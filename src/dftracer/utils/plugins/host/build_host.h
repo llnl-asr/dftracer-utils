@@ -65,7 +65,7 @@ class BuildHost {
 
     /// Record `what` as denied; only the first is kept, so the loader reports
     /// the call that first stepped outside the build phase.
-    void deny(const char* what);
+    void deny(dstd::StringView what);
 
     /// The state types the factory registered, moved out once it returns.
     StateRegistry take_states() { return std::move(states_); }

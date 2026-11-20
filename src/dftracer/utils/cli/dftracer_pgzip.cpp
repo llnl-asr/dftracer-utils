@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -64,7 +65,7 @@ struct FileResult {
 };
 
 static coro::CoroTask<dstd::Result<void>> compress_file_body(
-    FileResult& result, const dstd::String& file_path, int compression_level,
+    FileResult& result, dstd::String file_path, int compression_level,
     std::size_t worker_count, std::size_t chunk_size) {
     auto checking = runtime::fs::exists(dstd::PathView(file_path));
     auto checked = co_await coro::or_fail(std::move(checking));
@@ -147,8 +148,8 @@ static coro::CoroTask<dstd::Result<void>> compress_file_body(
 }
 
 static coro::CoroTask<FileResult> compress_file_parallel(
-    const dstd::String& file_path, int compression_level,
-    std::size_t worker_count, std::size_t chunk_size) {
+    dstd::String file_path, int compression_level, std::size_t worker_count,
+    std::size_t chunk_size) {
     FileResult result;
     result.input_path = file_path;
     result.output_path = dstd::fmt<"{}.gz">(file_path);

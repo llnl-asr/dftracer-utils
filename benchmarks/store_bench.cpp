@@ -221,18 +221,18 @@ void apply_smoke(Options& opt) {
     opt.which = "all";
 }
 
-dstd::Vector<std::uint64_t> parse_u64_list(const dstd::String& text) {
+dstd::Vector<std::uint64_t> parse_u64_list(dstd::StringView text) {
     dstd::Vector<std::uint64_t> out;
     std::size_t at = 0;
     while (at <= text.size()) {
         const std::size_t end = text.find(',', at);
-        const dstd::String item =
-            text.substr(at, end == dstd::String::npos ? end : end - at);
+        const dstd::StringView item =
+            text.substr(at, end == dstd::StringView::npos ? end : end - at);
         if (item.empty()) return {};
         const auto number = dstd::from_chars<std::uint64_t>(item);
         if (!number) return {};
         out.push_back(*number);
-        if (end == dstd::String::npos) break;
+        if (end == dstd::StringView::npos) break;
         at = end + 1;
     }
     return out;
@@ -601,7 +601,7 @@ dstd::String make_temp_dir(const dftracer::utils::dstd::Path& base) {
 }
 
 /// The bytes of every regular file under `dir`, at any depth.
-std::uint64_t directory_bytes(const dstd::String& dir) {
+std::uint64_t directory_bytes(dstd::StringView dir) {
     std::uint64_t total = 0;
     auto walked = dftracer::utils::dstd::fs::walk(
         dir, [&](dftracer::utils::dstd::PathView p,
@@ -626,7 +626,7 @@ struct DiskUse {
 };
 
 /// The regular files under `dir` at any depth, and their bytes.
-DiskUse disk_use(const dstd::String& dir) {
+DiskUse disk_use(dstd::StringView dir) {
     DiskUse use;
     auto walked = dftracer::utils::dstd::fs::walk(
         dir, [&](dftracer::utils::dstd::PathView p,
@@ -667,7 +667,7 @@ dstd::String grow_meta(std::uint64_t refresh) {
     return meta;
 }
 
-bool same_bytes(ByteView bytes, const dstd::String& expected) {
+bool same_bytes(ByteView bytes, dstd::StringView expected) {
     return dftracer::utils::dstd::StringView(
                reinterpret_cast<const char*>(bytes.data()), bytes.size()) ==
            dftracer::utils::dstd::StringView(expected.data(), expected.size());
@@ -853,7 +853,7 @@ constexpr SpaceField SPACE_FIELDS[] = {
 
 /// Prints the space report of every data file of `dir`, then the sum and the
 /// bytes of its summary file: one `name value` per line.
-bool print_space(const dstd::String& dir) {
+bool print_space(dstd::StringView dir) {
     dstd::Vector<dstd::String> names;
     auto handle = dftracer::utils::dstd::fs::Dir::open(dir);
     if (!handle) {
@@ -928,7 +928,7 @@ struct Bench {
         return options;
     }
 
-    void fail(const dstd::String& message) {
+    void fail(dstd::StringView message) {
         failed = true;
         std::cerr << "store_bench: " << message << "\n";
     }
@@ -969,7 +969,7 @@ struct Bench {
 
     void cleanup() { dftracer::utils::dstd::fs::remove_all(root).discard(); }
 
-    dstd::String case_dir(const dstd::String& name) {
+    dstd::String case_dir(dstd::StringView name) {
         return dstd::fmt<"{}/{}-{}">(root, case_index++, name);
     }
 
@@ -1054,22 +1054,22 @@ struct Bench {
 
     bool run();
     WriteRow run_write_case(Runtime& runtime, const Workload& workload,
-                            const dstd::String& dir, bool per_thread,
+                            dstd::StringView dir, bool per_thread,
                             bool keep_dir);
     QueryPlan make_query_plan(const Workload& workload) const;
     bool run_kept();
-    bool run_query_case(const Workload& workload, const dstd::String& dir);
-    bool query_store(const Workload& workload, const dstd::String& dir,
+    bool run_query_case(const Workload& workload, dstd::StringView dir);
+    bool query_store(const Workload& workload, dstd::StringView dir,
                      const QueryPlan& plan);
     ScopeRow run_scope_case(Runtime& runtime, std::uint64_t scopes);
     NamespaceSpec fold_spec() const;
-    bool write_fold(Runtime& runtime, const dstd::String& dir,
+    bool write_fold(Runtime& runtime, dstd::StringView dir,
                     std::uint64_t scopes, std::uint64_t keys);
     FoldScan fold_scan(const Snapshot& snapshot,
                        const NamespaceSpec& namespace_spec,
-                       const dstd::Vector<ScopeKey>& scopes, std::uint64_t keys,
+                       dstd::Span<const ScopeKey> scopes, std::uint64_t keys,
                        std::uint64_t threads,
-                       const dstd::Vector<std::int64_t>& expected);
+                       dstd::Span<const std::int64_t> expected);
     bool run_fold_case(Runtime& runtime, std::uint64_t scopes);
     void print_write_row(const WriteRow& row);
     void print_query_row(const QueryRow& row);
@@ -1077,19 +1077,19 @@ struct Bench {
     void print_fold_row(const FoldRow& row);
     void print_grow_row(const GrowRow& row);
     NamespaceSpec grow_spec(bool shared) const;
-    bool run_grow_case(const dstd::String& label, std::uint64_t copies,
+    bool run_grow_case(dstd::StringView label, std::uint64_t copies,
                        bool shared, bool do_pack);
-    bool grow_reads(const dstd::String& label, const char* state,
-                    const dstd::String& dir,
-                    const NamespaceSpec& namespace_spec, const ScopeKey& scope,
-                    std::uint64_t total, std::uint64_t last_refresh);
+    bool grow_reads(dstd::StringView label, dstd::StringView state,
+                    dstd::StringView dir, const NamespaceSpec& namespace_spec,
+                    const ScopeKey& scope, std::uint64_t total,
+                    std::uint64_t last_refresh);
     bool check_write_row(const WriteRow& row);
-    std::uint64_t count_keys(const dstd::String& dir);
+    std::uint64_t count_keys(dstd::StringView dir);
     void close_writers(Runtime& runtime,
                        dstd::Vector<dstd::UniquePtr<Writer>>& writers,
                        std::atomic<int>& errors);
-    bool report_single_thread_open(const dstd::String& dir,
-                                   const dstd::String& prefix, bool print_now);
+    bool report_single_thread_open(dstd::StringView dir,
+                                   dstd::StringView prefix, bool print_now);
 };
 
 QueryRow query_row(dstd::String op, std::uint64_t count, std::uint64_t nanos,
@@ -1192,9 +1192,8 @@ void Bench::print_grow_row(const GrowRow& row) {
 /// One worker still coalesces the runs, so read_calls shows what the split
 /// alone gives and the time shows what the other workers add. A case whose
 /// rows are printed as they come asks for the row to be printed here.
-bool Bench::report_single_thread_open(const dstd::String& dir,
-                                      const dstd::String& prefix,
-                                      bool print_now) {
+bool Bench::report_single_thread_open(dstd::StringView dir,
+                                      dstd::StringView prefix, bool print_now) {
     const std::size_t previous = dftracer::utils::default_runtime().threads();
     dftracer::utils::configure_default_runtime({.threads = 1});
     const std::uint64_t rss = dftu::bench::peak_heap_bytes();
@@ -1207,9 +1206,10 @@ bool Bench::report_single_thread_open(const dstd::String& dir,
             dir, to_std(opened.error())));
         return false;
     }
-    QueryRow row = query_row(
-        "open_1t", 1, nanos, rss,
-        prefix + format_stats(opened->open_stats(), opened->read_stats()));
+    QueryRow row =
+        query_row("open_1t", 1, nanos, rss,
+                  dstd::String(prefix) +
+                      format_stats(opened->open_stats(), opened->read_stats()));
     if (print_now) {
         print_query_row(row);
     } else {
@@ -1231,7 +1231,7 @@ bool Bench::check_write_row(const WriteRow& row) {
     const std::size_t trailer =
         static_cast<std::size_t>(store::engine::io_fault::WriteKind::Trailer);
     bool ok = true;
-    const auto require = [&](bool condition, const char* what) {
+    const auto require = [&](bool condition, dstd::StringView what) {
         if (!condition) {
             fail(dstd::fmt<"{} {} threads: {}">(row.mode, row.threads, what));
             ok = false;
@@ -1259,7 +1259,7 @@ bool Bench::check_write_row(const WriteRow& row) {
     return ok;
 }
 
-std::uint64_t Bench::count_keys(const dstd::String& dir) {
+std::uint64_t Bench::count_keys(dstd::StringView dir) {
     auto snapshot = Snapshot::open(dir);
     if (!snapshot) {
         fail(dstd::fmt<"snapshot of {}: {}">(dir, to_std(snapshot.error())));
@@ -1298,7 +1298,7 @@ void Bench::close_writers(Runtime& runtime,
 }
 
 WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
-                               const dstd::String& dir, bool per_thread,
+                               dstd::StringView dir, bool per_thread,
                                bool keep_dir) {
     WriteRow row;
     row.mode = per_thread ? "per-thread" : "shared";
@@ -1448,7 +1448,7 @@ QueryPlan Bench::make_query_plan(const Workload& workload) const {
     return plan;
 }
 
-bool Bench::query_store(const Workload& workload, const dstd::String& dir,
+bool Bench::query_store(const Workload& workload, dstd::StringView dir,
                         const QueryPlan& plan) {
     const NamespaceSpec namespace_spec = spec();
 
@@ -1630,7 +1630,7 @@ bool Bench::query_store(const Workload& workload, const dstd::String& dir,
     return true;
 }
 
-bool Bench::run_query_case(const Workload& workload, const dstd::String& dir) {
+bool Bench::run_query_case(const Workload& workload, dstd::StringView dir) {
     if (dir.empty()) {
         ensure_comment();
         std::cout << "# the query case reads the data of the shared write case,"
@@ -1738,7 +1738,7 @@ NamespaceSpec Bench::fold_spec() const {
     return namespace_spec;
 }
 
-bool Bench::write_fold(Runtime& runtime, const dstd::String& dir,
+bool Bench::write_fold(Runtime& runtime, dstd::StringView dir,
                        std::uint64_t scopes, std::uint64_t keys) {
     const auto made = dftracer::utils::dstd::fs::create_directories(dir);
     if (!made.has_value()) {
@@ -1814,9 +1814,9 @@ bool Bench::write_fold(Runtime& runtime, const dstd::String& dir,
 
 FoldScan Bench::fold_scan(const Snapshot& snapshot,
                           const NamespaceSpec& namespace_spec,
-                          const dstd::Vector<ScopeKey>& scopes,
-                          std::uint64_t keys, std::uint64_t threads,
-                          const dstd::Vector<std::int64_t>& expected) {
+                          dstd::Span<const ScopeKey> scopes, std::uint64_t keys,
+                          std::uint64_t threads,
+                          dstd::Span<const std::int64_t> expected) {
     FoldScan scan;
     dstd::Vector<dstd::Vector<std::int64_t>> parts(
         static_cast<std::size_t>(threads),
@@ -1943,8 +1943,9 @@ NamespaceSpec Bench::grow_spec(bool shared) const {
     return namespace_spec;
 }
 
-GrowRow grow_row(const dstd::String& label, const char* state, const char* op,
-                 std::uint64_t count, std::uint64_t nanos, dstd::String extra) {
+GrowRow grow_row(dstd::StringView label, dstd::StringView state,
+                 dstd::StringView op, std::uint64_t count, std::uint64_t nanos,
+                 dstd::String extra) {
     GrowRow row;
     row.copies = label;
     row.state = state;
@@ -1957,8 +1958,8 @@ GrowRow grow_row(const dstd::String& label, const char* state, const char* op,
     return row;
 }
 
-bool Bench::grow_reads(const dstd::String& label, const char* state,
-                       const dstd::String& dir,
+bool Bench::grow_reads(dstd::StringView label, dstd::StringView state,
+                       dstd::StringView dir,
                        const NamespaceSpec& namespace_spec,
                        const ScopeKey& scope, std::uint64_t total,
                        std::uint64_t last_refresh) {
@@ -2144,7 +2145,7 @@ bool Bench::grow_reads(const dstd::String& label, const char* state,
     return ok;
 }
 
-bool Bench::run_grow_case(const dstd::String& label, std::uint64_t copies,
+bool Bench::run_grow_case(dstd::StringView label, std::uint64_t copies,
                           bool shared, bool do_pack) {
     const std::uint64_t per_refresh = opt.grow_keys / copies;
     if (per_refresh == 0) {

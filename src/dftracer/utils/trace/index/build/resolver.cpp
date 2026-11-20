@@ -85,11 +85,13 @@ bool agg_current(const Snapshot& snapshot, const FileRef& file,
     return ready_with_params(snapshot, file, IndexExtension::Agg, params_hash);
 }
 
-// Paths the file's pruning tier indexed by value (bloom) or range (zonemap).
+// Paths the file's pruning tier indexed by value (bloom), range (zonemap) or
+// count (counts).
 dstd::Result<dstd::Vector<dstd::String>> indexed_paths(const Snapshot& snapshot,
                                                        const FileRef& file) {
     dstd::Vector<dstd::String> out;
-    for (auto ext : {IndexExtension::Bloom, IndexExtension::Zonemap}) {
+    for (auto ext : {IndexExtension::Bloom, IndexExtension::Zonemap,
+                     IndexExtension::Counts}) {
         auto listed = trace::index::paths(snapshot, file, ext);
         if (!listed) return listed.error();
         for (auto& p : *listed) out.emplace_back(p.data(), p.size());
@@ -97,8 +99,8 @@ dstd::Result<dstd::Vector<dstd::String>> indexed_paths(const Snapshot& snapshot,
     return out;
 }
 
-bool covers(const dstd::Vector<dstd::String>& indexed,
-            const dstd::Vector<dstd::String>& fields) {
+bool covers(dstd::Span<const dstd::String> indexed,
+            dstd::Span<const dstd::String> fields) {
     for (const dstd::String& f : fields)
         if (std::find(indexed.begin(), indexed.end(), f) == indexed.end())
             return false;
@@ -107,7 +109,7 @@ bool covers(const dstd::Vector<dstd::String>& indexed,
 
 // The file's recorded schema is current and, when `wanted` is set, is it.
 dstd::Result<bool> schema_current(const Snapshot& snapshot, const FileRef& file,
-                                  const dstd::String& wanted) {
+                                  dstd::StringView wanted) {
     const auto recorded = trace::index::schema(snapshot, file);
     if (!recorded) return recorded.error();
     if (!*recorded) return false;
@@ -147,12 +149,21 @@ dstd::Result<trace::index::store::ExtensionMask> stale_tier(
             stale.add(ext);
     }
     const bool paths = config->extensions.has(IndexExtension::Bloom) ||
-                       config->extensions.has(IndexExtension::Zonemap);
+                       config->extensions.has(IndexExtension::Zonemap) ||
+                       config->extensions.has(IndexExtension::Counts);
     if (paths) {
         const auto indexed = indexed_paths(snapshot, file);
         if (!indexed) return indexed.error();
-        if (!covers(*indexed, config->extra_dimensions)) {
-            for (auto ext : {IndexExtension::Bloom, IndexExtension::Zonemap})
+        // A dimension whose built-in summaries are all refused leaves no path.
+        dstd::Vector<dstd::String> wanted;
+        for (const dstd::String& dim : config->extra_dimensions)
+            if (config->builds(dim, IndexExtension::Bloom) ||
+                config->builds(dim, IndexExtension::Zonemap) ||
+                config->builds(dim, IndexExtension::Counts))
+                wanted.push_back(dim);
+        if (!covers(*indexed, wanted)) {
+            for (auto ext : {IndexExtension::Bloom, IndexExtension::Zonemap,
+                             IndexExtension::Counts})
                 if (config->extensions.has(ext)) stale.add(ext);
         }
     }
@@ -301,6 +312,10 @@ dstd::Result<void> decide_group(ResolveGroupInput& input,
         if (!snapshot_result) return snapshot_result.error();
         const auto& snapshot = *snapshot_result;
 
+        auto serving = trace::index::schemas::dft::agg::tier::serving_config(
+            snapshot, input.aggregation_config);
+        if (!serving) return serving.error();
+        input.aggregation_config = std::move(*serving);
         const std::uint64_t params = input.aggregation_config.params_hash();
         const auto config =
             trace::index::schemas::dft::agg::tier::read_config(snapshot);
@@ -446,7 +461,7 @@ dstd::Vector<runtime::fs::FoundFile> scanned_entries(
 }
 
 dstd::Vector<runtime::fs::FoundFile> scanned_entries(
-    const ResolverResult& result, const dstd::Vector<FileWorkItem>& items) {
+    const ResolverResult& result, dstd::Span<const FileWorkItem> items) {
     dstd::Vector<runtime::fs::FoundFile> out;
     out.reserve(items.size());
     for (const auto& item : items) {
@@ -458,6 +473,18 @@ dstd::Vector<runtime::fs::FoundFile> scanned_entries(
         out.push_back(std::move(entry));
     }
     return out;
+}
+
+coro::CoroTask<dstd::Result<dstd::Vector<runtime::fs::FoundFile>>>
+find_input_files(coro::Scope& scope, dstd::PathView directory) {
+    runtime::fs::FindOptions options;
+    options.patterns =
+        runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
+    options.skip_dirs =
+        runtime::fs::names_of(common::constants::indexer::SCAN_SKIP_DIRS);
+    options.skip_unreadable = true;
+    co_return co_await runtime::fs::find_all(scope, directory,
+                                             std::move(options));
 }
 
 coro::CoroTask<dstd::Result<ResolverResult>> Resolver::operator()(
@@ -475,14 +502,8 @@ coro::CoroTask<dstd::Result<ResolverResult>> Resolver::operator()(
             result.all_file_mtimes.push_back(entry.mtime_seconds());
         }
     } else if (!input.directory.empty()) {
-        runtime::fs::FindOptions options;
-        options.patterns = runtime::fs::names_of(
-            common::constants::indexer::INPUT_FILE_PATTERNS);
-        options.skip_dirs =
-            runtime::fs::names_of(common::constants::indexer::SCAN_SKIP_DIRS);
-        options.skip_unreadable = true;
-        auto found = co_await runtime::fs::find_all(
-            ctx, dstd::PathView(input.directory), std::move(options));
+        auto found =
+            co_await find_input_files(ctx, dstd::PathView(input.directory));
         if (!found) co_return found.error();
         const dstd::Vector<runtime::fs::FoundFile>& matched = *found;
         result.all_files.reserve(matched.size());

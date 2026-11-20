@@ -67,15 +67,15 @@ inline dstd::StringView strip_ndjson_bookends(dstd::StringView bytes) {
 // own document in place. A line is a document, so a bad line cannot swallow or
 // desynchronise the lines around it, and a long line needs no batch capacity.
 // The buffer must be a simdjson::padded_string, or otherwise hold
-// SIMDJSON_PADDING readable bytes after `len`. Blank lines, a lone bracket
-// and a trailing comma are trimmed as on the non-indexed path. A line that
-// simdjson refuses for bad UTF-8 or a raw control byte in a string is parsed
-// once more from a repaired private copy (@ref json::detail::repair_line).
+// SIMDJSON_PADDING readable bytes after `buf.size()`. Blank lines, a lone
+// bracket and a trailing comma are trimmed as on the non-indexed path. A line
+// that simdjson refuses for bad UTF-8 or a raw control byte in a string is
+// parsed once more from a repaired private copy (@ref
+// json::detail::repair_line).
 class PaddedLines {
    public:
-    PaddedLines(simdjson::ondemand::parser& parser, const char* base,
-                std::size_t len)
-        : parser_(parser), base_(base), len_(len) {}
+    PaddedLines(simdjson::ondemand::parser& parser, dstd::StringView buf)
+        : parser_(parser), base_(buf.data()), len_(buf.size()) {}
 
     // The next line that parses as a document, false at the end. `line` is the
     // original bytes of the line; `text` is the bytes that `doc` points into,
@@ -93,10 +93,12 @@ class PaddedLines {
                                               from)
                    : len_ - pos_;
             pos_ += nl ? size + 1 : size;
-            const char* start;
-            std::size_t trimmed;
-            if (!json::trim_and_validate_with_comma(from, size, start, trimmed))
+            dstd::StringView view;
+            if (!json::trim_and_validate_with_comma(
+                    dstd::StringView(from, size), view))
                 continue;
+            const char* const start = view.data();
+            const std::size_t trimmed = view.size();
             const std::size_t capacity =
                 static_cast<std::size_t>(base_ + len_ - start) +
                 simdjson::SIMDJSON_PADDING;

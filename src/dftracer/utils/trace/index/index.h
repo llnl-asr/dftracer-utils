@@ -118,6 +118,13 @@ class Index {
 
     dstd::Expected<Snapshot, dstd::Error> snapshot() const;
 
+    /// Names this incarnation of the index: the @ref Store::generation of its
+    /// store, the same while the store on disk is the one this handle opened
+    /// and different for an index that was deleted and built again at the same
+    /// root. Creates the store directory. Fails when the store cannot be
+    /// opened.
+    dstd::Expected<std::uint64_t, dstd::Error> generation() const;
+
     /// Starts the data of `path`, which is named as snapshots name it, with
     /// the stat of the trace file the data is read from.
     dstd::Expected<FileBuild, dstd::Error> build(dstd::StringView path,

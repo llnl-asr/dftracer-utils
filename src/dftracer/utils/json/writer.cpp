@@ -122,8 +122,6 @@ void Writer::value(dstd::StringView v) {
     value_done();
 }
 
-void Writer::value(const char* v) { value(dstd::StringView(v)); }
-
 void Writer::value(double v) {
     DFTRACER_UTILS_JSON_CHECK(std::isfinite(v),
                               "json::Writer: a double that is not finite");

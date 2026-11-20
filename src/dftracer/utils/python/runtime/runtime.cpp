@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/dict_helpers.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/method.h>
@@ -13,6 +15,9 @@
 #include <dftracer/utils/python/runtime/runtime.h>
 
 #include <chrono>
+
+using dftracer::utils::python::core::guard;
+using dftracer::utils::python::core::parse_kw;
 
 dftracer::utils::Runtime *
 dftracer::utils::python::runtime::get_default_runtime() {
@@ -35,13 +40,11 @@ static PyObject *Runtime_new(PyTypeObject *type, PyObject *, PyObject *) {
 }
 
 static int Runtime_init(RuntimeObject *self, PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"threads", "io_threads", NULL};
     Py_ssize_t threads = 0;
     Py_ssize_t io_threads = 0;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|nn",
-                                     const_cast<char **>(kwlist), &threads,
-                                     &io_threads)) {
+    if (!parse_kw<"|nn">(args, kwds, {"threads", "io_threads"}, &threads,
+                         &io_threads)) {
         return -1;
     }
 
@@ -54,19 +57,15 @@ static int Runtime_init(RuntimeObject *self, PyObject *args, PyObject *kwds) {
         return -1;
     }
 
-    try {
+    return guard([&] {
         // The process has one runtime, which this configures and holds.
         dftracer::utils::RuntimeSettings settings;
         settings.threads = static_cast<std::size_t>(threads);
         settings.io_threads = static_cast<std::size_t>(io_threads);
         dftracer::utils::configure_default_runtime(settings);
         self->runtime = dftracer::utils::default_runtime_shared();
-    } catch (const std::exception &e) {
-        dftracer::utils::python::core::set_typed_py_error(e);
-        return -1;
-    }
-
-    return 0;
+        return 0;
+    });
 }
 
 static bool set_size(PyObject *d, const char *key, std::size_t val) {
@@ -78,7 +77,7 @@ static bool set_double(PyObject *d, const char *key, double val) {
 }
 
 static bool set_str(PyObject *d, const char *key,
-                    const dftracer::utils::dstd::String &val) {
+                    dftracer::utils::dstd::CStringView val) {
     return dict_set_str(d, key, val.c_str()) == 0;
 }
 
@@ -235,11 +234,9 @@ static PyObject *Runtime_is_responsive(RuntimeObject *self,
 
 static PyObject *Runtime_set_timeout(RuntimeObject *self, PyObject *args,
                                      PyObject *kwds) {
-    static const char *kwlist[] = {"global_ms", NULL};
     Py_ssize_t ms = 0;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|n",
-                                     const_cast<char **>(kwlist), &ms)) {
+    if (!parse_kw<"|n">(args, kwds, {"global_ms"}, &ms)) {
         return NULL;
     }
 
@@ -252,8 +249,7 @@ static PyObject *Runtime_set_timeout(RuntimeObject *self, PyObject *args,
     Py_BEGIN_ALLOW_THREADS set =
         self->runtime->set_global_timeout(std::chrono::milliseconds(ms));
     Py_END_ALLOW_THREADS if (!set) {
-        dftracer::utils::python::core::set_typed_py_error(
-            dftracer::utils::python::core::PyErrorException(set.error()));
+        dftracer::utils::python::core::set_py_error(set.error());
         return NULL;
     }
     Py_RETURN_NONE;
@@ -262,11 +258,9 @@ static PyObject *Runtime_set_timeout(RuntimeObject *self, PyObject *args,
 static PyObject *Runtime_set_default_task_timeout(RuntimeObject *self,
                                                   PyObject *args,
                                                   PyObject *kwds) {
-    static const char *kwlist[] = {"ms", NULL};
     Py_ssize_t ms = 0;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|n",
-                                     const_cast<char **>(kwlist), &ms)) {
+    if (!parse_kw<"|n">(args, kwds, {"ms"}, &ms)) {
         return NULL;
     }
 
@@ -279,8 +273,7 @@ static PyObject *Runtime_set_default_task_timeout(RuntimeObject *self,
     Py_BEGIN_ALLOW_THREADS set =
         self->runtime->set_default_task_timeout(std::chrono::milliseconds(ms));
     Py_END_ALLOW_THREADS if (!set) {
-        dftracer::utils::python::core::set_typed_py_error(
-            dftracer::utils::python::core::PyErrorException(set.error()));
+        dftracer::utils::python::core::set_py_error(set.error());
         return NULL;
     }
     Py_RETURN_NONE;

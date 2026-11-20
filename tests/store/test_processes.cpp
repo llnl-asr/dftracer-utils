@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -68,7 +69,7 @@ constexpr int FOLD_KEYS = 2;
 constexpr int DURABLE_BATCHES = SANITIZED ? 4 : 20;
 constexpr int SHARED_BATCHES = SANITIZED ? 2 : 5;
 
-dstd::ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(dstd::StringView bytes) {
     return {bytes.data(), bytes.size()};
 }
 
@@ -84,7 +85,7 @@ dstd::String i64_bytes(std::int64_t value) {
     return bytes;
 }
 
-NamespaceSpec put_spec(const dstd::String& name) {
+NamespaceSpec put_spec(dstd::StringView name) {
     NamespaceSpec spec;
     spec.name = dstd::String(name);
     spec.format_version = 0;
@@ -92,13 +93,13 @@ NamespaceSpec put_spec(const dstd::String& name) {
     return spec;
 }
 
-NamespaceSpec durable_spec(const dstd::String& name) {
+NamespaceSpec durable_spec(dstd::StringView name) {
     NamespaceSpec spec = put_spec(name);
     spec.durable = true;
     return spec;
 }
 
-NamespaceSpec fold_spec(const dstd::String& name) {
+NamespaceSpec fold_spec(dstd::StringView name) {
     NamespaceSpec spec;
     spec.name = dstd::String(name);
     spec.format_version = 0;
@@ -106,7 +107,7 @@ NamespaceSpec fold_spec(const dstd::String& name) {
     return spec;
 }
 
-ScopeKey file_scope(const dstd::String& path) {
+ScopeKey file_scope(dstd::StringView path) {
     return ScopeKey::file(dstd::String(path));
 }
 
@@ -150,12 +151,15 @@ dstd::String durable_value(int child, int n, int round) {
     return dstd::fmt<"dur-c{}-{}-g{}">(child, n, round);
 }
 
-dstd::String row_id(const dstd::String& scope, const dstd::String& key) {
-    return scope + '\x1f' + key;
+dstd::String row_id(dstd::StringView scope, dstd::StringView key) {
+    dstd::String id(scope);
+    id += '\x1f';
+    id += key;
+    return id;
 }
 
-dstd::String visible(const dstd::String& id) {
-    dstd::String out = id;
+dstd::String visible(dstd::StringView id) {
+    dstd::String out(id);
     for (char& c : out) {
         if (c == '\x1f') c = '/';
     }
@@ -169,10 +173,10 @@ struct ScanDump {
     dstd::Map<dstd::String, std::size_t> counts;
     dstd::Map<dstd::String, dstd::String> values;
 
-    void add(const dstd::String& id, const dstd::String& value) {
+    void add(dstd::StringView id, dstd::StringView value) {
         ++rows;
-        ++counts[id];
-        values[id] = value;
+        ++counts[dstd::String(id)];
+        values[dstd::String(id)] = value;
     }
 
     bool exactly_once(const Expected& expected) const {
@@ -282,7 +286,7 @@ Expected expected_durable(int round) {
     return out;
 }
 
-std::size_t count_data_files(const dstd::String& root) {
+std::size_t count_data_files(dstd::StringView root) {
     std::size_t count = 0;
     for (const auto& e : dftu_utils_test::list_dir(root)) {
         const dstd::String name(e.path.view().filename());
@@ -341,7 +345,7 @@ void check_states(const engine::Snapshot& snapshot, const NamespaceSpec& raw,
     CHECK(snapshot.state(sum, file_scope(SHARED_SCOPE)) == ScopeState::Ready);
 }
 
-void check_root(const dstd::String& root, int round) {
+void check_root(dstd::StringView root, int round) {
     auto opened = engine::Snapshot::open(root);
     REQUIRE(opened.has_value());
     const engine::Snapshot& snapshot = *opened;
@@ -388,7 +392,7 @@ struct ChildFailure {
     dstd::String message;
 };
 
-[[noreturn]] void child_fail(const dstd::String& message) {
+[[noreturn]] void child_fail(dstd::StringView message) {
     const dstd::String line = dstd::fmt<"store_processes child: {}\n">(message);
     std::fputs(line.c_str(), stderr);
     std::fflush(stderr);
@@ -486,8 +490,7 @@ coro::CoroTask<int> run_workload(engine::Writer& writer, const Namespaces& ids,
     co_return 0;
 }
 
-void run_child(const dstd::String& root, int child, int round,
-               int barrier_read) {
+void run_child(dstd::StringView root, int child, int round, int barrier_read) {
     // The runtime is built before the barrier so the create that follows the
     // barrier is the first store call this process makes.
     Runtime runtime(RUNTIME_THREADS);
@@ -561,7 +564,7 @@ dstd::String exit_report(pid_t pid, int status) {
     return dstd::fmt<"child pid {} ended with status {}">(pid, status);
 }
 
-void reap_children(const dstd::Vector<pid_t>& pids) {
+void reap_children(dstd::Span<const pid_t> pids) {
     struct ChildExit {
         pid_t pid;
         bool done;
@@ -607,7 +610,7 @@ void reap_children(const dstd::Vector<pid_t>& pids) {
     }
 }
 
-void run_round(const dstd::String& root, int round) {
+void run_round(dstd::StringView root, int round) {
     int barrier[2];
     if (::pipe(barrier) != 0) {
         FAIL("pipe failed: " << std::strerror(errno));
@@ -640,7 +643,7 @@ void run_round(const dstd::String& root, int round) {
     reap_children(pids);
 }
 
-void copy_files(const dstd::String& from, const dstd::String& to) {
+void copy_files(dstd::StringView from, dstd::StringView to) {
     for (const auto& entry : dftu_utils_test::list_dir(from)) {
         if (!(entry.kind == dstd::fs::FileKind::File)) continue;
         REQUIRE(dstd::fs::copy_file(

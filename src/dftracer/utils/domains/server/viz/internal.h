@@ -7,6 +7,7 @@
 
 #include <dftracer/utils/domains/server/trace_index.h>
 #include <dftracer/utils/domains/server/viz/record_event.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -152,7 +153,7 @@ using NameMap = dftracer::utils::dstd::StringViewMap<NameStat>;
 
 // Map selected index files to view sources (path + index + cached sizes).
 inline dstd::Vector<trace::views::ViewFile> to_view_files(
-    const dstd::Vector<const TraceIndex::FileInfo*>& fis) {
+    dstd::Span<const TraceIndex::FileInfo* const> fis) {
     dstd::Vector<trace::views::ViewFile> v;
     v.reserve(fis.size());
     for (auto* fi : fis) {

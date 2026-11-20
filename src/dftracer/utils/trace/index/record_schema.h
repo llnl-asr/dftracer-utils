@@ -60,7 +60,7 @@ dstd::Optional<std::int64_t> iso8601_micros(dstd::StringView text);
 inline std::int64_t entity_id(dstd::StringView text) {
     std::int64_t v = 0;
     const char* end = text.data() + text.size();
-    if (auto [ptr, ec] = dstd::from_chars(text.data(), end, v);
+    if (auto [ptr, ec] = dstd::from_chars(text, v);
         ec == std::errc() && ptr == end && !text.empty())
         return v;
     return static_cast<std::int64_t>(

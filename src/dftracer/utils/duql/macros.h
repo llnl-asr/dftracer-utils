@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -33,10 +34,10 @@ using MacroScopes = dstd::Vector<dstd::Vector<Macro>>;
 /// not a macro and is left out. Fails for two macros of one name.
 dftracer::utils::dstd::Expected<dstd::Vector<Macro>, DuqlError> macros_of(
     dstd::Vector<syntax::Def>& defs, dstd::StringView text,
-    const dstd::String& origin);
+    dstd::StringView origin);
 
 /// Whether `defs` define `args_fallback = true`.
-bool args_fallback(const dstd::Vector<syntax::Def>& defs);
+bool args_fallback(dstd::Span<const syntax::Def> defs);
 
 /// The `def`s of `decls`, taken out of it.
 dstd::Vector<syntax::Def> take_defs(dstd::Vector<syntax::Decl>& decls);

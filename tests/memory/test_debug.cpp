@@ -18,6 +18,7 @@
 #include <cstring>
 #include <random>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -72,18 +73,20 @@ struct ReportedSite {
     std::size_t blocks = 0;
 };
 
-std::vector<ReportedSite> sites_of(const std::string& text,
-                                   const std::string& pool) {
+std::vector<ReportedSite> sites_of(std::string_view text,
+                                   std::string_view pool) {
     std::vector<ReportedSite> out;
-    std::string key = "pool " + pool + " site 0x";
+    std::string key = "pool ";
+    key.append(pool);
+    key.append(" site 0x");
     for (std::size_t at = text.find(key); at != std::string::npos;
          at = text.find(key, at + 1)) {
         unsigned long long site = 0;
         std::size_t bytes = 0;
         std::size_t blocks = 0;
-        if (std::sscanf(text.c_str() + at + key.size() - 2,
-                        "0x%llx holds %zu bytes in %zu blocks", &site, &bytes,
-                        &blocks) == 3) {
+        const std::string tail(text.substr(at + key.size() - 2, 128));
+        if (std::sscanf(tail.c_str(), "0x%llx holds %zu bytes in %zu blocks",
+                        &site, &bytes, &blocks) == 3) {
             out.push_back({static_cast<std::uintptr_t>(site), bytes, blocks});
         }
     }
@@ -92,7 +95,7 @@ std::vector<ReportedSite> sites_of(const std::string& text,
 
 void plain_abort() { ::signal(SIGABRT, SIG_DFL); }
 
-void expect_abort(const char* test_case, const char* text) {
+void expect_abort(std::string_view test_case, std::string_view text) {
     auto result = fresh_process::run(test_case);
     REQUIRE(result.announced);
     CHECK(WIFSIGNALED(result.status));

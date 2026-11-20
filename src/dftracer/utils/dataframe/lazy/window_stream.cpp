@@ -115,7 +115,7 @@ struct PartitionStats {
     dstd::Vector<Tail> tail_specs;
     dstd::HashMap<dstd::String, Part> parts;
 
-    const Part* find(const dstd::String& key) const {
+    const Part* find(dstd::StringView key) const {
         const auto it = parts.find(key);
         return it == parts.end() ? nullptr : &it->second;
     }
@@ -291,7 +291,7 @@ class FigureWriter {
           lasts_(st.last_cols.size()) {}
 
     dstd::Result<void> add(const PartitionStats::Part& p,
-                           const dstd::Vector<Series>& last) {
+                           dstd::Span<const Series> last) {
         blobs_.push_back(st_.encode(p));
         for (std::size_t j = 0; j < lasts_.size(); ++j)
             lasts_[j].push_back(last[j].share());
@@ -401,15 +401,14 @@ struct WindowSpecInfo {
     double span = 0.0;
 };
 
-dstd::Vector<WindowSpecInfo> window_specs(
-    const OwnedFrameOpArgs& args, const dstd::Vector<dstd::String>& sch) {
+dstd::Vector<WindowSpecInfo> window_specs(const OwnedFrameOpArgs& args,
+                                          dstd::Span<const dstd::String> sch) {
     dstd::Vector<dstd::Vector<const char*>> cstrs;
     dstd::Vector<dstd::Vector<dftu_window_spec>> wins;
     dstd::Vector<dstd::Vector<dftu_group_agg>> aggs;
     const dftu_op_arg bag = args.bind(cstrs, wins, aggs);
     const auto& list = bag.args[3].winlist;
-    const auto index_of = [&](const char* name) {
-        if (!name) return -1;
+    const auto index_of = [&](dstd::StringView name) {
         const auto it = std::find(sch.begin(), sch.end(), name);
         return it == sch.end() ? -1 : static_cast<int>(it - sch.begin());
     };
@@ -419,7 +418,7 @@ dstd::Vector<WindowSpecInfo> window_specs(
         WindowSpecInfo i;
         i.func = w.func;
         i.out = w.out ? w.out : "";
-        i.value = index_of(w.value);
+        i.value = w.value ? index_of(w.value) : -1;
         switch (w.func) {
             case DFTU_WINDOW_LAG:
                 i.before = w.param.offset;
@@ -440,8 +439,10 @@ dstd::Vector<WindowSpecInfo> window_specs(
                 i.nth = w.param.offset;
                 break;
             case DFTU_WINDOW_SESSIONIZE:
-                i.time = index_of(w.param.session.time);
-                i.end = index_of(w.param.session.end);
+                i.time =
+                    w.param.session.time ? index_of(w.param.session.time) : -1;
+                i.end =
+                    w.param.session.end ? index_of(w.param.session.end) : -1;
                 i.gap = w.param.session.gap;
                 i.span = w.param.session.span;
                 i.unbounded = i.time < 0 || !(i.gap >= 0.0) || !(i.span >= 0.0);
@@ -507,8 +508,8 @@ dstd::Vector<WindowSpecInfo> window_specs(
 
 // Whether a window needs the figures of PartitionStats, and for which columns.
 bool window_needs_stats(dstd::Vector<WindowSpecInfo>& specs, PartitionStats& st,
-                        const dstd::Vector<dstd::String>& sch,
-                        const dstd::Vector<Field>& fields) {
+                        dstd::Span<const dstd::String> sch,
+                        dstd::Span<const Field> fields) {
     bool need = false;
     // A column the plan does not type may be float.
     const auto maybe_float = [&](int column) {
@@ -738,7 +739,8 @@ class WindowStreamCursor : public Cursor {
                     body = cols[c].take(head).materialize();
                 }
                 if (ctx_n > 0) {
-                    auto joined = concat_columns({&ctx_[c], &body});
+                    const Series* const pair[] = {&ctx_[c], &body};
+                    auto joined = concat_columns(pair);
                     if (!joined) co_return joined.error();
                     fcols.push_back(joined->materialize());
                 } else {
@@ -919,7 +921,7 @@ class WindowStreamCursor : public Cursor {
 
     // Whether one function can stream across a cut, and what it needs. Sets
     // `why_` to the reason it cannot.
-    bool classify(SpecState& s, const dstd::Vector<Series>& cols, Needs& n) {
+    bool classify(SpecState& s, dstd::Span<const Series> cols, Needs& n) {
         const WindowSpecInfo& w = s.info;
         why_ =
             dstd::fmt<"function {} of '{}'">(static_cast<int>(w.func), w.out);
@@ -1126,7 +1128,7 @@ class WindowStreamCursor : public Cursor {
     }
 
     // Chooses how a cut may fall from the functions and the column types.
-    void plan(const dstd::Vector<Series>& cols) {
+    void plan(dstd::Span<const Series> cols) {
         mode_ = Carry::Aligned;
         Needs n;
         for (SpecState& s : specs_)
@@ -1201,7 +1203,7 @@ class WindowStreamCursor : public Cursor {
         dstd::String cur_key;
         dstd::Vector<Series> prev_last;
         dstd::Optional<dstd::Error> close_error;
-        const auto close = [&](const dstd::Vector<Series>& last) {
+        const auto close = [&](dstd::Span<const Series> last) {
             auto added = figures.add(cur, last);
             if (!added && !close_error) close_error = added.error();
         };
@@ -1217,10 +1219,11 @@ class WindowStreamCursor : public Cursor {
                     if (!open || key != cur_key) {
                         if (open) {
                             dstd::Vector<Series> last;
+                            const std::int64_t at = r - 1;
                             for (std::size_t j = 0; j < nl; ++j)
                                 last.push_back(r > 0
                                                    ? m->columns[st.last_cols[j]]
-                                                         .take({r - 1})
+                                                         .take({&at, 1})
                                                          .materialize()
                                                    : prev_last[j].share());
                             close(last);
@@ -1234,9 +1237,10 @@ class WindowStreamCursor : public Cursor {
                 if (refusal.refused()) co_return refusal.error();
                 if (close_error) co_return *close_error;
                 prev_last.clear();
+                const std::int64_t last_row = m->rows - 1;
                 for (std::size_t j = 0; j < nl; ++j)
                     prev_last.push_back(m->columns[st.last_cols[j]]
-                                            .take({m->rows - 1})
+                                            .take({&last_row, 1})
                                             .materialize());
                 auto added = body_->add(std::move(m->columns), m->rows);
                 if (!added) co_return added;
@@ -1513,7 +1517,8 @@ class WindowStreamCursor : public Cursor {
                     cols.push_back(Series::flat_i64(wk.out.data(), m->rows));
                     continue;
                 }
-                auto joined = concat_columns({&wk.carried, &col});
+                const Series* const pair[] = {&wk.carried, &col};
+                auto joined = concat_columns(pair);
                 if (!joined) co_return joined.error();
                 cols.push_back(
                     joined->materialize().take(wk.out).materialize());
@@ -1559,7 +1564,7 @@ class WindowStreamCursor : public Cursor {
             PartitionStats::Part p =
                 stats_->decode(read_bytes(m.columns[0], i));
             for (std::size_t j = 0; j < nl; ++j)
-                p.last.push_back(m.columns[1 + j].take({i}).materialize());
+                p.last.push_back(m.columns[1 + j].take({&i, 1}).materialize());
             into.push_back(std::move(p));
         }
     }
@@ -1590,7 +1595,7 @@ class WindowStreamCursor : public Cursor {
 
     // The rows of the held chunk that can leave now.
     template <class Key>
-    std::int64_t emit_count(const dstd::Vector<Series>& cols, std::int64_t n,
+    std::int64_t emit_count(dstd::Span<const Series> cols, std::int64_t n,
                             const Key& key, KeyRefusal& refusal) {
         if (mode_ == Carry::Aligned) {
             if (eof_) return n;
@@ -1648,7 +1653,7 @@ class WindowStreamCursor : public Cursor {
     }
 
     // The column of a native result, with the type the kernel gives it.
-    static void put(DataFrame& res, const dstd::String& name, Series col) {
+    static void put(DataFrame& res, dstd::StringView name, Series col) {
         const int oc = column_index_of(res.names, name);
         if (oc >= 0) res.columns[static_cast<std::size_t>(oc)] = std::move(col);
     }
@@ -1717,7 +1722,7 @@ class WindowStreamCursor : public Cursor {
             make_numeric(bits, okv, NumClass::Float, TypeId::Float64));
     }
 
-    void native_whole(SpecState& s, const dstd::Vector<Series>& cols,
+    void native_whole(SpecState& s, dstd::Span<const Series> cols,
                       DataFrame& res, std::size_t ue, const RowInfo& row,
                       WindowOverflow& overflow) {
         const WindowSpecInfo& w = s.info;
@@ -1798,7 +1803,7 @@ class WindowStreamCursor : public Cursor {
     }
 
     template <class Key>
-    dstd::Result<void> native(const dstd::Vector<Series>& cols, DataFrame& res,
+    dstd::Result<void> native(dstd::Span<const Series> cols, DataFrame& res,
                               std::int64_t n, std::int64_t emit,
                               bool continuing, const Key& key,
                               KeyRefusal& refusal) {
@@ -1930,9 +1935,9 @@ class WindowStreamCursor : public Cursor {
         return {};
     }
 
-    void native_session(SpecState& s, const dstd::Vector<Series>& cols,
+    void native_session(SpecState& s, dstd::Span<const Series> cols,
                         DataFrame& res, std::size_t emit,
-                        const dstd::Vector<char>& new_part) {
+                        dstd::Span<const char> new_part) {
         const WindowSpecInfo& w = s.info;
         const NumCells t = read_cells(cols[static_cast<std::size_t>(w.time)]);
         NumClass tc = NumClass::Signed;
@@ -1978,8 +1983,7 @@ class WindowStreamCursor : public Cursor {
     // leave at the back in the order the kernel does it, so a float sum, a
     // mean and a variance give the same bits. A frame from the partition start
     // never drops a row, so it keeps none of them.
-    dstd::Result<void> native_frame(SpecState& s,
-                                    const dstd::Vector<Series>& cols,
+    dstd::Result<void> native_frame(SpecState& s, dstd::Span<const Series> cols,
                                     DataFrame& res, std::size_t emit,
                                     const RowInfo& row,
                                     WindowOverflow& overflow) {
@@ -2272,7 +2276,8 @@ class WindowStreamCursor : public Cursor {
             }
         }
         if (suffix) {
-            auto joined = concat_columns({&hist, &cols[s.ext_at]});
+            const Series* const pair[] = {&hist, &cols[s.ext_at]};
+            auto joined = concat_columns(pair);
             if (!joined) return joined.error();
             const Series all = joined->materialize();
             put(res, w.out, all.take(src).materialize());
@@ -2311,7 +2316,7 @@ class WindowStreamCursor : public Cursor {
     // entered now and not again in the next chunk (`win_hi` is the position of
     // the last one entered).
     dstd::Result<void> native_extreme(SpecState& s,
-                                      const dstd::Vector<Series>& cols,
+                                      dstd::Span<const Series> cols,
                                       DataFrame& res, std::size_t emit,
                                       const RowInfo& row) {
         const WindowSpecInfo& w = s.info;
@@ -2355,7 +2360,8 @@ class WindowStreamCursor : public Cursor {
             }
             if (have && count >= w.min_count) src[r] = best >= 0 ? 1 + best : 0;
         }
-        auto joined = concat_columns({&carried, &vcol});
+        const Series* const pair[] = {&carried, &vcol};
+        auto joined = concat_columns(pair);
         if (!joined) return joined.error();
         const Series all = joined->materialize();
         put(res, w.out, all.take(src).materialize());
@@ -2370,8 +2376,7 @@ class WindowStreamCursor : public Cursor {
     // first_value and nth_value: the row at one position of the partition. A
     // row of this chunk is read from it, and an earlier one from the copy
     // carried across the cut.
-    dstd::Result<void> native_pick(SpecState& s,
-                                   const dstd::Vector<Series>& cols,
+    dstd::Result<void> native_pick(SpecState& s, dstd::Span<const Series> cols,
                                    DataFrame& res, std::size_t emit,
                                    const RowInfo& row) {
         const WindowSpecInfo& w = s.info;
@@ -2393,7 +2398,8 @@ class WindowStreamCursor : public Cursor {
                 src[r] = 1 + at;
             if (r + 1 == emit) pick_at = at;
         }
-        auto joined = concat_columns({&carried, &vcol});
+        const Series* const pair[] = {&carried, &vcol};
+        auto joined = concat_columns(pair);
         if (!joined) return joined.error();
         const Series all = joined->materialize();
         put(res, w.out, all.take(src).materialize());
@@ -2410,8 +2416,7 @@ class WindowStreamCursor : public Cursor {
 
     // last_value: the last row of the partition, which the figures collected
     // in sorted order hold.
-    dstd::Result<void> native_last(SpecState& s,
-                                   const dstd::Vector<Series>& cols,
+    dstd::Result<void> native_last(SpecState& s, dstd::Span<const Series> cols,
                                    DataFrame& res, std::size_t emit,
                                    const RowInfo& row) {
         (void)cols;
@@ -2438,8 +2443,8 @@ class WindowStreamCursor : public Cursor {
     // chunk is taken. `cols` are the chunk's rows, `fcols` the kernel input
     // (context first), `res` the emitted result.
     template <class Key>
-    dstd::Result<void> carry(const dstd::Vector<Series>& cols,
-                             const dstd::Vector<Series>& fcols, DataFrame& res,
+    dstd::Result<void> carry(dstd::Span<const Series> cols,
+                             dstd::Span<const Series> fcols, DataFrame& res,
                              const Key& key, KeyRefusal& refusal,
                              std::int64_t n, std::int64_t emit) {
         WindowOverflow overflow;
@@ -2573,7 +2578,7 @@ class WindowStreamCursor : public Cursor {
 
     // The context of a range frame: the emitted rows of the partition the next
     // row belongs to whose order value is within the preceding bound of it.
-    void range_context(const dstd::Vector<Series>& fcols, std::int64_t ctx_n,
+    void range_context(dstd::Span<const Series> fcols, std::int64_t ctx_n,
                        std::int64_t emit, std::int64_t n, KeyRefusal& refusal) {
         const std::int64_t total = ctx_n + emit;
         dstd::Vector<double> ov;
@@ -2661,9 +2666,9 @@ class WindowStreamCursor : public Cursor {
 namespace lazy_internal {
 
 CursorResult make_window(dstd::UniquePtr<Cursor> in,
-                         const dstd::Vector<dstd::String>& sch,
-                         const dstd::Vector<Field>& in_fields,
-                         const dstd::String& name, OpDesc op,
+                         dstd::Span<const dstd::String> sch,
+                         dstd::Span<const Field> in_fields,
+                         dstd::StringView name, OpDesc op,
                          dstd::SharedPtr<const OwnedFrameOpArgs> args,
                          std::uint64_t budget) {
     const dstd::Vector<dstd::String>& part = args->strings_at(1);
@@ -2701,16 +2706,18 @@ CursorResult make_window(dstd::UniquePtr<Cursor> in,
     }
     dstd::UniquePtr<Cursor> sorted = std::move(source);
     if (!sort_keys.empty()) {
-        auto made = make_sort_merge(std::move(sorted), sch, sort_keys,
-                                    dstd::Vector<bool>(sort_keys.size(), false),
-                                    budget);
+        auto made = make_sort_merge(
+            std::move(sorted),
+            dstd::Vector<dstd::String>(sch.begin(), sch.end()), sort_keys,
+            dstd::Vector<bool>(sort_keys.size(), false), budget);
         if (!made) return made.error();
         sorted = std::move(*made);
     }
     return dstd::make_unique<WindowStreamCursor>(
-        std::move(sorted), sch, std::move(part_idx), std::move(order_idx),
-        std::move(specs), name, std::move(op), std::move(args),
-        std::move(stats), budget);
+        std::move(sorted), dstd::Vector<dstd::String>(sch.begin(), sch.end()),
+        std::move(part_idx), std::move(order_idx), std::move(specs),
+        dstd::String(name), std::move(op), std::move(args), std::move(stats),
+        budget);
 }
 
 }  // namespace lazy_internal

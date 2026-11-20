@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/internal/morsel_frame.h>
 #include <dftracer/utils/dataframe/internal/name_cache.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>
+#include <dftracer/utils/dataframe/internal/run_counters.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -20,6 +21,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/cursor_host.h>
+#include <dftracer/utils/plugins/host/explain_abi.h>
 #include <dftracer/utils/plugins/host/frame_check.h>
 #include <dftracer/utils/plugins/host/node_adapter.h>
 #include <dftracer/utils/plugins/host/plugin_abi.h>
@@ -179,8 +181,10 @@ class PluginNodeCursor final : public dataframe::Cursor {
    public:
     PluginNodeCursor(dstd::SharedPtr<NodeHandle> node,
                      dstd::UniquePtr<CursorHost> host, void* out_self,
-                     const ::dftu_cursor_vt* out_vt)
-        : node_(std::move(node)),
+                     const ::dftu_cursor_vt* out_vt,
+                     dstd::SharedPtr<dataframe::RunCounters> counters)
+        : counters_(std::move(counters)),
+          node_(std::move(node)),
           host_(std::move(host)),
           out_self_(out_self),
           out_vt_(),
@@ -204,7 +208,7 @@ class PluginNodeCursor final : public dataframe::Cursor {
         std::int64_t max_rows) override {
         host_->poll_reclaim();
         const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
-        plugins::AbiContext ctx(cancel);
+        plugins::AbiContext ctx(cancel, node_->name, counters_.get());
         AbiHandle<::dftu_dataframe, ::dftu_dataframe_free> frame;
         ::dftu_task* pending = nullptr;
         dftu_status status = out_vt_.next(ctx.get(), out_self_, max_rows,
@@ -246,7 +250,7 @@ class PluginNodeCursor final : public dataframe::Cursor {
         AbiHandle<::dftu_expr, ::dftu_expr_free> h(
             dataframe::expr_handle_wrap(predicate));
         const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
-        plugins::AbiContext ctx(cancel);
+        plugins::AbiContext ctx(cancel, node_->name, counters_.get());
         ::dftu_task* t = nullptr;
         const dftu_status status =
             out_vt_.narrow(ctx.get(), out_self_, h.get(), &applied, &t);
@@ -267,6 +271,8 @@ class PluginNodeCursor final : public dataframe::Cursor {
     }
 
    private:
+    // Last to go, so the run outlives the plugin cursor that adds to it.
+    dstd::SharedPtr<dataframe::RunCounters> counters_;
     dstd::SharedPtr<NodeHandle> node_;
     // After the plugin's cursor is destroyed, so what it left is released then.
     dstd::UniquePtr<CursorHost> host_;
@@ -288,7 +294,7 @@ class VtableNode final : public dataframe::NodeImpl {
         ::dftu_schema in_built;
         in_built.top = in.fields;
         ::dftu_schema out_built;
-        plugins::AbiContext ctx;
+        plugins::AbiContext ctx({}, handle_->name);
         const dftu_status status = handle_->vt.output_schema(
             ctx.get(), handle_->self, &in_built, &args.raw(), &out_built);
         if (status < 0)
@@ -302,14 +308,15 @@ class VtableNode final : public dataframe::NodeImpl {
 
     dstd::Result<dstd::UniquePtr<dataframe::Cursor>> open(
         dstd::UniquePtr<dataframe::Cursor> input,
-        const dstd::Vector<dstd::String>& input_names,
-        const dataframe::OpArgs& args,
-        std::uint64_t memory_budget) const override {
-        auto bridge =
-            dstd::make_unique<HostCursorBridge>(std::move(input), input_names);
+        dstd::Span<const dstd::String> input_names,
+        const dataframe::OpArgs& args, std::uint64_t memory_budget,
+        dstd::SharedPtr<dataframe::RunCounters> counters) const override {
+        auto bridge = dstd::make_unique<HostCursorBridge>(
+            std::move(input),
+            dstd::Vector<dstd::String>(input_names.begin(), input_names.end()));
         void* out_self = nullptr;
         const ::dftu_cursor_vt* out_vt = nullptr;
-        plugins::AbiContext ctx;
+        plugins::AbiContext ctx({}, handle_->name, counters.get());
         auto host = dstd::make_unique<CursorHost>(handle_->memory, "node",
                                                   memory_budget);
         const dftu_status status =
@@ -333,7 +340,23 @@ class VtableNode final : public dataframe::NodeImpl {
         bridge.release();
         return dstd::UniquePtr<dataframe::Cursor>(
             dstd::make_unique<PluginNodeCursor>(handle_, std::move(host),
-                                                out_self, out_vt));
+                                                out_self, out_vt,
+                                                std::move(counters)));
+    }
+
+    dstd::Vector<dataframe::ExplainLine> explain(
+        const dataframe::OpArgs& args) const override {
+        if (!handle_->vt.explain) return {};
+        ExplainLines lines;
+        plugins::AbiContext ctx({}, handle_->name);
+        const dftu_status status = handle_->vt.explain(
+            ctx.get(), handle_->self, &args.raw(), lines.out());
+        if (status < 0) {
+            DFTRACER_UTILS_LOG_WARN(
+                "{}", plugin_error(ctx, status, "node explain").format());
+            return {};
+        }
+        return lines.take();
     }
 
    private:

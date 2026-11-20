@@ -35,7 +35,7 @@ bool encodes_as(double v, std::uint8_t e, std::int64_t& i) {
            dstd::double_bits(v);
 }
 
-std::uint8_t best_exponent(const dstd::Vector<std::uint64_t>& bits) {
+std::uint8_t best_exponent(dstd::Span<const std::uint64_t> bits) {
     const std::size_t sample = std::min(bits.size(), SAMPLE_VALUES);
     std::array<std::uint32_t, MAX_EXPONENT + 1> encoded{};
     for (std::size_t k = 0; k < sample; ++k) {
@@ -57,7 +57,7 @@ std::uint8_t best_exponent(const dstd::Vector<std::uint64_t>& bits) {
 }
 
 template <class T, class Put>
-void put_rle(dstd::Vector<std::uint8_t>& out, const dstd::Vector<T>& values,
+void put_rle(dstd::Vector<std::uint8_t>& out, dstd::Span<const T> values,
              Put&& put) {
     std::size_t runs = 0;
     for (std::size_t i = 0; i < values.size(); ++i)
@@ -74,7 +74,7 @@ void put_rle(dstd::Vector<std::uint8_t>& out, const dstd::Vector<T>& values,
 }
 
 void put_deltas(dstd::Vector<std::uint8_t>& out,
-                const dstd::Vector<std::uint64_t>& values) {
+                dstd::Span<const std::uint64_t> values) {
     std::uint64_t prev = 0;
     for (const std::uint64_t v : values) {
         dstd::append_varint(
@@ -84,7 +84,7 @@ void put_deltas(dstd::Vector<std::uint8_t>& out,
 }
 
 void put_gaps(dstd::Vector<std::uint8_t>& out,
-              const dstd::Vector<std::uint64_t>& rows) {
+              dstd::Span<const std::uint64_t> rows) {
     std::uint64_t prev = 0;
     for (const std::uint64_t row : rows) {
         dstd::append_varint(out, row - prev);
@@ -114,14 +114,15 @@ void put_core(dstd::Vector<std::uint8_t>& out, const ChunkColumns& block) {
     }
     put_deltas(out, block.pid);
     put_deltas(out, block.tid);
-    put_rle(out, block.phase, [&out](std::uint8_t v) { out.push_back(v); });
+    put_rle<std::uint8_t>(out, block.phase,
+                          [&out](std::uint8_t v) { out.push_back(v); });
     const auto put_local = [&out](std::uint32_t v) {
         dstd::append_varint(out, v);
     };
-    put_rle(out, block.cat, put_local);
-    put_rle(out, block.name, put_local);
-    put_rle(out, block.host, put_local);
-    put_rle(out, block.file, put_local);
+    put_rle<std::uint32_t>(out, block.cat, put_local);
+    put_rle<std::uint32_t>(out, block.name, put_local);
+    put_rle<std::uint32_t>(out, block.host, put_local);
+    put_rle<std::uint32_t>(out, block.file, put_local);
 }
 
 /// The value a column's delta is taken from. The counter rows of one sample
@@ -132,7 +133,7 @@ enum class DeltaBase : std::uint8_t { Previous = 0, SameName = 1 };
 /// The value of entry k as an integer, false for an entry stored elsewhere.
 template <class ValueAt>
 DeltaBase pick_delta_base(const ChunkColumn& column,
-                          const dstd::Vector<std::uint32_t>& names,
+                          dstd::Span<const std::uint32_t> names,
                           dstd::Vector<std::uint64_t>& last,
                           ValueAt&& value_at) {
     std::fill(last.begin(), last.end(), 0);
@@ -157,7 +158,7 @@ DeltaBase pick_delta_base(const ChunkColumn& column,
 template <class ValueAt>
 void put_value_deltas(dstd::Vector<std::uint8_t>& out,
                       const ChunkColumn& column,
-                      const dstd::Vector<std::uint32_t>& names,
+                      dstd::Span<const std::uint32_t> names,
                       dstd::Vector<std::uint64_t>& last, DeltaBase base,
                       ValueAt&& value_at) {
     std::fill(last.begin(), last.end(), 0);
@@ -175,7 +176,7 @@ void put_value_deltas(dstd::Vector<std::uint8_t>& out,
 
 /// `last` holds one value per local id of the block, as scratch.
 void put_column(dstd::Vector<std::uint8_t>& out, const ChunkColumn& column,
-                const dstd::Vector<std::uint32_t>& names,
+                dstd::Span<const std::uint32_t> names,
                 dstd::Vector<std::uint64_t>& last) {
     dstd::append_varint(out, column.path);
     out.push_back(static_cast<std::uint8_t>(column.kind));
@@ -341,7 +342,7 @@ bool get_core(dstd::LeReader& r, ChunkColumns& block, std::size_t id_count) {
 
 /// Reads the next value delta of entry k into `value`.
 bool get_value_delta(dstd::LeReader& r, const ChunkColumn& column,
-                     std::size_t k, const dstd::Vector<std::uint32_t>& names,
+                     std::size_t k, dstd::Span<const std::uint32_t> names,
                      dstd::Vector<std::uint64_t>& last, DeltaBase base,
                      std::uint64_t& prev, std::uint64_t& value) {
     std::uint64_t z = 0;
@@ -356,7 +357,7 @@ bool get_value_delta(dstd::LeReader& r, const ChunkColumn& column,
 /// `names` is the block's decoded name column, `last` scratch of one value
 /// per local id.
 bool get_column(dstd::LeReader& r, std::uint64_t rows, std::size_t id_count,
-                const dstd::Vector<std::uint32_t>& names,
+                dstd::Span<const std::uint32_t> names,
                 dstd::Vector<std::uint64_t>& last, ChunkColumn& column) {
     std::uint64_t path = 0;
     std::uint8_t kind = 0;

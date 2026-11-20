@@ -20,6 +20,8 @@ PyObject* scalar_to_py(dftu_scalar v) {
             return PyUnicode_DecodeUTF8(v.value.s ? v.value.s : "",
                                         static_cast<Py_ssize_t>(v.len),
                                         "strict");
+        case DFTU_SCALAR_TAG_NULL:
+            Py_RETURN_NONE;
         case DFTU_SCALAR_TAG_ERR:
             PyErr_SetString(PyExc_TypeError,
                             v.value.err != nullptr && v.value.err->message
@@ -32,21 +34,27 @@ PyObject* scalar_to_py(dftu_scalar v) {
 }
 
 PyObject* Series_all(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
-    return PyBool_FromLong(a->all());
+    return PyBool_FromLong(without_gil(a->length(), [&] { return a->all(); }));
 }
 PyObject* Series_any(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
-    return PyBool_FromLong(a->any());
+    return PyBool_FromLong(without_gil(a->length(), [&] { return a->any(); }));
 }
 PyObject* Series_dot(PyObject* self, PyObject* other) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
-    Series* b = as_series(other);
+    Held held_b(other);
+    Series* b = held_b.get();
     if (!b) return nullptr;
-    return scalar_to_py(dftu_series_dot(a->handle(), b->handle()));
+    return scalar_to_py(without_gil(a->length(), [&] {
+        return dftu_series_dot(a->handle(), b->handle());
+    }));
 }
 
 }  // namespace dftracer::utils::python::frame::series_detail

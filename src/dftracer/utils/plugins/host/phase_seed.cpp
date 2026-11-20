@@ -137,8 +137,8 @@ coro::CoroTask<dstd::Result<InputStats>> scan_input_stats(
 
 // The first path whose key in `before` is not in `after`, or empty when none.
 dstd::String first_changed(
-    const dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>>& before,
-    const dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>>& after) {
+    dstd::Span<const dstd::Pair<dstd::String, std::uint64_t>> before,
+    dstd::Span<const dstd::Pair<dstd::String, std::uint64_t>> after) {
     for (const auto& file : before) {
         bool same = false;
         for (const auto& now : after) same = same || now == file;

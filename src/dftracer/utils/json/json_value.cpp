@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/json_value.h>
 
 #include <cstddef>
 
 namespace dftracer::utils::json {
 
-JsonValue JsonValue::at(const char* path) const {
-    if (!valid_ || !path) return JsonValue();
+JsonValue JsonValue::at(dstd::StringView path) const {
+    if (!valid_) return JsonValue();
 
     JsonValue current = *this;
-    const char* p = path;
+    const char* p = path.data();
+    const char* const pend = p + path.size();
 
-    while (*p) {
+    while (p < pend) {
         if (*p == '.') {
             ++p;
             continue;
@@ -20,12 +22,12 @@ JsonValue JsonValue::at(const char* path) const {
             ++p;
             std::size_t idx = 0;
             bool any = false;
-            while (*p >= '0' && *p <= '9') {
+            while (p < pend && *p >= '0' && *p <= '9') {
                 idx = idx * 10 + static_cast<std::size_t>(*p - '0');
                 ++p;
                 any = true;
             }
-            if (*p == ']') ++p;
+            if (p < pend && *p == ']') ++p;
             if (!any) return JsonValue();
             current = current[idx];
             if (!current.exists()) return JsonValue();
@@ -33,7 +35,7 @@ JsonValue JsonValue::at(const char* path) const {
         }
 
         const char* start = p;
-        while (*p && *p != '.' && *p != '[') ++p;
+        while (p < pend && *p != '.' && *p != '[') ++p;
         dstd::StringView key_sv(start, static_cast<std::size_t>(p - start));
 
         JsonValue next = current[key_sv];
@@ -58,9 +60,9 @@ JsonValue JsonValue::at(const char* path) const {
         // wins when it exists; only on its miss do we try progressively longer
         // dot-joined keys, longest first, then continue the walk from the end
         // of the matched key so a value nested under a flat key still resolves.
-        if (!next.exists() && current.is_object() && *p == '.') {
+        if (!next.exists() && current.is_object() && p < pend && *p == '.') {
             const char* run_end = p;
-            while (*run_end && *run_end != '[') ++run_end;
+            while (run_end < pend && *run_end != '[') ++run_end;
             for (const char* end = run_end; end > p;) {
                 dstd::StringView cand(start,
                                       static_cast<std::size_t>(end - start));
@@ -79,11 +81,6 @@ JsonValue JsonValue::at(const char* path) const {
     }
 
     return current;
-}
-
-JsonValue JsonValue::at(dstd::StringView path) const {
-    const dstd::String path_str(path);
-    return at(path_str.c_str());
 }
 
 }  // namespace dftracer::utils::json

@@ -49,7 +49,7 @@ int column_index(const char* name) {
 }
 
 dftu_status schema(dftu_ctx*, void*, const char* const** out_names,
-                   int32_t* out_count) {
+                   std::int32_t* out_count) {
     *out_names = NAMES;
     *out_count = N_COLUMNS;
     return DFTU_OK;
@@ -62,8 +62,8 @@ struct Cursor {
     bool done = false;
 };
 
-dftu_status next(dftu_ctx* ctx, void* self, int64_t, ::dftu_dataframe** out,
-                 dftu_task**) {
+dftu_status next(dftu_ctx* ctx, void* self, std::int64_t,
+                 ::dftu_dataframe** out, dftu_task**) {
     auto* cursor = static_cast<Cursor*>(self);
     if (cursor->done) {
         *out = nullptr;
@@ -84,7 +84,7 @@ const ::dftu_cursor_vt CURSOR_VT = {.struct_size = sizeof(dftu_cursor_vt),
                                     .destroy = cursor_destroy};
 
 dftu_status scan(dftu_ctx* ctx, void*, const ::dftu_plugin_host*,
-                 const ::dftu_scan_request* request, int32_t*,
+                 const ::dftu_scan_request* request, std::int32_t*,
                  void** out_cursor_self, const ::dftu_cursor_vt** out_vt) {
     auto* cursor = new Cursor();
     // The host re-checks that a projection's columns come back in its order.

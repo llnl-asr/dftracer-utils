@@ -4,7 +4,7 @@
 ``DataFrame`` wraps the native ``_DataFrame`` handle: native frame ops plus
 Python-side Arrow/pandas/polars conversion and pickling. Every relational and
 reshape primitive - ``join``/``asof``/``interval``, ``window``/``gap_fill``,
-``unnest``/``explode``, ``melt``/``pivot``, ``concat``/``union``, ``distinct``,
+``unnest``/``explode``, ``melt``/``pivot``, ``concat``/``union``,
 ``sample``, ``top_k``, ``sort`` - is a native method that takes and returns
 ``DataFrame``s, running the SIMD kernels on the native columns; Arrow is crossed
 only at the edge (``to_arrow``/``from_arrow``), never as the operating boundary.
@@ -13,12 +13,11 @@ See :mod:`dftracer.utils.series` for the column counterpart.
 
 from __future__ import annotations
 
+import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
-    Dict,
-    List,
     Literal,
     Mapping,
     Optional,
@@ -31,66 +30,47 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
-from ._pandas_frame import _FramePandasMixin
-from ._polars_frame import _FramePolarsMixin
-from .enums import DType
-from .series import (
-    Series,
+from ._aliases import install as _install_aliases
+from ._convert import (
     _apply_index,
     _arrow_native,
-    _indices,
     _pandas_default,
     _pandas_nullable,
     _polars_via_arrow,
-    _register,
     _require_pyarrow,
+    _row_indices,
     _to_pandas,
-    _unwrap,
-    _wrap,
-    _Wrapper,
+    index_columns,
 )
+from ._eval import Columnar
+from ._levels import LevelArg, pick_levels
+from ._pandas_frame import FramePandasMixin
+from ._polars_frame import FramePolarsMixin
+from ._series_index import default_name, positions, public_name, shown_name
+from ._window_spec import norm_window_spec
+from .agg import AggForm, AggKeyword, select_aggs
+from .enums import DType, rule_to_units
+from .expr import Agg, Expr, Lit, Named, SelectItem, col, resolve_selectors, when
+from .series import Series
 
 if TYPE_CHECKING:
-    import numpy as np  # ty: ignore[import-not-found]
-    import pandas as pd  # ty: ignore[import-not-found]
-    import polars as pl  # ty: ignore[import-not-found]
-    import pyarrow as pa  # ty: ignore[import-not-found]
-    from pandas.api.extensions import ExtensionArray  # ty: ignore[import-not-found]
+    import numpy as np
+    import pandas as pd
+    import polars as pl
+    import pyarrow as pa
+    from pandas.api.extensions import ExtensionArray
+    from typing_extensions import Self
 
-    from .columnar import Agg, ColumnExpr, GroupBy, Named
-    from .indexing import At, ILoc, Loc, Resampler
+    from ._loc import At, ILoc, Loc, Resampler
+    from ._time_index import TimeResampler
+    from .dftracer_utils_ext import Scalar
+    from .groupby import GroupBy
     from .lazyframe import LazyFrame
 
-# Matches WINDOW_UNBOUNDED (int64 max): a frame bound of None means that side of
-# the ROWS frame runs to the partition edge.
-_WINDOW_UNBOUNDED = (1 << 63) - 1
 
-_WINDOW_NULLARY = ("row_number", "rank", "dense_rank")
-_WINDOW_VALUE_ONLY = (
-    "running_sum",
-    "running_min",
-    "running_max",
-    "running_count",
-    "running_prod",
-    "delta",
-    "first_value",
-    "last_value",
-    "fill_forward",
-)
-_WINDOW_FRAME = (
-    "frame_sum",
-    "frame_min",
-    "frame_max",
-    "frame_count",
-    "frame_mean",
-    "frame_var",
-    "frame_std",
-    "frame_count_distinct",
-    "frame_collect",
-)
-_WINDOW_FRAME_Q = "frame_quantile"
-_WINDOW_FRAME_BY = ("frame_arg_max", "frame_arg_min")
-
+__all__ = [
+    "DataFrame",
+]
 # Finite value sets for the viewer builder args (kept as reusable aliases so the
 # wrappers, the dask plan, and the stub share one definition).
 PhaseArg = Literal["events", "counters", "aggregated", "metadata", "any"]
@@ -232,7 +212,7 @@ PivotTableAgg = Literal[
 ]
 
 
-def _names(cols: Optional[Union[str, Sequence[str]]]) -> List[str]:
+def as_names(cols: str | Sequence[str] | None) -> list[str]:
     if cols is None:
         return []
     if isinstance(cols, str):
@@ -240,212 +220,213 @@ def _names(cols: Optional[Union[str, Sequence[str]]]) -> List[str]:
     return list(cols)
 
 
-def _window_bound(v: Optional[int]) -> int:
-    return _WINDOW_UNBOUNDED if v is None else int(v)
-
-
-def _window_arity(spec: Sequence[object], n: int) -> None:
-    if len(spec) != n:
-        raise ValueError(
-            f"window: {spec[0]!r} spec expects {n} elements, got {len(spec)}: {spec!r}"
-        )
-
-
-# A spec is a heterogeneous positional tuple (str, col names, ints, None) read
-# by index, so its elements are genuinely Any; the output 9-tuple is mixed too.
-def _single_index(index: Optional[List[str]], op: str) -> str:
+def single_index(index: Sequence[str], op: str) -> str:
     """The one index column an op reads its time from."""
-    if index is None:
+    if not index:
         raise ValueError(f"{op}: set_index(time) first, or pass on=")
     if len(index) != 1:
         raise ValueError(f"{op}: the index has {len(index)} columns; pass on=")
     return index[0]
 
 
-def _nulls_first_keys(
-    names: List[str], descending: Union[bool, Sequence[bool]]
-) -> Tuple[List[str], List[bool]]:
-    """The sort keys and directions that put null keys first: a hidden 0 / 1
-    presence column ahead of each key, ascending."""
-    flags = [descending] * len(names) if isinstance(descending, bool) else list(descending)
-    if len(flags) == 1:
-        flags = flags * len(names)
-    if len(flags) != len(names):
-        raise ValueError("sort: one direction per key, or a single flag")
-    keys: List[str] = []
-    dirs: List[bool] = []
-    for i, (name, desc) in enumerate(zip(names, flags)):
-        keys += [f"__dftu_present_{i}__", name]
-        dirs += [False, bool(desc)]
-    return keys, dirs
+def _nan_keys(frame: DataFrame, given: list[str | Series]) -> tuple[DataFrame, list[str | Series]]:
+    """The frame and keys for a pandas ``groupby`` over float keys: a NaN is
+    missing like a null, so it becomes a null and ``dropna`` treats the two
+    alike (the rows keep their places, so the group-wise transforms keep the
+    length of the frame)."""
+    keys = list(given)
+    for i in range(len(keys)):
+        key = keys[i]
+        column = frame._col(key) if isinstance(key, str) else key
+        if not column.dtype.is_float or not column.is_nan().any():
+            continue
+        cleaned = column.where(column.is_nan().logical_not())
+        if isinstance(key, str):
+            frame = frame.with_column(key, cleaned)
+        else:
+            keys[i] = cleaned
+    return frame, keys
 
 
-def _norm_window_spec(spec: Sequence[Any]) -> Tuple[object, ...]:
-    # Normalize to the fixed 12-tuple the native kernel reads: (func,
-    # value|None, offset, name, time|None, threshold, counter, frame_pre,
-    # frame_post, end|None, span, range_frame).
-    if not isinstance(spec, (tuple, list)) or not spec:
-        raise ValueError(f"window: bad spec {spec!r}")
-    func = spec[0]
-    value: Optional[str] = None
-    offset = 0
-    name: Optional[str] = None
-    time: Optional[str] = None
-    threshold = 0.0
-    counter = False
-    pre = 0
-    post = 0
-    end: Optional[str] = None
-    span = 0.0
-    range_frame = False
-    if func in _WINDOW_NULLARY:
-        _window_arity(spec, 2)
-        name = spec[1]
-    elif func in ("lag", "lead"):
-        _window_arity(spec, 4)
-        value, offset, name = spec[1], int(spec[2]), spec[3]
-    elif func in _WINDOW_VALUE_ONLY:
-        _window_arity(spec, 3)
-        value, name = spec[1], spec[2]
-    elif func == "rate":
-        if len(spec) not in (4, 5):
-            raise ValueError(f"window: 'rate' spec expects 4 or 5 elements: {spec!r}")
-        value, time, name = spec[1], spec[2], spec[3]
-        counter = bool(spec[4]) if len(spec) == 5 else False
-    elif func == "sessionize":
-        if len(spec) not in (4, 5, 6):
-            raise ValueError(f"window: 'sessionize' spec expects 4 to 6 elements: {spec!r}")
-        time, threshold, name = spec[1], float(spec[2]), spec[3]
-        end = spec[4] if len(spec) > 4 else None
-        span = float(spec[5]) if len(spec) > 5 else 0.0
-    elif func in _WINDOW_FRAME or func == _WINDOW_FRAME_Q or func in _WINDOW_FRAME_BY:
-        extra = func == _WINDOW_FRAME_Q or func in _WINDOW_FRAME_BY
-        if len(spec) not in ((8,) if extra else (5, 6, 7)):
-            raise ValueError(
-                f"window: {func!r} spec expects {8 if extra else '5 to 7'} elements: {spec!r}"
-            )
-        if func == _WINDOW_FRAME_Q:
-            threshold = float(spec[7])
-        elif extra:
-            end = spec[7]
-            if not isinstance(end, str):
-                raise ValueError(f"window: {func!r} needs a str 'by' column: {spec!r}")
-        if len(spec) >= 7:
-            if spec[6] not in ("rows", "range"):
-                raise ValueError(f"window: frame mode must be 'rows' or 'range': {spec!r}")
-            range_frame = spec[6] == "range"
-        value, pre, post, name = spec[1], _window_bound(spec[2]), _window_bound(spec[3]), spec[4]
-        offset = int(spec[5]) if len(spec) > 5 else 0
-    elif func == "ntile":
-        _window_arity(spec, 3)
-        offset, name = int(spec[1]), spec[2]
-    elif func == "nth_value":
-        _window_arity(spec, 4)
-        value, offset, name = spec[1], int(spec[2]), spec[3]
-    else:
-        raise ValueError(f"window: unknown function {func!r}")
-    if not isinstance(name, str):
-        raise ValueError(f"window: output name must be a str: {spec!r}")
-    return (func, value, offset, name, time, threshold, counter, pre, post, end, span, range_frame)
+def _keeps_every_row(mask: Series, rows: int) -> bool:
+    """Whether the Bool Series ``mask`` is true on all ``rows`` rows."""
+    return len(mask) == rows and mask.null_count == 0 and bool(mask.all())
 
 
-class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"]):
+def _bound(native: _ext.DataFrame) -> DataFrame:
+    """A native result as the public class: the native factories build it."""
+    return cast("DataFrame", native)
+
+
+class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
     """A named set of columns: native frame ops plus Arrow conversion.
 
     ``DataFrame({"a": [1, 2]})`` builds one from a ``{name: array-like}``
-    mapping, the pandas / polars constructor; ``DataFrame(native)`` wraps a
-    native handle."""
+    mapping, the pandas / polars constructor. A labelled Series in the mapping
+    gives the frame its labels, as pandas (see :func:`_with_series_labels`);
+    :meth:`from_dict` takes the columns only."""
 
-    __slots__ = ("_index",)
+    __slots__ = ()
 
-    def __init__(self, data: "Union[_ext._DataFrame, Mapping[str, object]]") -> None:
-        if isinstance(data, Mapping):
-            data = _unwrap(DataFrame.from_dict(data))
-        super().__init__(data)
-        self._index: Optional[List[str]] = None
+    # The native type has no constructor of its own: its factories build this
+    # class directly (_bind_types), so only a Python-data call comes through
+    # here, and __new__ hands back the frame a native importer built.
+    def __new__(cls, data: Mapping[str, object] | _ext.DataFrame) -> DataFrame:
+        if cls is not DataFrame:
+            raise TypeError(
+                "DataFrame cannot be subclassed: the native calls build the class bound by "
+                "_bind_types, so an instance of a subclass would come back as a DataFrame"
+            )
+        if isinstance(data, _ext.DataFrame):
+            return cast("DataFrame", data)
+        native = _native_columns(data)
+        if native is not None:
+            return _with_series_labels(*native)
+        return DataFrame.from_dict(data)
 
-    def _like(self, native: object) -> Any:
-        """Wrap a native result, carrying this frame's index column names when
-        the result still holds every one of them."""
-        out = _wrap(native)
-        if isinstance(out, DataFrame) and self._index is not None:
-            if all(name in out for name in self._index):
-                out._index = self._index
-        return out
+    def __init__(self, data: Mapping[str, object] | _ext.DataFrame) -> None:
+        pass
 
     # -- the index: named columns, or the row position -------------------------
+    def _labelled(self) -> DataFrame:
+        """This frame with the row positions as its index when it has none:
+        what a pandas op that selects rows keeps, so the rows it keeps say
+        where they came from."""
+        if _ext.DataFrame.index_names(self):
+            return self
+        first = default_name(0)
+        numbered = _ext.DataFrame.with_row_index(self, first)
+        with_labels = _ext.DataFrame.select(numbered, *self._names(), first)
+        return _bound(_ext.DataFrame.with_index(with_labels, [first]))
+
+    def _selecting(
+        self, run: Callable[[DataFrame], DataFrame], in_order: bool = False
+    ) -> DataFrame:
+        """``run`` on this frame under row labels (see :meth:`_labelled`). With
+        ``in_order`` (the op only drops rows) a result that kept every row
+        has no labels to show and comes back as a frame with no index."""
+        if _ext.DataFrame.index_names(self):
+            return run(self)
+        out = run(self._labelled())
+        if in_order and len(out) == len(self):
+            return _bound(_ext.DataFrame.select(out, *self._names()))
+        return out
+
     @property
-    def index(self) -> "Union[Series, DataFrame]":
+    def index(self) -> Series | DataFrame:
         """The index column set by :meth:`set_index` as a Series (several
         columns: a frame of them), else the row positions (pandas' default
         ``RangeIndex``)."""
-        if self._index is None:
+        names = self.index_names()
+        if not names:
             return Series.from_list(list(range(len(self))))
-        if len(self._index) == 1:
-            return Series(self._native[self._index[0]])
-        return _wrap(self._native.select(*self._index))
+        if len(names) == 1:
+            return _ext.DataFrame.__getitem__(self, names[0])
+        return _bound(_ext.DataFrame.with_index(_ext.DataFrame.select(self, *names), []))
 
-    def index_levels(self) -> List[Series]:
+    def index_levels(self) -> list[Series]:
         """The index columns, one Series per level; the row positions when no
         index is set."""
-        if self._index is None:
+        names = self.index_names()
+        if not names:
             return [Series.from_list(list(range(len(self))))]
-        return [Series(self._native[name]) for name in self._index]
+        return [_ext.DataFrame.__getitem__(self, name) for name in names]
 
-    def set_index(self, names: "Union[str, Sequence[str]]") -> "DataFrame":
+    def set_index(self, names: str | Sequence[str], *, append: bool = False) -> DataFrame:
         """Name the column(s) ``loc`` / ``at`` / ``resample`` read labels
-        from. The columns stay in place; nothing is copied (the polars model
-        of an index: a column). Several names are the pandas ``MultiIndex``
-        shape: ``loc[(a, b)]`` matches every level, ``loc[a]`` the first."""
+        from: the native row index of the frame. The columns stay in place;
+        nothing is copied. Several names are the pandas ``MultiIndex``
+        shape: ``loc[(a, b)]`` matches every level, ``loc[a]`` the first. A
+        list or struct column cannot be an index. With ``append`` the columns
+        become levels after the current ones (a frame with no index keeps its
+        row positions as an unnamed first level); a name that is already a level
+        is a ``KeyError``, as pandas. Without ``append`` the old index columns are
+        dropped, as pandas does, and a name that is a level and not a column is a
+        ``KeyError``."""
         keys = [names] if isinstance(names, str) else list(names)
         if not keys:
             raise ValueError("set_index: at least one column")
-        for name in keys:
-            if name not in self:
-                raise KeyError(f"set_index: no column named {name!r}")
-        out = DataFrame(self._native)
-        out._index = keys
-        return out
+        if not append:
+            missing = [name for name in keys if name not in self.columns]
+            if missing:
+                raise KeyError(f"None of {missing} are in the columns")
+            gone = [n for n in self.index_names() if n not in keys]
+            frame = self
+            if gone:
+                rest = [c for c in self._names() if c not in gone]
+                frame = _bound(_ext.DataFrame.select(self, *rest))
+            return _bound(_ext.DataFrame.with_index(frame, keys))
+        shown = self.columns
+        missing = [name for name in keys if name not in shown]
+        if missing:
+            raise KeyError(f"None of {missing} are in the columns")
+        current = self.index_names()
+        if current:
+            return _bound(_ext.DataFrame.with_index(self, [*current, *keys]))
+        first = default_name(0)
+        frame = _ext.DataFrame.with_row_index(self, first)
+        return _bound(_ext.DataFrame.with_index(frame, [first, *keys]))
 
-    def reset_index(self, drop: bool = False) -> "DataFrame":
-        """Forget the index columns (they stay as plain columns unless
-        ``drop``); with no index set, prepend the row positions as ``index``,
-        as pandas."""
-        if self._index is None:
-            return self if drop else self._like(self._native.with_row_index("index"))
+    def reset_index(self, level: LevelArg = None, *, drop: bool = False) -> DataFrame:
+        """The index levels ``level`` (a name, a position or a list; all by
+        default) back to plain columns, in front of the others and named as
+        pandas names them (``index`` for an unnamed single level, ``level_<i>``
+        for an unnamed one of several); the other levels stay the index. With
+        ``drop`` the levels are removed. With no index, prepend the row
+        positions as ``index``, as pandas. ``ValueError`` when a level's name is
+        already a column (a frame has no duplicate names)."""
+        names = self.index_names()
+        effective = names or [default_name(0)]
+        picked = (
+            sorted(set(pick_levels(effective, level)))
+            if level is not None
+            else list(range(len(effective)))
+        )
+        if not names:
+            return self if drop else _bound(_ext.DataFrame.with_row_index(self, "index"))
+        keep = [names[i] for i in range(len(names)) if i not in picked]
+        gone = [names[i] for i in picked]
         if drop:
-            keep = [c for c in self.columns if c not in self._index]
-            return _wrap(self._native.select(*keep))
-        return DataFrame(self._native)
+            rest = [c for c in self._names() if c not in gone]
+            return _bound(_ext.DataFrame.with_index(_ext.DataFrame.select(self, *rest), keep))
+        shown = [shown_name(names, i) for i in picked]
+        visible = self.columns
+        if len(set(shown)) != len(shown) or any(s in visible for s in shown):
+            clash = next(s for s in shown if s in visible or shown.count(s) > 1)
+            raise ValueError(f"cannot insert {clash}, already exists")
+        renamed = {a: b for a, b in zip(gone, shown) if a != b}
+        out = _ext.DataFrame.rename(self, renamed) if renamed else self
+        order = [*shown, *visible, *keep]
+        return _bound(_ext.DataFrame.with_index(_ext.DataFrame.select(out, *order), keep))
 
     @property
-    def iloc(self) -> "ILoc":
+    def iloc(self) -> ILoc:
         """Rows and columns by position: ``df.iloc[3]``, ``df.iloc[2:5]``,
         ``df.iloc[[0, 4], "c"]``; assignment rebuilds the touched columns."""
-        from .indexing import ILoc
+        from ._loc import ILoc
 
         return ILoc(self)
 
     @property
-    def loc(self) -> "Loc":
+    def loc(self) -> Loc:
         """Rows by index label (a value, an inclusive slice, a list, a Bool
         mask or an expression), columns by name; assignment rebuilds the
         touched columns (``df.loc[df["a"] > 1, "c"] = 0``)."""
-        from .indexing import Loc
+        from ._loc import Loc
 
         return Loc(self)
 
     @property
-    def at(self) -> "At":
+    def at(self) -> At:
         """One value by index label and column name."""
-        from .indexing import At
+        from ._loc import At
 
         return At(self, by_position=False)
 
     @property
-    def iat(self) -> "At":
+    def iat(self) -> At:
         """One value by row position and column position."""
-        from .indexing import At
+        from ._loc import At
 
         return At(self, by_position=True)
 
@@ -454,62 +435,95 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         ``df[mask] = value`` writes every column where the mask holds. The
         frame's columns are immutable: the handle is rebound to a new frame
         that shares every untouched column."""
-        from .indexing import Rows, assign_rows, rows_by_label
+        from ._loc import Labels, Rows, assign_rows, rows_by_label
 
         if isinstance(key, str):
             assign_rows(self, Rows.all(), [key], value)
         elif isinstance(key, (list, tuple)):
             assign_rows(self, Rows.all(), [str(k) for k in key], value)
         elif isinstance(key, Series):
-            assign_rows(self, rows_by_label(self.index_levels(), key), self.columns, value)
+            assign_rows(self, rows_by_label(Labels(self), key), self.columns, value)
         else:
             raise TypeError("assign to a column name, a list of names or a Bool mask")
 
     def resample(
-        self, rule: "Union[int, str]", on: Optional[str] = None, unit: str = "us"
-    ) -> "Resampler":
-        """Tumbling time windows of ``rule`` (``"5s"``, ``"100ms"``, ``"1min"``,
-        or an int of the column's own units) over the index column or ``on``,
-        with the aggregate family (``.sum()``, ``.agg(...)``, ``.size()``);
-        ``unit`` is the time column's unit (dftracer timestamps are ``us``).
-        Each call is one ``group_by_dynamic`` over the time-sorted frame."""
-        from .indexing import Resampler, rule_to_units
+        self,
+        rule: int | str | datetime.timedelta,
+        closed: Literal["left", "right"] | None = None,
+        label: Literal["left", "right"] | None = None,
+        on: str | None = None,
+        level: int | str | None = None,
+        origin: str | datetime.datetime = "start_day",
+        offset: str | datetime.timedelta | None = None,
+        group_keys: bool = False,
+        *,
+        unit: str = "us",
+    ) -> Resampler | TimeResampler:
+        """Time bins of ``rule`` over a Timestamp index level, ``level`` of a
+        MultiIndex or the column ``on`` (pandas ``resample``): ``rule`` is
+        ``"5s"``, ``"1min"``, ``"D"`` or a calendar rule (``"W"``, ``"ME"``,
+        ``"MS"``, ``"QE"``, ``"QS"``, ``"YE"``, ``"YS"``), ``closed``, ``label``,
+        ``origin`` and ``offset`` as pandas. The result has one row per bin
+        between the first and the last, empty bins included (sum 0, mean
+        NaN, count 0), indexed by the bin label. The aggregations are ``sum``,
+        ``prod``, ``mean``, ``median``, ``min``, ``max``, ``count``, ``size``,
+        ``first``, ``last``, ``std``, ``var``, ``nunique``, ``ohlc`` and
+        ``agg``. An Int64 column (DFTracer timestamps) is read in ``unit``
+        (``"us"`` by default) with the width ``rule`` and fixed left-closed
+        bins; each call is one ``group_by_dynamic`` over the time-sorted
+        frame."""
+        from ._loc import Resampler
+        from ._time_index import is_timestamp, resample
 
-        time = on if on is not None else _single_index(self._index, "resample")
-        if time not in self:
-            raise KeyError(f"resample: no column named {time!r}")
-        return Resampler(self, time, rule_to_units(rule, unit))
+        names = self.index_names()
+        legacy = on if on is not None else (names[0] if len(names) == 1 else None)
+        if level is None and legacy is not None and legacy in self:
+            column = self[legacy]
+            if not is_timestamp(column) and column.dtype == DType.INT64:
+                if isinstance(rule, datetime.timedelta):
+                    raise TypeError("resample: a timedelta rule needs a Timestamp index")
+                if closed or label or origin != "start_day" or offset is not None:
+                    raise NotImplementedError(
+                        "resample: an Int64 column takes rule, on and unit only; "
+                        "closed, label, origin and offset need a Timestamp column"
+                    )
+                return Resampler(self, legacy, rule_to_units(rule, unit))
+        return resample(self, rule, closed, label, on, level, origin, offset)
 
     @classmethod
-    def from_arrow(cls, table: "pa.Table") -> "DataFrame":
+    def from_arrow(cls, table: pa.Table) -> DataFrame:
         """Import a ``pyarrow.Table`` (or any ``__arrow_c_stream__`` provider),
         zero-copy via the Arrow C Data Interface."""
         return _dataframe_from_arrow(table)
 
     @classmethod
-    def from_pandas(cls, df: "pd.DataFrame") -> "DataFrame":
+    def from_pandas(cls, df: pd.DataFrame) -> DataFrame:
         """Import a ``pandas.DataFrame`` through NumPy, with no pyarrow (see
         :meth:`Series.from_pandas`). A non-default index becomes columns after the
-        data columns, named by its levels or ``__index_level_<i>__``."""
-        from ._import import index_columns
-
+        data columns, named by its levels or ``__index_level_<i>__``, and the
+        frame's row index (:meth:`index_names`); the default ``RangeIndex`` (``0 .. n-1``
+        with step 1) is no index, any other range is labels."""
         columns = [(str(name), df[name]) for name in df.columns]
         if len({n for n, _ in columns}) != len(columns):
             raise ValueError("from_pandas: column names are not unique")
-        columns += index_columns(df)
-        return _frame_of(columns, Series.from_pandas)
+        levels = index_columns(df)
+        names = [n for n, _ in levels]
+        if len({n for n, _ in columns + levels}) != len(columns) + len(levels):
+            raise ValueError("from_pandas: an index level repeats a column name")
+        frame = _frame_of(columns + levels, Series.from_pandas)
+        return _bound(_ext.DataFrame.with_index(frame, names)) if names else frame
 
     @classmethod
-    def from_polars(cls, df: "pl.DataFrame") -> "DataFrame":
+    def from_polars(cls, df: pl.DataFrame) -> DataFrame:
         """Import a ``polars.DataFrame`` with no pyarrow (see
         :meth:`Series.from_polars`)."""
         return _frame_of([(name, df[name]) for name in df.columns], Series.from_polars)
 
     @classmethod
-    def from_parquet(cls, path: str, columns: Optional[Sequence[str]] = None) -> "DataFrame":
+    def from_parquet(cls, path: str, columns: Sequence[str] | None = None) -> DataFrame:
         """Read a Parquet file into a frame (needs pyarrow)."""
         _require_pyarrow()
-        import pyarrow.parquet as pq  # ty: ignore[import-not-found]
+        import pyarrow.parquet as pq
 
         table = pq.read_table(path, columns=columns)
         # Dask writes its default index as a column of this name and lists it as
@@ -524,7 +538,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         return _dataframe_from_arrow(table)
 
     @classmethod
-    def from_dict(cls, mapping: Mapping[str, object]) -> "DataFrame":
+    def from_dict(cls, mapping: Mapping[str, object]) -> DataFrame:
         """Import a ``{name: array-like}`` mapping: Series, lists of scalars, NumPy
         arrays and pandas or polars Series import natively; anything else (a
         pyarrow array, nested lists) goes through pyarrow."""
@@ -537,9 +551,9 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
     @classmethod
     def from_numpy(
         cls,
-        arr: "Union[np.ndarray, Dict[str, np.ndarray]]",
+        arr: np.ndarray | dict[str, np.ndarray],
         columns: Sequence[str],
-    ) -> "DataFrame":
+    ) -> DataFrame:
         """Import NumPy columns into a frame.
 
         ``arr`` is either a 2-D array (one column per column index) or a
@@ -549,16 +563,14 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             cols = {name: Series.from_numpy(col) for name, col in arr.items()}
         else:
             cols = {name: Series.from_numpy(arr[:, i]) for i, name in enumerate(columns)}
-        return DataFrame(
-            _ext._dataframe_from_columns(list(cols), [_unwrap(c) for c in cols.values()])
-        )
+        return DataFrame(_ext._dataframe_from_columns(list(cols), [c for c in cols.values()]))
 
-    def to_arrow(self) -> "pa.Table":
+    def to_arrow(self) -> pa.Table:
         """This frame as a ``pyarrow.Table`` (zero-copy via the C Data Interface
         stream)."""
-        return _require_pyarrow().table(self._native)
+        return _require_pyarrow().table(self)
 
-    def _arrow_for_parquet(self) -> "pa.Table":
+    def _arrow_for_parquet(self) -> pa.Table:
         """The Arrow table a Parquet writer saves: ``to_arrow`` plus the pandas
         metadata block that makes ``pandas.read_parquet`` restore the nullable
         extension dtype (``Int8`` to ``Int64``, ``UInt8`` to ``UInt64``,
@@ -572,7 +584,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             import pandas  # noqa: F401  (to_pandas below needs it)
         except ImportError:
             return table
-        extension: Dict[str, str] = {}
+        extension: dict[str, str] = {}
         for field in table.schema:
             if table.column(field.name).null_count == 0:
                 continue
@@ -598,18 +610,13 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             {**(table.schema.metadata or {}), b"pandas": pandas_md}
         )
 
-    def to_ipc(self) -> bytes:
-        """This frame serialized as an Arrow IPC stream (schema + one record
-        batch + EOS) - bytes any Arrow IPC reader opens, no pyarrow needed."""
-        return self._native.to_ipc()
-
     def to_pandas(
         self,
         *,
         arrow: bool = False,
         nullable: bool = False,
-        index: "Union[str, Sequence[str], None]" = None,
-    ) -> "pd.DataFrame":
+        index: str | Sequence[str] | None = None,
+    ) -> pd.DataFrame:
         """This frame as a pandas DataFrame. By default the columns are NumPy
         dtypes, which copies (pyarrow packs them into blocks), except that a
         dictionary-encoded string column becomes ``category`` and an integer,
@@ -630,23 +637,29 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
 
         ``index`` names the columns to move into the pandas index, in the order
         given: a flat index for one name, a MultiIndex for several. An unknown
-        name raises ``KeyError`` and a repeated one ``ValueError``."""
+        name raises ``KeyError`` and a repeated one ``ValueError``. Without
+        ``index``, the frame's own row index (:meth:`index_names`) becomes the
+        pandas index, a MultiIndex for several levels; a level that
+        :meth:`from_pandas` named ``__index_level_<i>__`` is unnamed again."""
         if arrow and nullable:
             raise ValueError("to_pandas: pass either arrow=True or nullable=True, not both")
         if arrow:
-            out = _to_pandas(self.to_arrow(), arrow)
+            out = cast("pd.DataFrame", _to_pandas(self.to_arrow(), arrow))
         else:
-            import pandas as pd  # ty: ignore[import-not-found]
+            import pandas as pd
 
-            def one(name: str) -> "Union[pd.Series, np.ndarray, ExtensionArray]":
-                col = self._native[name]
+            def one(name: str) -> pd.Series | np.ndarray | ExtensionArray:
+                col = _ext.DataFrame.__getitem__(self, name)
                 values = _pandas_nullable(col) if nullable else None
                 return values if values is not None else _pandas_default(col)
 
-            out = pd.DataFrame({name: one(name) for name in self.columns})
-        return out if index is None else _apply_index(out, index)
+            out = pd.DataFrame({name: one(name) for name in self._names()})
+        if index is not None:
+            return _apply_index(out, index)
+        names = self.index_names()
+        return _apply_index(out, names, restore_unnamed=True) if names else out
 
-    def to_polars(self) -> "pl.DataFrame":
+    def to_polars(self) -> pl.DataFrame:
         """This frame as a polars DataFrame. Where the extension has Arrow
         support and no column is Float16 or a decimal, the frame
         comes through the Arrow PyCapsule stream (polars >= 1.3; an older
@@ -654,37 +667,21 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         uses the native conversion. A dictionary column becomes
         ``Categorical``."""
         try:
-            import polars as pl  # ty: ignore[import-not-found]
+            import polars as pl
         except ImportError:
             raise ImportError(
                 "polars is required for to_polars(). Install with: pip install polars"
             ) from None
-        if self._native.num_rows == 0:
+        if self.num_rows == 0:
             return pl.DataFrame()
-        if hasattr(self._native, "__arrow_c_stream__") and all(
-            _polars_via_arrow(self._native[name]) for name in self.columns
+        if hasattr(self, "__arrow_c_stream__") and all(
+            _polars_via_arrow(_ext.DataFrame.__getitem__(self, name)) for name in self._names()
         ):
             return pl.DataFrame(self)
-        return pl.DataFrame({name: self[name].to_polars() for name in self.columns})
-
-    @overload
-    def __getitem__(self, key: str) -> Series: ...
-    @overload
-    def __getitem__(self, key: "Union[Sequence[str], Series]") -> "DataFrame": ...
-    def __getitem__(self, key: "Union[str, Sequence[str], Series]") -> "Union[Series, DataFrame]":
-        """``df["a"]`` is a column; ``df[["a", "b"]]`` a projection; ``df[mask]``
-        with a Bool Series the matching rows (the pandas spellings)."""
-        if isinstance(key, str):
-            return Series(self._native[key])
-        if isinstance(key, Series):
-            return self._like(self._native.filter(_unwrap(key)))
-        return self._like(self._native.select(*[str(k) for k in key]))
-
-    def __contains__(self, name: str) -> bool:
-        return name in self._native
+        return pl.DataFrame({name: self[name].to_polars() for name in self._names()})
 
     def __len__(self) -> int:
-        return self._native.num_rows
+        return self.num_rows
 
     def __repr__(self) -> str:
         from ._repr import frame_repr
@@ -698,46 +695,144 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         return frame_html(self)
 
     # -- pandas / polars spellings ---------------------------------------------
-    @property
-    def columns(self) -> List[str]:
-        return list(self._native.column_names)
+    def _names(self) -> list[str]:
+        """Every column, the index columns included (``columns`` leaves them out)."""
+        return list(self.column_names)
 
     @property
-    def shape(self) -> Tuple[int, int]:
-        return (self._native.num_rows, self._native.num_columns)
+    def columns(self) -> list[str]:
+        """The columns, as pandas shows them: the index columns of
+        :meth:`index_names` are not among them. A frame with no index lists
+        every column, and the Polars names (``schema``, ``width``, ``select``,
+        ``col``) see all of them."""
+        names = list(self.column_names)
+        index = _ext.DataFrame.index_names(self)
+        return [c for c in names if c not in index] if index else names
+
+    @overload
+    def __getitem__(self, key: str, /) -> Series: ...
+    @overload
+    def __getitem__(self, key: list[str] | tuple[str, ...] | Series, /) -> Self: ...
+    def __getitem__(self, key: str | list[str] | tuple[str, ...] | Series, /) -> Series | Self:
+        """A column by name, a frame of the listed columns or a frame of the
+        rows a Bool Series keeps. As pandas, a list takes the columns of
+        :attr:`columns` and the frame keeps its index."""
+        if isinstance(key, (list, tuple)):
+            index = _ext.DataFrame.index_names(self)
+            if index:
+                shown = set(self.columns)
+                missing = [c for c in key if c not in shown]
+                if missing:
+                    raise KeyError(f"None of {missing} are in the columns")
+                return cast("Self", _bound(_ext.DataFrame.select(self, *key, *index)))
+        if isinstance(key, Series) and not _ext.DataFrame.index_names(self):
+            if _keeps_every_row(key, len(self)):
+                return cast("Self", _bound(_ext.DataFrame.share(self)))
+            return cast("Self", self._selecting(lambda f: _ext.DataFrame.__getitem__(f, key), True))
+        return _ext.DataFrame.__getitem__(self, key)
+
+    def query(
+        self,
+        dsl: str | None = None,
+        *,
+        group_by: str | None = None,
+        aggs: list[str] | None = None,
+        select: list[str] | None = None,
+        order_by: str | None = None,
+        descending: bool = False,
+        limit: int | None = None,
+    ) -> DataFrame:
+        """A query plan over the batch (filter, group-by, select, sort, limit).
+        A plan that is only a predicate is the pandas ``query``: the rows it
+        keeps keep their labels, and a frame with no index is labelled by the
+        positions kept. ``dsl`` is the duql expression language, not the
+        pandas ``query`` one: there is no ``@var`` for a Python variable and no
+        backticks around a column name."""
+
+        def run(f: DataFrame) -> DataFrame:
+            return _bound(
+                _ext.DataFrame.query(
+                    f,
+                    dsl,
+                    group_by=group_by,
+                    aggs=aggs,
+                    select=select,
+                    order_by=order_by,
+                    descending=descending,
+                    limit=limit,
+                )
+            )
+
+        if (
+            group_by is None
+            and aggs is None
+            and select is None
+            and order_by is None
+            and limit is None
+        ):
+            return self._selecting(run, True)
+        return run(self)
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (self.num_rows, len(self.columns))
 
     @property
     def height(self) -> int:
-        return self._native.num_rows
+        return self.num_rows
+
+    def _polars_names(self) -> list[str]:
+        """The columns the Polars names list: every column but the hidden
+        default labels (``__index_level_<n>__``); named index levels stay."""
+        hidden = {n for n in _ext.DataFrame.index_names(self) if public_name(n) is None}
+        names = list(self.column_names)
+        return [c for c in names if c not in hidden] if hidden else names
 
     @property
     def width(self) -> int:
-        return self._native.num_columns
+        """The number of columns, named index levels included, hidden default
+        labels not. ``to_arrow`` and ``to_pandas`` still carry the labels, for
+        the round trip."""
+        return len(self._polars_names())
 
     @property
-    def dtypes(self) -> List[DType]:
+    def dtypes(self) -> list[DType]:
         return [self[name].dtype for name in self.columns]
 
     @property
-    def schema(self) -> "Dict[str, DType]":
-        return {name: self[name].dtype for name in self.columns}
-
-    def limit(self, n: int = 5) -> "DataFrame":
-        return self._like(self._native.head(_unwrap(n)))
+    def schema(self) -> dict[str, DType]:
+        return {name: self[name].dtype for name in self._polars_names()}
 
     def drop(
-        self, *names: "Union[str, Sequence[str]]", columns: Union[str, Sequence[str], None] = None
-    ) -> "DataFrame":
-        """Every column except ``names`` (``columns=`` is the pandas spelling)."""
-        dropped = set(_names(columns))
+        self,
+        *names: str | Sequence[str],
+        columns: str | Sequence[str] | None = None,
+        axis: int | Literal["index", "columns"] | None = None,
+    ) -> DataFrame:
+        """Every column except ``names`` (``columns=`` is the pandas spelling,
+        which names shown columns only: an index column there is a ``KeyError``,
+        while a positional name, the Polars form, may be one). ``axis`` is ``None``, ``1`` or ``"columns"``; any other value raises
+        ``ValueError`` (the frame has no row labels for ``axis=0``)."""
+        if (
+            axis is not None
+            and not (axis == 1 and not isinstance(axis, bool))
+            and axis != "columns"
+        ):
+            raise ValueError(
+                f"drop: axis must be None, 1 or 'columns', not {axis!r} "
+                "(dropping rows by label needs the row index; use filter)"
+            )
+        pandas_named = set(as_names(columns))
+        dropped = set(pandas_named)
         for n in names:
-            dropped.update(_names(n))
-        missing = [n for n in dropped if n not in self]
+            dropped.update(as_names(n))
+        shown = set(self.columns)
+        missing = [n for n in dropped if n not in (shown if n in pandas_named else self)]
         if missing:
             raise KeyError(f"drop: no column named {missing[0]!r}")
-        return self._like(self._native.select(*[c for c in self.columns if c not in dropped]))
+        return _bound(_ext.DataFrame.select(self, *[c for c in self._names() if c not in dropped]))
 
-    def _constant_column(self, value: "Union[bool, int, float, str, None]") -> Series:
+    def _constant_column(self, value: bool | int | float | str | None) -> Series:
         """A column of this frame's row count holding ``value``: an Int64, Float64,
         Bool or String column, empty for a frame with no rows. ``None`` gives an
         all-null String column, the type a column of only ``None`` has in
@@ -753,37 +848,33 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         )
         n = len(self)
         if n == 0:
-            return Series(_ext._series_from_list([], int(kind)))
+            return _ext._series_from_list([], int(kind))
         # Built from the row count alone, so no other column's nulls reach it.
         if value is None:
-            return Series(_ext._series_nulls(int(kind), n))
-        return Series(_ext._series_nulls(int(kind), n).fillna(value))
+            return _ext._series_nulls(int(kind), n)
+        return _ext._series_nulls(int(kind), n).fillna(value)
 
-    def assign(
-        self, **columns: "Union[Series, ColumnExpr, bool, int, float, str, None]"
-    ) -> "DataFrame":
+    def assign(self, **columns: Series | Expr | bool | int | float | str | None) -> DataFrame:
         """Add or replace columns from Series, column expressions or Python
         scalars (pandas ``assign``; polars ``with_columns``). A scalar, or
         ``lit(value)``, gives a column of the frame's row count holding it;
         ``None`` (or ``lit(None)``) gives an all-null String column."""
-        from .columnar import _Lit
 
         out = self
         for name, value in columns.items():
-            if isinstance(value, _Lit) and value.value is None:
+            if isinstance(value, Lit) and value.value is None:
                 value = None  # lit(None) is the null constant, as a bare None is
             if value is None or isinstance(value, (bool, int, float, str)):
                 value = out._constant_column(value)
             col = value if isinstance(value, Series) else value.apply(out)
-            out = _wrap(out._native.with_column(name, _unwrap(col)))
+            out = _ext.DataFrame.with_column(out, name, col)
         return out
 
     def with_columns(
-        self, *named: "Named", **columns: "Union[Series, ColumnExpr, bool, int, float, str, None]"
-    ) -> "DataFrame":
+        self, *named: Named, **columns: Series | Expr | bool | int | float | str | None
+    ) -> DataFrame:
         """:meth:`assign`, also taking named expressions positionally
         (``with_columns((col("a") * 2).alias("b"))``, the polars spelling)."""
-        from .columnar import Named
 
         out = self
         for item in named:
@@ -793,132 +884,157 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         return out.assign(**columns)
 
     def cast(
-        self, dtypes: "Union[Mapping[str, Union[str, int, DType, type]], str, int, DType, type]"
-    ) -> "DataFrame":
-        """Cast columns (polars ``cast``; pandas ``astype``). A mapping casts
+        self, dtype: Mapping[str, str | int | DType | type] | str | int | DType | type
+    ) -> DataFrame:
+        """Cast columns (``astype`` is the pandas name). A mapping casts
         only the named columns; a single dtype casts every column to it. If a
         column cannot be cast the call raises ``TypeError`` that names the column
         and the two types, and no frame is returned."""
-        if not isinstance(dtypes, Mapping):
-            dtypes = {name: dtypes for name in self.columns}
-        casted: Dict[str, Series] = {}
-        for name, dtype in dtypes.items():
+        if not isinstance(dtype, Mapping):
+            dtype = {name: dtype for name in self.columns}
+        casted: dict[str, Series] = {}
+        for name, target in dtype.items():
             try:
-                casted[name] = Series(self._native[name]).astype(dtype)
+                casted[name] = _ext.DataFrame.__getitem__(self, name).cast(target)
             except TypeError as e:
-                raise TypeError(f"astype: column {name!r}: {e}") from None
+                raise TypeError(f"cast: column {name!r}: {e}") from None
         out = self
         for name, column in casted.items():
-            out = _wrap(out._native.with_column(name, _unwrap(column)))
+            out = _ext.DataFrame.with_column(out, name, column)
         return out
-
-    def astype(
-        self, dtypes: "Union[Mapping[str, Union[str, int, DType, type]], str, int, DType, type]"
-    ) -> "DataFrame":
-        out = self.cast(dtypes)
-        for name in self.columns:
-            # A bool column that became text is spelled True/False, as Series.astype does.
-            was_bool = int(self[name].dtype) == int(DType.BOOL)
-            if was_bool and int(out[name].dtype) == int(DType.STRING):
-                out = out.with_column(name, out[name].str.capitalize())
-        return out
-
-    def dropna(self) -> "DataFrame":
-        return self._like(self._native.drop_nulls())
-
-    def fillna(self, value: Union[int, float]) -> "DataFrame":
-        return self._like(self._native.fill_null(_unwrap(value)))
 
     def duplicated(
         self,
-        subset: "Union[str, Sequence[str], None]" = None,
-        keep: "Union[Literal['first', 'last'], bool]" = "first",
-    ) -> "Series":
+        subset: str | Sequence[str] | None = None,
+        keep: Literal["first", "last"] | bool = "first",
+    ) -> Series:
         """Bool mask of the rows that repeat an earlier row (pandas
         ``DataFrame.duplicated``), compared on ``subset`` or every column:
         ``keep="first"`` leaves the first of equal rows unmarked, ``"last"``
         the last, and ``False`` marks every one of them. Nulls compare
         equal."""
-        cols = list(self.columns) if subset is None else _names(subset)
+        cols = list(self.columns) if subset is None else as_names(subset)
         frame = self[cols]
         if keep is False:
-            return cast("Series", _wrap(frame._native.is_duplicated()))
+            return _ext.DataFrame.is_duplicated(frame._data_only())
         if keep == "last":
             back = list(range(frame.num_rows - 1, -1, -1))
-            return frame.take(back).duplicated(keep="first").take(back)
+            return frame.gather(back).duplicated(keep="first").take(back)
         if keep != "first":
             raise ValueError(f"duplicated: keep must be 'first', 'last' or False, not {keep!r}")
-        return frame.groupby(cols, dropna=False).cumcount()["cumcount"] > 0
+        return frame.groupby(cols, dropna=False, as_index=False).cumcount()["cumcount"] > 0
 
-    def gather(self, indices: "Union[Series, Sequence[int]]") -> "DataFrame":
-        return self.take(indices)
-
+    @overload
     def groupby(
         self,
-        by: "Union[str, Series, Sequence[Union[str, Series]]]",
-        *aggs: "Union[str, Agg]",
+        by: str | Series | Sequence[str | Series],
+        *,
         dropna: bool = True,
         sort: bool = True,
-    ) -> "Any":
-        """The pandas spelling of :meth:`group_by`. With ``sort`` (the pandas
-        default) every aggregate result is ordered ascending by the key
-        columns, nulls last; ``sort=False`` keeps the engine's group order."""
-        out = self.group_by(by, *aggs, dropna=dropna)
-        if not sort:
-            return out
+        as_index: bool = True,
+    ) -> GroupBy: ...
+    @overload
+    def groupby(
+        self,
+        by: str | Series | Sequence[str | Series],
+        agg: str | Agg,
+        /,
+        *aggs: str | Agg,
+        dropna: bool = True,
+        sort: bool = True,
+        as_index: bool = True,
+    ) -> DataFrame: ...
+    def groupby(
+        self,
+        by: str | Series | Sequence[str | Series],
+        *aggs: str | Agg,
+        dropna: bool = True,
+        sort: bool = True,
+        as_index: bool = True,
+    ) -> DataFrame | GroupBy:
+        """The pandas ``groupby``: :meth:`group_by` with ``sort`` and
+        ``as_index``. With ``sort`` (the pandas default) every aggregate result
+        is ordered ascending by the key columns, nulls last; ``sort=False``
+        keeps the engine's group order. With ``as_index`` (the pandas default)
+        an aggregate result is indexed by the keys, as pandas does, even when
+        this frame has no index; ``as_index=False`` keeps the keys as plain
+        columns, as :meth:`group_by` always does. A float NaN key is missing like
+        a null: left out with ``dropna`` (the default), and one group with the
+        null keys without it, as pandas; :meth:`group_by` keeps NaN as its own
+        group, as Polars."""
+        given = [by] if isinstance(by, (str, Series)) else list(by)
+        source = self
+        hidden = [n for n in _ext.DataFrame.index_names(self) if n not in given]
+        if hidden:
+            # The index levels that are not keys are not value columns, as pandas.
+            source = _bound(
+                _ext.DataFrame.select(self, *[c for c in self._names() if c not in hidden])
+            )
+        source, given = _nan_keys(source, given)
+        out = source.group_by(given, *aggs, dropna=dropna)
         if isinstance(out, DataFrame):
-            given = [by] if isinstance(by, (str, Series)) else list(by)
             keys = [
                 k if isinstance(k, str) else "key" if len(given) == 1 else f"key{i}"
                 for i, k in enumerate(given)
             ]
-            return out.sort_by_multi(keys)
-        out._sort = True
+            if sort:
+                out = out.sort_by_multi(keys)
+            return out.set_index(keys) if as_index else out.reset_index()
+        out._sort = sort
+        out._as_index = as_index
+        if hidden:
+            out._origin = self
         return out
 
-    def nlargest(self, n: int, columns: str) -> "DataFrame":
-        return self._like(self._native.topk(columns, n, True))
+    def nlargest(self, n: int, columns: str) -> DataFrame:
+        """The pandas ``nlargest``: the ``n`` rows with the largest ``columns``."""
+        return self._selecting(lambda f: _bound(_ext.DataFrame.topk(f, columns, n, True)))
 
-    def nsmallest(self, n: int, columns: str) -> "DataFrame":
-        return self._like(self._native.topk(columns, n, False))
+    def nsmallest(self, n: int, columns: str) -> DataFrame:
+        """The pandas ``nsmallest``: the ``n`` rows with the smallest ``columns``."""
+        return self._selecting(lambda f: _bound(_ext.DataFrame.topk(f, columns, n, False)))
 
     def pivot_table(
         self,
         values: str,
-        index: "Union[str, Sequence[str]]",
+        index: str | Sequence[str],
         columns: str,
-        aggfunc: "PivotTableAgg" = "first",
-    ) -> "DataFrame":
+        aggfunc: PivotTableAgg = "first",
+    ) -> DataFrame:
         """Long to wide with ``aggfunc`` over each (``index``, ``columns``)
         cell: one row for each combination of the ``index`` keys, in sorted
         order, and one column for each value of ``columns``. ``index`` may name
         several keys and ``aggfunc`` may be any group-by reduction, such as
         ``"median"``."""
-        keys = _names(index)
+        keys = as_names(index)
         if len(keys) == 1 and aggfunc in get_args(PivotAgg):
             return self.pivot(keys[0], columns, values, cast("PivotAgg", aggfunc))
         picked = self[keys + [columns, values]]
-        cells = getattr(picked.groupby(keys + [columns]), aggfunc)()
+        cells: DataFrame = getattr(picked.groupby(keys + [columns], as_index=False), aggfunc)()
         row = "__dftu_pivot_row__"
-        cells = cells.assign(**{row: cells.groupby(keys).ngroup()["ngroup"]})
+        cells = cells.assign(**{row: cells.groupby(keys, as_index=False).ngroup()["ngroup"]})
         wide = cells[[row, columns, values]].pivot(row, columns, values, "first")
-        names = cells[[row] + keys].drop_duplicates()
-        out = names.merge(wide, on=row).sort_values(keys)
+        names = cells[[row] + keys].unique()
+        out = names.merge(wide, on=row)._sort_values(keys)
         return out.drop(columns=[row])
 
-    def to_dict(self) -> "Dict[str, List[object]]":
+    def to_dict(self) -> dict[str, list[Scalar | None]]:
+        """Each shown column as a list; the index columns are not among them,
+        as in pandas ``to_dict("list")``."""
         return {name: self[name].to_list() for name in self.columns}
 
+    def __copy__(self) -> Self:
+        return self.copy()
+
+    def __deepcopy__(self, memo: object) -> Self:
+        """The columns are immutable, so a deep copy is a shallow one."""
+        return self.copy()
+
     # Opaque Arrow C Data Interface capsule; Python has no capsule type.
-    def __arrow_c_stream__(self, requested_schema: Optional[object] = None) -> object:
-        return self._native.__arrow_c_stream__(requested_schema)
+    def __reduce__(self) -> tuple[Callable[[bytes], DataFrame], tuple[bytes, ...]]:
+        return (_dataframe_from_bytes, (_ext.DataFrame.to_bytes(self),))
 
-    def __reduce__(self) -> "Tuple[Callable[[bytes], DataFrame], Tuple[bytes, ...]]":
-        return (_dataframe_from_bytes, (self._native.to_bytes(),))
-
-    def apply(
-        self, func: "Union[ColumnExpr, Callable[..., object]]", axis: int = 0
-    ) -> "Union[Series, DataFrame]":
+    def apply(self, func: Expr | Callable[..., object], axis: int = 0) -> Series | DataFrame:
         """With a column expression: evaluate it against this frame and return
         the resulting :class:`~dftracer.utils.Series` (``df.apply(F.a / F.b)``
         equals ``(F.a / F.b).apply(df)``).
@@ -933,9 +1049,8 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         thing runs fused in the engine. Otherwise it runs in Python per row,
         with a warning naming why. See ``_apply``."""
         from ._apply import apply_rows
-        from .columnar import ColumnExpr
 
-        if isinstance(func, ColumnExpr):
+        if isinstance(func, Expr):
             return func.apply(self)
         if not callable(func):
             raise TypeError(
@@ -946,34 +1061,29 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             return apply_rows(self, func, "DataFrame.apply(axis=1)")
         if axis != 0:
             raise ValueError("axis must be 0 (per column) or 1 (per row)")
-        results = {name: func(Series(self._native[name])) for name in self.columns}
+        results = {name: func(_ext.DataFrame.__getitem__(self, name)) for name in self.columns}
         if all(isinstance(r, Series) for r in results.values()):
             out = self
             for name, r in results.items():
                 out = out.with_column(name, cast(Series, r))
-            return out.select(*self.columns)
+            return out.select(*self._names())
         if any(isinstance(r, Series) for r in results.values()):
             raise TypeError(
                 "apply(): the callable must return a Series for every column, or for none"
             )
         return DataFrame({name: [r] for name, r in results.items()})
 
-    def partition_id(self, keys: Union[str, List[str]], n_parts: int) -> "Series":
-        """Int32 column: the part in ``[0, n_parts)`` each row lands in under a
-        stable hash of ``keys`` (equal keys share a part)."""
-        return Series(self._native.partition_id(keys, n_parts))
-
-    def hash_partition(self, keys: Union[str, List[str]], n_parts: int) -> "list[DataFrame]":
+    def hash_partition(self, keys: str | list[str], n_parts: int) -> list[DataFrame]:
         """Hash-partition the rows into ``n_parts`` frames by
         :meth:`partition_id` (the shuffle primitive)."""
-        return [DataFrame(p) for p in self._native.hash_partition(keys, n_parts)]
+        return [DataFrame(p) for p in _ext.DataFrame.hash_partition(self, keys, n_parts)]
 
     def window(
         self,
-        partition_by: Optional[Sequence[str]] = None,
-        order_by: Optional[Sequence[str]] = None,
-        specs: Optional[Sequence[WindowSpec]] = None,
-    ) -> "DataFrame":
+        partition_by: Sequence[str] | None = None,
+        order_by: Sequence[str] | None = None,
+        specs: Sequence[WindowSpec] | None = None,
+    ) -> DataFrame:
         """SQL window functions, PARTITION BY ``partition_by`` and ORDER BY
         ``order_by``.
 
@@ -1016,19 +1126,19 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
 
         All input columns pass through, then one column per spec, in sorted
         (partition, order) row order."""
-        norm = [_norm_window_spec(s) for s in (specs or [])]
-        return self._like(self._native.window(_names(partition_by), _names(order_by), norm))
+        norm = [norm_window_spec(s) for s in (specs or [])]
+        return _bound(_ext.DataFrame.window(self, as_names(partition_by), as_names(order_by), norm))
 
     def gap_fill(
         self,
-        partition_by: Optional[Sequence[str]],
+        partition_by: Sequence[str] | None,
         time: str,
         bucket: int,
-        values: Union[str, Sequence[str]],
+        values: str | Sequence[str],
         mode: Literal["none", "locf", "linear"] = "none",
-        start: Optional[int] = None,
-        end: Optional[int] = None,
-    ) -> "DataFrame":
+        start: int | None = None,
+        end: int | None = None,
+    ) -> DataFrame:
         """Materialize a regular time grid of width ``bucket``, PARTITION BY
         ``partition_by``, keyed on the integer ``time`` column.
 
@@ -1039,28 +1149,27 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         partition; pass both or neither."""
         if (start is None) != (end is None):
             raise ValueError("gap_fill: pass both start and end, or neither")
-        return _wrap(
-            self._native.gap_fill(
-                _names(partition_by),
-                time,
-                int(bucket),
-                _names(values),
-                mode,
-                start,
-                end,
-            )
+        return _ext.DataFrame.gap_fill(
+            self,
+            as_names(partition_by),
+            time,
+            int(bucket),
+            as_names(values),
+            mode,
+            start,
+            end,
         )
 
     def join(
         self,
-        other: "DataFrame",
-        on: Union[int, str, Sequence[str], None] = None,
+        other: DataFrame,
+        on: int | str | Sequence[str] | None = None,
         how: JoinHow = "inner",
-        left_on: Union[str, Sequence[str], None] = None,
-        right_on: Union[str, Sequence[str], None] = None,
+        left_on: str | Sequence[str] | None = None,
+        right_on: str | Sequence[str] | None = None,
         suffix: str = "_right",
         nulls_equal: bool = False,
-    ) -> "DataFrame":
+    ) -> DataFrame:
         """Hash join with ``other``.
 
         ``on`` names the key column(s) shared by both frames (a str, a list of
@@ -1087,49 +1196,48 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         if isinstance(on, bool):
             raise TypeError("join: 'on' must be a key name/list or an int count")
         if isinstance(on, int):
-            names = list(self._native.column_names)
+            names = list(self.column_names)
             if on < 1 or on > len(names):
                 raise ValueError(
                     f"join: 'on' count {on} is out of range for a {len(names)}-column frame"
                 )
             on = names[:on]
-        return _wrap(
-            self._native.join(
-                _unwrap(other),
-                on=_unwrap(on),
-                how=how,
-                left_on=_unwrap(left_on),
-                right_on=_unwrap(right_on),
-                suffix=suffix,
-                nulls_equal=nulls_equal,
-            )
+        return _ext.DataFrame.join(
+            self,
+            other,
+            on=on,
+            how=how,
+            left_on=left_on,
+            right_on=right_on,
+            suffix=suffix,
+            nulls_equal=nulls_equal,
         )
 
     def merge(
         self,
-        right: "DataFrame",
+        right: DataFrame,
         how: JoinHow = "inner",
-        on: Union[str, Sequence[str], None] = None,
-        left_on: Union[str, Sequence[str], None] = None,
-        right_on: Union[str, Sequence[str], None] = None,
-        suffixes: Tuple[str, str] = ("_x", "_y"),
+        on: str | Sequence[str] | None = None,
+        left_on: str | Sequence[str] | None = None,
+        right_on: str | Sequence[str] | None = None,
+        suffixes: tuple[str, str] = ("_x", "_y"),
         nulls_equal: bool = False,
-    ) -> "DataFrame":
+    ) -> DataFrame:
         """pandas ``merge``: :meth:`join` with ``right`` first, then ``how``.
         With no key given, joins on the columns both frames share. A non-key
         column present on both sides is suffixed on BOTH sides with
         ``suffixes``, as pandas does. A null key does not match another null
         key unless ``nulls_equal=True``, which is the pandas rule."""
         if on is None and left_on is None and right_on is None:
-            shared = [c for c in self.columns if c in right]
+            shared = [c for c in self._names() if c in right]
             if not shared:
                 raise ValueError(
                     "merge(): no common columns to join on; pass on= or left_on=/right_on="
                 )
             on = shared
-        lkeys = _names(on) if on is not None else _names(left_on)
-        rkeys = _names(on) if on is not None else _names(right_on)
-        collide = [c for c in self.columns if c in right and c not in lkeys and c not in rkeys]
+        lkeys = as_names(on) if on is not None else as_names(left_on)
+        rkeys = as_names(on) if on is not None else as_names(right_on)
+        collide = [c for c in self._names() if c in right and c not in lkeys and c not in rkeys]
         left = self
         if collide:
             left = self.rename({c: c + suffixes[0] for c in collide})
@@ -1144,9 +1252,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             nulls_equal=nulls_equal,
         )
 
-    def compare_agg(
-        self, variant: "DataFrame", on: Union[int, str, Sequence[str]] = 1
-    ) -> "DataFrame":
+    def compare_agg(self, variant: DataFrame, on: int | str | Sequence[str] = 1) -> DataFrame:
         """Compare two aggregation results: FULL-join on the shared leading key
         columns, then append ``delta_<m>``/``pct_<m>`` for each numeric
         ``l_``/``r_`` metric pair.
@@ -1158,27 +1264,27 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         if isinstance(on, bool):
             raise TypeError("compare_agg: 'on' must be a key name/list or an int count")
         if isinstance(on, int):
-            names = list(self._native.column_names)
+            names = list(self.column_names)
             if on < 1 or on > len(names):
                 raise ValueError(
                     f"compare_agg: 'on' count {on} is out of range for a {len(names)}-column frame"
                 )
             n_key = on
         else:
-            keys = _names(on)
+            keys = as_names(on)
             if not keys:
                 raise ValueError("compare_agg: 'on' must name at least one key column")
             n_key = len(keys)
-        return self._like(self._native.compare_agg(_unwrap(variant), n_key))
+        return _bound(_ext.DataFrame.compare_agg(self, variant, n_key))
 
     def asof(
         self,
-        other: "DataFrame",
+        other: DataFrame,
         on: str,
-        by: Optional[Union[str, Sequence[str]]] = None,
+        by: str | Sequence[str] | None = None,
         direction: Literal["backward", "forward", "nearest"] = "backward",
-        tolerance: Optional[float] = None,
-    ) -> "DataFrame":
+        tolerance: float | None = None,
+    ) -> DataFrame:
         """Temporal (as-of) join: match each row to the nearest ``other`` row by
         the time column ``on``, within optional equi-key partition ``by``.
 
@@ -1186,17 +1292,17 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         (smallest ts >= self.ts), or ``"nearest"``. ``tolerance`` (if given)
         bounds the allowed time distance. Output is all left columns then the
         right value columns; unmatched left rows get null right values."""
-        return self._like(self._native.asof(_unwrap(other), on, _names(by), direction, tolerance))
+        return _bound(_ext.DataFrame.asof(self, other, on, as_names(by), direction, tolerance))
 
     def interval(
         self,
-        other: "DataFrame",
+        other: DataFrame,
         point: str,
         lo: str,
         hi: str,
-        by: Optional[Union[str, Sequence[str]]] = None,
+        by: str | Sequence[str] | None = None,
         outer: bool = False,
-    ) -> "DataFrame":
+    ) -> DataFrame:
         """Point-in-range join: match each row (the ``point`` column) to every
         ``other`` row whose closed span ``[lo, hi]`` contains it, within optional
         equi-key partition ``by``.
@@ -1204,11 +1310,11 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         One output row per (left, matching right); ``outer=True`` also emits an
         unmatched left row once with null right values. Output is all left
         columns then the right value columns."""
-        return self._like(
-            self._native.interval(_unwrap(other), point, lo, hi, _names(by), bool(outer))
+        return _bound(
+            _ext.DataFrame.interval(self, other, point, lo, hi, as_names(by), bool(outer))
         )
 
-    def unnest(self, column: str, keep_empty: bool = False) -> "DataFrame":
+    def unnest(self, column: str, keep_empty: bool = False) -> DataFrame:
         """UNNEST / EXPLODE the list-typed ``column`` into one row per element,
         repeating every other column.
 
@@ -1218,119 +1324,129 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         value. An empty or null list drops the row unless ``keep_empty=True``
         (then one row with the exploded column(s) null). See :meth:`explode` for
         the single-list variant that always keeps the row."""
-        return self._like(self._native.unnest(column, bool(keep_empty)))
+        return _bound(_ext.DataFrame.unnest(self, column, bool(keep_empty)))
 
-    def top_k(self, name: str, k: int, largest: bool = True) -> "DataFrame":
-        """The ``k`` best rows by column ``name`` (alias of the native
-        :meth:`topk`)."""
-        return self._like(self._native.topk(name, k, largest))
+    def top_k(self, k: int, *, by: str | Sequence[str], reverse: bool = False) -> DataFrame:
+        """The ``k`` rows with the largest ``by`` (the smallest with
+        ``reverse=True``), best first; a null never ranks (polars ``top_k``).
+        Several ``by`` columns rank lexicographically."""
+        if isinstance(by, str):
+            return _bound(_ext.DataFrame.topk(self, by, k, not reverse))
+        cols = list(by)
+        present = self[cols[0]].is_not_null()
+        for c in cols[1:]:
+            present = present & self[c].is_not_null()
+        return self.filter(present).sort(cols, descending=not reverse).head(k)
 
-    def distinct(self, subset: "str | Sequence[str] | None" = None) -> "DataFrame":
-        """Drop duplicate rows, keeping the first (alias of :meth:`unique`)."""
-        return self._like(self._native.unique(subset))
+    def bottom_k(self, k: int, *, by: str | Sequence[str], reverse: bool = False) -> DataFrame:
+        """The ``k`` rows with the smallest ``by``, smallest first (polars
+        ``bottom_k``): :meth:`top_k` with ``reverse`` flipped."""
+        return self.top_k(k, by=by, reverse=not reverse)
 
     def sort_values(
         self,
-        by: Union[str, Sequence[str]],
-        ascending: Union[bool, Sequence[bool]] = True,
+        by: str | Sequence[str],
+        ascending: bool | Sequence[bool] = True,
         na_position: Literal["first", "last"] = "last",
-    ) -> "DataFrame":
-        """Order rows by one column or several, pandas-style. ``by`` and
-        ``ascending`` each accept a scalar or a sequence; a sequence
-        ``ascending`` maps one flag per column in ``by`` (a single flag
-        broadcasts to every key). ``na_position="first"`` puts the rows whose
-        key is null before the rest (one key only)."""
-        names = [by] if isinstance(by, str) else list(by)
+    ) -> DataFrame:
+        """The pandas ``sort_values``: :meth:`sort` with ``ascending`` (a flag
+        or one per column in ``by``) and ``na_position`` (nulls last by
+        default, unlike :meth:`sort`). The rows keep their labels; a frame with
+        no index is labelled by the positions, as pandas' index shows where
+        each row came from."""
+        return self._selecting(lambda f: f._sort_values(by, ascending, na_position))
+
+    def _sort_values(
+        self,
+        by: str | Sequence[str],
+        ascending: bool | Sequence[bool] = True,
+        na_position: Literal["first", "last"] = "last",
+    ) -> DataFrame:
+        if na_position not in ("first", "last"):
+            raise ValueError("na_position must be 'first' or 'last'")
         if isinstance(ascending, bool):
-            descending: Union[bool, "list[bool]"] = not ascending
+            descending: bool | list[bool] = not ascending
         else:
             descending = [not a for a in ascending]
-        if na_position == "first":
-            return self._sort_nulls_first(names, descending)
-        if na_position != "last":
-            raise ValueError("na_position must be 'first' or 'last'")
-        if len(names) == 1 and isinstance(descending, bool):
-            return self._like(self._native.sort_by(names[0], descending))
-        return self._like(self._native.sort_by_multi(names, descending))
+        return self.sort(by, descending=descending, nulls_last=na_position == "last")
 
     def sort(
         self,
-        by: Union[str, Sequence[str]],
-        descending: bool = False,
-        nulls_last: bool = True,
-    ) -> "DataFrame":
+        by: str | Sequence[str],
+        *,
+        descending: bool | Sequence[bool] = False,
+        nulls_last: bool = False,
+    ) -> DataFrame:
         """Order rows by one column (``by`` a name) or lexicographically by
-        several (``by`` a list); the fluent spelling over the native
-        :meth:`sort_by` / :meth:`sort_by_multi`. See :meth:`sort_values` for
-        the pandas-style ``ascending`` spelling (accepts a per-column list).
-        ``nulls_last=False`` puts the null-keyed rows first (one key only)."""
-        if not nulls_last:
-            return self._sort_nulls_first([by] if isinstance(by, str) else list(by), descending)
-        if isinstance(by, str):
-            return self._like(self._native.sort_by(by, descending))
-        return self._like(self._native.sort_by_multi(list(by), descending))
+        several (``by`` a list); ``descending`` is a flag or one per column.
+        The rows whose key is null come first, or last with
+        ``nulls_last=True`` (the polars keywords and default); a NaN sorts
+        after every number and apart from the nulls."""
+        names = [by] if isinstance(by, str) else list(by)
+        flags = descending if isinstance(descending, bool) else list(descending)
+        if len(names) == 1 and isinstance(flags, bool) and isinstance(nulls_last, bool):
+            return _bound(_ext.DataFrame.sort_by(self, names[0], flags, nulls_last))
+        return _bound(_ext.DataFrame.sort_by_multi(self, names, flags, nulls_last))
 
-    def _sort_nulls_first(
-        self, names: List[str], descending: Union[bool, "list[bool]"]
-    ) -> "DataFrame":
-        # The sort kernels place nulls last. Nulls first is a lexicographic
-        # sort over (present(key), key) per key: the 0 / 1 presence column
-        # sorts the null rows ahead, then the key orders the rest.
-        keys, flags = _nulls_first_keys(names, descending)
-        native = self._native
-        for name, key in zip(keys[::2], names):
-            native = native.with_column(
-                name, _unwrap(Series(native[key]).is_not_null().astype("int64"))
-            )
-        return _wrap(native.sort_by_multi(keys, flags).select(*self.columns))
-
-    def union(self, *others: "DataFrame") -> "DataFrame":
+    def union(self, *others: DataFrame) -> DataFrame:
         """Vertically concatenate with ``others`` and drop duplicate rows (SQL
         UNION); use :meth:`concat` for UNION ALL (keep duplicates)."""
-        cat = self._native.concat(*[_unwrap(o) for o in others])
-        return _wrap(cat.unique())
+        return self.concat(*others).unique()
 
     # -- native engine ops (SIMD/relational kernels, wrapped from the C extension) --
-    def keys(self) -> List[str]:
-        return self._native.keys()
-
     def filter(
         self,
-        mask: "Union[Series, ColumnExpr, None]" = None,
+        predicate: Series | Expr | None = None,
         *,
-        items: Optional[Sequence[str]] = None,
-        like: Optional[str] = None,
-        regex: Optional[str] = None,
-    ) -> "DataFrame":
-        """Rows or columns. With ``mask`` (a Bool Series, or a column expression
+        items: Sequence[str] | None = None,
+        like: str | None = None,
+        regex: str | None = None,
+    ) -> DataFrame:
+        """Rows or columns. With ``predicate`` (a Bool Series, or a column expression
         evaluated against this frame): the rows where it is true. With the
         pandas keywords ``items`` / ``like`` / ``regex``: the columns whose
         name is listed / contains ``like`` / matches ``regex``."""
         keyed = [k for k in (items, like, regex) if k is not None]
-        if len(keyed) > 1 or (keyed and mask is not None):
+        if len(keyed) > 1 or (keyed and predicate is not None):
             raise TypeError("filter() takes a row mask, or one of items= / like= / regex=")
         if items is not None:
-            return self._like(self._native.select(*[c for c in items if c in self]))
+            return _bound(
+                _ext.DataFrame.select(
+                    self, *[c for c in items if c in self], *_ext.DataFrame.index_names(self)
+                )
+            )
         if like is not None:
-            return self._like(self._native.select(*[c for c in self.columns if like in c]))
+            return _bound(
+                _ext.DataFrame.select(
+                    self,
+                    *[c for c in self.columns if like in c],
+                    *_ext.DataFrame.index_names(self),
+                )
+            )
         if regex is not None:
             import re
 
             pat = re.compile(regex)
-            return self._like(self._native.select(*[c for c in self.columns if pat.search(c)]))
-        if mask is None:
+            return _bound(
+                _ext.DataFrame.select(
+                    self,
+                    *[c for c in self.columns if pat.search(c)],
+                    *_ext.DataFrame.index_names(self),
+                )
+            )
+        if predicate is None:
             raise TypeError("filter() needs a row mask or one of items= / like= / regex=")
-        if not isinstance(mask, Series):
-            mask = mask.apply(self)
-        return self._like(self._native.filter(_unwrap(mask)))
+        if not isinstance(predicate, Series):
+            predicate = predicate.apply(self)
+        return _bound(_ext.DataFrame.filter(self, predicate))
 
-    def select(self, *items: object) -> "DataFrame":
+    def select(self, *items: SelectItem) -> DataFrame:
         """Project to ``items``: column names, bare column expressions, or
         named expressions (``(col("a") * 2).alias("b")``), in that order; a
         set of aggregate expressions (``col("a").sum()``) gives the one-row
         frame ``group_by().agg(...)`` does, each unaliased aggregate of a
         column named after that column (the polars ``select``)."""
-        from .columnar import Agg, GroupBy, resolve_selectors, select_aggs
+        from .groupby import GroupBy
 
         if items and all(isinstance(i, Agg) for i in items):
             return GroupBy(self, []).agg(*select_aggs(items))
@@ -1339,118 +1455,284 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         for name, expr in pairs:
             if expr is not None:
                 out = out.assign(**{name: expr})
-        return _wrap(out._native.select(*[name for name, _ in pairs]))
+        return _ext.DataFrame.select(out, *[name for name, _ in pairs])
 
     def rename(
         self,
-        mapping: "Optional[dict[str, str]]" = None,
+        mapping: dict[str, str] | None = None,
         *,
-        columns: "Optional[dict[str, str]]" = None,
-    ) -> "DataFrame":
+        columns: dict[str, str] | None = None,
+    ) -> DataFrame:
         """Rename columns by ``{old: new}`` (``columns=`` is the pandas spelling)."""
         if mapping is None:
             mapping = columns
         if mapping is None:
             raise TypeError("rename() needs a {old: new} mapping")
-        return self._like(self._native.rename(_unwrap(mapping)))
+        return _bound(_ext.DataFrame.rename(self, mapping))
 
-    def with_column(self, name: str, col: "Series") -> "DataFrame":
-        return self._like(self._native.with_column(_unwrap(name), _unwrap(col)))
+    def with_column(self, name: str, col: Series) -> DataFrame:
+        return _bound(_ext.DataFrame.with_column(self, name, col))
 
-    def take(self, indices: "Union[Series, Sequence[int]]") -> "DataFrame":
+    def gather(self, indices: Series | Sequence[int]) -> DataFrame:
         """The rows at ``indices`` (a Series or a list; any order, repeats
-        allowed)."""
-        return self._like(self._native.take(_indices(indices)))
+        allowed); ``take`` is the pandas name. An index past the last row is an
+        ``IndexError``. A negative index gives a null row, it does not count
+        from the end as in pandas: the group transforms use that to leave a
+        vacated row null. ``LazyFrame.gather`` refuses a negative index when
+        it runs, because a plan has no null row to give a row that is not
+        there."""
+        return _bound(_ext.DataFrame.take(self, _row_indices(indices)))
 
-    def column_index(self, name: str) -> int:
-        return self._native.column_index(_unwrap(name))
+    def head(self, n: int = 5) -> DataFrame:
+        return _bound(_ext.DataFrame.head(self, n))
 
-    def head(self, n: int = 5) -> "DataFrame":
-        return self._like(self._native.head(_unwrap(n)))
+    def tail(self, n: int = 5) -> DataFrame:
+        """The last ``n`` rows (all but the first ``-n`` for a negative ``n``).
+        The rows keep their labels; a frame with no index is labelled by the
+        positions it kept, as pandas."""
+        out = _bound(_ext.DataFrame.tail(self, n if n >= 0 else max(len(self) + n, 0)))
+        if _ext.DataFrame.index_names(self) or len(out) == len(self):
+            return out
+        first = default_name(0)
+        kept = positions(len(out), len(self) - len(out))
+        return _bound(
+            _ext.DataFrame.with_index(_ext.DataFrame.with_column(out, first, kept), [first])
+        )
 
-    def tail(self, n: int = 5) -> "DataFrame":
-        return self._like(self._native.tail(_unwrap(n)))
+    def take(self, indices: Sequence[int] | Series) -> DataFrame:
+        """The pandas ``take``: :meth:`gather`. The rows keep their labels; a
+        frame with no index is labelled by the positions taken."""
+        return self._selecting(lambda f: f.gather(indices))
 
-    def reverse(self) -> "DataFrame":
-        return self._like(self._native.reverse())
+    def reverse(self) -> DataFrame:
+        return _bound(_ext.DataFrame.reverse(self))
 
-    def drop_nulls(self) -> "DataFrame":
-        return self._like(self._native.drop_nulls())
+    def drop_nulls(self) -> DataFrame:
+        return _bound(_ext.DataFrame.drop_nulls(self))
 
-    def fill_null(self, value: Union[int, float]) -> "DataFrame":
-        return self._like(self._native.fill_null(_unwrap(value)))
+    def fill_null(self, value: int | float) -> DataFrame:
+        return _bound(_ext.DataFrame.fill_null(self, value))
 
-    def unique(self, subset: "str | Sequence[str] | None" = None) -> "DataFrame":
+    def unique(self, subset: str | Sequence[str] | None = None) -> DataFrame:
         """Distinct rows, keeping the first occurrence, keyed on every column
-        or on ``subset`` (pandas ``drop_duplicates(subset=)``)."""
-        return self._like(self._native.unique(subset))
+        (the index columns included) or on ``subset``. The pandas name is
+        ``drop_duplicates``, which keys on the shown columns."""
+        return _bound(_ext.DataFrame.unique(self, subset))
 
-    def drop_duplicates(self, subset: "str | Sequence[str] | None" = None) -> "DataFrame":
-        return self._like(self._native.drop_duplicates(subset))
+    def _shown_subset(self, subset: str | Sequence[str] | None, who: str) -> list[str] | None:
+        """``subset`` as a list of shown columns: a name that is not in
+        :attr:`columns` (an index column included) is a ``KeyError``, as in
+        pandas. ``None`` stays ``None``."""
+        if subset is None:
+            return None
+        names = as_names(subset)
+        shown = set(self.columns)
+        missing = [n for n in names if n not in shown]
+        if missing:
+            raise KeyError(f"{who}: no column named {missing[0]!r} in the columns")
+        return names
 
-    def lazy(self) -> "LazyFrame":
+    def drop_duplicates(self, subset: str | Sequence[str] | None = None) -> DataFrame:
+        """The pandas ``drop_duplicates``: distinct rows keyed on ``subset`` or
+        on :attr:`columns` (the index columns are not compared), keeping the
+        first occurrence and the index with its row. A ``subset`` name that is
+        not a shown column is a ``KeyError``."""
+        names = self._shown_subset(subset, "drop_duplicates")
+
+        def run(f: DataFrame) -> DataFrame:
+            keyed = f.columns if names is None and _ext.DataFrame.index_names(f) else names
+            return _bound(_ext.DataFrame.unique(f, keyed))
+
+        return self._selecting(run, True)
+
+    def dropna(
+        self,
+        axis: int | Literal["index", "columns"] = 0,
+        how: Literal["any", "all"] | None = None,
+        thresh: int | None = None,
+        subset: str | Sequence[str] | None = None,
+    ) -> DataFrame:
+        """The pandas ``dropna`` over :attr:`columns` (a null in an index column
+        does not drop its row). ``axis=0`` drops the rows with a null in
+        ``subset`` (every shown column by default): ``how="any"`` (the default)
+        a row with one null, ``"all"`` a row of only nulls, or ``thresh`` a row
+        with fewer than ``thresh`` values. ``axis=1`` drops the columns with a
+        null (``how="all"``: all null, ``thresh``: fewer than that many values),
+        and takes no ``subset``, which would name row labels. ``how`` and
+        ``thresh`` are exclusive (``TypeError``); a ``subset`` name that is not a
+        shown column is a ``KeyError``."""
+        if axis in (0, "index"):
+            by_row = True
+        elif axis in (1, "columns"):
+            by_row = False
+        else:
+            raise ValueError(f"dropna: no axis named {axis!r}")
+        if how is not None and thresh is not None:
+            raise TypeError("dropna: you cannot set both the how and thresh arguments")
+        if how not in (None, "any", "all"):
+            raise ValueError(f"dropna: invalid how option: {how}")
+        index = _ext.DataFrame.index_names(self)
+        names = self._shown_subset(subset, "dropna")
+        if not by_row:
+            if names is not None:
+                raise KeyError(
+                    f"dropna: subset {names} with axis=1 names row labels, which a frame has none of"
+                )
+            rows = len(self)
+            kept = []
+            for name in self.columns:
+                values = rows - self._col(name).null_count
+                keep = (
+                    values >= thresh
+                    if thresh is not None
+                    else (values > 0 or rows == 0 if how == "all" else values == rows)
+                )
+                if keep:
+                    kept.append(name)
+            return _bound(_ext.DataFrame.select(self, *kept, *index))
+        if names is None:
+            names = self.columns
+            if not index and how is None and thresh is None:
+                with_nulls = [c for c in names if self._col(c).null_count]
+                if not with_nulls:
+                    return _bound(_ext.DataFrame.share(self))
+                mask = self._col(with_nulls[0]).notna()
+                for c in with_nulls[1:]:
+                    mask = mask & self._col(c).notna()
+                return self._keep_rows(mask)
+        if not names:
+            return self
+        counts: Series | None = None
+        for name in names:
+            present = self._col(name).notna().astype("int64")
+            counts = present if counts is None else counts + present
+        assert counts is not None
+        if thresh is not None:
+            mask = counts >= thresh
+        elif how == "all":
+            mask = counts >= 1
+        else:
+            mask = counts == len(names)
+        if not index and _keeps_every_row(mask, len(self)):
+            return _bound(_ext.DataFrame.share(self))
+        return self._keep_rows(mask)
+
+    def _keep_rows(self, mask: Series) -> DataFrame:
+        """The rows where ``mask`` is true, under their row labels in one
+        pass: the mask over the columns, then one gather of columns and
+        positions. A frame with an index keeps it."""
+        if _ext.DataFrame.index_names(self):
+            return self.filter(mask)
+        first = default_name(0)
+        names = self._names()
+        positions = _ext.DataFrame.with_row_index(
+            _ext.DataFrame.select(self, names[0]), first
+        )._col(first)
+        body = _ext.DataFrame.with_column(self, first, positions)
+        return _bound(_ext.DataFrame.with_index(body.filter(mask), [first]))
+
+    def fillna(
+        self,
+        value: int | float | Mapping[str, int | float] | None = None,
+        *,
+        axis: int | Literal["index", "columns"] | None = None,
+    ) -> DataFrame:
+        """The pandas ``fillna``: nulls of :attr:`columns` become ``value``, a
+        scalar or a ``{column: value}`` mapping (a name that is not a shown
+        column is ignored, as in pandas); the index columns are left as they
+        are. A mapping with ``axis=1`` is refused (``NotImplementedError``, as
+        pandas); a scalar fills the same cells for either axis."""
+        if axis not in (None, 0, 1, "index", "columns"):
+            raise ValueError(f"fillna: no axis named {axis!r}")
+        if value is None:
+            raise ValueError("fillna: must specify a fill value")
+        names = _ext.DataFrame.index_names(self)
+        if isinstance(value, Mapping):
+            if axis in (1, "columns"):
+                raise NotImplementedError("fillna: a mapping value with axis=1 is not supported")
+            out: DataFrame = self
+            shown = set(self.columns)
+            for name, fill in value.items():
+                if name in shown:
+                    out = _bound(
+                        _ext.DataFrame.with_column(out, name, self._col(name).fillna(fill))
+                    )
+            return _bound(_ext.DataFrame.share(out)) if out is self else out
+        if not names:
+            return _bound(_ext.DataFrame.fill_null(self, value))
+        out = _ext.DataFrame.fill_null(self._data_only(), value)
+        for name in names:
+            out = _ext.DataFrame.with_column(out, name, self._col(name))
+        return _bound(_ext.DataFrame.with_index(out, names))
+
+    def lazy(self) -> LazyFrame:
         """Start a deferred query over this batch. Ops are recorded and nothing
         runs until :meth:`LazyFrame.collect`."""
-        from .lazyframe import LazyFrame
-
-        out = LazyFrame(self._native.lazy())
-        out._index = self._index
-        return out
+        return _ext.DataFrame.lazy(self)
 
     def sort_by_multi(
-        self, names: "list[str]", descending: Union[bool, Sequence[bool]] = False
-    ) -> "DataFrame":
+        self,
+        names: list[str],
+        descending: bool | Sequence[bool] = False,
+        nulls_last: bool | Sequence[bool] = True,
+    ) -> DataFrame:
         """A single flag broadcasts to every key; a sequence maps one flag per
-        name (size must be 1 or ``len(names)``)."""
-        return self._like(self._native.sort_by_multi(_unwrap(names), _unwrap(descending)))
+        name (size must be 1 or ``len(names)``). ``nulls_last`` places the
+        nulls of each key."""
+        return _bound(_ext.DataFrame.sort_by_multi(self, names, descending, nulls_last))
 
-    def sample(self, n: int, seed: int = 0, *, random_state: Optional[int] = None) -> "DataFrame":
+    def sample(self, n: int, seed: int = 0, *, random_state: int | None = None) -> DataFrame:
         """A deterministic ``n``-row sample (``random_state`` is the pandas
         spelling of ``seed``)."""
         if random_state is not None:
             seed = random_state
-        return self._like(self._native.sample(_unwrap(n), _unwrap(seed)))
+        return self._selecting(lambda f: _bound(_ext.DataFrame.sample(f, n, seed)))
 
-    def with_row_index(self, name: str = "index") -> "DataFrame":
-        return self._like(self._native.with_row_index(_unwrap(name)))
+    def with_row_index(self, name: str = "index") -> DataFrame:
+        return _bound(_ext.DataFrame.with_row_index(self, name))
 
-    def describe(self) -> "DataFrame":
-        return self._like(self._native.describe())
+    def describe(self) -> DataFrame:
+        """The summary of every column; the index columns are not summarised,
+        as pandas does not."""
+        return _bound(_ext.DataFrame.describe(self._data_only()))
 
-    def null_count(self) -> "DataFrame":
-        return self._like(self._native.null_count())
+    def null_count(self) -> DataFrame:
+        return _bound(_ext.DataFrame.null_count(self))
 
-    def is_duplicated(self) -> "Series":
-        return self._like(self._native.is_duplicated())
+    def is_duplicated(self) -> Series:
+        return _ext.DataFrame.is_duplicated(self)
 
-    def is_unique(self) -> "Series":
-        return self._like(self._native.is_unique())
+    def is_unique(self) -> Series:
+        return _ext.DataFrame.is_unique(self)
 
-    def slice(self, offset: int, length: int) -> "DataFrame":
-        return self._like(self._native.slice(_unwrap(offset), _unwrap(length)))
+    def slice(self, offset: int, length: int) -> DataFrame:
+        return _bound(_ext.DataFrame.slice(self, offset, length))
 
-    def sort_by(self, name: str, descending: bool = False) -> "DataFrame":
-        return self._like(self._native.sort_by(_unwrap(name), _unwrap(descending)))
+    def sort_by(self, name: str, descending: bool = False, nulls_last: bool = True) -> DataFrame:
+        return _bound(_ext.DataFrame.sort_by(self, name, descending, nulls_last))
 
-    def topk(self, name: str, k: int, largest: bool = True) -> "DataFrame":
-        return self._like(self._native.topk(_unwrap(name), _unwrap(k), _unwrap(largest)))
+    def topk(self, name: str, k: int, largest: bool = True) -> DataFrame:
+        return _bound(_ext.DataFrame.topk(self, name, k, largest))
 
     def concat(
-        self, *others: "DataFrame", how: Literal["vertical", "diagonal"] = "vertical"
-    ) -> "DataFrame":
+        self, *others: DataFrame, how: Literal["vertical", "diagonal"] = "vertical"
+    ) -> DataFrame:
         """Vertically concatenate with ``others`` (UNION ALL). ``how='vertical'``
         requires a shared schema; ``how='diagonal'`` unions columns, null-filling
         those absent from a part and promoting a mixed-numeric column to float."""
-        return self._like(self._native.concat(*[_unwrap(x) for x in others], how=how))
+        parts = [self, *others]
+        if any(_ext.DataFrame.index_names(p) for p in parts):
+            parts = [p._labelled() for p in parts]
+        return _bound(_ext.DataFrame.concat(parts[0], *parts[1:], how=how))
 
     def unpivot(
         self,
-        id_vars: "str | list[str] | None" = None,
-        value_vars: "str | list[str] | None" = None,
+        id_vars: str | list[str] | None = None,
+        value_vars: str | list[str] | None = None,
         *,
-        index: "str | list[str] | None" = None,
-        on: "str | list[str] | None" = None,
-    ) -> "DataFrame":
+        index: str | list[str] | None = None,
+        on: str | list[str] | None = None,
+    ) -> DataFrame:
         """Wide to long: keep ``id_vars``, stack ``value_vars`` into a
         ``variable`` / ``value`` pair. ``index`` / ``on`` are the polars
         spellings of the same two arguments."""
@@ -1458,35 +1740,35 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         vals = value_vars if value_vars is not None else on
         if vals is None:
             raise TypeError("unpivot() needs value_vars (polars: on=)")
-        return self._like(self._native.unpivot(_names(ids), _names(vals)))
+        return _bound(_ext.DataFrame.unpivot(self, as_names(ids), as_names(vals)))
 
     def melt(
         self,
-        id_vars: "str | list[str] | None" = None,
-        value_vars: "str | list[str] | None" = None,
+        id_vars: str | list[str] | None = None,
+        value_vars: str | list[str] | None = None,
         *,
-        index: "str | list[str] | None" = None,
-        on: "str | list[str] | None" = None,
-    ) -> "DataFrame":
+        index: str | list[str] | None = None,
+        on: str | list[str] | None = None,
+    ) -> DataFrame:
         return self.unpivot(id_vars, value_vars, index=index, on=on)
 
-    def explode(self, column: str) -> "DataFrame":
-        return self._like(self._native.explode(_unwrap(column)))
+    def explode(self, column: str) -> DataFrame:
+        return _bound(_ext.DataFrame.explode(self, column))
 
-    def to_dummies(self, column: str) -> "DataFrame":
-        return self._like(self._native.to_dummies(_unwrap(column)))
+    def to_dummies(self, column: str) -> DataFrame:
+        return _bound(_ext.DataFrame.to_dummies(self, column))
 
     def pivot(
         self,
         index: str,
-        columns: "str | None" = None,
-        values: "str | None" = None,
-        agg: "PivotAgg" = "first",
+        columns: str | None = None,
+        values: str | None = None,
+        agg: PivotAgg = "first",
         *,
-        on: "str | None" = None,
-        aggregate_function: "PivotAgg | None" = None,
-        aggfunc: "PivotAgg | None" = None,
-    ) -> "DataFrame":
+        on: str | None = None,
+        aggregate_function: PivotAgg | None = None,
+        aggfunc: PivotAgg | None = None,
+    ) -> DataFrame:
         """Long to wide (pandas argument names). ``on`` / ``aggregate_function``
         are the polars spellings of ``columns`` / ``agg``; ``aggfunc`` the
         pandas ``pivot_table`` one."""
@@ -1494,50 +1776,29 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         if cols is None or values is None:
             raise TypeError("pivot() needs index, columns (polars: on=) and values")
         agg_name = aggregate_function or aggfunc or agg
-        return self._like(self._native.pivot(_unwrap(index), cols, _unwrap(values), agg_name))
+        return _bound(_ext.DataFrame.pivot(self, index, cols, values, agg_name))
 
     def group_by_dynamic(
         self,
         time_col: str,
         every: int,
-        period: "int | None" = None,
-        aggs: "Sequence[Union[str, Agg, Tuple[str, str, List[str]]]] | None" = None,
-        origin: "int | Literal['min'] | None" = None,
-    ) -> "DataFrame":
+        period: int | None = None,
+        aggs: Sequence[str | Agg | tuple[str, str, list[str]]] | None = None,
+        origin: int | Literal["min"] | None = None,
+    ) -> DataFrame:
         """Tumbling/sliding time-window aggregation. ``origin`` anchors the
         window grid at ``origin + k*every`` (default: the classic ts-floored
         grid); pass a window's begin, or ``"min"`` to align buckets to the
         minimum timestamp (the frame-native ``time_bucket("min")``)."""
         from .lazyframe import dynamic_aggs
 
-        return self._like(
-            self._native.group_by_dynamic(time_col, every, period, dynamic_aggs(self, aggs), origin)
-        )
-
-    def query(
-        self,
-        dsl: "str | None" = None,
-        *,
-        group_by: "str | None" = None,
-        aggs: "list[str] | None" = None,
-        select: "list[str] | None" = None,
-        order_by: "str | None" = None,
-        descending: bool = False,
-        limit: "int | None" = None,
-    ) -> "DataFrame":
-        return _wrap(
-            self._native.query(
-                dsl,
-                group_by=group_by,
-                aggs=aggs,
-                select=select,
-                order_by=order_by,
-                descending=descending,
-                limit=limit,
+        return _bound(
+            _ext.DataFrame.group_by_dynamic(
+                self, time_col, every, period, dynamic_aggs(self, aggs), origin
             )
         )
 
-    def eval(self, expr: str) -> "Union[Series, DataFrame]":
+    def eval(self, expr: str) -> Series | DataFrame:
         """Evaluate Python expressions over the columns (pandas ``eval``).
         ``df.eval("a / b")`` gives a Series; ``df.eval("m = a / b")`` gives a new
         frame with column ``m`` added or replaced. Several lines run in order, each
@@ -1567,23 +1828,21 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         ``TranspileError`` naming the first unsupported construct (``@name``,
         attribute access, ...)."""
         from ._transpile import NULL_COLUMN, TranspileError, eval_statements, transpile_expr
-        from .columnar import Columnar
 
         statements = eval_statements(expr)
         if not statements:
             raise TranspileError("eval needs an expression")
         frame = self
         for i, text in enumerate(statements):
-            int_inputs = {
-                c: t.name.startswith(("INT", "UINT")) for c, t in zip(frame.columns, frame.dtypes)
-            }
-            target, column_expr = transpile_expr(text, frame.columns, int_inputs)
+            all_names = frame._names()
+            int_inputs = {c: frame[c].dtype.name.startswith(("INT", "UINT")) for c in all_names}
+            target, column_expr = transpile_expr(text, all_names, int_inputs)
             # `where` / `mask` without a replacement read an all-null column (the
             # expression language has no null literal); it is added for this line only.
             with_null = NULL_COLUMN in Columnar(column_expr).columns
             work = (
                 frame.with_columns(
-                    **{NULL_COLUMN: Series(_ext._series_nulls(int(DType.FLOAT64), len(frame)))}
+                    **{NULL_COLUMN: _ext._series_nulls(int(DType.FLOAT64), len(frame))}
                 )
                 if with_null
                 else frame
@@ -1594,15 +1853,31 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
                 return column_expr.apply(work)
             frame = work.with_columns(**{target: column_expr})
             if with_null:
-                frame = frame.select(*[c for c in frame.columns if c != NULL_COLUMN])
+                frame = frame.select(*[c for c in frame._names() if c != NULL_COLUMN])
         return frame
 
+    @overload
     def group_by(
         self,
-        key: "Union[str, Series, Sequence[Union[str, Series]], None]" = None,
-        *aggs: "Union[str, Agg]",
+        key: str | Series | Sequence[str | Series] | None = None,
+        *,
         dropna: bool = True,
-    ) -> "Union[DataFrame, GroupBy]":
+    ) -> GroupBy: ...
+    @overload
+    def group_by(
+        self,
+        key: str | Series | Sequence[str | Series] | None,
+        agg: str | Agg,
+        /,
+        *aggs: str | Agg,
+        dropna: bool = True,
+    ) -> DataFrame: ...
+    def group_by(
+        self,
+        key: str | Series | Sequence[str | Series] | None = None,
+        *aggs: str | Agg,
+        dropna: bool = True,
+    ) -> DataFrame | GroupBy:
         """Group by one column name or several (a composite key), then either
         run inline legacy specs or return a lazy :class:`GroupBy` for
         ``.agg(...)``. With no key the whole frame is one group: ``.agg(...)``
@@ -1610,7 +1885,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         included) and ``.sum()`` / ``.mean()`` / ... broadcast one. A row
         whose key is null is left out, as pandas; ``dropna=False`` keeps the
         null keys as their own group (polars), the key null in the result."""
-        from .columnar import GroupBy
+        from .groupby import GroupBy
 
         given = [] if key is None else [key] if isinstance(key, (str, Series)) else list(key)
         if not given:
@@ -1620,7 +1895,7 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
         # named ``key`` (``key<i>`` among several), as a computed expression
         # key is.
         source = self
-        keys: List[str] = []
+        keys: list[str] = []
         for i, k in enumerate(given):
             if isinstance(k, Series):
                 name = "key" if len(given) == 1 else f"key{i}"
@@ -1630,28 +1905,42 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
                 keys.append(k)
             else:
                 raise KeyError(f"group_by: no column named {k!r}")
+        rows: Series | None = None
+        total = len(source)
         if dropna:
             for k in keys:
                 if source._col(k).null_count:
-                    source = source.filter(source._col(k).notna())
+                    if rows is None:
+                        rows = DataFrame.from_dict({"v": source._col(k)}).with_row_index("_i")["_i"]
+                    present = source._col(k).notna()
+                    rows = rows.filter(present)
+                    source = source.filter(present)
         if not aggs:
             # The Python object over this wrapper, so the index names carry.
-            return GroupBy(source, keys)
-        return _wrap(
-            source._native.group_by(*[_unwrap(k) for k in keys], *[_unwrap(a) for a in aggs])
-        )
+            grouped = GroupBy(source, keys)
+            grouped._rows = rows
+            grouped._total = total
+            return grouped
+        return _ext.DataFrame.group_by(source, *[k for k in keys], *[a for a in aggs])
 
-    def reduce(self, agg: str) -> "DataFrame":
+    def reduce(self, agg: str) -> DataFrame:
         """One row: the engine aggregate named ``agg`` (``sum``, ``mean``,
         ``min``, ``max``, ``count_valid``, ``var``, ``std``, ``skew``,
-        ``kurt``, ``sumsq``, ``first``, ``last``, ``bit_or``, ``prod``) over every
+        ``kurt``, ``sumsq``, ``first``, ``last``, ``prod``) over every
         eligible column, each under its own name. The grouped form is
-        :meth:`group_by` ``(keys).reduce(agg)``."""
-        return self._like(self._native.reduce(agg))
+        :meth:`group_by` ``(keys).reduce(agg)``. The index columns are not
+        reduced, as pandas does not."""
+        return _bound(_ext.DataFrame.reduce(self._data_only(), agg))
+
+    def _data_only(self) -> DataFrame:
+        """This frame without its index columns (itself when it has no index)."""
+        if not _ext.DataFrame.index_names(self):
+            return self
+        return _bound(_ext.DataFrame.select(self, *self.columns))
 
     def agg(
-        self, func: object = None, axis: "Union[int, str]" = 0, **named: object
-    ) -> "Union[DataFrame, Series]":
+        self, func: AggForm | None = None, axis: int | str = 0, **named: AggKeyword
+    ) -> DataFrame | Series:
         """The pandas ``DataFrame.agg`` forms. ``axis=0`` reduces each column
         over the whole frame, one row: a name (``"sum"``), a list of names
         (flat ``<column>_<name>`` columns), a ``{column: name | [names]}``
@@ -1665,28 +1954,16 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             return self._reduce_rows(func)
         if axis not in (0, "index"):
             raise ValueError(f"agg: axis must be 0/'index' or 1/'columns', got {axis!r}")
-        from .columnar import GroupBy
+        from .groupby import GroupBy
 
-        return GroupBy(self, []).agg(*([] if func is None else [func]), **named)
+        return GroupBy(self._data_only(), []).agg(*([] if func is None else [func]), **named)
 
-    def _reduce_rows(self, func: str) -> "Series":
+    def _reduce_rows(self, func: str) -> Series:
         """One value per row across the numeric columns, nulls skipped: the
         pandas ``axis=1`` reductions, as engine column ops (fill, add, the
         select kernel) and no per-row Python."""
-        numeric = {
-            DType.INT8,
-            DType.INT16,
-            DType.INT32,
-            DType.INT64,
-            DType.UINT8,
-            DType.UINT16,
-            DType.UINT32,
-            DType.UINT64,
-            DType.FLOAT32,
-            DType.FLOAT64,
-        }
-        cols: List[Series] = [Series(self._native[name]) for name in self.columns]
-        cols = [c for c in cols if c.dtype in numeric]
+        cols: list[Series] = [_ext.DataFrame.__getitem__(self, name) for name in self.columns]
+        cols = [c for c in cols if c.dtype.is_numeric]
         if not cols:
             raise ValueError("agg(axis=1): no numeric columns")
         if func == "count":
@@ -1702,8 +1979,6 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
                 return total
             return total.astype("float64") / self._reduce_rows("count").astype("float64")
         if func in ("min", "max"):
-            from .columnar import col, when
-
             if len({c.dtype for c in cols}) > 1:
                 cols = [c.astype("float64") for c in cols]
             best: Series = cols[0]
@@ -1719,61 +1994,76 @@ class DataFrame(_FramePandasMixin, _FramePolarsMixin, _Wrapper["_ext._DataFrame"
             f"agg({func!r}, axis=1): the per-row reductions are sum, mean, min, max and count"
         )
 
-    aggregate = agg
-
     # The pandas ``df.sum()`` family: one row, one aggregate per column.
-    def sum(self) -> "DataFrame":
-        return self.reduce("sum")
+    def sum(self) -> DataFrame:
+        return self.reduce(agg="sum")
 
-    def mean(self) -> "DataFrame":
-        return self.reduce("mean")
+    def mean(self) -> DataFrame:
+        return self.reduce(agg="mean")
 
-    def min(self) -> "DataFrame":
-        return self.reduce("min")
+    def min(self) -> DataFrame:
+        return self.reduce(agg="min")
 
-    def max(self) -> "DataFrame":
-        return self.reduce("max")
+    def max(self) -> DataFrame:
+        return self.reduce(agg="max")
 
-    def count(self) -> "DataFrame":
-        return self.reduce("count_valid")
+    def count(self) -> DataFrame:
+        return self.reduce(agg="count_valid")
 
-    def var(self) -> "DataFrame":
-        return self.reduce("var")
+    def var(self) -> DataFrame:
+        return self.reduce(agg="var")
 
-    def std(self) -> "DataFrame":
-        return self.reduce("std")
+    def std(self) -> DataFrame:
+        return self.reduce(agg="std")
 
-    def skew(self) -> "DataFrame":
-        return self.reduce("skew")
+    def skew(self) -> DataFrame:
+        """The pandas unbiased skewness of every column, one row (see :meth:`Series.skew`)."""
+        return self.reduce("skew_unbiased")
 
-    def kurt(self) -> "DataFrame":
-        return self.reduce("kurt")
+    def kurt(self) -> DataFrame:
+        """The pandas unbiased excess kurtosis of every column, one row."""
+        return self.reduce("kurt_unbiased")
+
+    # BEGIN GENERATED aliases from _aliases.py by scripts/gen_pyi.py
+    if TYPE_CHECKING:
+        aggregate = agg
+        astype = cast
+        divide = FramePandasMixin.div
+        truediv = FramePandasMixin.div
+        multiply = FramePandasMixin.mul
+        subtract = FramePandasMixin.sub
+        product = FramePandasMixin.prod
+        rtruediv = FramePandasMixin.rdiv
+        map = FramePandasMixin.applymap
+        isnull = FramePandasMixin.isna
+        notnull = FramePandasMixin.notna
+        backfill = FramePandasMixin.bfill
+        pad = FramePandasMixin.ffill
+        limit = head
+        clone = FramePandasMixin.copy
+        select_seq = select
+        with_columns_seq = with_columns
+        pass
+    # END GENERATED aliases
 
 
-_register(_ext._DataFrame, DataFrame)
-
-
-def _frame_of(columns: "List[Tuple[str, object]]", read: "Callable[[Any], Series]") -> DataFrame:
+def _frame_of(columns: list[tuple[str, object]], read: Callable[[Any], Series]) -> DataFrame:
     """A frame of ``read(value)`` for each ``(name, value)``."""
     return DataFrame(
-        _ext._dataframe_from_columns(
-            [n for n, _ in columns], [_unwrap(read(v)) for _, v in columns]
-        )
+        _ext._dataframe_from_columns([n for n, _ in columns], [read(v) for _, v in columns])
     )
 
 
 def _native_columns(
     mapping: Mapping[str, object],
-) -> "Optional[Tuple[List[str], List[_ext._Series]]]":
+) -> tuple[list[str], list[Series]] | None:
     """The names and native columns of a mapping whose values are all Series,
     lists of scalars, NumPy arrays or pandas and polars Series that import
     without Arrow; None otherwise."""
-    names: "List[str]" = []
-    cols: "List[_ext._Series]" = []
+    names: list[str] = []
+    cols: list[Series] = []
     for name, value in mapping.items():
         if isinstance(value, Series):
-            cols.append(_unwrap(value))
-        elif isinstance(value, _ext._Series):
             cols.append(value)
         elif isinstance(value, (list, tuple)):
             items = list(value)
@@ -1785,17 +2075,17 @@ def _native_columns(
                 return None
         elif type(value).__module__.startswith("pandas") and type(value).__name__ == "Series":
             try:
-                cols.append(_unwrap(Series.from_pandas(cast(Any, value))))
+                cols.append(Series.from_pandas(cast(Any, value)))
             except TypeError:
                 return None
         elif type(value).__module__.startswith("polars") and type(value).__name__ == "Series":
             try:
-                cols.append(_unwrap(Series.from_polars(cast(Any, value))))
+                cols.append(Series.from_polars(cast(Any, value)))
             except TypeError:
                 return None
         elif type(value).__module__ == "numpy" and type(value).__name__ == "ndarray":
             try:
-                cols.append(_unwrap(Series.from_numpy(cast(Any, value))))
+                cols.append(Series.from_numpy(cast(Any, value)))
             except (TypeError, BufferError, RuntimeError, ImportError):
                 return None
         else:
@@ -1804,11 +2094,115 @@ def _native_columns(
     return names, cols
 
 
+def _with_series_labels(names: list[str], cols: list[Series]) -> DataFrame:
+    """The frame of ``cols`` under the row labels of the labelled Series among
+    them, as the pandas constructor does: one labelled Series, or several with
+    equal labels, give those labels; several with different labels are aligned
+    on the union of their labels (:meth:`Series.align`, an integer column that
+    misses a row becomes Float64). A column with no labels is positional, so it
+    needs labels equal to the others'; next to Series with different labels it
+    is a ``ValueError``. Frames of columns with no labels carry none."""
+    from . import _series_index as si
+
+    labelled = [i for i, c in enumerate(cols) if si.names_of(c)]
+    if not labelled:
+        return DataFrame(_ext._dataframe_from_columns(names, cols))
+    first = cols[labelled[0]]
+    level_names = si.names_of(first)
+    same = all(
+        si.names_of(cols[i]) == level_names
+        and len(cols[i]) == len(first)
+        and all(a.equals(b) for a, b in zip(si.levels_of(cols[i]), si.levels_of(first)))
+        for i in labelled[1:]
+    )
+    if same and len(labelled) < len(cols) and any(len(c) != len(first) for c in cols):
+        raise ValueError("all columns must have the same length")
+    if not same:
+        if len(labelled) < len(cols):
+            raise ValueError(
+                "cannot align Series with different labels next to a column with no labels; "
+                "give it labels with set_axis or reset_index them first"
+            )
+        union = first
+        for i in labelled[1:]:
+            union = union.align(cols[i])[0]
+        cols = [c.reindex_like(union) for c in cols]
+        first = cols[0]
+        level_names = si.names_of(first)
+    # a column that shares its name with a level keeps the name; the level
+    # becomes an unnamed (hidden) one
+    level_names = [si.default_name(i) if n in names else n for i, n in enumerate(level_names)]
+    levels = si.levels_of(first)
+    plain = [si.drop_levels(c) for c in cols]
+    frame = _ext._dataframe_from_columns([*names, *level_names], [*plain, *levels])
+    return _bound(_ext.DataFrame.with_index(DataFrame(frame), level_names))
+
+
 def _dataframe_from_bytes(data: bytes) -> DataFrame:
     """The DataFrame a pickle holds (``DataFrame.to_bytes`` of the native frame format)."""
     return DataFrame(_ext._dataframe_from_bytes(data))
 
 
-def _dataframe_from_arrow(table: "pa.Table") -> DataFrame:
-    """Import a pyarrow Table into a native DataFrame wrapper."""
-    return DataFrame(_arrow_native("_dataframe_from_arrow")(table))
+def _dataframe_from_arrow(table: pa.Table) -> DataFrame:
+    """Import a pyarrow Table into a native DataFrame wrapper, with the row
+    index its schema metadata names: ``dftracer.utils.index``, else the
+    ``index_columns`` of its pandas metadata (a default ``RangeIndex``, ``0 .. n-1``
+    with step 1, is none; another range becomes an index column of its values)."""
+    frame = DataFrame(_arrow_native("_dataframe_from_arrow")(table))
+    names = _arrow_index_names(table.schema.metadata, frame)
+    if not names:
+        return _range_index(table.schema.metadata, frame)
+    try:
+        return _bound(_ext.DataFrame.with_index(frame, names))
+    except ValueError:
+        return frame
+
+
+def _range_index(metadata: Mapping[bytes, bytes] | None, frame: DataFrame) -> DataFrame:
+    """``frame`` indexed by the range its pandas metadata stores in place of a
+    column (``{"kind": "range", ...}``), unless it is the default ``0 .. n-1``."""
+    if not metadata or b"dftracer.utils.index" in metadata:
+        return frame
+    import json
+
+    listed = json.loads(metadata[b"pandas"]).get("index_columns") if b"pandas" in metadata else None
+    if not isinstance(listed, list) or len(listed) != 1 or not isinstance(listed[0], dict):
+        return frame
+    spec = listed[0]
+    start, step = spec.get("start"), spec.get("step")
+    if spec.get("kind") != "range" or not isinstance(start, int) or not isinstance(step, int):
+        return frame
+    if (start == 0 and step == 1) or step == 0:
+        return frame
+    name = spec.get("name")
+    name = default_name(0) if name is None else str(name)
+    if name in frame._names():
+        return frame
+    from ._series_index import positions
+
+    labels = positions(len(frame)) * step + start
+    framed = _ext.DataFrame.with_column(frame, name, labels)
+    return _bound(_ext.DataFrame.with_index(framed, [name]))
+
+
+def _arrow_index_names(metadata: Mapping[bytes, bytes] | None, frame: DataFrame) -> list[str]:
+    """The index column names a pyarrow schema metadata carries that are
+    columns of ``frame``, without repeats."""
+    if not metadata:
+        return []
+    import json
+
+    listed: object = None
+    if b"dftracer.utils.index" in metadata:
+        listed = json.loads(metadata[b"dftracer.utils.index"])
+    elif b"pandas" in metadata:
+        listed = json.loads(metadata[b"pandas"]).get("index_columns")
+    names: list[str] = []
+    for name in listed if isinstance(listed, list) else ():
+        if isinstance(name, str) and name in frame and name not in names:
+            names.append(name)
+    return names
+
+
+_install_aliases("DataFrame", DataFrame)
+_ext._bind_types(DataFrame=DataFrame)

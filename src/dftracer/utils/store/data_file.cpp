@@ -95,7 +95,7 @@ struct DirectOpen {
     std::uint32_t align = 0;
 };
 
-dstd::Expected<DirectOpen, dstd::Error> open_direct(const dstd::String& path) {
+dstd::Expected<DirectOpen, dstd::Error> open_direct(dstd::StringView path) {
     const dstd::PathView view(path);
     const std::uint32_t align = dstd::File::direct_alignment(view);
     if (align == 0 || align > DIRECT_READ_CHUNK_BYTES ||
@@ -167,7 +167,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> pread_all(
     return out;
 }
 
-dstd::ByteView bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::ByteView bytes_of(dstd::Span<const std::uint8_t> bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
@@ -360,7 +360,7 @@ dstd::Expected<dstd::Vector<Record>, dstd::Error> walk_back(
 
 dstd::Expected<dstd::Vector<Record>, dstd::Error> recover_from_scan(
     const dstd::File& file, std::uint64_t file_size,
-    const dstd::Vector<Record>& scanned, std::size_t& records_read) {
+    dstd::Span<const Record> scanned, std::size_t& records_read) {
     std::uint64_t last_sequence = 0;
     bool have_sequence = false;
     for (const Record& start : scanned) {
@@ -421,7 +421,7 @@ void apply_record(FileIndex& index, const Record& record) {
     index.closed = record.kind == RecordKind::Footer;
 }
 
-void apply_chain(FileIndex& index, const dstd::Vector<Record>& chain) {
+void apply_chain(FileIndex& index, dstd::Span<const Record> chain) {
     for (std::size_t i = chain.size(); i > 0; --i) {
         apply_record(index, chain[i - 1]);
     }
@@ -535,8 +535,8 @@ dstd::Pair<dstd::String, dstd::String> split_path(dstd::StringView path) {
             whole.substr(slash + 1)};
 }
 
-dstd::String summary_path(const dstd::String& dir) {
-    dstd::String path = dir;
+dstd::String summary_path(dstd::StringView dir) {
+    dstd::String path(dir);
     if (!path.empty() && path.back() != '/') path.push_back('/');
     path.append(SUMMARY_FILE_NAME.data(), SUMMARY_FILE_NAME.size());
     return path;
@@ -575,8 +575,7 @@ void append_summary(dstd::StringView data_path, std::uint64_t needed_bytes,
 dstd::Expected<dstd::Vector<SummaryEntry>, dstd::Error> read_summary(
     dstd::StringView dir) {
     dstd::Vector<SummaryEntry> entries;
-    const dstd::String path =
-        summary_path(dstd::String(dir.data(), dir.size()));
+    const dstd::String path = summary_path(dir);
     auto file = dstd::File::open(dstd::PathView(path), {});
     if (!file) {
         if (file.error().is(dstd::Condition::NotFound)) return entries;
@@ -891,7 +890,7 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
     const RecordItems& items, std::uint64_t base,
     dstd::Vector<std::uint8_t>& out) const {
     // An empty block takes no bytes and a zero handle.
-    const auto place = [base, &out](const dstd::Vector<std::uint8_t>& raw) {
+    const auto place = [base, &out](dstd::Span<const std::uint8_t> raw) {
         if (raw.empty()) return BlockHandle{};
         const dstd::Vector<std::uint8_t> bytes =
             encode_meta(bytes_of(raw), META_ZSTD_LEVEL);

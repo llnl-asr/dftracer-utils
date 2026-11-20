@@ -64,6 +64,26 @@ struct FileIndexData;
 /// (dictionaries and min/max), the ts histogram and the chunk blooms.
 Conditions make_query_conditions(FileIndexData& data);
 
+/// What one summary kind alone rules out of a file, for the leaves of a query
+/// on one path.
+struct SummarySkip {
+    /// The path as the query names it.
+    dstd::String path;
+    /// "zonemap", "bloom", "counts" or "postings".
+    dstd::String summary;
+    /// Chunks the summary rules out when it is the only evidence used and only
+    /// the leaves on `path` are judged.
+    std::uint64_t skipped = 0;
+    std::uint64_t chunks = 0;
+};
+
+/// A SummarySkip for each (path, summary kind) pair of the query's leaves
+/// whose summary rules out at least one chunk, in query order. The work is per
+/// chunk decision of an explain, not per row of a scan.
+dstd::Vector<SummarySkip> summary_skips(const duql::detail::QueryNode& root,
+                                        FileIndexData& data,
+                                        const ChunkSet& universe);
+
 /// The Condition over metadata records (dft.metadata): a chunk may hold a
 /// record matching a leaf only when one of its records has the leaf's field
 /// and, for a leaf on `name`, one of its record names satisfies it. `metadata`

@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/file_compressor_utility.h>
@@ -38,7 +39,7 @@ bool run_sync(const char* name, Fn body) {
         .has_value();
 }
 
-dftu_series* paths_column(const dstd::Vector<dstd::Path>& paths) {
+dftu_series* paths_column(dstd::Span<const dstd::Path> paths) {
     dstd::Vector<dstd::StringView> views;
     views.reserve(paths.size());
     for (const dstd::Path& path : paths) views.emplace_back(path.str());

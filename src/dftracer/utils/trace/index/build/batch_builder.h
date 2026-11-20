@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_TRACE_INDEX_BUILD_BATCH_BUILDER_H
 
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/function.h>
@@ -39,6 +40,12 @@ inline constexpr std::size_t MAX_SINK_BYTES = std::size_t{4} << 20;
 
 /// The limit a build applies. Tests lower it to make small inputs commit.
 inline std::atomic<std::size_t> g_max_sink_bytes{MAX_SINK_BYTES};
+
+#if DFTRACER_UTILS_TEST_PROBES
+/// Called on the worker of a file that is parsed, before it is written. For
+/// tests.
+inline std::atomic<void (*)()> g_before_write_probe{nullptr};
+#endif
 
 /// Returns the start of each block of consecutive files, then the end. There
 /// are about `workers` blocks of equal cost (equal file counts when `costs` is

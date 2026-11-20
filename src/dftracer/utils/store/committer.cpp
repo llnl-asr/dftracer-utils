@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/store/committer.h>
@@ -31,7 +32,7 @@ std::atomic<std::uint64_t>& batch_count() {
     return count;
 }
 
-dstd::Error io_error(const char* message) {
+dstd::Error io_error(dstd::StringView message) {
     return dstd::Error(dstd::Condition::Io, message);
 }
 

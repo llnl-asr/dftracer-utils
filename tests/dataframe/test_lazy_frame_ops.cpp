@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -38,14 +39,14 @@ DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
-Series i64s(const dstd::Vector<std::int64_t>& v) {
+Series i64s(dstd::Vector<std::int64_t> v) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()));
 }
 
 using I = dstd::Optional<std::int64_t>;
 const I NI = dstd::nullopt;
 
-dstd::Vector<I> i64_col(const DataFrame& df, const dstd::String& name) {
+dstd::Vector<I> i64_col(const DataFrame& df, dstd::StringView name) {
     Series c = df.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
@@ -63,13 +64,15 @@ dstd::Vector<I> i64_col(const DataFrame& df, const dstd::String& name) {
 DataFrame make_nested() {
     std::int64_t counts[3] = {5, 7, 9};
     dstd::Vector<Series> fields;
-    fields.push_back(Series::strings({"read", "write", "open"}));
+    fields.push_back(Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"read", "write", "open"})));
     fields.push_back(Series::flat_i64(counts, 3));
     DataFrame df;
     df.names = dstd::make_shared_strings({"pid", "tk"});
     df.columns.push_back(i64s({1, 2, 3}));
-    df.columns.push_back(Series::list(
-        {0, 2, 2, 3}, Series::structs({"value", "count"}, std::move(fields))));
+    df.columns.push_back(
+        Series::list(dftu_utils_test::span_of<std::int32_t>({0, 2, 2, 3}),
+                     Series::structs({"value", "count"}, std::move(fields))));
     return df;
 }
 
@@ -102,7 +105,7 @@ LazyFrame row_numbered(DataFrame df) {
     specs[0].func = DFTU_WINDOW_ROW_NUMBER;
     specs[0].out = "rn";
     OpArgs args;
-    args.strlist(1, nullptr, 0).strlist(2, nullptr, 0).winlist(3, specs);
+    args.strlist(1, {}).strlist(2, {}).winlist(3, specs);
     return scan(std::move(df)).frame_op("dftu.frame.window", args);
 }
 
@@ -110,8 +113,10 @@ DataFrame row_numbered_eager(const DataFrame& df) {
     dftracer::utils::dataframe::WindowColumn w{};
     w.func = dftracer::utils::dataframe::WindowFunc::RowNumber;
     w.out = "rn";
-    return dftu_utils_test::ok(
-        dftracer::utils::dataframe::window(df, {}, {}, {w}));
+    return dftu_utils_test::ok(dftracer::utils::dataframe::window(
+        df, {}, {},
+        dftu_utils_test::span_of<dftracer::utils::dataframe::WindowColumn>(
+            {w})));
 }
 
 dftu_dataframe* to_abi(const DataFrame& df) {
@@ -122,7 +127,7 @@ dftu_dataframe* to_abi(const DataFrame& df) {
         cols.push_back(df.columns[i].share().release());
     }
     return dftu_dataframe_new(names.data(), cols.data(),
-                              static_cast<int32_t>(names.size()));
+                              static_cast<std::int32_t>(names.size()));
 }
 
 int g_keep_alive_destroyed = 0;
@@ -212,9 +217,10 @@ TEST_SUITE("lazy frame ops") {
             dftracer::utils::common::ErrorCode::InvalidArgument);
         dftu_utils_test::expect_error(
             scan(make_base())
-                .compare_agg(scan(dftu_utils_test::ok(
-                                 make_variant().rename({"j", "n"}))),
-                             1)
+                .compare_agg(
+                    scan(dftu_utils_test::ok(make_variant().rename(
+                        dftu_utils_test::span_of<dstd::String>({"j", "n"})))),
+                    1)
                 .status(),
             dftracer::utils::common::ErrorCode::InvalidArgument);
     }
@@ -264,9 +270,7 @@ TEST_SUITE("lazy frame ops") {
             specs[0].out = out.c_str();
             dstd::Vector<const char*> order = {"n"};
             OpArgs args;
-            args.strlist(1, nullptr, 0)
-                .strlist(2, order.data(), 1)
-                .winlist(3, specs);
+            args.strlist(1, {}).strlist(2, {order.data(), 1}).winlist(3, specs);
             return scan(make_base()).frame_op("dftu.frame.window", args);
         }();
         CHECK(plan.explain().find("frame_op dftu.frame.window") !=
@@ -314,8 +318,10 @@ TEST_SUITE("lazy frame ops") {
         DataFrame df;
         df.names = dstd::make_shared_strings({"k", "s", "a", "b"});
         double b[4] = {2.0, 4.0, 6.5, 1.5};
-        df.columns.push_back(Series::strings({"x", "y", "x", "y"}));
-        df.columns.push_back(Series::strings({"p", "q", "r", "s"}));
+        df.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "y", "x", "y"})));
+        df.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"p", "q", "r", "s"})));
         df.columns.push_back(i64s({1, 2, 3, 4}));
         df.columns.push_back(Series::flat_f64(b, 4));
 
@@ -384,7 +390,8 @@ TEST_SUITE("lazy frame ops") {
             scan_df().group_by({"nope"}).sum().status(),
             dftracer::utils::common::ErrorCode::NotFound);
         dftu_utils_test::expect_error(
-            scan_df().reduce_specs(Agg::Sum, {"nope"}),
+            scan_df().reduce_specs(
+                Agg::Sum, dftu_utils_test::span_of<dstd::String>({"nope"})),
             dftracer::utils::common::ErrorCode::NotFound);
 
         dftu_dataframe* h = to_abi(df);
@@ -428,7 +435,8 @@ TEST_SUITE("lazy frame ops") {
         const std::uint8_t valid[1] = {0x05};
         DataFrame df;
         df.names = dstd::make_shared_strings({"k", "a"});
-        df.columns.push_back(Series::strings({"x", "y", "x"}));
+        df.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "y", "x"})));
         df.columns.push_back(Series::flat_i64(av, 3, valid));
         CHECK(i64_col(dftu_utils_test::ok(df.group_by({"k"}).min()), "a") ==
               dstd::Vector<I>{1, NI});
@@ -470,11 +478,13 @@ TEST_SUITE("lazy frame ops") {
         df.columns.push_back(i64s({1, 2, 3, 3, 4}));
         DataFrame all = dftu_utils_test::ok(df.unique());
         CHECK(i64_col(all, "v") == dstd::Vector<I>{1, 2, 3, 4});
-        DataFrame by_k = dftu_utils_test::ok(df.unique({"k"}));
+        DataFrame by_k = dftu_utils_test::ok(
+            df.unique(dftu_utils_test::span_of<dstd::String>({"k"})));
         CHECK(i64_col(by_k, "k") == dstd::Vector<I>{1, 2, 3});
         CHECK(i64_col(by_k, "v") == dstd::Vector<I>{1, 3, 4});
         dftu_utils_test::expect_error(
-            df.unique({"nope"}), dftracer::utils::common::ErrorCode::NotFound);
+            df.unique(dftu_utils_test::span_of<dstd::String>({"nope"})),
+            dftracer::utils::common::ErrorCode::NotFound);
 
         auto scan_df = [&] {
             DataFrame c;
@@ -514,7 +524,7 @@ TEST_SUITE("lazy frame ops") {
         CHECK(dftu_dataframe_num_rows(lazy_out) == 3);
         const dftu_lazyframe* in1[1] = {lh};
         OpArgs arg;
-        arg.strlist(1, keys, 1);
+        arg.strlist(1, {keys, 1});
         dftu_lazyframe* via_op =
             dftu_op_run_lazy(dftu_op_find("dftu.lazy.unique_by"), in1, 1, arg);
         REQUIRE(via_op);
@@ -541,7 +551,8 @@ TEST_SUITE("lazy frame ops") {
             DataFrame df;
             df.names = dstd::make_shared_strings({"k", "v"});
             df.columns.push_back(
-                Series::strings({"x", "x", "y", "y", "z", "z", "z"}));
+                Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                    {"x", "x", "y", "y", "z", "z", "z"})));
             df.columns.push_back(Series::flat_i64(v, 7));
             return df;
         };
@@ -682,7 +693,7 @@ TEST_SUITE("lazy frame ops") {
         CHECK(dftu_lazyframe_head_by(lh, bad, 1, 2) == nullptr);
         const dftu_lazyframe* in1[1] = {lh};
         OpArgs arg;
-        arg.strlist(1, keys, 1);
+        arg.strlist(1, {keys, 1});
         arg.i64(2, 1);
         dftu_lazyframe* via_op =
             dftu_op_run_lazy(dftu_op_find("dftu.lazy.head_by"), in1, 1, arg);
@@ -791,7 +802,9 @@ TEST_SUITE("lazy frame ops") {
         const double bv[5] = {1.0, 5.0, 2.0, 5.0, 0.5};
         DataFrame df;
         df.names = dstd::make_shared_strings({"k", "a", "b"});
-        df.columns.push_back(Series::strings({"x", "y", "x", "y", "x"}));
+        df.columns.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"x", "y", "x", "y", "x"})));
         df.columns.push_back(Series::flat_i64(av, 5, valid));
         df.columns.push_back(Series::flat_f64(bv, 5));
         return df;
@@ -800,8 +813,7 @@ TEST_SUITE("lazy frame ops") {
     using D = dstd::Optional<double>;
     const D ND = dstd::nullopt;
 
-    static dstd::Vector<D> f64_col(const DataFrame& df,
-                                   const dstd::String& name) {
+    static dstd::Vector<D> f64_col(const DataFrame& df, dstd::StringView name) {
         Series c = df.column(name);
         REQUIRE(c.valid());
         c = c.materialize();
@@ -910,7 +922,9 @@ TEST_SUITE("lazy frame ops") {
         // stays null under ffill, after its last under bfill.
         DataFrame holes;
         holes.names = dstd::make_shared_strings({"k", "a"});
-        holes.columns.push_back(Series::strings({"x", "y", "x", "x", "y"}));
+        holes.columns.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"x", "y", "x", "x", "y"})));
         const std::int64_t hv[5] = {0, 1, 2, 0, 0};
         const std::uint8_t hvalid[1] = {0x06};
         holes.columns.push_back(Series::flat_i64(hv, 5, hvalid));
@@ -946,7 +960,8 @@ TEST_SUITE("lazy frame ops") {
             dftracer::utils::common::ErrorCode::InvalidArgument);
         DataFrame keys_only;
         keys_only.names = dstd::make_shared_strings({"k"});
-        keys_only.columns.push_back(Series::strings({"x", "y"}));
+        keys_only.columns.push_back(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "y"})));
         dftu_utils_test::expect_error(
             keys_only.group_by({"k"}).cumsum(),
             dftracer::utils::common::ErrorCode::InvalidArgument);
@@ -1053,7 +1068,7 @@ TEST_SUITE("lazy frame ops") {
         REQUIRE(fop);
         REQUIRE(lop);
         OpArgs a;
-        a.strlist(1, keys, 1)
+        a.strlist(1, {keys, 1})
             .i32(2, DFTU_GROUPWISE_TAIL)
             .i64(3, 1)
             .i32(4, DFTU_RANK_AVERAGE)

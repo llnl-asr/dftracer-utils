@@ -49,7 +49,10 @@ class Writer {
     void key(dstd::StringView k);
 
     void value(dstd::StringView v);
-    void value(const char* v);
+    template <std::size_t N>
+    void value(const char (&v)[N]) {
+        value(dstd::StringView(v));
+    }
     void value(double v);
     void value(bool v);
     void value(std::int64_t v);
@@ -66,7 +69,7 @@ class Writer {
             value(static_cast<std::uint64_t>(v));
     }
     template <class T>
-        requires(std::is_pointer_v<T> && !std::is_same_v<T, const char*>)
+        requires(std::is_pointer_v<T>)
     void value(T) = delete;
     void null();
 

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
-// The counters of a typed collect, answered from the aggregation tier's chunk
-// column blocks: the rows, their per-second means and the shard splits.
+// The counters of an index records read, answered from the aggregation tier's
+// chunk column blocks: the rows, their per-second means and the shard splits.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
@@ -48,8 +49,8 @@ constexpr std::size_t CHECKPOINT_SIZE = 2048;
 // an integer, and every third event is a pre-aggregated counter, which the
 // counters skip. App counters and plain events share the trace and are not
 // counters at all.
-dstd::String write_trace(const dstd::String& dir) {
-    const dstd::String pfw = dir + "/counters.pfw";
+dstd::String write_trace(dstd::CStringView dir) {
+    const dstd::String pfw = dstd::String(dir) + "/counters.pfw";
     {
         dstd::String out;
         for (int i = 0; i < 24; ++i) {
@@ -57,25 +58,25 @@ dstd::String write_trace(const dstd::String& dir) {
             const std::uint64_t ts =
                 BASE_TS + static_cast<std::uint64_t>(i) * 130'000;
             dstd::fmt_append<
-                "{\"ph\":\"C\",\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
+                "{\"ph\":2,\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
                 "\"tid\":1,\"ts\":{},\"args\":{\"hhash\":\"{}\",\"util\":{},"
                 "\"num\":{}}}\n">(out, ts, host, (i + 0.5), (10 + i));
             if (i % 6 == 0)
                 dstd::fmt_append<
-                    "{\"ph\":\"C\",\"name\":\"mem\",\"cat\":\"sys\",\"pid\":1,"
+                    "{\"ph\":2,\"name\":\"mem\",\"cat\":\"sys\",\"pid\":1,"
                     "\"tid\":1,\"ts\":{},\"args\":{\"hhash\":\"{}\",\"used\":{}"
                     "}}\n">(out, ts + 7'000, host, (1000 + i));
             if (i % 3 == 0)
                 dstd::fmt_append<
-                    "{\"ph\":\"C\",\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
+                    "{\"ph\":2,\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
                     "\"tid\":1,\"ts\":{},\"args\":{\"hhash\":\"{}\",\"count\":"
                     "5,\"util\":99.0}}\n">(out, ts + 11'000, host);
             dstd::fmt_append<
-                "{\"ph\":\"C\",\"name\":\"faults\",\"cat\":\"app\",\"pid\":1,"
+                "{\"ph\":2,\"name\":\"faults\",\"cat\":\"app\",\"pid\":1,"
                 "\"tid\":1,\"ts\":{},\"args\":{\"count\":2}}\n">(out,
                                                                  ts + 3'000);
             dstd::fmt_append<
-                "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
                 "\"tid\":1,\"ts\":{},\"dur\":10,\"args\":{\"size\":4096}}\n">(
                 out, ts + 5'000);
         }
@@ -88,7 +89,7 @@ dstd::String write_trace(const dstd::String& dir) {
     return gz;
 }
 
-IndexerOptions with_aggregation(const dstd::String& index_dir) {
+IndexerOptions with_aggregation(dstd::CStringView index_dir) {
     IndexerOptions o;
     o.index_dir = index_dir;
     o.checkpoint_size = CHECKPOINT_SIZE;
@@ -135,7 +136,7 @@ Expected expected_groups() {
 }
 
 dstd::Vector<dstd::String> string_column(const dataframe::DataFrame& df,
-                                         const dstd::String& name) {
+                                         dstd::StringView name) {
     dstd::Vector<dstd::String> out;
     for (std::size_t i = 0; i < df.names.size(); ++i)
         if (dstd::StringView(df.names[i]) == dstd::StringView(name)) {
@@ -147,7 +148,7 @@ dstd::Vector<dstd::String> string_column(const dataframe::DataFrame& df,
 }
 
 dstd::Vector<double> f64_column(const dataframe::DataFrame& df,
-                                const dstd::String& name) {
+                                dstd::StringView name) {
     dstd::Vector<double> out;
     for (std::size_t i = 0; i < df.names.size(); ++i)
         if (dstd::StringView(df.names[i]) == dstd::StringView(name)) {
@@ -224,7 +225,7 @@ struct Blocks {
     std::size_t other_rows = 0;
 };
 
-Blocks blocks_of(const dstd::String& gz, const dstd::String& idx) {
+Blocks blocks_of(dstd::CStringView gz, dstd::CStringView idx) {
     Blocks out;
     const auto index_path =
         dstd::String(trace::internal::determine_index_path(gz, idx));
@@ -265,7 +266,7 @@ TEST_SUITE("CountersColumns") {
         const auto typed =
             dftu_utils_test::ok(trace::views::View::from_files(
                                     {{dstd::String(gz), dstd::String(idx)}})
-                                    .collect_typed()
+                                    .collect_index_records()
                                     .get());
         check_against(typed.counters, expected_groups());
 
@@ -289,7 +290,7 @@ TEST_SUITE("CountersColumns") {
         const auto whole =
             dftu_utils_test::ok(trace::views::View::from_files(
                                     {{dstd::String(gz), dstd::String(idx)}})
-                                    .collect_typed()
+                                    .collect_index_records()
                                     .get());
         check_against(whole.counters, expected_groups());
 
@@ -310,12 +311,12 @@ TEST_SUITE("CountersColumns") {
         const auto first =
             dftu_utils_test::ok(trace::views::View::from_files(
                                     {{dstd::String(gz), dstd::String(idx)}})
-                                    .collect_typed(0, boundary)
+                                    .collect_index_records(0, boundary)
                                     .get());
         const auto second =
             dftu_utils_test::ok(trace::views::View::from_files(
                                     {{dstd::String(gz), dstd::String(idx)}})
-                                    .collect_typed(boundary, 4096)
+                                    .collect_index_records(boundary, 4096)
                                     .get());
         check_against(first.counters, lo);
         check_against(second.counters, hi);

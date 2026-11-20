@@ -23,12 +23,13 @@ CheckpointIndexerFactory::try_create(dstd::CStringView archive_path,
 
     switch (format) {
         case common::ArchiveFormat::Gzip: {
-            const dstd::String path(archive_path.view());
+            dstd::String path(archive_path.view());
             auto checked = GzipIndexer::check_arguments(path, checkpoint_size);
             if (!checked) return checked.error();
             return dstd::SharedPtr<CheckpointIndexer>(
                 dstd::make_shared<trace::index::gzip::GzipIndexer>(
-                    path, final_idx_path, checkpoint_size, force));
+                    std::move(path), std::move(final_idx_path), checkpoint_size,
+                    force));
         }
 
         case common::ArchiveFormat::Unknown:

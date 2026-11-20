@@ -12,21 +12,16 @@
 namespace dftracer::utils::fileio::parallel {
 
 /// Drain a full buffer to fd at the given absolute offset via pwrite, retrying
-/// short writes. Returns 0 on success, -1 on error (logged). path is used only
-/// for the error message.
-inline coro::CoroTask<int> pwrite_fully(int fd, const char* path,
-                                        const std::uint8_t* bytes,
+/// short writes. Returns 0 on success, -1 on error, which the caller logs with
+/// its path.
+inline coro::CoroTask<int> pwrite_fully(int fd, const std::uint8_t* bytes,
                                         std::size_t size, off_t offset) {
     std::size_t written = 0;
     while (written < size) {
         auto n = co_await ::dftracer::utils::runtime::io::pwrite(
             fd, bytes + written, size - written,
             offset + static_cast<off_t>(written));
-        if (n <= 0) {
-            DFTRACER_UTILS_LOG_ERROR("pwrite failed on {} at offset {}", path,
-                                     static_cast<long long>(offset));
-            co_return -1;
-        }
+        if (n <= 0) co_return -1;
         written += static_cast<std::size_t>(n);
     }
     co_return 0;

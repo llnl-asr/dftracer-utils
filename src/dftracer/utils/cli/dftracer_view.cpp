@@ -9,10 +9,12 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -43,7 +45,7 @@ using namespace dftracer::utils::trace::views;
 // The files owned by `rank` of `size`: a deterministic round-robin split, so
 // every rank derives the same assignment from the same sorted file list.
 static dstd::Vector<dstd::String> shard_files(
-    const dstd::Vector<dstd::String>& all_files, std::uint32_t rank,
+    dstd::Span<const dstd::String> all_files, std::uint32_t rank,
     std::uint32_t size) {
     dstd::Vector<dstd::String> shard;
     for (std::size_t i = 0; i < all_files.size(); ++i)
@@ -58,6 +60,7 @@ class ViewArgParse : public cli::ArgParse {
         "Trace files, a folder of trace files, or a shard set"};
     cli::RuntimeArgs runtime_args;
     cli::IndexingArgs indexing;
+    cli::ReaderArgs reader;
     cli::DuqlArgs duql_args;
     cli::CommArgs comm_args;
 
@@ -93,7 +96,7 @@ class ViewArgParse : public cli::ArgParse {
     std::uint64_t memory_budget = 0;
     bool no_spill = false;
     bool agg_numeric_args = false;
-    bool collect_typed = false;
+    bool index_records = false;
     bool materialize = false;
     dstd::StringView sink_name;
     dstd::Vector<dstd::StringView> sink_options;
@@ -106,7 +109,8 @@ class ViewArgParse : public cli::ArgParse {
         duql_args.help =
             "duql filter or pipeline (e.g., 'cat == \"POSIX\" | derive ms = "
             "dur / 1000 | sort -ms | take 5')";
-        schema(inputs, runtime_args, indexing, duql_args, comm_args);
+        load_plugins_after_parse();
+        schema(inputs, runtime_args, indexing, reader, duql_args, comm_args);
     }
 
    protected:
@@ -171,7 +175,7 @@ class ViewArgParse : public cli::ArgParse {
             "0");
 
         parser().flag(counters, {"--counters"},
-                      "Emit the aggregation as ph=C counter events");
+                      "Emit the aggregation as ph=2 counter events");
 
         parser().flag(
             call_tree, {"--call-tree"},
@@ -189,9 +193,9 @@ class ViewArgParse : public cli::ArgParse {
 
         parser().option(
             phase, {"--phase"},
-            "Select events by phase: events (ph=X), counters (ph=C), "
+            "Select events by phase: events (ph=1), counters (ph=2), "
             "aggregated, "
-            "metadata (ph=M), any (every record, metadata included)");
+            "metadata (ph=4), any (every record, metadata included)");
 
         parser().option(record_schema, {"--schema"},
                         "Read records as this registered schema instead of the "
@@ -245,7 +249,7 @@ class ViewArgParse : public cli::ArgParse {
                       "Aggregate every numeric args.* field automatically");
 
         parser().flag(
-            collect_typed, {"--collect-typed"},
+            index_records, {"--index-records"},
             "Dump the aggregation index's regular/aggregated/counters "
             "families (one pass)");
 
@@ -282,7 +286,7 @@ class ViewArgParse : public cli::ArgParse {
             // table, a trace or a rollup instead, so the two cannot both run.
             const dstd::StringView other =
                 counters          ? dstd::StringView("--counters")
-                : collect_typed   ? dstd::StringView("--collect-typed")
+                : index_records   ? dstd::StringView("--index-records")
                 : materialize     ? dstd::StringView("--materialize")
                 : merge           ? dstd::StringView("--merge")
                 : call_tree       ? dstd::StringView("--call-tree")
@@ -323,11 +327,12 @@ class NullSink : public ExportSink {
     void write(dstd::StringView) override {}
 };
 
-static ViewFile make_view_file(const dstd::String& file,
-                               dstd::String index_path,
-                               std::size_t checkpoint_size) {
+static ViewFile make_view_file(dstd::StringView file, dstd::String index_path,
+                               std::size_t checkpoint_size,
+                               dstd::StringView format = {}) {
     ViewFile vf;
     vf.file_path = file;
+    vf.format = format;
     vf.index_path = std::move(index_path);
     vf.checkpoint_size = checkpoint_size;
     return vf;
@@ -342,7 +347,7 @@ static bool fatal(const dstd::Error& error) {
 // Re-scan a freshly written trace and confirm the event count round-trips.
 template <class Configure>
 static coro::CoroTask<dstd::Result<void>> verify_output(
-    const dstd::String& final_output, const dstd::String& index_dir,
+    dstd::String final_output, dstd::String index_dir,
     std::size_t checkpoint_size, Configure&& configure,
     std::uint64_t expected_events, bool& verify_failed) {
     dstd::String output_arg{dstd::StringView(final_output)};
@@ -376,7 +381,7 @@ static coro::CoroTask<dstd::Result<void>> verify_output(
 static dstd::String text(dstd::StringView v) { return dstd::String(v); }
 
 static dstd::Vector<dstd::String> texts(
-    const dstd::Vector<dstd::StringView>& views) {
+    dstd::Span<const dstd::StringView> views) {
     dstd::Vector<dstd::String> out;
     out.reserve(views.size());
     for (const auto v : views) out.emplace_back(v);
@@ -512,12 +517,12 @@ static void print_table(FILE* out, const dataframe::DataFrame& table) {
     }
 }
 
-// Emit the three collect_typed() families to `out` as NDJSON rows, each family
+// Emit the three index record families to `out` as NDJSON rows, each family
 // preceded by a header on stderr so the sections stay identifiable when the
 // data stream is redirected.
-static void emit_typed(FILE* out, const dataframe::DataFrame& regular,
-                       const dataframe::DataFrame& aggregated,
-                       const dataframe::DataFrame& counters) {
+static void emit_index_records(FILE* out, const dataframe::DataFrame& regular,
+                               const dataframe::DataFrame& aggregated,
+                               const dataframe::DataFrame& counters) {
     const dstd::Pair<const char*, const dataframe::DataFrame*> families[] = {
         {"regular", &regular},
         {"aggregated", &aggregated},
@@ -534,12 +539,10 @@ namespace {
 
 // Rebuilds the stale indexes of `files` under `index_dir`.
 static coro::CoroTask<dstd::Result<void>> refresh_indexes(
-    const dstd::Vector<dstd::String>& files, const dstd::String& index_dir) {
-    auto to_check = files;
-    dstd::String dir_arg{dstd::StringView(index_dir)};
+    dstd::Vector<dstd::String> files, dstd::String index_dir) {
     auto fresh =
         co_await dftracer::utils::trace::index::build::ensure_indexes_fresh(
-            "", std::move(to_check), std::move(dir_arg));
+            "", std::move(files), std::move(index_dir));
     if (!fresh) co_return fresh.error();
     co_return dstd::Result<void>{};
 }
@@ -631,11 +634,13 @@ static bool add_duration_filter(const ViewArgParse& cli, ViewDefinition& view) {
     dstd::String extra;
     if (min_duration > 0) {
         if (!extra.empty()) extra += " and ";
-        extra += dstd::fmt<"dur >= {}">(static_cast<uint64_t>(min_duration));
+        extra +=
+            dstd::fmt<"dur >= {}">(static_cast<std::uint64_t>(min_duration));
     }
     if (max_duration > 0) {
         if (!extra.empty()) extra += " and ";
-        extra += dstd::fmt<"dur <= {}">(static_cast<uint64_t>(max_duration));
+        extra +=
+            dstd::fmt<"dur <= {}">(static_cast<std::uint64_t>(max_duration));
     }
     auto query = duql::Query::from_string(extra);
     if (!query) {
@@ -670,7 +675,7 @@ static bool parse_phase(dstd::StringView phase, Phase& out) {
 }
 
 static bool collect_input_files(const ViewArgParse& cli,
-                                const dstd::String& shard_set_root,
+                                dstd::StringView shard_set_root,
                                 dstd::Vector<dstd::String>& files) {
     const dstd::StringView directory = cli.inputs.directory;
     if (!shard_set_root.empty()) {
@@ -711,7 +716,7 @@ static bool collect_input_files(const ViewArgParse& cli,
 }
 
 // False when a file lacks its index and --no-auto-index forbids building it.
-static bool check_missing_indexes(const dstd::Vector<dstd::String>& files,
+static bool check_missing_indexes(dstd::Span<const dstd::String> files,
                                   dstd::StringView index_dir,
                                   bool no_auto_index) {
     dstd::Vector<dstd::String> files_needing_index;
@@ -779,7 +784,7 @@ struct ViewRun {
     bool ct_mode = false;
     bool fg_mode = false;
     bool aggregate = false;
-    bool typed_mode = false;
+    bool records_mode = false;
     bool mv_mode = false;
     bool merge = false;
     bool no_index = false;
@@ -837,7 +842,7 @@ ViewRun::ViewRun(const ViewArgParse* c)
       counters(c->counters),
       ct_mode(c->call_tree),
       fg_mode(c->flamegraph),
-      typed_mode(c->collect_typed),
+      records_mode(c->index_records),
       mv_mode(c->materialize),
       merge(c->merge),
       no_index(c->no_index),
@@ -980,7 +985,8 @@ coro::CoroTask<dstd::Result<dstd::String>> ViewRun::shard_partial(
     }
     dstd::Vector<ViewFile> shard_files_vf;
     for (const auto& f : shard) {
-        shard_files_vf.push_back(make_view_file(f, rank_idx, checkpoint_size));
+        shard_files_vf.push_back(
+            make_view_file(f, rank_idx, checkpoint_size, cli->reader.format));
     }
     View shard_view = configure(View::from_files(std::move(shard_files_vf)));
     dataframe::LazyResult<dstd::String> partial_plan =
@@ -1079,8 +1085,9 @@ coro::CoroTask<dstd::Result<dstd::String>> ViewRun::shard_write(
     }
     dstd::Vector<ViewFile> shard_vf;
     for (const auto& f : shard) {
-        shard_vf.push_back(make_view_file(
-            f, internal::determine_index_path(f, rank_idx), checkpoint_size));
+        shard_vf.push_back(
+            make_view_file(f, internal::determine_index_path(f, rank_idx),
+                           checkpoint_size, cli->reader.format));
     }
     const dstd::String rank_out =
         dstd::fmt<"{}.rank_{}">(final_output, world.rank());
@@ -1113,8 +1120,8 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_distributed_write(
         dstd::Vector<dstd::String> rank_outs;
         rank_outs.reserve(gathered->size());
         for (const auto& out : *gathered) rank_outs.push_back(*out);
-        const auto merge_rc =
-            co_await fileio::parallel::merge_shards(final_output, rank_outs);
+        const auto merge_rc = co_await fileio::parallel::merge_shards(
+            final_output, std::move(rank_outs));
         if (merge_rc != 0) {
             DFTRACER_UTILS_LOG_ERROR("merge_shards failed for {}",
                                      final_output);
@@ -1153,8 +1160,8 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_shard_set() {
 }
 
 coro::CoroTask<dstd::Result<void>> ViewRun::run_local() {
-    // The typed, rollup and counter terminals read the whole aggregation; the
-    // projection and row window apply to the other outputs.
+    // The index-records, rollup and counter terminals read the whole
+    // aggregation; the projection and row window apply to the other outputs.
     View base = configure(View::from_files(view_files));
     View v = windowed(base);
 
@@ -1174,6 +1181,9 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_local() {
         if (!bootstraps.has_value()) co_return bootstraps.error();
         will_bootstrap = *bootstraps;
     }
+    // An index-records read reads the aggregation tier and fails without it, so
+    // its index is built first and never bootstrapped by the scan.
+    if (records_mode) will_bootstrap = false;
     if (!no_auto_index && !will_bootstrap) {
         auto refreshed = co_await refresh_indexes(files, index_dir_std);
         if (!refreshed) co_return refreshed.error();
@@ -1208,11 +1218,11 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_local() {
         stats = *materialized;
         std::fprintf(stderr, "Materialized rollup (%llu events).\n",
                      (unsigned long long)stats.events_matched);
-    } else if (typed_mode) {
-        auto typed = co_await base.collect_typed();
-        if (!typed) co_return typed.error();
-        auto& tr = *typed;
-        emit_typed(out_target, tr.regular, tr.aggregated, tr.counters);
+    } else if (records_mode) {
+        auto records = co_await base.collect_index_records();
+        if (!records) co_return records.error();
+        auto& tr = *records;
+        emit_index_records(out_target, tr.regular, tr.aggregated, tr.counters);
         stats.events_matched = static_cast<std::uint64_t>(
             tr.regular.num_rows() + tr.aggregated.num_rows() +
             tr.counters.num_rows());
@@ -1238,7 +1248,7 @@ coro::CoroTask<dstd::Result<void>> ViewRun::run_local() {
         topts.worker_count = cli->runtime_args.executor_threads;
         topts.compress = true;
         topts.build_index = !no_index;
-        topts.index_path = index_dir;
+        topts.index_dir = index_dir;
         auto written = co_await v.sink_trace(topts);
         if (!written) co_return written.error();
         stats = *written;
@@ -1334,7 +1344,7 @@ static coro::CoroTask<int> run_view_body(const ViewArgParse* cli, ViewRun& run,
     // Event export to a file -> compressed, indexed trace via the parallel
     // writer. Aggregate/counter/containment tables and stdout keep their own
     // paths.
-    run.write_trace = !run.aggregate && !run.counters && !run.typed_mode &&
+    run.write_trace = !run.aggregate && !run.counters && !run.records_mode &&
                       !run.mv_mode && !run.ct_mode && !run.fg_mode &&
                       !cli->output.empty();
 
@@ -1348,7 +1358,7 @@ static coro::CoroTask<int> run_view_body(const ViewArgParse* cli, ViewRun& run,
         co_return 1;
 
     if (!run.view.query && run.duql_str.empty() && !run.time_range &&
-        !run.aggregate && !run.merge && !run.typed_mode && !run.mv_mode &&
+        !run.aggregate && !run.merge && !run.records_mode && !run.mv_mode &&
         !run.ct_mode && !run.fg_mode) {
         DFTRACER_UTILS_LOG_ERROR(
             "{}",
@@ -1401,17 +1411,17 @@ static coro::CoroTask<int> run_view_body(const ViewArgParse* cli, ViewRun& run,
     for (const auto& file : run.files) {
         run.view_files.push_back(make_view_file(
             file, internal::determine_index_path(file, run.index_dir),
-            run.checkpoint_size));
+            run.checkpoint_size, cli->reader.format));
     }
 
     if (const auto probe_rc = run.probe_duql()) co_return *probe_rc;
     if (run.duql_rows &&
-        (run.aggregate || run.counters || run.typed_mode || run.mv_mode ||
+        (run.aggregate || run.counters || run.records_mode || run.mv_mode ||
          run.ct_mode || run.fg_mode || run.merge)) {
         DFTRACER_UTILS_LOG_ERROR(
             "{}",
             "--duql stages after the scan do not combine with "
-            "aggregation, counters, typed, materialize, call-tree, "
+            "aggregation, counters, index-records, materialize, call-tree, "
             "flamegraph or merge output.");
         co_return 1;
     }

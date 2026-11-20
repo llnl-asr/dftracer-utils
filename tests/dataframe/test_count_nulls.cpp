@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -51,8 +52,9 @@ TEST_CASE("count of a column of nulls is 0") {
     dstd::Vector<const Series*> inputs = {&g, &x};
     DataFrame r = dftu_utils_test::ok(dataframe::group_agg_expr(
         dataframe::expr_col(0),
-        {dataframe::agg_count_valid(dataframe::expr_col(1), "n")}, inputs,
-        "g"));
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggExprSpec>(
+            {dataframe::agg_count_valid(dataframe::expr_col(1), "n")}),
+        inputs, "g"));
     REQUIRE(r.num_rows() == 1);
     CHECK(r.column("n").data<std::int64_t>()[0] == 0);
     CHECK(x.count() == 0);

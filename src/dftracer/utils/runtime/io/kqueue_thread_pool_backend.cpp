@@ -42,7 +42,11 @@ dstd::Result<void> KqueueThreadPoolBackend::start() {
     DFTRACER_UTILS_LOG_DEBUG("kqueue+threadpool backend started (kqueue_fd={})",
                              kqueue_fd_.get());
 
-    completion_thread_.start([this] { kqueue_loop(); });
+    if (auto started = completion_thread_.start([this] { kqueue_loop(); });
+        !started) {
+        stop();
+        return started;
+    }
     return {};
 }
 

@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <string_view>
 
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
@@ -49,7 +50,7 @@ struct Result {
     }
 
     /// The process ran the case, ended by SIGABRT and wrote @p text.
-    bool aborted_with(const char* text) const {
+    bool aborted_with(std::string_view text) const {
         int copy = status;
         return announced && WIFSIGNALED(copy) && WTERMSIG(copy) == SIGABRT &&
                output.find(text) != std::string::npos;
@@ -76,9 +77,10 @@ inline void announce_abort() {
 /// Runs one test case of this binary that is skipped by default in a new
 /// process, so it starts with no heap, cache or thread state from the tests
 /// that ran before it.
-inline Result run(const char* test_case, int timeout_ms = 0) {
+inline Result run(std::string_view test_case, int timeout_ms = 0) {
     std::string self = self_path();
-    std::string filter = std::string("--test-case=") + test_case;
+    std::string filter = "--test-case=";
+    filter.append(test_case);
     int fds[2];
     int err[2];
     Result result;

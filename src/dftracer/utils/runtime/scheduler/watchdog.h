@@ -44,8 +44,8 @@ class Watchdog {
      * Callback for warnings about long-running tasks
      * Parameters: task name, elapsed time in milliseconds
      */
-    using WarningCallback =
-        dstd::Function<void(dstd::StringView task_name, int64_t elapsed_ms)>;
+    using WarningCallback = dstd::Function<void(dstd::StringView task_name,
+                                                std::int64_t elapsed_ms)>;
 
     /**
      * Information about an active task execution
@@ -179,7 +179,7 @@ class Watchdog {
     /**
      * Get number of active tasks being monitored
      */
-    size_t active_task_count() const;
+    std::size_t active_task_count() const;
 
    private:
     /**
@@ -214,7 +214,7 @@ class Watchdog {
     /**
      * Trigger warning callback
      */
-    void trigger_warning(dstd::StringView task_name, int64_t elapsed_ms);
+    void trigger_warning(dstd::StringView task_name, std::int64_t elapsed_ms);
 };
 
 }  // namespace dftracer::utils

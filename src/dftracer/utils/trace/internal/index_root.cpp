@@ -29,7 +29,7 @@ RootMap& held(dstd::Optional<RootMap>& slot) {
 
 }  // namespace
 
-dstd::SharedPtr<IndexRoot> index_root(const dstd::String& index_path) {
+dstd::SharedPtr<IndexRoot> index_root(dstd::StringView index_path) {
     IndexRoots& known = dstd::Singleton<IndexRoots>::get();
     [[maybe_unused]] static const bool hooked = [] {
         dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, []() noexcept {

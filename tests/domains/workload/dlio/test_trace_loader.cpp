@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/domains/workload/dlio/trace_loader.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -38,8 +39,7 @@ constexpr Component COMPONENTS[] = {{"dataloader", "fetch.block", 100, 0},
 
 // One rank per file, all events inside one 5 s window, several gzip members
 // per file.
-dstd::String write_rank(const dstd::String& dir, int file,
-                        std::uint64_t& dur_sum) {
+dstd::String write_rank(dstd::String dir, int file, std::uint64_t& dur_sum) {
     const dstd::String pfw = dir + "/rank_" + dstd::to_string(file) + ".pfw";
     {
         dstd::String ofs;
@@ -54,7 +54,7 @@ dstd::String write_rank(const dstd::String& dir, int file,
                 if (dstd::String(c.name) == "fetch.block") dur_sum += dur;
                 dstd::fmt_append<
                     "{\"id\":{},\"pid\":{},\"tid\":{},\"name\":\"{}\",\"cat\":"
-                    "\"{}\",\"ph\":\"X\",\"ts\":{},\"dur\":{}{}\n">(
+                    "\"{}\",\"ph\":1,\"ts\":{},\"dur\":{}{}\n">(
                     ofs, id++, pid, pid, c.name, c.cat, ts, dur,
                     R"(,"args":{}})");
                 ts += dur;

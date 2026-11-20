@@ -9,18 +9,15 @@
 
 namespace dftracer::utils::duql::detail {
 
-/// Byte index of the first occurrence of `needle` (length `needle_size`) in
-/// `hay` (length `hay_size`), or -1 if absent. Vectorized (Highway dynamic
-/// dispatch): the needle's first byte is broadcast across a u8 vector to find
-/// candidate offsets, each verified in full. An empty needle matches at 0,
-/// mirroring dstd::StringView::find.
-std::int64_t substr_find(const char* hay, std::int64_t hay_size,
-                         const char* needle, std::int64_t needle_size);
+/// Byte index of the first occurrence of `needle` in `hay`, or -1 if absent.
+/// Vectorized (Highway dynamic dispatch): the needle's first byte is broadcast
+/// across a u8 vector to find candidate offsets, each verified in full. An
+/// empty needle matches at 0, mirroring dstd::StringView::find.
+std::int64_t substr_find(dstd::StringView hay, dstd::StringView needle);
 
 /// As substr_find, with ASCII letters compared without case. `needle` must be
 /// lowercase ASCII-folded already.
-std::int64_t substr_find_icase(const char* hay, std::int64_t hay_size,
-                               const char* needle, std::int64_t needle_size);
+std::int64_t substr_find_icase(dstd::StringView hay, dstd::StringView needle);
 
 /// Offset of the first vector block of `d` that holds a byte at or above
 /// 0x80, or the start of the tail shorter than a block. The vector width

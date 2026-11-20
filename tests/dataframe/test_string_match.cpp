@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/kernels/string_match.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -133,7 +134,7 @@ duql::PatternPtr must(duql::PatternResult r) {
     return std::move(*r);
 }
 
-void check_variant(const StringMatch& k, const char* label) {
+void check_variant(const StringMatch& k, dstd::CStringView label) {
     const Rows rows = make_rows();
     const dstd::String long_a(70, 'a');
     const struct {
@@ -141,7 +142,7 @@ void check_variant(const StringMatch& k, const char* label) {
     } likes[] = {{"read"},   {"MPI_%"},  {"%write"}, {"%Memcpy%"}, {"%p%e%d%"},
                  {"_write"}, {"%a%a_%"}, {""},       {"%"}};
     for (const Column& c : columns(rows)) {
-        CAPTURE(label);
+        CAPTURE(label.c_str());
         CAPTURE(c.name);
         for (const auto& l : likes) {
             CAPTURE(l.like);
@@ -163,16 +164,15 @@ void check_variant(const StringMatch& k, const char* label) {
              {dstd::String("read"), dstd::String(""), dstd::String("write"),
               long_a, dstd::fmt<"{}read">(dstd::String(130, 'q'))}) {
             CAPTURE(lit);
-            const auto n = static_cast<std::int32_t>(lit.size());
-            check_mask(k.eq(c.series.handle(), lit.data(), n), rows,
+            check_mask(k.eq(c.series.handle(), lit), rows,
                        [&](dstd::StringView s) { return s == lit; });
-            check_mask(k.contains(c.series.handle(), lit.data(), n), rows,
+            check_mask(k.contains(c.series.handle(), lit), rows,
                        [&](dstd::StringView s) {
                            return s.find(lit) != dstd::StringView::npos;
                        });
-            check_mask(k.starts_with(c.series.handle(), lit.data(), n), rows,
+            check_mask(k.starts_with(c.series.handle(), lit), rows,
                        [&](dstd::StringView s) { return s.starts_with(lit); });
-            check_mask(k.ends_with(c.series.handle(), lit.data(), n), rows,
+            check_mask(k.ends_with(c.series.handle(), lit), rows,
                        [&](dstd::StringView s) { return s.ends_with(lit); });
         }
     }

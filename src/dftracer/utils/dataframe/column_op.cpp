@@ -2,7 +2,10 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
+#include <dftracer/utils/dataframe/internal/frame_index.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdint>
 #include <cstring>
@@ -36,9 +39,11 @@ double scalar_f64(const dftu_scalar& s) {
 
 // The op's operand slots, filled in signature order from the sources the
 // frame op carries. False when a token has no source.
-bool fill_args(const dftu_op_desc* op, const dftu_series* column2,
-               const dftu_scalar* scalars, int n_scalars, const char* text,
-               dftu_op_arg& arg, int& n_in) {
+bool fill_args(
+    const dftu_op_desc* op, const dftu_series* column2,
+    const dftu_scalar* scalars, int n_scalars,
+    dftracer::utils::dstd::Optional<dftracer::utils::dstd::StringView> text,
+    dftu_op_arg& arg, int& n_in) {
     int used_scalars = 0;
     bool used_text = false;
     n_in = static_cast<int>(dftu_op_arity(op->sig));
@@ -79,13 +84,13 @@ bool fill_args(const dftu_op_desc* op, const dftu_series* column2,
                 break;
             case DFTU_TOK_STR:
                 if (!text || used_text) return false;
-                v.str.ptr = text;
-                v.str.len = static_cast<std::int32_t>(std::strlen(text));
+                v.str.ptr = text->data();
+                v.str.len = static_cast<std::int32_t>(text->size());
                 used_text = true;
                 break;
             case DFTU_TOK_CHAR:
-                if (!text || used_text || !text[0]) return false;
-                v.ch = text[0];
+                if (!text || used_text || text->empty()) return false;
+                v.ch = text->front();
                 used_text = true;
                 break;
             default:
@@ -125,7 +130,12 @@ dftu_dataframe* dftu_dataframe_column_op(const dftu_dataframe* df,
     const dftu_scalar scalars[2] = {a, b};
     dftu_op_arg arg{};
     int n_in = 0;
-    if (!fill_args(op, in[1], scalars, 2, text, arg, n_in)) return nullptr;
+    const dftracer::utils::dstd::Optional<dftracer::utils::dstd::StringView>
+        text_view = text ? dftracer::utils::dstd::Optional<
+                               dftracer::utils::dstd::StringView>(
+                               dftracer::utils::dstd::StringView(text))
+                         : dftracer::utils::dstd::nullopt;
+    if (!fill_args(op, in[1], scalars, 2, text_view, arg, n_in)) return nullptr;
     if (n_in == 2 && !in[1]) return nullptr;
     if (n_in > 2) return nullptr;
     dftu_series* out =
@@ -142,5 +152,6 @@ dftu_dataframe* dftu_dataframe_column_op(const dftu_dataframe* df,
         result.columns.push_back(static_cast<std::int64_t>(i) == ci
                                      ? Series{out}
                                      : frame.columns[i].share());
+    dftracer::utils::dataframe::index_keep<"column_op">(frame, result);
     return dftracer::utils::dataframe::dataframe_handle_wrap(std::move(result));
 }

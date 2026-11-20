@@ -136,8 +136,10 @@ void CompareI8(const void* p, std::int64_t n, dftu_scalar r, std::int32_t op,
 
 // Pack per-row byte flags (nonzero = set) into a bit-packed bitmap, 64 bits at
 // a time so each block store is byte-aligned; the tail is packed scalar.
-void PackFlags(const char* flags, std::int64_t n, std::uint8_t* out) {
-    const std::uint8_t* f = reinterpret_cast<const std::uint8_t*>(flags);
+void PackFlags(dftracer::utils::dstd::Span<const char> flags,
+               std::uint8_t* out) {
+    const std::int64_t n = static_cast<std::int64_t>(flags.size());
+    const std::uint8_t* f = reinterpret_cast<const std::uint8_t*>(flags.data());
     const hwy::HWY_NAMESPACE::ScalableTag<std::uint8_t> d;
     const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     const auto zero = hwy::HWY_NAMESPACE::Zero(d);
@@ -291,8 +293,9 @@ HWY_EXPORT(SortedI8);
 HWY_EXPORT(SortedU8);
 HWY_EXPORT(is_in_f64);
 
-void pack_flags(const char* flags, std::int64_t n, std::uint8_t* out) {
-    if (n > 0) HWY_DYNAMIC_DISPATCH(PackFlags)(flags, n, out);
+void pack_flags(dftracer::utils::dstd::Span<const char> flags,
+                std::uint8_t* out) {
+    if (!flags.empty()) HWY_DYNAMIC_DISPATCH(PackFlags)(flags, out);
 }
 
 bool is_in_f64_simd(const dftu_series& v, const dftu_series& values,
@@ -308,6 +311,10 @@ bool is_in_f64_simd(const dftu_series& v, const dftu_series& values,
         return false;
     const std::int64_t nn = values.length;
     if (nn <= 0 || nn > 32) return false;
+    // A NaN needle matches a NaN row, which an equality compare never sets.
+    const auto* needles = reinterpret_cast<const double*>(values.data.data());
+    for (std::int64_t k = 0; k < nn; ++k)
+        if (needles[k] != needles[k]) return false;
     HWY_DYNAMIC_DISPATCH(is_in_f64)
     (reinterpret_cast<const double*>(v.data.data()), v.length,
      reinterpret_cast<const double*>(values.data.data()), static_cast<int>(nn),

@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/store/store.h>
@@ -61,7 +62,7 @@ class TraceIndex {
             stats;
     };
 
-    TraceIndex(const dstd::String& directory, const dstd::String& index_dir,
+    TraceIndex(dstd::String directory, dstd::String index_dir,
                std::size_t max_concurrent = 8,
                std::size_t checkpoint_size =
                    common::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
@@ -78,7 +79,7 @@ class TraceIndex {
     const dstd::Vector<FileInfo>& files() const { return files_; }
 
     /// Find a file by its path. Returns nullptr if not found.
-    const FileInfo* find_file(const dstd::String& path) const;
+    const FileInfo* find_file(dstd::StringView path) const;
 
     /// Find a file by index. Returns nullptr if out of range.
     const FileInfo* file_at(std::size_t index) const;
@@ -141,7 +142,7 @@ class TraceIndex {
     /// loads once and stays. Empty when no row matches or no index holds
     /// the row set.
     dstd::String resolve(dstd::StringView rowset, dstd::StringView key,
-                         dstd::StringView value, const dstd::String& k);
+                         dstd::StringView value, dstd::StringView k);
 
     /// Summary cache in the index root's store, under
     /// `server.viz_summary`, in this folder's scope. The stored value carries
@@ -156,7 +157,7 @@ class TraceIndex {
     /// read. Nothing for a key the store holds no copy of, or a copy of
     /// another fingerprint.
     dstd::Vector<dstd::Optional<dstd::String>> load_viz_results(
-        const dstd::Vector<dstd::String>& request_keys);
+        dstd::Span<const dstd::String> request_keys);
     /// Hands a viz result to a store write this index owns and returns: no
     /// request waits for the store. The write is keyed by the folder's
     /// fingerprint, and a failure is logged and dropped.

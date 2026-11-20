@@ -325,7 +325,7 @@ static DetailedStatistics to_detailed(const TraceStatistics& stats) {
 
 // Resolve a group key for display, looking up hash values if needed
 static dstd::String resolve_display_key(
-    const dstd::String& key,
+    dstd::StringView key,
     const dstd::HashMap<dstd::String, dstd::String>& hash_resolutions) {
     if (!hash_resolutions.empty()) {
         auto it = hash_resolutions.find(key);
@@ -333,17 +333,18 @@ static dstd::String resolve_display_key(
             return it->second;
         }
     }
-    return key;
+    return dstd::String(key);
 }
 
 // Header plus the optional summary sections (time span, categories, PID:TID).
-static void print_detailed_header(const dstd::String& file_path,
+static void print_detailed_header(dstd::StringView file_path,
                                   const DetailedStatistics& detailed,
                                   std::uint64_t total_chunks,
                                   const TraceStatistics* summary,
                                   std::uint64_t top_n_pid_tid) {
     std::printf("========================================\n");
-    std::printf("File: %s\n", file_path.c_str());
+    std::printf("File: %.*s\n", static_cast<int>(file_path.size()),
+                file_path.data());
     std::printf("========================================\n");
     std::printf("  Chunks: %llu (scanned: %llu, skipped: %llu)\n",
                 (unsigned long long)total_chunks,
@@ -638,7 +639,7 @@ static void print_detailed_grouped_io(
 }
 
 static void print_text_detailed(
-    const dstd::String& file_path, const DetailedStatistics& detailed,
+    dstd::StringView file_path, const DetailedStatistics& detailed,
     std::uint64_t total_chunks, std::uint64_t top_n,
     const dstd::HashMap<dstd::String, dstd::String>& hash_resolutions,
     const TraceStatistics* summary = nullptr,
@@ -708,7 +709,8 @@ static coro::CoroTask<dstd::Result<void>> process_file_detailed(
             files{{dstd::String(dstd::StringView(file_path)),
                    dstd::String(dstd::StringView(index_path))}};
         auto resolve_hashes = [&](const GroupResolver::Column& column) {
-            const GroupResolver r(files, {column});
+            const GroupResolver r(
+                files, dstd::Span<const GroupResolver::Column>(&column, 1));
             const auto* values = r.column(column.name);
             if (!values) return;
             auto add = [&](const auto& grouped) {
@@ -879,7 +881,7 @@ static void print_text_query_output(const TraceStatistics& stats,
 }
 
 static coro::CoroTask<dstd::Result<dstd::Vector<dstd::String>>> collect_files(
-    coro::Scope& ctx, const dstd::Vector<dstd::String>& cli_files,
+    coro::Scope& ctx, dstd::Vector<dstd::String> cli_files,
     dstd::String directory) {
     if (!directory.empty()) {
         if (!common::input_exists(directory)) {
@@ -910,7 +912,7 @@ static coro::CoroTask<dstd::Result<dstd::Vector<dstd::String>>> collect_files(
 }
 
 static dstd::Result<dstd::UniquePtr<IndexedRootSnapshot>>
-load_index_root_snapshot_impl(const dstd::String& index_path) {
+load_index_root_snapshot_impl(dstd::StringView index_path) {
     auto snapshot = dstd::make_unique<IndexedRootSnapshot>();
     auto opened =
         dftracer::utils::trace::index::plan::open_snapshot(index_path);
@@ -990,7 +992,7 @@ run_batch_build(
 }
 
 static coro::CoroTask<dstd::Result<void>> auto_index_files(
-    IndexPartition& partition, const dstd::String& index_dir,
+    IndexPartition& partition, dstd::String index_dir,
     std::size_t checkpoint_size, std::size_t executor_threads) {
     auto index_path = trace::internal::determine_index_path(
         partition.files_needing_index.front().file_path, index_dir);

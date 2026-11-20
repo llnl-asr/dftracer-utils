@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -27,24 +29,25 @@ namespace {
 
 constexpr int EVENTS = 3000;
 
-dstd::String write_trace(const dstd::String& dir, int n) {
+dstd::String write_trace(dstd::CStringView dir, int n) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < EVENTS; ++i) {
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"op{}\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
-            "{},\"ph\":\"X\",\"ts\":{},\"dur\":{},\"args\":{\"fname\":\"/data/"
+            "{},\"ph\":1,\"ts\":{},\"dur\":{},\"args\":{\"fname\":\"/data/"
             "d{}/f{}\",\"size\":{},\"hhash\":\"h{}\"}}\n">(
             out, i, (i + n) % 40, 1 + n % 7, 10 + i % 5, 1000 + i * 10 + n * 7,
             3 + i % 50, n % 9, (i * 31 + n) % 700, (i * 17) % 4096, n);
     }
     out += "]\n";
     return dftu_utils_test::write_gz_trace(
-        dir + "/t" + dstd::String(dstd::to_string(n)) + ".pfw.gz", out);
+        dstd::String(dir) + "/t" + dstd::String(dstd::to_string(n)) + ".pfw.gz",
+        out);
 }
 
-std::size_t peak_live(const dstd::Vector<dstd::String>& files,
-                      const dstd::String& index_dir) {
+std::size_t peak_live(dstd::Span<const dstd::String> files,
+                      dstd::CStringView index_dir) {
     std::atomic<bool> done{false};
     std::atomic<std::size_t> peak{0};
     dstd::Thread sampler([&] {

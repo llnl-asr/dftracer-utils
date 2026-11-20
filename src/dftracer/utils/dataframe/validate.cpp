@@ -27,7 +27,7 @@ constexpr std::int32_t VIEW_INLINE_MAX = 12;
 /// self-referencing child from recursing without end.
 constexpr int MAX_DEPTH = 32;
 
-dstd::Result<void> broken(const String& label, const String& rule) {
+dstd::Result<void> broken(StringView label, StringView rule) {
     return make_error(ErrorCode::InvalidArgument,
                       dstd::fmt<"{}: {}">(label, rule));
 }
@@ -35,7 +35,7 @@ dstd::Result<void> broken(const String& label, const String& rule) {
 // Refuses more rows than a buffer of `width` bytes per row can size, so a
 // length no buffer could back fails here instead of overflowing a `length *
 // width` and then reading past a buffer the row count promised.
-dstd::Result<void> check_rows_fit(const String& label, std::uint64_t rows,
+dstd::Result<void> check_rows_fit(StringView label, std::uint64_t rows,
                                   std::uint64_t width) {
     if (width == 0) return {};
     if (rows > std::numeric_limits<std::size_t>::max() / width)
@@ -87,7 +87,7 @@ bool own_null(const dftu_series& c, std::int64_t i) noexcept {
            ((c.validity.data()[i >> 3] >> (i & 7)) & 1) == 0;
 }
 
-dstd::Result<void> check_validity(const dftu_series& c, const String& label) {
+dstd::Result<void> check_validity(const dftu_series& c, StringView label) {
     if (c.length < 0)
         return broken(label, dstd::fmt<"its length {} is negative">(c.length));
     if (c.null_count < 0)
@@ -127,7 +127,7 @@ dstd::Result<void> check_validity(const dftu_series& c, const String& label) {
 }
 
 template <class Off>
-dstd::Result<void> check_offsets(const dftu_series& c, const String& label,
+dstd::Result<void> check_offsets(const dftu_series& c, StringView label,
                                  StringView where, std::size_t limit) {
     if (c.offsets.data() == nullptr) {
         // Zero rows need no offsets at all: a row's ends are the pair around
@@ -167,13 +167,13 @@ dstd::Result<void> check_offsets(const dftu_series& c, const String& label,
 }
 
 dstd::Result<void> check_var_width_data(const dftu_series& c,
-                                        const String& label) {
+                                        StringView label) {
     if (c.wide_offsets())
         return check_offsets<std::int64_t>(c, label, "data", c.data.size());
     return check_offsets<std::int32_t>(c, label, "data", c.data.size());
 }
 
-dstd::Result<void> check_views(const dftu_series& c, const String& label) {
+dstd::Result<void> check_views(const dftu_series& c, StringView label) {
     if (auto ok = check_rows_fit(label, static_cast<std::uint64_t>(c.length),
                                  VIEW_BYTES);
         !ok)
@@ -218,10 +218,10 @@ dstd::Result<void> check_views(const dftu_series& c, const String& label) {
     return {};
 }
 
-dstd::Result<void> check_column(const dftu_series& c, const String& label,
+dstd::Result<void> check_column(const dftu_series& c, StringView label,
                                 int depth);
 
-dstd::Result<void> check_nested(const dftu_series& c, const String& label,
+dstd::Result<void> check_nested(const dftu_series& c, StringView label,
                                 int depth) {
     if (depth >= MAX_DEPTH)
         return broken(label, String("its nesting is deeper than 32 levels"));
@@ -234,7 +234,7 @@ dstd::Result<void> check_nested(const dftu_series& c, const String& label,
     if (fields) {
         for (const dftu_nested& n : c.nested) {
             const String child =
-                n.name.empty() ? label
+                n.name.empty() ? String(label)
                                : dstd::fmt<"{} field '{}'">(label, n.name);
             if (n.series->length != c.length)
                 return broken(
@@ -282,7 +282,7 @@ dstd::Result<void> check_nested(const dftu_series& c, const String& label,
     return {};
 }
 
-dstd::Result<void> check_column(const dftu_series& c, const String& label,
+dstd::Result<void> check_column(const dftu_series& c, StringView label,
                                 int depth) {
     if (c.type == TypeId::Unknown)
         return broken(label, String("its type is unknown"));

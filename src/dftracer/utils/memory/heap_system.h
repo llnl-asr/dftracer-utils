@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace dftracer::utils::memory::detail {
 
@@ -35,7 +36,7 @@ void system_deallocate(void* p, std::size_t size) noexcept;
 void* system_reallocate(void* p, std::size_t old_size, std::size_t new_size,
                         std::size_t align);
 
-[[noreturn]] void abort_with(const char* message) noexcept;
+[[noreturn]] void abort_with(std::string_view message) noexcept;
 
 }  // namespace dftracer::utils::memory::detail
 

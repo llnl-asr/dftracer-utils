@@ -15,6 +15,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -122,15 +123,19 @@ struct NodeAggPlan {
     dstd::Vector<AggSpec> specs;
 };
 
+// The aggregation coroutine owns its inputs, so a borrowed list is copied in.
+static dstd::Vector<ComparisonFilter> copy_of(
+    dstd::Span<const ComparisonFilter> filters) {
+    return dstd::Vector<ComparisonFilter>(filters.begin(), filters.end());
+}
+
 static coro::CoroTask<void> aggregate_all(
-    const dstd::Vector<dstd::String>& files,
-    const dstd::Vector<ComparisonFilter>& filters,
-    const dstd::String& index_dir, const ComparisonConfig& config,
-    std::size_t workers, dstd::StringIntern& strings, SideAggregate& out,
-    bool& failed) {
+    dstd::Vector<dstd::String> files, dstd::Vector<ComparisonFilter> filters,
+    dstd::String index_dir, const ComparisonConfig& config, std::size_t workers,
+    dstd::StringIntern& strings, SideAggregate& out, bool& failed) {
     if (files.empty()) co_return;
     auto result = co_await aggregate_side(
-        files, index_dir, filters,
+        std::move(files), std::move(index_dir), std::move(filters),
         static_cast<std::uint64_t>(config.defaults.time_interval_ms * 1000.0),
         workers, strings);
     if (!result) {
@@ -162,9 +167,8 @@ void render_comparison_output(const ComparisonOutput& output,
 // Indexes the traces under `path` with the aggregation config the queries use
 // and lists the trace files.
 coro::CoroTask<dstd::Result<void>> resolve_and_build(
-    const ComparisonConfig& config, const dstd::String& path,
-    const dstd::String& index_dir, dstd::Vector<dstd::String>& out_files,
-    std::size_t parallelism) {
+    const ComparisonConfig& config, dstd::String path, dstd::String index_dir,
+    dstd::Vector<dstd::String>& out_files, std::size_t parallelism) {
     if (!common::input_exists(path)) {
         DFTRACER_UTILS_LOG_ERROR("Path does not exist: {}", path);
         co_return dstd::Result<void>();
@@ -202,13 +206,13 @@ coro::CoroTask<dstd::Result<void>> resolve_and_build(
 // What the steps share. The ids of both sides' groups are in one string table.
 struct ComparatorState {
     ComparatorState(const ComparisonConfig& comparison,
-                    const dstd::Vector<ComparisonFilter>& node_filters,
-                    const dstd::Vector<NodeAggPlan>& plans)
+                    dstd::Span<const ComparisonFilter> node_filters,
+                    dstd::Span<const NodeAggPlan> plans)
         : config(comparison), filters(node_filters), agg_plans(plans) {}
 
     const ComparisonConfig& config;
-    const dstd::Vector<ComparisonFilter>& filters;
-    const dstd::Vector<NodeAggPlan>& agg_plans;
+    dstd::Span<const ComparisonFilter> filters;
+    dstd::Span<const NodeAggPlan> agg_plans;
     dstd::Vector<dstd::String> baseline_files;
     dstd::Vector<dstd::String> variant_files;
     dstd::StringIntern strings;
@@ -230,8 +234,8 @@ coro::CoroTask<dstd::Result<void>> index_and_aggregate_side(
     auto resolving = resolve_and_build(config, path, index_dir, files, threads);
     co_await coro::or_fail(std::move(resolving));
     co_await aggregate_all(
-        files, state.filters, index_dir, config, threads, state.strings,
-        is_baseline ? state.baseline_side : state.variant_side,
+        files, copy_of(state.filters), index_dir, config, threads,
+        state.strings, is_baseline ? state.baseline_side : state.variant_side,
         is_baseline ? state.baseline_failed : state.variant_failed);
     co_return dstd::Result<void>();
 }
@@ -248,7 +252,7 @@ coro::CoroTask<dstd::Result<void>> index_and_aggregate_shared(
     co_await coro::or_fail(std::move(resolving_baseline));
     if (same_files) {
         state.variant_files = state.baseline_files;
-        co_await aggregate_all(state.baseline_files, state.filters,
+        co_await aggregate_all(state.baseline_files, copy_of(state.filters),
                                config.baseline_index_dir, config,
                                config.executor_threads, state.strings,
                                state.baseline_side, state.baseline_failed);
@@ -261,11 +265,13 @@ coro::CoroTask<dstd::Result<void>> index_and_aggregate_shared(
     const std::size_t agg_threads =
         std::max<std::size_t>(1, config.executor_threads / 2);
     auto baseline_task = aggregate_all(
-        state.baseline_files, state.filters, config.baseline_index_dir, config,
-        agg_threads, state.strings, state.baseline_side, state.baseline_failed);
-    auto variant_task = aggregate_all(
-        state.variant_files, state.filters, config.variant_index_dir, config,
-        agg_threads, state.strings, state.variant_side, state.variant_failed);
+        state.baseline_files, copy_of(state.filters), config.baseline_index_dir,
+        config, agg_threads, state.strings, state.baseline_side,
+        state.baseline_failed);
+    auto variant_task =
+        aggregate_all(state.variant_files, copy_of(state.filters),
+                      config.variant_index_dir, config, agg_threads,
+                      state.strings, state.variant_side, state.variant_failed);
     co_await coro::when_all(std::move(baseline_task), std::move(variant_task));
     co_return dstd::Result<void>();
 }

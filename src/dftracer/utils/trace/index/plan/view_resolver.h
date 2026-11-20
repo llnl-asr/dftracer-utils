@@ -24,8 +24,8 @@ class GroupResolver {
         dstd::String value;
     };
 
-    GroupResolver(const dstd::Vector<RowSetFile>& files,
-                  const dstd::Vector<Column>& columns);
+    GroupResolver(dstd::Span<const RowSetFile> files,
+                  dstd::Span<const Column> columns);
 
     /// key -> value of column `name`; null when not loaded.
     const dstd::StringViewMap<dstd::String>* column(

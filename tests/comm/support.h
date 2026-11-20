@@ -44,14 +44,14 @@ inline std::uint64_t deadline_after(std::uint64_t ns) noexcept {
 }
 
 /// True when @p error names @p text.
-inline bool has_text(const Error& error, const char* text) {
+inline bool has_text(const Error& error, StringView text) {
     return error.message().find(text) != StringView::npos;
 }
 
 /// How many times @p error names @p text.
-inline std::size_t count_text(const Error& error, const char* text) {
+inline std::size_t count_text(const Error& error, StringView text) {
     const StringView message = error.message();
-    const StringView needle{text};
+    const StringView needle = text;
     std::size_t count = 0;
     std::size_t at = message.find(needle);
     while (at != StringView::npos) {

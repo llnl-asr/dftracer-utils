@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -54,7 +55,7 @@ void AggState::init_udaf_layout() {
 }
 
 dstd::Result<void> AggState::udaf_prepare(
-    const dstd::Vector<const Series*>& values) {
+    dstd::Span<const Series* const> values) {
     for (UdafSlot& slot : udafs) {
         const AggSpec& sp = specs[slot.spec];
         if (sp.value_col < 0 && !sp.args.empty())
@@ -112,10 +113,9 @@ dstd::Result<void> AggState::udaf_sync() const {
     return {};
 }
 
-dstd::Result<void> AggState::udaf_update(
-    const dstd::Vector<std::int64_t>& gids,
-    const dstd::Vector<const Series*>& values, std::int64_t begin,
-    std::int64_t end) {
+dstd::Result<void> AggState::udaf_update(dstd::Span<const std::int64_t> gids,
+                                         dstd::Span<const Series* const> values,
+                                         std::int64_t begin, std::int64_t end) {
     for (std::size_t i = 0; i < udafs.size(); ++i) {
         const dstd::Vector<std::int32_t> cols =
             udaf_arg_cols(specs[udafs[i].spec]);
@@ -161,8 +161,8 @@ void AggState::udaf_adopt(const AggState& other) {
 }
 
 void AggState::udaf_combine(const AggState& other,
-                            const dstd::Vector<std::int64_t>& into,
-                            const dstd::Vector<std::int64_t>& from) {
+                            dstd::Span<const std::int64_t> into,
+                            dstd::Span<const std::int64_t> from) {
     if (!has_udaf) return;
     if (dstd::Result<void> synced = other.udaf_sync(); !synced)
         return udaf_note(std::move(synced.error()));
@@ -196,7 +196,7 @@ void AggState::udaf_combine(const AggState& other,
     }
 }
 
-void AggState::udaf_permute(const dstd::Vector<std::int64_t>& perm) {
+void AggState::udaf_permute(dstd::Span<const std::int64_t> perm) {
     if (!has_udaf) return;
     if (dstd::Result<void> synced = udaf_sync(); !synced)
         return udaf_note(std::move(synced.error()));
@@ -252,8 +252,10 @@ Series AggState::udaf_column(std::size_t spec) const {
     return std::move(*column);
 }
 
-bool agg_specs_serial(const dstd::Vector<AggSpec>& specs) {
+bool agg_specs_serial(dstd::Span<const AggSpec> specs) {
     for (const AggSpec& sp : specs) {
+        // A position within the group counts rows in input order.
+        if (sp.op == AggOp::ArgMaxPos || sp.op == AggOp::ArgMinPos) return true;
         if (sp.op != AggOp::Udaf) continue;
         const dstd::SharedPtr<const UdafRecord> record = find_udaf(sp.fn);
         if (!record || !record->is_parallel_safe()) return true;
@@ -265,6 +267,11 @@ bool agg_serial_only(const AggState& state) { return state.udaf_serial; }
 
 dstd::Result<void> agg_check(const AggState& state) {
     if (state.udaf_error) return dstd::Unexpected(*state.udaf_error);
+    if (state.apos_unordered)
+        return common::make_error<
+            "agg_merge: an arg_max/arg_min position needs the states merged "
+            "in row order, and a partial starts before the one it joins">(
+            common::ErrorCode::InvalidArgument);
     return {};
 }
 

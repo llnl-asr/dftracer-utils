@@ -29,6 +29,7 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <plugins/test_plugin_common.h>
+#include <span_list.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -91,7 +92,7 @@ dstd::String make_trace(dftu_utils_test::TestEnvironment& env) {
     dstd::String ofs;
     for (int i = 0; i < 8; ++i)
         dstd::fmt_append<
-            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
             "\"tid\":1,\"ts\":{},\"dur\":{}{}\n">(ofs, (1000 + i * 100),
                                                   (10 + i), R"(,"args":{}})");
     dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();
@@ -128,7 +129,10 @@ TEST_CASE("a broken UDF result fails the query naming plugin, callback") {
 
     const std::int64_t xs[] = {1, 2, 3};
     const Series in = Series::flat_i64(xs, 3);
-    auto got = eval((*call)(col(0)), {&in});
+    auto got = eval(
+        (*call)(col(0)),
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&in}));
     if (got) MESSAGE("the UDF over a broken result succeeded");
     REQUIRE_FALSE(got.has_value());
     const dstd::StringView why = got.error().message();

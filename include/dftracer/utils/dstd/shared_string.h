@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DSTD_SHARED_STRING_H
 
 #include <dftracer/utils/dstd/hasher.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -34,9 +35,6 @@ class SharedString {
 
     /// Copies @p text into a new block; an empty @p text allocates nothing.
     explicit SharedString(StringView text) : block_(make_block(text)) {}
-    explicit SharedString(const char* text) : SharedString(StringView{text}) {}
-    explicit SharedString(const String& text)
-        : SharedString(StringView{text}) {}
 
     SharedString(const SharedString& other) noexcept : block_(other.block_) {
         if (block_ != nullptr) {
@@ -85,12 +83,6 @@ class SharedString {
     friend bool operator==(const SharedString& a, StringView b) noexcept {
         return a.view() == b;
     }
-    friend bool operator==(const SharedString& a, const char* b) noexcept {
-        return a.view() == StringView{b};
-    }
-    friend bool operator==(const SharedString& a, const String& b) noexcept {
-        return a.view() == StringView{b};
-    }
 
    private:
     struct Block {
@@ -118,11 +110,10 @@ template <>
 struct Hash<SharedString> : StringHash {};
 
 /// One new @ref SharedString per name, each with its own block.
-template <class Name>
-Vector<SharedString> make_shared_strings(const Vector<Name>& names) {
+inline Vector<SharedString> make_shared_strings(Span<const String> names) {
     Vector<SharedString> out;
     out.reserve(names.size());
-    for (const Name& n : names) out.emplace_back(StringView{n});
+    for (const String& n : names) out.emplace_back(StringView{n});
     return out;
 }
 
@@ -136,7 +127,7 @@ inline Vector<SharedString> make_shared_strings(
 }
 
 /// One new @ref String per name.
-inline Vector<String> to_strings(const Vector<SharedString>& names) {
+inline Vector<String> to_strings(Span<const SharedString> names) {
     Vector<String> out;
     out.reserve(names.size());
     for (const SharedString& n : names) out.emplace_back(n.view());

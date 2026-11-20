@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi/providers.h>
@@ -27,12 +28,15 @@ class CursorHost;
 /// DFTRACER_UTILS_PLUGIN_CHECK on, every frame it yields is validated and a
 /// broken one fails the scan with an error naming `label` (who made the frames
 /// and the callback that handed one back, such as "provider 'a.b' next") and
-/// the rule.
+/// the rule. `owner` is the registered name the cursor's run counters are
+/// added under, and `counters` the run they are added to, or null.
 dstd::UniquePtr<dataframe::Cursor> make_plugin_cursor(
     const ::dftu_cursor_vt* vt, void* self, dstd::UniquePtr<CursorHost> host,
     dstd::Vector<dstd::String> expected_projection,
     dstd::Vector<dataframe::TypeId> expected_types,
-    dstd::SharedPtr<const dataframe::Source> source, dstd::String label = {});
+    dstd::SharedPtr<const dataframe::Source> source, dstd::String label = {},
+    dstd::String owner = {},
+    dstd::SharedPtr<dataframe::RunCounters> counters = nullptr);
 
 /// The dataframe::Pushed one dftu_pushed value means. A value the ABI does not
 /// define reads as No, which is always sound: the engine re-applies.
@@ -43,7 +47,7 @@ dataframe::Pushed plugin_pushed(std::int32_t value);
 /// reads as Unknown, so the frame check skips it.
 dstd::Vector<dataframe::TypeId> declared_types(
     const dataframe::Schema& declared,
-    const dstd::Vector<dstd::String>& projection);
+    dstd::Span<const dstd::String> projection);
 
 /// Adapts a dftu_source_vt/self pair as a dataframe Source, for a test that
 /// drives the scan() C-ABI marshaling (dftu_scan_request, the out_pushed array,

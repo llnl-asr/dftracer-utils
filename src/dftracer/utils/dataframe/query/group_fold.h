@@ -80,10 +80,9 @@ class GroupFold {
     using Sketch = dataframe::MergeSketch;
 
     void arg(std::size_t a, const dataframe::Series& in,
-             const dataframe::Series& by,
-             const dstd::Vector<std::int64_t>& gid);
+             const dataframe::Series& by, dstd::Span<const std::int64_t> gid);
     void sketches(std::size_t a, const dataframe::Series& in,
-                  const dstd::Vector<std::int64_t>& gid);
+                  dstd::Span<const std::int64_t> gid);
 
     dstd::Vector<dataframe::DataType> key_types_;
     dstd::Vector<FoldAgg> aggs_;

@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/trace/index/plan/condition.h>
 
 #include <cstdint>
 
@@ -76,12 +77,15 @@ struct ChunkExplanation {
     dstd::Vector<std::uint64_t> read;
     /// One entry per pruning extension current for the file.
     dstd::Vector<ByExtension> by_extension;
+    /// What each summary kind skips on each path the query filters: the
+    /// summary alone, judging only the leaves on that path.
+    dstd::Vector<SummarySkip> by_summary;
 };
 
 /// Explains the pruning of `file_path` for `query`. An error when the index
 /// cannot be read or holds corrupt evidence, as @ref ChunkPruner returns one.
 dstd::Result<ChunkExplanation> explain_file_chunks(
-    const trace::index::Snapshot& snapshot, const dstd::String& file_path,
+    const trace::index::Snapshot& snapshot, dstd::StringView file_path,
     const Query& query);
 
 /// Chunk pruner over the index's pruning kinds (bloom, postings, counts,

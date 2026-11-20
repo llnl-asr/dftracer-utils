@@ -238,7 +238,7 @@ Query events optimized for visualization with time-range windowing, lane groupin
         "events": [
             {
                 "name": "MPI_Send",
-                "ph": "X",
+                "ph": 1,
                 "ts": 234567,
                 "dur": 12345,
                 "pid": 1,

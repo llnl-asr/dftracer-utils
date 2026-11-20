@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <unistd.h>
 
@@ -94,7 +95,7 @@ void Tracer::event(std::uint32_t world_rank, CallKind kind, std::uint64_t group,
                                                       pid_, number_);
     }
     dstd::fmt_append<
-        R"({"id":{},"name":"{}","cat":"comm","pid":{},"tid":{},"ts":{},"dur":{},"ph":"X",)">(
+        R"({"id":{},"name":"{}","cat":"comm","pid":{},"tid":{},"ts":{},"dur":{},"ph":1,)">(
         sink.buffer, next_id_++, call_name(kind), pid_, tid, begin_ns / 1000,
         dur_us);
     dstd::fmt_append<
@@ -106,7 +107,7 @@ void Tracer::event(std::uint32_t world_rank, CallKind kind, std::uint64_t group,
         write_locked(sink);
 }
 
-void Tracer::warn_once(const dstd::String& path, const dstd::Error& why) {
+void Tracer::warn_once(dstd::StringView path, const dstd::Error& why) {
     if (warned_) return;
     warned_ = true;
     DFTRACER_UTILS_LOG_WARN("comm trace: cannot write {}: {}", path,

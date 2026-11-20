@@ -5,12 +5,14 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/mask.h>
 #include <dftracer/utils/dataframe/plan.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/c_api.h>
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -39,14 +41,14 @@ dstd::String truth(const Series& m) {
     return out;
 }
 
-Series mask_of(const char* q, const DataFrame& b) {
+Series mask_of(dstd::StringView q, const DataFrame& b) {
     auto parsed = duql::Query::from_string(q);
     REQUIRE(parsed.has_value());
     return dftu_utils_test::ok(
         dataframe::evaluate_mask(duql::detail::QueryAccess::root(*parsed), b));
 }
 
-std::int64_t kept_rows(const char* q, const DataFrame& b) {
+std::int64_t kept_rows(dstd::StringView q, const DataFrame& b) {
     auto parsed = duql::Query::from_string(q);
     REQUIRE(parsed.has_value());
     dataframe::QueryPlan plan;
@@ -60,7 +62,9 @@ DataFrame nullable_x() {
     DataFrame b;
     b.names = dstd::make_shared_strings({"x", "cat"});
     b.columns.push_back(Series::flat_i64(x.data(), 4, &valid));
-    b.columns.push_back(Series::strings({"io", "io", "cpu", "net"}));
+    b.columns.push_back(
+        Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"io", "io", "cpu", "net"})));
     return b;
 }
 }  // namespace
@@ -71,7 +75,9 @@ TEST_SUITE("query vec_mask") {
         DataFrame b;
         b.names = dstd::make_shared_strings({"dur", "cat"});
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
-        b.columns.push_back(Series::strings({"io", "cpu", "io", "io", "net"}));
+        b.columns.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"io", "cpu", "io", "io", "net"})));
 
         auto q = duql::Query::from_string("dur > 100 and cat == \"io\"");
         REQUIRE(q.has_value());
@@ -187,7 +193,9 @@ TEST_SUITE("query vec_mask") {
         DataFrame b;
         b.names = dstd::make_shared_strings({"dur", "cat"});
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
-        b.columns.push_back(Series::strings({"io", "cpu", "io", "io", "net"}));
+        b.columns.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"io", "cpu", "io", "io", "net"})));
 
         auto q = duql::Query::from_string("dur > 60");
         REQUIRE(q.has_value());
@@ -211,7 +219,9 @@ TEST_SUITE("query vec_mask") {
         dstd::Vector<std::int64_t> dur{10, 5, 20, 15, 30};
         DataFrame b;
         b.names = dstd::make_shared_strings({"cat", "dur"});
-        b.columns.push_back(Series::strings({"io", "cpu", "io", "io", "net"}));
+        b.columns.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"io", "cpu", "io", "io", "net"})));
         b.columns.push_back(Series::flat_i64(dur.data(), 5));
 
         dataframe::QueryPlan plan;
@@ -242,7 +252,8 @@ TEST_SUITE("query vec_mask") {
 
         dstd::Vector<std::int64_t> dur{50, 150, 200};
         Series cdur = Series::flat_i64(dur.data(), 3);
-        Series ccat = Series::strings({"io", "io", "net"});
+        Series ccat = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"io", "io", "net"}));
         const dftu_series* cols[2] = {cdur.handle(), ccat.handle()};
         const char* names[2] = {"dur", "cat"};
         dftu_series* m = dftu_dataframe_mask(q, cols, names, 2);

@@ -32,7 +32,7 @@ def _write_trace(path: str, n: int, pids, files) -> None:
             fhash = files[i % len(files)]
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{1000 + i},"dur":{10 + i},"ph":"X",'
+                f'"ts":{1000 + i},"dur":{10 + i},"ph":1,'
                 f'"args":{{"fhash":"{fhash}","ret":{i}}}}}\n'
             )
 
@@ -177,7 +177,7 @@ def _write_seq_trace(path: str, events) -> None:
         for pid, name, ts in events:
             f.write(
                 f'{{"name":"{name}","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{ts},"dur":1,"ph":"X","args":{{}}}}\n'
+                f'"ts":{ts},"dur":1,"ph":1,"args":{{}}}}\n'
             )
 
 
@@ -225,7 +225,7 @@ def test_many_keys_stay_one_accumulator(tmp_path):
         for i in range(keys):
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{i},"tid":1,'
-                f'"ts":{1000 + i},"dur":{10 + i},"ph":"X",'
+                f'"ts":{1000 + i},"dur":{10 + i},"ph":1,'
                 f'"args":{{"fhash":"file{i}","ret":{i}}}}}\n'
             )
 
@@ -253,7 +253,7 @@ def _write_dur_trace(path: str, events) -> None:
         for pid, dur, ts in events:
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{ts},"dur":{dur},"ph":"X","args":{{}}}}\n'
+                f'"ts":{ts},"dur":{dur},"ph":1,"args":{{}}}}\n'
             )
 
 

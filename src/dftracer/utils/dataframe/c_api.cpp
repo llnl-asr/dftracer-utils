@@ -75,8 +75,9 @@ std::int64_t count_nulls(const std::uint8_t* validity, std::int64_t n) {
 
 }  // namespace
 
-dftu_series* dftu_series_new_flat(dftu_dtype type, const void* data, int64_t n,
-                                  const uint8_t* validity) {
+dftu_series* dftu_series_new_flat(dftu_dtype type, const void* data,
+                                  std::int64_t n,
+                                  const std::uint8_t* validity) {
     TypeId t = static_cast<TypeId>(type);
     // Fixed-width only; String/Binary are offset+data and need their own
     // builder. FixedSizeBinary also has no builder here: this signature has
@@ -104,7 +105,8 @@ dftu_series* dftu_series_new_flat(dftu_dtype type, const void* data, int64_t n,
 }
 
 dftu_series* dftu_series_new_flat_borrowed(dftu_dtype type, const void* data,
-                                           int64_t n, const uint8_t* validity,
+                                           std::int64_t n,
+                                           const std::uint8_t* validity,
                                            void (*release)(void* ctx),
                                            void* release_ctx) {
     TypeId t = static_cast<TypeId>(type);
@@ -137,8 +139,9 @@ dftu_series* dftu_series_new_flat_borrowed(dftu_dtype type, const void* data,
 }
 
 dftu_series* dftu_series_new_string_view(
-    dftu_dtype type, const void* views, int64_t n, const uint8_t* validity,
-    const void* const* buffers, const int64_t* sizes, int32_t n_buffers,
+    dftu_dtype type, const void* views, std::int64_t n,
+    const std::uint8_t* validity, const void* const* buffers,
+    const std::int64_t* sizes, std::int32_t n_buffers,
     void (*release)(void* ctx), void* ctx) {
     // Runs `release` once when the last column or buffer using it dies, and
     // on every early return below.
@@ -192,9 +195,10 @@ dftu_series* dftu_series_new_string_view(
     return col;
 }
 
-dftu_series* dftu_series_new_string(dftu_dtype type, const int32_t* offsets,
-                                    const void* data, int64_t n,
-                                    const uint8_t* validity) {
+dftu_series* dftu_series_new_string(dftu_dtype type,
+                                    const std::int32_t* offsets,
+                                    const void* data, std::int64_t n,
+                                    const std::uint8_t* validity) {
     TypeId t = static_cast<TypeId>(type);
     if (t != TypeId::String && t != TypeId::Binary) return nullptr;
     if (offsets != nullptr && offsets[n] < 0) return nullptr;
@@ -226,8 +230,9 @@ dftu_series* dftu_series_new_string(dftu_dtype type, const int32_t* offsets,
 }
 
 dftu_series* dftu_series_new_string_borrowed(
-    dftu_dtype type, const void* offsets, const void* data, int64_t data_size,
-    int64_t n, const uint8_t* validity, void (*release)(void* ctx), void* ctx) {
+    dftu_dtype type, const void* offsets, const void* data,
+    std::int64_t data_size, std::int64_t n, const std::uint8_t* validity,
+    void (*release)(void* ctx), void* ctx) {
     // Runs `release` once when the last column or buffer using it dies, and on
     // every early return below.
     dftracer::utils::dstd::SharedPtr<void> owner = borrow_owner(release, ctx);
@@ -269,7 +274,7 @@ dftu_series* dftu_series_new_string_borrowed(
 }
 
 dftu_series* dftu_series_new_struct(dftu_series** fields, const char** names,
-                                    int32_t n_fields) {
+                                    std::int32_t n_fields) {
     if (n_fields < 0 || (n_fields > 0 && fields == nullptr)) return nullptr;
     auto* col = new dftu_series();
     col->type = TypeId::Struct;
@@ -278,14 +283,14 @@ dftu_series* dftu_series_new_struct(dftu_series** fields, const char** names,
     // null here made an empty result crash the Arrow export (null handle
     // deref).
     col->length = n_fields > 0 ? fields[0]->length : 0;
-    for (int32_t i = 0; i < n_fields; ++i) {
+    for (std::int32_t i = 0; i < n_fields; ++i) {
         col->nested.push_back(
             {adopt_series(fields[i]), names && names[i] ? names[i] : ""});
     }
     return col;
 }
 
-dftu_series* dftu_series_new_list(const int32_t* offsets, int64_t n,
+dftu_series* dftu_series_new_list(const std::int32_t* offsets, std::int64_t n,
                                   dftu_series* values) {
     auto* col = new dftu_series();
     col->type = TypeId::List;
@@ -302,17 +307,17 @@ dftu_series* dftu_series_new_list(const int32_t* offsets, int64_t n,
 
 void dftu_series_free(dftu_series* col) { delete col; }
 
-int32_t dftu_series_type(const dftu_series* col) {
-    return static_cast<int32_t>(col->type);
+std::int32_t dftu_series_type(const dftu_series* col) {
+    return static_cast<std::int32_t>(col->type);
 }
 
-int32_t dftu_series_encoding(const dftu_series* col) {
-    return static_cast<int32_t>(col->encoding);
+std::int32_t dftu_series_encoding(const dftu_series* col) {
+    return static_cast<std::int32_t>(col->encoding);
 }
 
-int64_t dftu_series_length(const dftu_series* col) { return col->length; }
+std::int64_t dftu_series_length(const dftu_series* col) { return col->length; }
 
-int64_t dftu_series_null_count(const dftu_series* col) {
+std::int64_t dftu_series_null_count(const dftu_series* col) {
     // A SELECTION view holds no count of its own; its nulls are the base's
     // at the selected rows plus the outer-fill sentinels.
     if (col->encoding == dftracer::utils::dataframe::Encoding::Selection &&
@@ -330,18 +335,18 @@ const void* dftu_series_data(const dftu_series* col) {
     return col->data.data();
 }
 
-const int32_t* dftu_series_offsets(const dftu_series* col) {
+const std::int32_t* dftu_series_offsets(const dftu_series* col) {
     if (!col->offsets.block() || col->wide_offsets()) return nullptr;
-    return reinterpret_cast<const int32_t*>(col->offsets.data());
+    return reinterpret_cast<const std::int32_t*>(col->offsets.data());
 }
 
-const int64_t* dftu_series_offsets64(const dftu_series* col) {
+const std::int64_t* dftu_series_offsets64(const dftu_series* col) {
     if (!col->offsets.block() || !col->wide_offsets()) return nullptr;
-    return reinterpret_cast<const int64_t*>(col->offsets.data());
+    return reinterpret_cast<const std::int64_t*>(col->offsets.data());
 }
 
-const uint8_t* dftu_series_validity(const dftu_series* col,
-                                    int64_t* bit_offset) {
+const std::uint8_t* dftu_series_validity(const dftu_series* col,
+                                         std::int64_t* bit_offset) {
     // No storage keeps a bit offset: a slice repacks the bitmap from bit 0.
     if (bit_offset != nullptr) *bit_offset = 0;
     if (col == nullptr) return nullptr;
@@ -351,13 +356,13 @@ const uint8_t* dftu_series_validity(const dftu_series* col,
     return col->validity.data();
 }
 
-int32_t dftu_series_chunk_count(const dftu_series* col) {
+std::int32_t dftu_series_chunk_count(const dftu_series* col) {
     if (col == nullptr) return 0;
     if (!col->is_chunked()) return 1;
-    return static_cast<int32_t>(col->nested.size());
+    return static_cast<std::int32_t>(col->nested.size());
 }
 
-dftu_series* dftu_series_chunk(const dftu_series* col, int32_t i) {
+dftu_series* dftu_series_chunk(const dftu_series* col, std::int32_t i) {
     if (col == nullptr || i < 0) return nullptr;
     if (!col->is_chunked()) return i == 0 ? new dftu_series(*col) : nullptr;
     const auto at = static_cast<std::size_t>(i);
@@ -386,9 +391,9 @@ dftu_series* dftu_series_dictionary_values(const dftu_series* col) {
     return new dftu_series(*values);
 }
 
-int32_t dftu_series_view_buffer_count(const dftu_series* col) {
+std::int32_t dftu_series_view_buffer_count(const dftu_series* col) {
     if (col == nullptr || col->encoding != Encoding::View) return -1;
-    return col->blobs ? static_cast<int32_t>(col->blobs->size()) : 0;
+    return col->blobs ? static_cast<std::int32_t>(col->blobs->size()) : 0;
 }
 
 const void* dftu_series_view_data(const dftu_series* col) {
@@ -397,8 +402,8 @@ const void* dftu_series_view_data(const dftu_series* col) {
     return col->data.data();
 }
 
-const void* dftu_series_view_buffer(const dftu_series* col, int32_t i,
-                                    int64_t* size) {
+const void* dftu_series_view_buffer(const dftu_series* col, std::int32_t i,
+                                    std::int64_t* size) {
     if (size != nullptr) *size = 0;
     if (i < 0 || dftu_series_view_buffer_count(col) <= i) return nullptr;
     const BufferView& blob = (*col->blobs)[static_cast<std::size_t>(i)];
@@ -406,7 +411,7 @@ const void* dftu_series_view_buffer(const dftu_series* col, int32_t i,
     return blob.block() ? blob.data() : nullptr;
 }
 
-int32_t dftu_series_is_null(const dftu_series* col, int64_t i) {
+std::int32_t dftu_series_is_null(const dftu_series* col, std::int64_t i) {
     if (col->is_chunked()) {
         std::int64_t local = 0;
         const dftu_series& c = col->chunk_at(i, local);
@@ -436,8 +441,8 @@ int32_t dftu_series_is_null(const dftu_series* col, int64_t i) {
     return 0;
 }
 
-const char* dftu_series_string_at(const dftu_series* col, int64_t i,
-                                  int64_t* len) {
+const char* dftu_series_string_at(const dftu_series* col, std::int64_t i,
+                                  std::int64_t* len) {
     *len = 0;
     if (col == nullptr) return nullptr;
     switch (col->type) {
@@ -536,7 +541,7 @@ void buffer_bytes_once(const dftu_series* col,
 }
 }  // namespace
 
-int64_t dftu_series_buffer_bytes(const dftu_series* col) {
+std::int64_t dftu_series_buffer_bytes(const dftu_series* col) {
     if (col == nullptr) return 0;
     std::int64_t total = 0;
     if (col->is_chunked()) {
@@ -564,12 +569,12 @@ bool is_single_child_container(TypeId t) {
 }
 }  // namespace
 
-int32_t dftu_series_num_children(const dftu_series* col) {
+std::int32_t dftu_series_num_children(const dftu_series* col) {
     if (is_single_child_container(col->type)) return col->child() ? 1 : 0;
-    return static_cast<int32_t>(col->num_fields());
+    return static_cast<std::int32_t>(col->num_fields());
 }
 
-dftu_series* dftu_series_child(const dftu_series* col, int32_t i) {
+dftu_series* dftu_series_child(const dftu_series* col, std::int32_t i) {
     const dftracer::utils::dstd::SharedPtr<dftu_series>* ch = nullptr;
     if (is_single_child_container(col->type)) {
         if (i == 0 && col->child()) ch = &col->child();
@@ -581,16 +586,16 @@ dftu_series* dftu_series_child(const dftu_series* col, int32_t i) {
     return new dftu_series(**ch);
 }
 
-const char* dftu_series_field_name(const dftu_series* col, int32_t i) {
+const char* dftu_series_field_name(const dftu_series* col, std::int32_t i) {
     if (!col || col->type != TypeId::Struct) return nullptr;
     if (i < 0 || static_cast<std::size_t>(i) >= col->num_fields())
         return nullptr;
     return col->nested[static_cast<std::size_t>(i)].name.c_str();
 }
 
-int32_t dftu_series_time_unit(const dftu_series* col) {
-    return col ? static_cast<int32_t>(col->time_unit())
-               : static_cast<int32_t>(
+std::int32_t dftu_series_time_unit(const dftu_series* col) {
+    return col ? static_cast<std::int32_t>(col->time_unit())
+               : static_cast<std::int32_t>(
                      dftracer::utils::dataframe::TimeUnit::Micro);
 }
 
@@ -600,19 +605,19 @@ const char* dftu_series_timezone(const dftu_series* col) {
     return col && !col->timezone().empty() ? col->timezone().data() : empty;
 }
 
-int32_t dftu_series_decimal_precision(const dftu_series* col) {
+std::int32_t dftu_series_decimal_precision(const dftu_series* col) {
     return col ? col->decimal_precision() : 0;
 }
 
-int32_t dftu_series_decimal_scale(const dftu_series* col) {
+std::int32_t dftu_series_decimal_scale(const dftu_series* col) {
     return col ? col->decimal_scale() : 0;
 }
 
-int32_t dftu_series_fixed_size(const dftu_series* col) {
+std::int32_t dftu_series_fixed_size(const dftu_series* col) {
     return col ? col->fixed_size() : 0;
 }
 
-int32_t dftu_series_is_json(const dftu_series* col) {
+std::int32_t dftu_series_is_json(const dftu_series* col) {
     return col && col->json() ? 1 : 0;
 }
 
@@ -630,13 +635,13 @@ dftu_series* dftu_series_share(const dftu_series* col) {
     return new dftu_series(*col);
 }
 
-const char* dftu_series_name(const dftu_series* s, size_t* len) {
+const char* dftu_series_name(const dftu_series* s, std::size_t* len) {
     if (len) *len = s ? s->name.size() : 0;
     return s && !s->name.empty() ? s->name.data() : nullptr;
 }
 
 dftu_series* dftu_series_rename(const dftu_series* s, const char* name,
-                                size_t len) {
+                                std::size_t len) {
     if (!s) return nullptr;
     auto* out = new dftu_series(*s);
     if (name && len > 0)
@@ -644,6 +649,61 @@ dftu_series* dftu_series_rename(const dftu_series* s, const char* name,
             dftracer::utils::dstd::StringView{name, len}};
     else
         out->name = {};
+    return out;
+}
+
+std::int32_t dftu_series_index_count(const dftu_series* s) {
+    return s && s->labels ? static_cast<std::int32_t>(s->labels->levels.size())
+                          : 0;
+}
+
+std::int32_t dftu_series_index_name(const dftu_series* s, std::int32_t i,
+                                    const char** ptr, std::size_t* len) {
+    if (!s || !ptr || i < 0 || !s->labels ||
+        static_cast<std::size_t>(i) >= s->labels->levels.size())
+        return -1;
+    const auto& name = s->labels->levels[static_cast<std::size_t>(i)].name;
+    *ptr = name.c_str();
+    if (len) *len = name.size();
+    return 0;
+}
+
+dftu_series* dftu_series_index_column(const dftu_series* s, std::int32_t i) {
+    if (!s || i < 0 || !s->labels ||
+        static_cast<std::size_t>(i) >= s->labels->levels.size())
+        return nullptr;
+    return dftu_series_share(
+        s->labels->levels[static_cast<std::size_t>(i)].series.get());
+}
+
+dftu_series* dftu_series_with_index(const dftu_series* s,
+                                    const char* const* names,
+                                    const std::size_t* lens,
+                                    const dftu_series* const* levels,
+                                    std::int32_t n) {
+    if (!s || n < 0 || (n > 0 && (!names || !lens || !levels))) return nullptr;
+    auto labels = dftracer::utils::dstd::make_shared<dftu_labels>();
+    labels->levels.reserve(static_cast<std::size_t>(n));
+    for (std::int32_t i = 0; i < n; ++i) {
+        const dftu_series* level = levels[i];
+        if (!names[i] || !level || level->length != s->length ||
+            level->type == TypeId::List || level->type == TypeId::Struct)
+            return nullptr;
+        const dftracer::utils::dstd::StringView name(names[i], lens[i]);
+        for (const dftu_nested& seen : labels->levels)
+            if (dftracer::utils::dstd::StringView(seen.name) == name)
+                return nullptr;
+        dftu_series* shared = dftu_series_share(level);
+        shared->labels = {};
+        shared->name = {};
+        labels->levels.push_back(
+            {adopt_series(shared), dftracer::utils::dstd::String(name)});
+    }
+    auto* out = new dftu_series(*s);
+    if (n == 0)
+        out->labels = {};
+    else
+        out->labels = std::move(labels);
     return out;
 }
 
@@ -689,8 +749,8 @@ BufferView rebased_offsets(const dftu_series& col, std::int64_t offset,
     return out;
 }
 
-dftu_series* slice_unnamed(const dftu_series* col, int64_t offset,
-                           int64_t len) {
+dftu_series* slice_unnamed(const dftu_series* col, std::int64_t offset,
+                           std::int64_t len) {
     if (!col) return nullptr;
     if (offset < 0) offset = 0;
     if (offset > col->length) offset = col->length;
@@ -784,9 +844,21 @@ dftu_series* slice_unnamed(const dftu_series* col, int64_t offset,
 
 }  // namespace
 
-dftu_series* dftu_series_slice(const dftu_series* col, int64_t offset,
-                               int64_t len) {
+dftu_series* dftu_series_slice(const dftu_series* col, std::int64_t offset,
+                               std::int64_t len) {
     dftu_series* out = slice_unnamed(col, offset, len);
-    if (out) out->name = col->name;
+    if (!out) return out;
+    out->name = col->name;
+    if (!col->labels) return out;
+    auto labels = dftracer::utils::dstd::make_shared<dftu_labels>();
+    for (const dftu_nested& level : col->labels->levels) {
+        dftu_series* part = slice_unnamed(level.series.get(), offset, len);
+        if (!part) {
+            dftu_series_free(out);
+            return nullptr;
+        }
+        labels->levels.push_back({adopt_series(part), level.name});
+    }
+    out->labels = std::move(labels);
     return out;
 }

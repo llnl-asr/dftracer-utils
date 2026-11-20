@@ -23,7 +23,7 @@ const ::dftu_svc_nodes g_nodes = {sizeof(::dftu_svc_nodes),
 
 }  // namespace
 
-dftu_status detail::register_plugin_node(::dftu_ctx* ctx, const char* name,
+dftu_status detail::register_plugin_node(::dftu_ctx* ctx, dstd::StringView name,
                                          const ::dftu_node_vt* vt, void* self,
                                          dstd::SharedPtr<PluginLibrary> library,
                                          dstd::SharedPtr<PluginMemory> memory) {
@@ -32,16 +32,14 @@ dftu_status detail::register_plugin_node(::dftu_ctx* ctx, const char* name,
             ctx, DFTU_E_INVALID,
             dstd::fmt<"node '{}' refused: the bare and 'dftu.' namespaces are "
                       "host-reserved, so a node name must be "
-                      "'<plugin>.<name>'">(
-                dstd::StringView(name ? name : "(null)")));
+                      "'<plugin>.<name>'">(name));
     }
     auto registered = register_node_vtable(name, vt, self, std::move(library),
                                            std::move(memory));
     if (!registered) {
-        return host_fail(
-            ctx, common::to_status(registered.error().condition()),
-            dstd::fmt<"node '{}' refused: {}">(dstd::StringView(name),
-                                               registered.error().message()));
+        return host_fail(ctx, common::to_status(registered.error().condition()),
+                         dstd::fmt<"node '{}' refused: {}">(
+                             name, registered.error().message()));
     }
     return DFTU_OK;
 }

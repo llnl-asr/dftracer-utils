@@ -56,7 +56,7 @@ coro::CoroTask<int> stream_shard_to_fd(int out_fd, dstd::CStringView shard) {
 }  // namespace
 
 coro::CoroTask<int> merge_shards(dstd::CStringView target,
-                                 const dstd::Vector<dstd::String>& shards) {
+                                 dstd::Vector<dstd::String> shards) {
     if (shards.empty()) co_return 0;
 
     ssize_t out_fd = co_await ::dftracer::utils::runtime::io::open(

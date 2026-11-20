@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <type_traits>
 #include <utility>
@@ -12,7 +13,8 @@ namespace coro_test {
 
 /// A task that ends with a dstd::Condition::Unknown error holding `message`.
 template <typename T = void>
-dftracer::utils::coro::CoroTask<T> failing_task(const char* message) {
+dftracer::utils::coro::CoroTask<T> failing_task(
+    dftracer::utils::dstd::String message) {
     dftracer::utils::dstd::Error error{
         dftracer::utils::dstd::Condition::Unknown, message};
     auto failure = dftracer::utils::coro::fail_with(std::move(error));

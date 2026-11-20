@@ -15,7 +15,7 @@ namespace dftracer::utils::python::frame {
 // Returns 0 on success, -1 with the Python error set on failure.
 int init_columnar_eval(PyObject* m);
 
-// Rebuild a dataframe::Expr from a Python post-order AST list (the columnar.py
+// Rebuild a dataframe::Expr from a Python post-order AST list (the expr.py
 // serialization). Returns false with a Python error set on a malformed AST.
 // Only defined in the arrow-enabled build (returns false otherwise).
 bool build_expr_from_ast(PyObject* ast, dftracer::utils::dataframe::Expr* out);

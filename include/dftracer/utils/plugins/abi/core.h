@@ -138,6 +138,20 @@ typedef struct dftu_bytes {
 typedef dftu_status (*dftu_stream_item_fn)(dftu_ctx* ctx, const void* item,
                                            void* ud);
 
+/** Host-owned lines for an explain call: one key and one value each. `add`
+   copies `key_len` bytes of `key` and `value_len` bytes of `value` (neither
+   needs a NUL); it may be called any number of times during one explain call
+   and never after it. The host prints the lines in the order they were added.
+   A plugin states what it would do with a request (the filters it accepts, the
+   chunks it reads, an option that shapes the scan), not what it did: the run
+   counters of dftu_ctx_vt::counter carry the numbers of a run. */
+typedef struct dftu_explain_out {
+    uint32_t struct_size; /**< sizeof(dftu_explain_out) */
+    void* self;
+    void (*add)(void* self, const char* key, uint64_t key_len,
+                const char* value, uint64_t value_len);
+} dftu_explain_out;
+
 /** Severity for dftu_plugin_host::log; higher is more severe. Mirrors the
    host's own logger levels, so a plugin's line is gated by the same threshold.
  */

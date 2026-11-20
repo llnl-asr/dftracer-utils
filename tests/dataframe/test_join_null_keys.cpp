@@ -15,6 +15,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -32,15 +33,14 @@ DataFrame run(coro::CoroTask<dstd::Result<DataFrame>> t) {
         dftracer::utils::default_runtime().submit(std::move(t)).get());
 }
 
-Series i64s(const dstd::Vector<std::int64_t>& v,
-            const dstd::Vector<std::uint8_t>& validity = {}) {
+Series i64s(dstd::Vector<std::int64_t> v,
+            dstd::Vector<std::uint8_t> validity = {}) {
     return Series::flat_i64(v.data(), static_cast<std::int64_t>(v.size()),
                             validity.empty() ? nullptr : validity.data());
 }
 
 // A string column with nulls where `validity` bit i is 0.
-Series strs(const dstd::Vector<dstd::String>& v,
-            const dstd::Vector<std::uint8_t>& validity) {
+Series strs(dstd::Vector<dstd::String> v, dstd::Vector<std::uint8_t> validity) {
     dstd::Vector<dstd::StringView> views(v.begin(), v.end());
     return Series::strings(dstd::Span<const dstd::StringView>(views),
                            validity.data());
@@ -89,7 +89,9 @@ DataFrame right() {
 
 DataFrame join(const DataFrame& l, const DataFrame& r, JoinHow how,
                bool nulls_equal) {
-    return dftu_utils_test::ok(l.join(r, {"k"}, how, "_right", nulls_equal));
+    return dftu_utils_test::ok(
+        l.join(r, dftu_utils_test::span_of<dstd::String>({"k"}), how, "_right",
+               nulls_equal));
 }
 
 LazyFrame lazy_of(const DataFrame& d, std::uint64_t budget = 0) {
@@ -165,10 +167,12 @@ TEST_SUITE("join null keys") {
         const DataFrame r =
             frame({"a", "b", "y"}, i64s({7}), i64s({0}, {0}), i64s({10}));
         const DataFrame out = dftu_utils_test::ok(
-            l.join(r, {"a", "b"}, JoinHow::Inner, "_right", true));
+            l.join(r, dftu_utils_test::span_of<dstd::String>({"a", "b"}),
+                   JoinHow::Inner, "_right", true));
         CHECK(rows(out) == Rows{"7,null,1,10"});
         CHECK(dftu_utils_test::ok(
-                  l.join(r, {"a", "b"}, JoinHow::Inner, "_right", false))
+                  l.join(r, dftu_utils_test::span_of<dstd::String>({"a", "b"}),
+                         JoinHow::Inner, "_right", false))
                   .num_rows() == 0);
     }
 
@@ -185,11 +189,14 @@ TEST_SUITE("join null keys") {
     TEST_CASE("cross, lookup and nest refuse the option") {
         for (JoinHow how : {JoinHow::Cross, JoinHow::Lookup, JoinHow::Nest}) {
             dftu_utils_test::expect_error(
-                left().join(right(), {"k"}, how, "_right", true),
+                left().join(right(),
+                            dftu_utils_test::span_of<dstd::String>({"k"}), how,
+                            "_right", true),
                 dftracer::utils::common::ErrorCode::InvalidArgument);
         }
         const auto crossed =
-            left().join(right(), {"k"}, JoinHow::Cross, "_right", true);
+            left().join(right(), dftu_utils_test::span_of<dstd::String>({"k"}),
+                        JoinHow::Cross, "_right", true);
         REQUIRE_FALSE(crossed.has_value());
         CHECK(dstd::String(crossed.error().c_str()).find("cross") !=
               dstd::String::npos);

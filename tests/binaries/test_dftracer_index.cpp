@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -12,6 +14,7 @@
 #include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <sys/wait.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -45,14 +48,13 @@ dstd::String find_index_binary() {
                                                 "dftracer_index");
 }
 
-void write_plain_pfw(const dstd::String& path) {
+void write_plain_pfw(dstd::StringView path) {
     dftu_utils_test::FileOut plain(path);
-    plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\","
+    plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":1,"
              "\"pid\":1,\"tid\":1,\"ts\":1,\"dur\":1}\n";
 }
 
-int run_index(const dstd::String& binary,
-              const dstd::Vector<dstd::String>& args) {
+int run_index(dstd::String binary, dstd::Vector<dstd::String> args) {
     dftu_utils_test::set_test_library_path(binary);
     return dftu_utils_test::run_process(binary, args);
 }
@@ -199,7 +201,8 @@ TEST_SUITE("DFTracerIndex") {
                                          std::size_t skipped) {
             int rc = -1;
             const dstd::String out = dftu_utils_test::run_process_capture(
-                binary, {env.dir()}, true, &rc);
+                binary, dftu_utils_test::span_of<dstd::String>({env.dir()}),
+                true, &rc);
             INFO(out);
             CHECK(rc == 0);
             CHECK(out.find("Files processed: " + dstd::to_string(processed) +
@@ -229,7 +232,10 @@ TEST_SUITE("DFTracerIndex") {
         dftu_utils_test::set_test_library_path(binary);
         int rc = -1;
         const dstd::String out = dftu_utils_test::run_process_capture(
-            binary, {env.dir(), "--read-batch-size", "4"}, true, &rc);
+            binary,
+            dftu_utils_test::span_of<dstd::String>(
+                {env.dir(), "--read-batch-size", "4"}),
+            true, &rc);
         INFO(out);
         CHECK(rc != 0);
         CHECK(out.find("--read-batch-size") != dstd::String::npos);
@@ -259,7 +265,8 @@ TEST_SUITE("DFTracerIndex") {
         dftu_utils_test::set_test_library_path(binary);
         int rc = -1;
         const dstd::String out = dftu_utils_test::run_process_capture(
-            binary, {env.dir()}, true, &rc);
+            binary, dftu_utils_test::span_of<dstd::String>({env.dir()}), true,
+            &rc);
         INFO(out);
         CHECK(rc == 0);
         CHECK(out.find("Clearing the aggregation tier of " + index_path) !=
@@ -293,7 +300,9 @@ TEST_SUITE("DFTracerIndex") {
         dftu_utils_test::set_test_library_path(binary);
         int rc = 0;
         const dstd::String out = dftu_utils_test::run_process_capture(
-            binary, {env.dir(), "--force"}, true, &rc);
+            binary,
+            dftu_utils_test::span_of<dstd::String>({env.dir(), "--force"}),
+            true, &rc);
         CHECK(rc != 0);
         CHECK(out.find("plain.pfw.gz") != dstd::String::npos);
         CHECK(out.find("is not gzip") != dstd::String::npos);

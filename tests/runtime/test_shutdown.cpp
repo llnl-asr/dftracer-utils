@@ -65,7 +65,7 @@ struct Witness {
 
 // A hang fails the test and ends the process: the stuck threads cannot be
 // joined, and ctest must not wait for them.
-void fail_hung(const char* what) {
+void fail_hung(dstd::StringView what) {
     FAIL_CHECK(what << " hung");
     std::_Exit(1);
 }
@@ -94,7 +94,7 @@ void wait_until_entered(const Probe& probe) {
     std::this_thread::sleep_for(SETTLE);
 }
 
-void wait_or_fail(const TaskHandle& task, const char* what) {
+void wait_or_fail(const TaskHandle& task, dstd::StringView what) {
     if (task.future.wait_for(HANG_LIMIT) != std::future_status::ready) {
         fail_hung(what);
     }

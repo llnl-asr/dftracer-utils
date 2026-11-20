@@ -93,14 +93,14 @@ dstd::Vector<std::int64_t> radix_counts_by(std::int64_t m, KeyOf&& key_of) {
 
 /// Composite row-key convenience: `keys[j]` is already materialized.
 inline dstd::Vector<std::uint8_t> radix_first_seen_mask(
-    const dstd::Vector<dstd::String>& keys, std::int64_t n) {
+    dstd::Span<const dstd::String> keys, std::int64_t n) {
     return radix_first_seen_by<dstd::String>(
         n, [&](std::int64_t j) { return keys[static_cast<std::size_t>(j)]; });
 }
 
 /// Composite row-key convenience: `keys[j]` is already materialized.
 inline dstd::Vector<std::int64_t> radix_key_counts(
-    const dstd::Vector<dstd::String>& keys, std::int64_t n) {
+    dstd::Span<const dstd::String> keys, std::int64_t n) {
     return radix_counts_by<dstd::String>(
         n, [&](std::int64_t j) { return keys[static_cast<std::size_t>(j)]; });
 }

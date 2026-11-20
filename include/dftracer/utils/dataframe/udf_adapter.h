@@ -16,6 +16,7 @@
 #include <dftracer/utils/dataframe/plugin_frame.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -153,8 +154,10 @@ class UdfBatch {
     std::uint64_t rows() const noexcept { return rows_; }
 
     /// Argument column `i`, borrowed, `rows()` rows long. Read it with a
-    /// @ref ColumnView: a column the host passes is FLAT, or a String column
-    /// that @ref ColumnView::string_at reads as it is.
+    /// @ref dftracer::utils::dataframe::ColumnView "ColumnView": a column the
+    /// host passes is FLAT, or a String column that @ref
+    /// dftracer::utils::dataframe::ColumnView "ColumnView"::string_at reads as
+    /// it is.
     ColumnView arg(std::uint32_t i) const noexcept {
         return ColumnView(i < args_.size() ? args_[i] : nullptr);
     }
@@ -182,16 +185,17 @@ struct UdfOptions {
 
 /// A type `U` that registers as a scalar UDF is the state its bind keeps: bind
 /// gives a new `U` (or an error, which fails the query) and exec runs it on one
-/// batch, giving a @ref Column of `batch.rows()` rows of the type bind chose
-/// (or an error, which fails the query with its message). exec may run on
-/// several batches at once, so it only reads `U`.
+/// batch, giving a @ref dftracer::utils::dataframe::Column of `batch.rows()`
+/// rows of the type bind chose (or an error, which fails the query with its
+/// message). exec may run on several batches at once, so it only reads `U`.
 template <class U>
 concept UdfType = requires(UdfBind& bind, UdfBatch& batch, const U& udf) {
     { U::bind(bind) } -> std::same_as<dstd::Result<dstd::UniquePtr<U>>>;
     { udf.exec(batch) } -> std::same_as<dstd::Result<Column>>;
 };
 
-/// A @ref UdfType that names itself, for @ref make_udf: `NAME` is the duql
+/// A @ref dftracer::utils::dataframe::UdfType that names itself, for
+/// @ref dftracer::utils::dataframe::make_udf "make_udf": `NAME` is the duql
 /// name, and `FLAGS`, `MIN_ARGS` and `MAX_ARGS` are optional (a deterministic
 /// UDF of one argument by default).
 template <class U>
@@ -202,10 +206,10 @@ concept NamedUdfType = UdfType<U> && requires {
 namespace detail {
 
 template <UdfType U>
-dftu_udf_desc udf_desc_of(const char* name, UdfOptions options) noexcept {
+dftu_udf_desc udf_desc_of(dstd::CStringView name, UdfOptions options) noexcept {
     dftu_udf_desc d{};
     d.struct_size = sizeof(dftu_udf_desc);
-    d.name = name;
+    d.name = name.c_str();
     d.flags = static_cast<std::uint32_t>(options.flags);
     d.min_args = options.min_args;
     d.max_args = options.max_args;

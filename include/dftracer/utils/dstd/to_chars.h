@@ -137,13 +137,14 @@ inline String int_text(I v) {
     return ec == std::errc{} ? String(buf, p) : String();
 }
 
-/// Parse a double from [first, last) like std::from_chars: no leading
+/// Parse a double from @p text like std::from_chars: no leading
 /// whitespace or '+', `ptr` at the first byte not consumed, `ec` set when no
 /// number starts there. Falls back to strtod on a copy where libc++ lacks the
 /// floating-point overload.
-inline std::from_chars_result from_chars_double(const char* first,
-                                                const char* last,
+inline std::from_chars_result from_chars_double(StringView text,
                                                 double& out) noexcept {
+    const char* const first = text.data();
+    const char* const last = first + text.size();
 #ifdef DFTRACER_UTILS_FP_FROM_CHARS_UNAVAILABLE
     if (first == last || *first == ' ' || *first == '+')
         return {first, std::errc::invalid_argument};
@@ -247,15 +248,14 @@ inline char* to_chars_general(char* first, char* last, double v,
 /// when no number starts there or the value is out of range for T.
 template <class T>
     requires IS_CHARS_NUMBER<T>
-inline FromCharsResult from_chars(const char* first, const char* last,
-                                  T& out) noexcept {
+inline FromCharsResult from_chars(StringView text, T& out) noexcept {
     if constexpr (std::is_integral_v<T>) {
-        return std::from_chars(first, last, out);
+        return std::from_chars(text.data(), text.data() + text.size(), out);
     } else if constexpr (std::is_same_v<T, double>) {
-        return from_chars_double(first, last, out);
+        return from_chars_double(text, out);
     } else {
         double d = 0;
-        const FromCharsResult r = from_chars_double(first, last, d);
+        const FromCharsResult r = from_chars_double(text, d);
         if (r.ec != std::errc{}) return r;
         if (d > static_cast<double>(std::numeric_limits<float>::max()) ||
             d < -static_cast<double>(std::numeric_limits<float>::max()))
@@ -282,11 +282,11 @@ inline String to_string(T v) {
 template <class T>
     requires IS_CHARS_NUMBER<T>
 inline Optional<T> from_chars(StringView text) {
-    const char* first = text.data();
-    const char* last = first + text.size();
     T value{};
-    const FromCharsResult r = from_chars(first, last, value);
-    if (r.ec != std::errc{} || r.ptr != last || first == last) return nullopt;
+    const FromCharsResult r = from_chars(text, value);
+    if (r.ec != std::errc{} || r.ptr != text.data() + text.size() ||
+        text.empty())
+        return nullopt;
     return value;
 }
 

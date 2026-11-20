@@ -41,7 +41,7 @@ CoroTask<int> value_nested(int value, std::chrono::milliseconds delay) {
     co_return inner + 1;
 }
 
-CoroTask<void> fail_with_message(const char* message) {
+CoroTask<void> fail_with_message(dstd::String message) {
     dstd::Error error{dstd::Condition::Unknown, message};
     auto failure = fail_with(std::move(error));
     co_await failure;

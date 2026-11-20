@@ -25,23 +25,23 @@ using namespace dftracer::utils::duql;
 
 namespace {
 
-Truth truth(const char* query, const char* record) {
+Truth truth(dstd::StringView query, dstd::StringView record) {
     auto ast = parse(query);
     REQUIRE_MESSAGE(ast.has_value(),
                     (ast ? dstd::String() : ast.error().message));
     simdjson::dom::parser p;
     simdjson::dom::element el;
-    REQUIRE(p.parse(record, std::strlen(record)).get(el) == simdjson::SUCCESS);
+    REQUIRE(p.parse(record.data(), record.size()).get(el) == simdjson::SUCCESS);
     return evaluate_truth(**ast, json::JsonValue(el));
 }
 
-dstd::String error_of(const char* query) {
+dstd::String error_of(dstd::StringView query) {
     auto ast = parse(query);
     REQUIRE_FALSE(ast.has_value());
     return ast.error().message;
 }
 
-bool has(const dstd::String& text, dstd::StringView part) {
+bool has(dstd::StringView text, dstd::StringView part) {
     return text.find(part) != dstd::String::npos;
 }
 
@@ -210,9 +210,7 @@ TEST_SUITE("duql patterns") {
             dstd::String lower = hay;
             for (char& c : lower) c = dstd::to_ascii_lower(c);
             const auto want = static_cast<std::int64_t>(lower.find(needle));
-            const auto got = detail::substr_find_icase(
-                hay.data(), static_cast<std::int64_t>(hay.size()),
-                needle.data(), static_cast<std::int64_t>(needle.size()));
+            const auto got = detail::substr_find_icase(hay, needle);
             CAPTURE(hay);
             CAPTURE(needle);
             CHECK(got == (want == static_cast<std::int64_t>(dstd::String::npos)
@@ -222,7 +220,7 @@ TEST_SUITE("duql patterns") {
     }
 
     TEST_CASE("required literals") {
-        auto lits = [](const char* re) {
+        auto lits = [](dstd::StringView re) {
             auto p = compile_regex(re, false);
             REQUIRE(p);
             return required_literals(**p);
@@ -274,7 +272,7 @@ TEST_CASE("a catastrophic pattern retries on Vectorscan at any length") {
 #include <hs.h>
 
 TEST_CASE("the engine path gives exact results") {
-    auto m = [](const char* re, bool icase, dstd::StringView s,
+    auto m = [](dstd::StringView re, bool icase, dstd::StringView s,
                 bool whole = false) {
         auto p = compile_regex(re, icase, whole);
         REQUIRE(p);
@@ -338,10 +336,10 @@ TEST_CASE("vectorscan links and scans") {
                        &err) == HS_SUCCESS);
     hs_scratch_t* scratch = nullptr;
     REQUIRE(hs_alloc_scratch(db, &scratch) == HS_SUCCESS);
-    auto count = [&](const char* s) {
+    auto count = [&](dstd::StringView s) {
         int hits = 0;
         hs_scan(
-            db, s, static_cast<unsigned>(std::strlen(s)), 0, scratch,
+            db, s.data(), static_cast<unsigned>(s.size()), 0, scratch,
             [](unsigned, unsigned long long, unsigned long long, unsigned,
                void* ctx) {
                 ++*static_cast<int*>(ctx);
@@ -359,8 +357,8 @@ TEST_CASE("vectorscan links and scans") {
 
 namespace {
 
-dstd::String replace_with(const char* re, const char* to, dstd::StringView s,
-                          MatchResult* res = nullptr) {
+dstd::String replace_with(dstd::StringView re, dstd::StringView to,
+                          dstd::StringView s, MatchResult* res = nullptr) {
     auto p = compile_regex(re, false);
     REQUIRE(p.has_value());
     auto sub = compile_substitution(**p, to);
@@ -431,7 +429,9 @@ TEST_CASE("regex_replace invalid UTF-8 never matches the bad bytes") {
 TEST_CASE("compile_substitution rejects bad templates") {
     auto p = compile_regex("(?<n>a)", false);
     REQUIRE(p.has_value());
-    auto bad = [&](const char* to) { return compile_substitution(**p, to); };
+    auto bad = [&](dstd::StringView to) {
+        return compile_substitution(**p, to);
+    };
     auto g2 = bad("x$2");
     REQUIRE(!g2.has_value());
     CHECK(g2.error().message.find("group 2") != dstd::String::npos);

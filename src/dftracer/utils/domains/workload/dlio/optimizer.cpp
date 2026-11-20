@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/domains/workload/dlio/optimizer.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
@@ -9,7 +10,7 @@
 
 namespace dftracer::utils::domains::workload::dlio {
 
-double percentile(const dstd::Vector<double>& sorted_data, double pct) {
+double percentile(dstd::Span<const double> sorted_data, double pct) {
     if (sorted_data.empty()) return 0.0;
     const double p = std::clamp(pct, 0.0, 100.0) / 100.0;
     const double idx = p * static_cast<double>(sorted_data.size() - 1);

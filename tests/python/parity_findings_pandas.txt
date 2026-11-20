@@ -1,0 +1,220 @@
+# Cases whose result differs from pandas today, one line per case:
+#   kind.method#N[input] | tag | reason
+# kind: series, frame, groupby, str (the table the case sits in).
+# tag: keyword (a pandas keyword is not accepted), missing (the method is not there), shape (another
+# result type or layout), semantics (another value, dtype or error rule),
+# engine (the engine refuses the input).
+# test_pandas_parity.py marks every listed case as a strict expected failure:
+# a listed case must fail and an unlisted case must pass, so a fixed case
+# fails the run until its line is deleted.
+series.sum#2[X] | semantics | [values] nan vs 5.0
+series.mean#2[X] | semantics | [values] nan vs 1.0
+series.count#1[X] | semantics | [values] 6 vs 5
+series.nunique#1[X] | semantics | [values] 5 vs 4
+series.isna#1[X] | semantics | [values] [False, False, False, False, False, False] vs [False, True, False, False, False, False]
+series.notna#1[X] | semantics | [values] [True, True, True, True, True, True] vs [True, False, True, True, True, True]
+series.cumsum#1[X] | semantics | [values] [1.5, nan, nan, nan, nan, nan] vs [1.5, nan, 4.5, 2.0, 5.0, 5.0]
+series.fillna#1[X] | semantics | [values] [1.5, nan, 3.0, -2.5, 3.0, 0.0] vs [1.5, 0.0, 3.0, -2.5, 3.0, 0.0]
+series.dropna#1[X] | semantics | [shape] length 6 vs 5
+series.sum#3[I] | semantics | [error] ours raised TypeError: Series.sum() takes no keyword arguments
+series.sum#3[F] | semantics | [error] ours raised TypeError: Series.sum() takes no keyword arguments
+series.sum#4[I] | semantics | [error] ours raised TypeError: Series.sum() takes no keyword arguments
+series.sum#4[F] | semantics | [error] ours raised TypeError: Series.sum() takes no keyword arguments
+series.sum#5[E] | semantics | [error] ours raised TypeError: Series.sum() takes no keyword arguments
+series.mean#3[I] | semantics | [error] ours raised TypeError: Series.mean() takes no keyword arguments
+series.mean#3[F] | semantics | [error] ours raised TypeError: Series.mean() takes no keyword arguments
+series.max#3[I] | semantics | [error] ours raised TypeError: Series.max() takes no keyword arguments
+series.max#3[F] | semantics | [error] ours raised TypeError: Series.max() takes no keyword arguments
+series.kurtosis#1[I] | semantics | [values] -0.056754933378309946 vs 3.772980266486764
+series.kurtosis#1[F] | semantics | [values] -1.0191995673336933 vs -0.07679826933477565
+series.nunique#3[I] | semantics | [error] ours raised TypeError: Series.n_unique() takes no keyword arguments
+series.nunique#3[F] | semantics | [error] ours raised TypeError: Series.n_unique() takes no keyword arguments
+series.nunique#3[S] | semantics | [error] ours raised TypeError: Series.n_unique() takes no keyword arguments
+series.quantile#1[I] | keyword | [values] 2.0 vs 2
+series.quantile#2[I] | keyword | [values] 1.0 vs 1
+series.quantile#3[I] | keyword | [values] 1.0 vs 1
+series.quantile#4[I] | keyword | [values] 2.0 vs 2
+series.quantile#7[I] | keyword | [error] ours raised TypeError: must be real number, not list
+series.quantile#7[F] | keyword | [error] ours raised TypeError: must be real number, not list
+series.median#2[I] | keyword | [error] ours raised TypeError: Series.median() takes no keyword arguments
+series.median#2[F] | keyword | [error] ours raised TypeError: Series.median() takes no keyword arguments
+series.describe#1[I] | shape | [type] ours DataFrame (frame), library Series (series)
+series.describe#1[F] | shape | [type] ours DataFrame (frame), library Series (series)
+series.dot#1[I] | semantics | [values] 36.0 vs nan
+series.convert_dtypes#1[X] | semantics | [values] [1.5, nan, 3.0, -2.5, 3.0, 0.0] vs [1.5, None, 3.0, -2.5, 3.0, 0.0]
+series.infer_objects#1[W] | semantics | [values] [1.0, None, 3.0, -2.0] vs [1.0, nan, 3.0, -2.0]
+series.cumsum#3[I] | semantics | [error] ours raised TypeError: Series.cum_sum() takes no keyword arguments
+series.cumsum#3[F] | semantics | [error] ours raised TypeError: Series.cum_sum() takes no keyword arguments
+series.shift#3[I] | keyword | [error] ours raised TypeError: Series.shift() got an unexpected keyword argument 'fill_value'
+series.shift#3[F] | keyword | [error] ours raised TypeError: Series.shift() got an unexpected keyword argument 'fill_value'
+series.rank#2[I] | semantics | [dtype] float64 vs uint64
+series.rank#2[F] | semantics | [dtype] float64 vs uint64
+series.rank#3[I] | semantics | [dtype] float64 vs uint64
+series.rank#3[F] | semantics | [dtype] float64 vs uint64
+series.rank#4[I] | semantics | [error] ours raised TypeError: Series.rank() got an unexpected keyword argument 'na_option'
+series.rank#4[F] | semantics | [error] ours raised TypeError: Series.rank() got an unexpected keyword argument 'na_option'
+series.ffill#2[I] | keyword | [error] ours raised TypeError: Series.forward_fill() takes no keyword arguments
+series.ffill#2[F] | keyword | [error] ours raised TypeError: Series.forward_fill() takes no keyword arguments
+series.mask#2[I] | semantics | [values] [1, None, 0, 0, 0, None, -4] vs [1, 0, 0, 0, 0, 0, -4]
+series.mask#2[F] | semantics | [values] [0.0, None, 0.0, -2.5, 0.0, 0.0] vs [0.0, 0.0, 0.0, -2.5, 0.0, 0.0]
+series.astype#1[I] | semantics | [values] [1.0, None, 3.0, 2.0, 2.0, None, -4.0] vs [1.0, nan, 3.0, 2.0, 2.0, nan, -4.0]
+series.astype#1[F] | semantics | [values] [1.5, None, 3.0, -2.5, 3.0, 0.0] vs [1.5, nan, 3.0, -2.5, 3.0, 0.0]
+series.astype#2[I] | semantics | [raises] pandas raised ValueError, ours returned
+series.astype#2[F] | semantics | [raises] pandas raised ValueError, ours returned
+series.unique#1[I] | semantics | [values] [None, -4, 1, 2, 3] vs [1, None, 3, 2, -4]
+series.unique#1[F] | semantics | [values] [None, -2.5, 0.0, 1.5, 3.0] vs [1.5, None, 3.0, -2.5, 0.0]
+series.unique#1[S] | semantics | [values] [None, 'a', 'ab', 'b'] vs ['b', 'a', None, 'ab']
+series.value_counts#2[I] | semantics | [index] pandas ranks the missing value of a nullable dtype (Int64, Float64) after equal counts, and of a numpy dtype at its first appearance; ours keeps the first appearance
+series.value_counts#2[F] | semantics | [index] pandas ranks the missing value of a nullable dtype (Int64, Float64) after equal counts, and of a numpy dtype at its first appearance; ours keeps the first appearance
+pandas3:series.value_counts#1[S] | semantics | pandas 3 only: [dtype] int64 vs int64[pyarrow]
+pandas3:series.value_counts#2[S] | semantics | pandas 3 only: [dtype] int64 vs int64[pyarrow]
+pandas3:series.value_counts#3[S] | semantics | pandas 3 only: [dtype] float64 vs double[pyarrow]
+pandas3:series.value_counts#4[S] | semantics | pandas 3 only: [dtype] int64 vs int64[pyarrow]
+series.mode#1[S] | semantics | [dtype] int64 vs str
+series.mode#2[I] | semantics | [error] ours raised TypeError: Series.mode() got an unexpected keyword argument 'dropna'
+series.head#3[I] | shape | [shape] length 0 vs 6
+series.head#3[F] | shape | [shape] length 0 vs 5
+series.searchsorted#1[F] | semantics | [raises] pandas raised ValueError, ours returned
+series.factorize#1[I] | semantics | [values] [[1, -1, 3, 2, 2, -1, 0], [-4, 1, 2, 3]] vs [[0, -1, 1, 2, 2, -1, 3], [1, 3, 2, -4]]
+series.factorize#1[S] | semantics | [error] ours raised DFTUtilsValueError: dataframe kernel produced a null column
+series.to_numpy#1[F] | shape | [type] ours ndarray (scalar), library ndarray (array)
+series.explode#1[I] | engine | [error] ours raised DFTUtilsValueError: explode: v is not a List column
+series.explode#1[F] | engine | [error] ours raised DFTUtilsValueError: explode: v is not a List column
+series.explode#1[S] | engine | [error] ours raised DFTUtilsValueError: explode: v is not a List column
+series.agg#2[I] | shape | [type] ours DataFrame (frame), library Series (series)
+series.agg#2[F] | shape | [type] ours DataFrame (frame), library Series (series)
+series.rolling#1[F] | semantics | [values] <dftracer_utils_ext.Rolling object at 0x11441f930> vs Rolling [window=2,center=False,method=single]
+series.rfloordiv#1[F] | semantics | [values] [1.0, None, 0.0, -1.0, 0.0, None] vs [1.0, None, 0.0, -1.0, 0.0, inf]
+series.rpow#1[I] | semantics | [raises] pandas raised ValueError, ours returned
+series.add#3[I] | keyword | [error] ours raised TypeError: Series.add() got an unexpected keyword argument 'fill_value'
+series.add#3[F] | keyword | [error] ours raised TypeError: Series.add() got an unexpected keyword argument 'fill_value'
+series.add#4[I] | keyword | [error] ours raised TypeError: Series.add() got an unexpected keyword argument 'fill_value'
+series.add#4[F] | keyword | [error] ours raised TypeError: Series.add() got an unexpected keyword argument 'fill_value'
+series.eq#1[S] | semantics | [error] ours raised DFTUtilsValueError: dataframe kernel produced a null column
+series.ne#1[S] | semantics | [error] ours raised DFTUtilsValueError: dataframe kernel produced a null column
+series.values#1[I] | shape | [type] ours ndarray (scalar), library IntegerArray (array)
+series.values#1[F] | shape | [type] ours ndarray (scalar), library FloatingArray (array)
+series.values#1[S] | shape | [type] ours ndarray (scalar), library ArrowStringArray (array)
+series.nbytes#1[I] | semantics | [values] 57 vs 63
+series.nbytes#1[F] | semantics | [values] 49 vs 54
+series.nbytes#1[S] | semantics | [values] 30 vs 46
+series.nbytes#1[B] | semantics | [values] 2 vs 4
+frame.sum#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.sum#1[E] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.mean#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.mean#1[E] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.median#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.median#1[E] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.min#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.min#1[E] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.max#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.max#1[E] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.std#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.std#1[E] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.var#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.var#1[E] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.prod#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.prod#1[E] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.sum#2[N] | shape | [error] ours raised TypeError: DataFrame.sum() got an unexpected keyword argument 'skipna'
+frame.sum#3[N] | shape | [error] ours raised TypeError: DataFrame.sum() got an unexpected keyword argument 'min_count'
+frame.sum#4[N] | shape | [error] ours raised TypeError: DataFrame.sum() got an unexpected keyword argument 'axis'
+frame.mean#2[N] | shape | [error] ours raised TypeError: DataFrame.mean() got an unexpected keyword argument 'axis'
+frame.max#2[N] | shape | [error] ours raised TypeError: DataFrame.max() got an unexpected keyword argument 'axis'
+frame.sum#5[M] | shape | [error] ours raised TypeError: DataFrame.sum() got an unexpected keyword argument 'numeric_only'
+frame.std#2[N] | shape | [error] ours raised TypeError: DataFrame.std() got an unexpected keyword argument 'ddof'
+frame.var#2[N] | shape | [error] ours raised TypeError: DataFrame.var() got an unexpected keyword argument 'ddof'
+frame.sem#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.skew#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.kurt#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.sum#6[X] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.mean#3[X] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.count#1[X] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.isna#1[X] | semantics | [values] b: [False, False, False, False, False] vs [False, True, False, False, False]
+frame.count#2[M] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.count#2[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.count#2[E] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.count#3[M] | shape | [error] ours raised TypeError: DataFrame.count() got an unexpected keyword argument 'axis'
+frame.nunique#1[M] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.nunique#2[M] | shape | [error] ours raised TypeError: _FramePandasMixin.nunique() got an unexpected keyword argument 'dropna'
+frame.any#1[M] | semantics | [raises] pandas raised TypeError, ours returned
+frame.all#1[M] | semantics | [raises] pandas raised TypeError, ours returned
+frame.quantile#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.quantile#2[N] | shape | [error] ours raised TypeError: must be real number, not list
+frame.idxmax#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.idxmin#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.describe#1[N] | shape | [shape] columns ['statistic', 'a', 'b'] vs ['a', 'b']
+frame.cov#1[N] | shape | [shape] columns ['column', 'a', 'b'] vs ['a', 'b']
+frame.corr#1[N] | shape | [shape] columns ['column', 'a', 'b'] vs ['a', 'b']
+frame.corrwith#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.infer_objects#1[W] | semantics | [values] b: [1.0, None, 3.0] vs [1.0, nan, 3.0]
+frame.diff#2[N] | keyword | [error] ours raised TypeError: _FramePandasMixin.diff() got an unexpected keyword argument 'periods'
+frame.shift#1[M] | semantics | [dtype] d: bool vs str
+frame.shift#3[N] | semantics | [error] ours raised TypeError: _FramePandasMixin.shift() got an unexpected keyword argument 'fill_value'
+frame.pct_change#1[N] | keyword | [error] ours raised TypeError: _FramePandasMixin.pct_change() got an unexpected keyword argument 'fill_method'
+frame.rank#1[N] | semantics | [values] a: [1.0, None, 4.0, 2.5, 2.5] vs [1.0, nan, 4.0, 2.5, 2.5]
+frame.rank#2[N] | semantics | [values] a: [4.0, None, 1.0, 2.0, 2.0] vs [4.0, nan, 1.0, 2.0, 2.0]
+frame.mask#1[N] | semantics | [values] a: [-1, None, -1, 2, -1] vs [-1, -1, -1, 2, -1]
+frame.astype#1[N] | semantics | [values] a: [1.0, None, 3.0, 2.0, 2.0] vs [1.0, nan, 3.0, 2.0, 2.0]
+frame.astype#2[N] | semantics | [values] a: [1.0, None, 3.0, 2.0, 2.0] vs [1.0, nan, 3.0, 2.0, 2.0]
+frame.drop_duplicates#2[M] | keyword | [error] ours raised TypeError: DataFrame.unique() got an unexpected keyword argument 'keep'
+frame.melt#1[N] | keyword | [error] ours raised TypeError: unpivot() needs value_vars (polars: on=)
+frame.explode#1[M] | engine | [error] ours raised DFTUtilsValueError: explode: c is not a List column
+frame.to_dict#1[N] | semantics | [values] {'a': [1, None, 3, 2, 2], 'b': [1.5, None, 3.0, -2.5, 3.0]} vs {'a': {0: 1, 1: None, 2: 3, 3: 2, 4: 2}, 'b': {0: 1.5, 1: None, 2: 3.0, 3: -2.5, 4: 3.0}}
+frame.to_dict#2[N] | semantics | [error] ours raised TypeError: DataFrame.to_dict() got an unexpected keyword argument 'orient'
+frame.to_dict#3[N] | semantics | [error] ours raised TypeError: DataFrame.to_dict() got an unexpected keyword argument 'orient'
+frame.to_numpy#1[N] | semantics | [values] [[1.0, 1.5], [nan, nan], [3.0, 3.0], [2.0, -2.5], [2.0, 3.0]] vs [[1, 1.5], [None, None], [3, 3.0], [2, -2.5], [2, 3.0]]
+frame.to_records#1[N] | shape | to_records gives a list of tuples of the shown columns, not the numpy record array with the index in front, and takes no index keyword
+frame.compare#1[N] | shape | [shape] columns ['row', 'column', 'self', 'other'] vs []
+frame.transpose#1[N] | shape | [shape] columns ['column', '0', '1', '2', '3', '4'] vs ['0', '1', '2', '3', '4']
+frame.apply#2[N] | engine | [error] ours raised TypeError: DataFrame.apply expects a column expression (col()/F./lit()) or a callable, got str
+frame.agg#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.agg#2[N] | shape | [shape] columns ['a_sum', 'b_sum', 'a_min', 'b_min'] vs ['a', 'b']
+frame.agg#3[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.aggregate#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
+frame.sample#1[N] | semantics | [values] a: [3, 2] vs [3, None]
+frame.pivot_table#1[G] | keyword | [error] ours raised TypeError: DataFrame.pivot_table() missing 1 required positional argument: 'columns'
+frame.memory_usage#1[N] | shape | memory_usage gives a one-row frame of the Arrow buffer bytes per column, not a Series with an Index entry, and takes no index keyword
+frame.info#1[N] | semantics | [values] DataFrame: 5 rows, 2 columns   a: int64, 4 present, 41 bytes   b: float64, 4 present, 41 bytes memory: 82 bytes vs None
+frame.to_string#1[N] | semantics | [values]    a    b    1  1.5 <NA>  NaN    3  3.0    2 -2.5    2  3.0 vs       a     b 0     1   1.5 1  <NA>  <NA> 2     3   3.0 3     2  -2.5 4     2   3.0
+frame.to_html#1[N] | semantics | [values] <table border="1" class="dataframe">   <thead>     <tr style="text-align: right;">       <th>a</th>       <th>b</th>     </tr>   </thead>   <tbody>     <tr>       <td>1</td>       <td>1.5</td
+frame.ewm#1[N] | semantics | [values] <dftracer.utils._pandas_frame._FrameWindow object at 0x10ebe5d20> vs ExponentialMovingWindow [alpha=0.5,min_periods=1,adjust=True,ignore_na=False,method=single]
+frame.expanding#1[N] | semantics | [values] <dftracer.utils._pandas_frame._FrameWindow object at 0x1108ade70> vs Expanding [min_periods=1,method=single]
+frame.rolling#1[N] | semantics | [values] <dftracer.utils._pandas_frame._FrameWindow object at 0x10f9f5390> vs Rolling [window=2,center=False,method=single]
+frame.add#3[N] | keyword | [error] ours raised TypeError: _FramePandasMixin.add() got an unexpected keyword argument 'fill_value'
+frame.dot#1[N] | shape | [shape] columns ['column', '0', '1', '2', '3', '4'] vs ['0', '1', '2', '3', '4']
+frame.dtypes#1[M] | shape | [type] ours list (seq), library Series (series): dtypes is the Polars list of DType; the engine has no object column for the pandas Series of dtype objects, and df.schema maps each name to its DType
+frame.dtypes#1[N] | shape | [type] ours list (seq), library Series (series): dtypes is the Polars list of DType; the engine has no object column for the pandas Series of dtype objects, and df.schema maps each name to its DType
+frame.dtypes#1[E] | shape | [type] ours list (seq), library Series (series): dtypes is the Polars list of DType; the engine has no object column for the pandas Series of dtype objects, and df.schema maps each name to its DType
+frame.values#1[N] | semantics | [values] [[1.0, 1.5], [nan, nan], [3.0, 3.0], [2.0, -2.5], [2.0, 3.0]] vs [[1, 1.5], [None, None], [3, 3.0], [2, -2.5], [2, 3.0]]
+frame.T#1[N] | shape | [shape] columns ['column', '0', '1', '2', '3', '4'] vs ['0', '1', '2', '3', '4']
+groupby.prod#1[G] | semantics | [dtype] a: float64 vs int64
+groupby.skew#1[G] | semantics | [values] a: [0.0, nan] vs [0.0, None]
+groupby.sum#2[G] | keyword | [error] ours raised TypeError: GroupBy.sum() got an unexpected keyword argument 'min_count'
+groupby.std#2[G] | keyword | [error] ours raised TypeError: GroupBy.std() got an unexpected keyword argument 'ddof'
+groupby.describe#1[G] | shape | [shape] columns ['k', 'a_count', 'a_mean', 'a_std', 'a_min', 'a_25%', 'a_50%', 'a_75%', 'a_max', 'b_count', 'b_mean', 'b_std', 'b_min', 'b_25%', 'b_50%', 'b_75%', 'b_max'] vs ["('k', '')", "('a', 'cou
+groupby.agg#2[G] | shape | [shape] columns ['k', 'a_sum', 'b_sum', 'a_min', 'b_min'] vs ["('k', '')", "('a', 'sum')", "('a', 'min')", "('b', 'sum')", "('b', 'min')"]
+groupby.cumprod#1[G] | semantics | [dtype] a: float64 vs int64
+groupby.cumcount#1[G] | shape | [type] ours DataFrame (frame), library Series (series)
+groupby.ngroup#1[G] | shape | [type] ours DataFrame (frame), library Series (series)
+groupby.pct_change#1[G] | keyword | [error] ours raised TypeError: GroupBy.pct_change() got an unexpected keyword argument 'fill_method'
+str.cat#1[S] | keyword | [error] ours raised TypeError: _StrAccessor.cat() got an unexpected keyword argument 'na_rep'
+str.join#1[S] | engine | [error] ours raised DFTUtilsValueError: list_join: not a List column of strings
+str.extract#1[S] | keyword | [error] ours raised TypeError: _StrAccessor.extract() got an unexpected keyword argument 'expand'
+pandas2:series.pct_change#1[F] | semantics | pandas 2 only: [values] [None, None, None, -1.8333333333333333, -2.2, -1.0] vs [None, 0.0, 1.0, -1.8333333333333335, -2.2, -1.0]
+pandas2:series.rank#1[I] | semantics | pandas 2 only: [values] [2.0, None, 5.0, 3.5, 3.5, None, 1.0] vs [3.0, 3.0, 7.0, 5.5, 5.5, 3.0, 1.0]
+pandas2:series.rank#1[F] | semantics | pandas 2 only: [values] [3.0, None, 4.5, 1.0, 4.5, 2.0] vs [3.0, nan, 4.5, 1.0, 4.5, 2.0]
+pandas2:series.rank#5[I] | semantics | pandas 2 only: [values] [0.4, None, 1.0, 0.7, 0.7, None, 0.2] vs [0.42857142857142855, 0.42857142857142855, 1.0, 0.7857142857142857, 0.7857142857142857, 0.42857142857142855, 0.14285714285714285]
+pandas2:series.rank#5[F] | semantics | pandas 2 only: [values] [0.6, None, 0.9, 0.2, 0.9, 0.4] vs [0.6, nan, 0.9, 0.2, 0.9, 0.4]
+pandas2:series.argsort#1[I] | semantics | pandas 2 only: [values] [6, 0, 3, 4, 2, 1, 5] vs [4, -1, 0, 2, 3, -1, 1]
+pandas2:series.argsort#1[F] | semantics | pandas 2 only: [values] [3, 5, 0, 2, 4, 1] vs [2, -1, 4, 0, 1, 3]
+pandas<3.1:series.apply#1[I] | semantics | pandas before 3.1: [dtype] int64 vs float64
+pandas<3.1:series.apply#1[F] | semantics | pandas before 3.1: [values] [2.5, None, 4.0, -1.5, 4.0, 1.0] vs [2.5, nan, 4.0, -1.5, 4.0, 1.0]
+pandas<3.1:series.map#1[I] | semantics | pandas before 3.1: [dtype] int64 vs float64
+pandas<3.1:series.map#1[F] | semantics | pandas before 3.1: [values] [2.5, None, 4.0, -1.5, 4.0, 1.0] vs [2.5, nan, 4.0, -1.5, 4.0, 1.0]
+pandas2:series.rmod#1[F] | semantics | pandas 2 only: [values] [0.5, None, 2.0, -0.5, 2.0, None] vs [0.5, None, 2.0, -0.5, 2.0, nan]
+pandas2:series.rdivmod#1[F] | semantics | pandas 2 only: [values] [[1.0, None, 0.0, -1.0, 0.0, None], [0.5, None, 2.0, -0.5, 2.0, None]] vs [[1.0, None, 0.0, -1.0, 0.0, inf], [0.5, None, 2.0, -0.5, 2.0, nan]]
+pandas<3.1:frame.map#1[N] | semantics | pandas before 3.1: [dtype] a: int64 vs float64
+pandas2:groupby.apply#1[G] | semantics | pandas 2 only: the group function gets the key columns (pandas 3 leaves them out), so its result has the key as a column and as an index level and the harness cannot reset the index
+pandas2:groupby.value_counts#1[G] | semantics | pandas 2 only: [values] a: [1, 3, 2, 2] vs [1, 2, 3, 2]
+
+pandas2:frame.value_counts#1[M] | semantics | pandas 2 only: pandas 2 orders the tied rows of a frame's value_counts, and the rows with a null key, in its own way, so the labels differ

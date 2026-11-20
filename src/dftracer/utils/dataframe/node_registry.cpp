@@ -5,6 +5,7 @@
 
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/shutdown.h>
@@ -72,6 +73,20 @@ bool unregister_node(dstd::StringView name) {
     }
     // Released outside the lock: the node's destructor may be plugin code.
     return true;
+}
+
+dstd::String explain_line(dstd::StringView label,
+                          dstd::Span<const ExplainLine> lines) {
+    dstd::String out;
+    if (lines.empty()) return out;
+    out = dstd::fmt<"  {}:">(label);
+    bool first = true;
+    for (const ExplainLine& l : lines) {
+        out += first ? " " : "; ";
+        first = false;
+        out += dstd::fmt<"{}={}">(l.key, l.value);
+    }
+    return out;
 }
 
 dstd::SharedPtr<NodeImpl> find_node(dstd::StringView name) {

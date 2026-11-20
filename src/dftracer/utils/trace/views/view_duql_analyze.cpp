@@ -76,7 +76,7 @@ dstd::Unexpected<dstd::Error> refuse(dstd::StringView why) {
         common::ErrorCode::InvalidArgument, why);
 }
 
-dstd::Vector<dstd::String> std_strs(const dstd::Vector<dstd::String>& v) {
+dstd::Vector<dstd::String> std_strs(dstd::Span<const dstd::String> v) {
     dstd::Vector<dstd::String> out;
     out.reserve(v.size());
     for (const auto& n : v) out.emplace_back(n);
@@ -219,13 +219,13 @@ dstd::String pivot_name(const duql::TConst& c) {
         c.value);
 }
 
-Reads referenced_fields(const dstd::Vector<duql::PipelineStage>& stages,
+Reads referenced_fields(dstd::Span<const duql::PipelineStage> stages,
                         const dstd::Function<dstd::Vector<dstd::String>(
                             const duql::PipelineLookup&)>& adds,
                         bool carried) {
     Reads out;
     dstd::Vector<dstd::String> defined;
-    auto known = [](const dstd::Vector<dstd::String>& v, dstd::StringView n) {
+    auto known = [](dstd::Span<const dstd::String> v, dstd::StringView n) {
         return std::find(v.begin(), v.end(), n) != v.end();
     };
     auto field = [&](dstd::StringView base, bool array) {
@@ -249,13 +249,13 @@ Reads referenced_fields(const dstd::Vector<duql::PipelineStage>& stages,
                     field(a->base, true);
         });
     };
-    auto items = [&](const dstd::Vector<duql::PipelineItem>& v) {
+    auto items = [&](dstd::Span<const duql::PipelineItem> v) {
         for (const auto& it : v) add(it.term);
     };
-    auto define = [&](const dstd::Vector<duql::PipelineItem>& v) {
+    auto define = [&](dstd::Span<const duql::PipelineItem> v) {
         for (const auto& it : v) defined.push_back(dstd::String(it.name));
     };
-    auto sort_keys = [&](const dstd::Vector<duql::PipelineSortKey>& v) {
+    auto sort_keys = [&](dstd::Span<const duql::PipelineSortKey> v) {
         for (const auto& k : v) add(k.key.term);
     };
     bool whole_rows = false;
@@ -371,7 +371,7 @@ Reads referenced_fields(const dstd::Vector<duql::PipelineStage>& stages,
 
 namespace {
 
-char type_letter(const dstd::String& type) {
+char type_letter(dstd::StringView type) {
     if (type == "int" || type == "uint") return 'i';
     if (type == "float") return 'f';
     if (type == "string") return 's';
@@ -411,7 +411,7 @@ bool digits(dstd::StringView s) {
 const dstd::String JSON_LIST = detail::list_token("j", "");
 
 dstd::Pair<dstd::String, dataframe::DataType> list_type(
-    const dstd::Vector<SchemaLeaf>& tree, const dstd::String& path,
+    dstd::Span<const SchemaLeaf> tree, dstd::StringView path,
     bool args_fallback) {
     char scalar = 0;
     bool scalars = false;
@@ -467,8 +467,8 @@ dstd::Pair<dstd::String, dataframe::DataType> list_type(
             dataframe::list_of(letter_type(k))};
 }
 
-dstd::Vector<dstd::String> scan_reads(const dstd::Vector<SchemaLeaf>& tree,
-                                      const dstd::String& f, bool array,
+dstd::Vector<dstd::String> scan_reads(dstd::Span<const SchemaLeaf> tree,
+                                      dstd::StringView f, bool array,
                                       dstd::Vector<dstd::String>& arrays,
                                       bool args_fallback) {
     dstd::Vector<dstd::String> prefixes = {dotted(f) + "."};
@@ -488,14 +488,14 @@ dstd::Vector<dstd::String> scan_reads(const dstd::Vector<SchemaLeaf>& tree,
             }
     if (array || (elements && leaves.empty())) {
         if (std::find(arrays.begin(), arrays.end(), f) == arrays.end())
-            arrays.push_back(f);
+            arrays.emplace_back(f);
         return {list_type(tree, f, args_fallback).first};
     }
     if (!leaves.empty() && !elements) return leaves;
-    return {f};
+    return {dstd::String(f)};
 }
 
-dataframe::TypeId observed_type(const dstd::String& type) {
+dataframe::TypeId observed_type(dstd::StringView type) {
     if (type == "int" || type == "uint") return dataframe::TypeId::Int64;
     if (type == "float") return dataframe::TypeId::Float64;
     if (type == "string") return dataframe::TypeId::String;
@@ -504,10 +504,12 @@ dataframe::TypeId observed_type(const dstd::String& type) {
 }
 
 dataframe::Series null_cell(const dataframe::DataType& type) {
-    if (type.id == dataframe::TypeId::List && !type.fields.empty())
-        return dataframe::Series::list({0, 0},
+    if (type.id == dataframe::TypeId::List && !type.fields.empty()) {
+        const std::int32_t offsets[] = {0, 0};
+        return dataframe::Series::list(offsets,
                                        null_cell(type.fields.front().type))
             .take(dstd::Vector<std::int64_t>{-1});
+    }
     const bool scalar = type.id != dataframe::TypeId::Unknown &&
                         type.id != dataframe::TypeId::List &&
                         type.id != dataframe::TypeId::Struct;
@@ -748,9 +750,14 @@ dstd::Result<Pushdown> key_sets(const duql::Pipeline& p) {
             });
         if (cond && !record && t.value) {
             const dataframe::Series& values = t.frame->columns[*t.value];
-            if (auto e = dataframe::query::vectorize_condition(
-                    *cond, {{".", values.data_type()}}, false)) {
-                auto evaluated = dataframe::eval(*e, {&values});
+            const dataframe::query::VectorColumn columns[] = {
+                {".", values.data_type()}};
+            const dataframe::Series* const value_ptr = &values;
+            if (auto e = dataframe::query::vectorize_condition(*cond, columns,
+                                                               false)) {
+                auto evaluated = dataframe::eval(
+                    *e,
+                    dstd::Span<const dataframe::Series* const>(&value_ptr, 1));
                 if (!evaluated) {
                     failure = evaluated.error();
                     return;

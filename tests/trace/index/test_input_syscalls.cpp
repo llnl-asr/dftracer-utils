@@ -2,12 +2,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -59,7 +61,7 @@ dstd::String make_trace(int pid, int events) {
     for (int i = 0; i < events; ++i) {
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
-            "{},\"ts\":{},\"dur\":5,\"ph\":\"X\",\"args\":{\"hhash\":\"abc\","
+            "{},\"ts\":{},\"dur\":5,\"ph\":1,\"args\":{\"hhash\":\"abc\","
             "\"ret\":1024}}\n">(os, i, pid, pid, (1000 + i * 10));
     }
     return os;
@@ -68,60 +70,68 @@ dstd::String make_trace(int pid, int events) {
 struct Tool {
     dstd::String name;
     // in, idx and out are the input, index and output directories of the run.
-    dstd::Vector<dstd::String> (*args)(const dstd::String& in,
-                                       const dstd::String& idx,
-                                       const dstd::String& out);
+    dstd::Vector<dstd::String> (*args)(dstd::StringView in,
+                                       dstd::StringView idx,
+                                       dstd::StringView out);
 };
 
-dstd::Vector<dstd::String> index_args(const dstd::String& in,
-                                      const dstd::String& idx,
-                                      const dstd::String&) {
-    return {"--executor-threads", "2", in, "--index-dir", idx};
+dstd::Vector<dstd::String> index_args(dstd::StringView in, dstd::StringView idx,
+                                      dstd::StringView) {
+    return {"--executor-threads", "2", dstd::String(in), "--index-dir",
+            dstd::String(idx)};
 }
 
-dstd::Vector<dstd::String> view_args(const dstd::String& in,
-                                     const dstd::String& idx,
-                                     const dstd::String&) {
-    return {"--executor-threads", "2",   in, "--index-dir", idx,
-            "--group-by",         "name"};
+dstd::Vector<dstd::String> view_args(dstd::StringView in, dstd::StringView idx,
+                                     dstd::StringView) {
+    return {"--executor-threads",
+            "2",
+            dstd::String(in),
+            "--index-dir",
+            dstd::String(idx),
+            "--group-by",
+            "name"};
 }
 
-dstd::Vector<dstd::String> split_args(const dstd::String& in,
-                                      const dstd::String&,
-                                      const dstd::String& out) {
-    return {"--executor-threads", "2",   in, "-o", out, "--app-name", "bench",
-            "--chunk-size",       "64MB"};
+dstd::Vector<dstd::String> split_args(dstd::StringView in, dstd::StringView,
+                                      dstd::StringView out) {
+    return {"--executor-threads",
+            "2",
+            dstd::String(in),
+            "-o",
+            dstd::String(out),
+            "--app-name",
+            "bench",
+            "--chunk-size",
+            "64MB"};
 }
 
-dstd::Vector<dstd::String> validate_args(const dstd::String& in,
-                                         const dstd::String&,
-                                         const dstd::String&) {
-    return {"--executor-threads", "2", in};
+dstd::Vector<dstd::String> validate_args(dstd::StringView in, dstd::StringView,
+                                         dstd::StringView) {
+    return {"--executor-threads", "2", dstd::String(in)};
 }
 
-dstd::Vector<dstd::String> comparator_args(const dstd::String& in,
-                                           const dstd::String& idx,
-                                           const dstd::String&) {
+dstd::Vector<dstd::String> comparator_args(dstd::StringView in,
+                                           dstd::StringView idx,
+                                           dstd::StringView) {
     return {"--executor-threads",
             "2",
             "--baseline",
-            in,
+            dstd::String(in),
             "--variant",
-            in + "_variant",
+            dstd::String(in) + "_variant",
             "--baseline-index-dir",
-            idx + "/baseline",
+            dstd::String(idx) + "/baseline",
             "--variant-index-dir",
-            idx + "/variant"};
+            dstd::String(idx) + "/variant"};
 }
 
-dstd::Vector<dstd::String> replay_args(const dstd::String& in,
-                                       const dstd::String&,
-                                       const dstd::String&) {
+dstd::Vector<dstd::String> replay_args(dstd::StringView in, dstd::StringView,
+                                       dstd::StringView) {
     return {"--executor-threads", "2",          "--dry-run",
-            "--dftracer-mode",    "--no-sleep", in};
+            "--dftracer-mode",    "--no-sleep", dstd::String(in)};
 }
 
-dstd::String canonical_or_empty(const dstd::String& path) {
+dstd::String canonical_or_empty(dstd::CStringView path) {
     auto p = dstd::fs::weakly_canonical(path);
     return p.has_value() ? dstd::String(p->str()) : dstd::String();
 }
@@ -135,20 +145,18 @@ struct RunCounts {
     dstd::String output;
 };
 
-RunCounts run_once(const dstd::String& binary,
-                   const dstd::Vector<dstd::String>& args,
-                   const dstd::String& log_path,
-                   const dstd::Vector<dstd::String>& roots,
-                   const dstd::Vector<dstd::String>& inputs) {
+RunCounts run_once(dstd::StringView binary, dstd::Vector<dstd::String> args,
+                   dstd::CStringView log_path, dstd::Vector<dstd::String> roots,
+                   dstd::Vector<dstd::String> inputs) {
     RunCounts rc;
     rc.per_input.resize(inputs.size());
     dstd::fs::remove(log_path).discard();
 
-    dftu_utils_test::set_test_library_path(binary);
+    dftu_utils_test::set_test_library_path(dstd::String(binary));
     ::setenv(PRELOAD_VAR, DFTRACER_UTILS_TEST_INTERPOSE_PATH, 1);
     ::setenv("DFTRACER_UTILS_TEST_SYSCALL_LOG", log_path.c_str(), 1);
-    rc.output =
-        dftu_utils_test::run_process_capture(binary, args, true, &rc.exit_code);
+    rc.output = dftu_utils_test::run_process_capture(dstd::String(binary), args,
+                                                     true, &rc.exit_code);
     ::unsetenv(PRELOAD_VAR);
     ::unsetenv("DFTRACER_UTILS_TEST_SYSCALL_LOG");
 
@@ -201,8 +209,8 @@ RunCounts run_once(const dstd::String& binary,
     return rc;
 }
 
-void check_run(const dstd::String& label, const dstd::String& tool,
-               const RunCounts& rc, const dstd::Vector<dstd::String>& inputs,
+void check_run(dstd::StringView label, dstd::StringView tool,
+               const RunCounts& rc, dstd::Span<const dstd::String> inputs,
                std::size_t max_open, std::size_t roots) {
     INFO(tool << " " << label << " exit code " << rc.exit_code);
     if (!rc.log_found) MESSAGE(tool << " output: " << rc.output);
@@ -344,7 +352,7 @@ Text hex_lines(std::size_t size, std::uint32_t seed) {
     return t;
 }
 
-Bytes gzip_member(const dstd::String& text, int level = 6) {
+Bytes gzip_member(dstd::StringView text, int level = 6) {
     fileio::compress::GzipMemberCompressor c(level);
     Bytes out;
     REQUIRE(c.compress_member_into(out, text.data(), text.size()));
@@ -353,7 +361,7 @@ Bytes gzip_member(const dstd::String& text, int level = 6) {
 
 void put(Bytes& to, const Bytes& m) { to.insert(to.end(), m.begin(), m.end()); }
 
-void write_bytes(const dstd::String& path, const Bytes& bytes) {
+void write_bytes(dstd::CStringView path, const Bytes& bytes) {
     REQUIRE(dstd::fs::write_file(
                 dstd::PathView(path),
                 dstd::StringView(reinterpret_cast<const char*>(bytes.data()),
@@ -509,7 +517,7 @@ TEST_CASE("an index build reads each gzip input byte about once") {
     constexpr std::uint64_t RANGE = std::uint64_t{1} << 20;
 
     dstd::Vector<Shape> shapes;
-    const auto add = [&](Shape s, const char* name) {
+    const auto add = [&](Shape s, dstd::StringView name) {
         s.name = name;
         shapes.push_back(std::move(s));
     };
@@ -586,16 +594,15 @@ class FoldVisitor : public trace::index::build::IndexVisitor {
         out_.checkpoints.push_back(idx);
         co_return dstd::Result<void>{};
     }
-    coro::CoroTask<dstd::Result<void>> on_chunk(const char* data,
-                                                std::size_t len,
+    coro::CoroTask<dstd::Result<void>> on_chunk(dstd::StringView data,
                                                 std::size_t) override {
-        for (std::size_t i = 0; i < len; ++i) {
+        for (std::size_t i = 0; i < data.size(); ++i) {
             out_.seen_hash =
                 (out_.seen_hash ^ static_cast<unsigned char>(data[i])) *
                 dstd::hash::FNV1A_PRIME;
             out_.seen_lines += data[i] == '\n';
         }
-        out_.seen_bytes += len;
+        out_.seen_bytes += data.size();
         co_return dstd::Result<void>{};
     }
 
@@ -605,7 +612,7 @@ class FoldVisitor : public trace::index::build::IndexVisitor {
 
 // `scanned` runs the pass on the member list that a header scan of the whole
 // file gives, which is how a pass that does not cut ranges by bytes works.
-Built build_artifacts(const dstd::String& path, std::uint64_t ckpt,
+Built build_artifacts(dstd::CStringView path, std::uint64_t ckpt,
                       std::size_t ways, bool scanned) {
     Built b;
     b.seen_hash = dstd::hash::FNV1A_OFFSET_BASIS;
@@ -636,7 +643,7 @@ Built build_artifacts(const dstd::String& path, std::uint64_t ckpt,
     return b;
 }
 
-void check_same(const Built& a, const Built& b, const char* what) {
+void check_same(const Built& a, const Built& b, dstd::StringView what) {
     INFO(dstd::String(what));
     REQUIRE(a.ok == b.ok);
     if (!a.ok) return;
@@ -802,10 +809,10 @@ TEST_CASE("a file shorter than a gzip member indexes like the scanned pass") {
 
 namespace {
 
-dstd::String run_capture(const char* tool,
-                         const dstd::Vector<dstd::String>& args) {
+dstd::String run_capture(dstd::StringView tool,
+                         dstd::Vector<dstd::String> args) {
     const dstd::String binary =
-        dstd::String(DFTRACER_UTILS_TEST_BIN_DIR) + "/" + tool;
+        dstd::String(DFTRACER_UTILS_TEST_BIN_DIR) + "/" + dstd::String(tool);
     dftu_utils_test::set_test_library_path(binary);
     int code = -1;
     const dstd::String out =
@@ -920,7 +927,7 @@ namespace {
 // A member of stored blocks of 65535 bytes, so the text is plain in the file,
 // whose block `bad` has an invalid header: the text before that block is
 // readable and the rest is not.
-Bytes stored_member_with_bad_block(const dstd::String& text, std::size_t bad) {
+Bytes stored_member_with_bad_block(dstd::StringView text, std::size_t bad) {
     constexpr std::size_t BLOCK = 65535;
     Bytes m = {0x1F, 0x8B, 0x08, 0x00, 0, 0, 0, 0, 0x00, 0xFF};
     const std::size_t blocks = (text.size() + BLOCK - 1) / BLOCK;

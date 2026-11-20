@@ -45,10 +45,7 @@ dftu_series* pattern_predicate(const dftu_series* v,
                     v, [lit](dstd::StringView s) { return s.ends_with(lit); });
             case duql::LiteralTest::Op::Contains:
                 return string_mask(v, [lit](dstd::StringView s) {
-                    return substr_find(
-                               s.data(), static_cast<std::int64_t>(s.size()),
-                               lit.data(),
-                               static_cast<std::int64_t>(lit.size())) >= 0;
+                    return substr_find(s, lit) >= 0;
                 });
         }
     }
@@ -72,30 +69,20 @@ dftu_series* pattern_predicate(const dftu_series* v,
     return limited.apply(out, v);
 }
 
-dftu_series* mask_eq(const dftu_series* v, const char* rhs,
-                     std::int32_t rhs_size) {
-    dstd::StringView r(rhs, static_cast<std::size_t>(rhs_size));
+dftu_series* mask_eq(const dftu_series* v, dstd::StringView r) {
     return string_mask(v, [r](dstd::StringView s) { return s == r; });
 }
 
-dftu_series* mask_contains(const dftu_series* v, const char* needle,
-                           std::int32_t needle_size) {
-    dstd::StringView n(needle, static_cast<std::size_t>(needle_size));
-    return string_mask(v, [n](dstd::StringView s) {
-        return substr_find(s.data(), static_cast<std::int64_t>(s.size()),
-                           n.data(), static_cast<std::int64_t>(n.size())) >= 0;
-    });
+dftu_series* mask_contains(const dftu_series* v, dstd::StringView n) {
+    return string_mask(
+        v, [n](dstd::StringView s) { return substr_find(s, n) >= 0; });
 }
 
-dftu_series* mask_starts_with(const dftu_series* v, const char* prefix,
-                              std::int32_t prefix_size) {
-    dstd::StringView p(prefix, static_cast<std::size_t>(prefix_size));
+dftu_series* mask_starts_with(const dftu_series* v, dstd::StringView p) {
     return string_mask(v, [p](dstd::StringView s) { return s.starts_with(p); });
 }
 
-dftu_series* mask_ends_with(const dftu_series* v, const char* suffix,
-                            std::int32_t suffix_size) {
-    dstd::StringView p(suffix, static_cast<std::size_t>(suffix_size));
+dftu_series* mask_ends_with(const dftu_series* v, dstd::StringView p) {
     return string_mask(v, [p](dstd::StringView s) { return s.ends_with(p); });
 }
 

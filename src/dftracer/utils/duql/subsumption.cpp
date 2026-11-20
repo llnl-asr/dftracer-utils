@@ -98,8 +98,7 @@ struct Buckets {
     dstd::HashSet<dstd::String> residual;
 };
 
-void add_set_value(Buckets& b, const dstd::String& field,
-                   const LiteralValue& v) {
+void add_set_value(Buckets& b, dstd::StringView field, const LiteralValue& v) {
     b.sets[field].emplace(literal_key(v), as_number(v));
 }
 

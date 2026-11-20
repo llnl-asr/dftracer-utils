@@ -22,6 +22,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -320,8 +321,10 @@ TEST_SUITE("chunked columns") {
         a.columns.push_back(piece_of(Kind::StringFlat, 0, 10, true, 0));
         b.columns.push_back(piece_of(Kind::StringView, 10, 20, false, 0));
         c.columns.push_back(piece_of(Kind::StringDict, 20, 30, true, 0));
-        const DataFrame eager =
-            dftu_utils_test::ok(concat({&a, &b, &c}, ConcatHow::Diagonal));
+        const DataFrame eager = dftu_utils_test::ok(concat(
+            dftu_utils_test::span_of<
+                const dftracer::utils::dataframe::DataFrame*>({&a, &b, &c}),
+            ConcatHow::Diagonal));
         dstd::Vector<DataFrame> parts;
         parts.push_back(std::move(a));
         parts.push_back(std::move(b));
@@ -474,9 +477,11 @@ TEST_SUITE("chunked columns") {
                     CHECK(flat_reprs(got) == flat_reprs(want));
                 }
                 const Series spanning =
-                    p.chunked.take({0, 1, 5, 13, 14, 20, 29, 35, 39});
+                    p.chunked.take(dftu_utils_test::span_of<std::int64_t>(
+                        {0, 1, 5, 13, 14, 20, 29, 35, 39}));
                 CHECK(spanning.handle()->is_chunked());
-                const Series one_chunk = p.chunked.take({0, 5, 12});
+                const Series one_chunk = p.chunked.take(
+                    dftu_utils_test::span_of<std::int64_t>({0, 5, 12}));
                 CHECK_FALSE(one_chunk.handle()->is_chunked());
             }
     }
@@ -575,10 +580,12 @@ TEST_SUITE("chunked columns") {
                      dftu_utils_test::ok(joined.sort_by("s")));
                 same(dftu_utils_test::ok(chunked.sort_by("f", true)),
                      dftu_utils_test::ok(joined.sort_by("f", true)));
-                same(dftu_utils_test::ok(
-                         chunked.sort_by_multi({"key", "i"}, {false, true})),
-                     dftu_utils_test::ok(
-                         joined.sort_by_multi({"key", "i"}, {false, true})));
+                same(dftu_utils_test::ok(chunked.sort_by_multi(
+                         dftu_utils_test::span_of<dstd::String>({"key", "i"}),
+                         dstd::Vector<std::uint8_t>{0, 1})),
+                     dftu_utils_test::ok(joined.sort_by_multi(
+                         dftu_utils_test::span_of<dstd::String>({"key", "i"}),
+                         dstd::Vector<std::uint8_t>{0, 1})));
 
                 if (kind == Kind::Bool) continue;
                 dstd::Vector<GroupAgg> aggs;

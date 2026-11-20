@@ -22,15 +22,34 @@ index. Registered schemas last for the process.
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import sys
 import types
 import typing
-from typing import Any, ClassVar, Dict, FrozenSet, List, NewType, Optional, Type, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Dict,
+    FrozenSet,
+    List,
+    Mapping,
+    NewType,
+    NoReturn,
+    Union,
+    cast,
+)
 
 from . import dftracer_utils_ext as _ext
-from .dftracer_utils_ext import DFTUtilsValueError
+from .enums import UNIT_CODES
+from .errors import DFTUtilsValueError
+
+if TYPE_CHECKING:
+    from typing_extensions import TypeAlias
+
+    from .dftracer_utils_ext import Scalar
 
 if sys.version_info >= (3, 11):
     from typing import dataclass_transform
@@ -55,16 +74,16 @@ Json = NewType("Json", str)
 """A field holding any JSON value, an object or array included, as canonical
 JSON text (no whitespace, keys sorted); filters compare it as that text."""
 
-_TYPES: Dict[Any, str] = {bool: "bool", int: "int", float: "float", str: "string", Json: "json"}
+_TYPES: dict[Any, str] = {bool: "bool", int: "int", float: "float", str: "string", Json: "json"}
 _ROLES = ("time", "duration", "entity", "lane", "name")
-_UNITS = ("ns", "us", "ms", "s")
+_UNITS = tuple(reversed(UNIT_CODES))
 
 
 class _Field:
     __slots__ = ("path", "role", "unit", "always_index")
 
     def __init__(
-        self, path: Optional[str], role: Optional[str], unit: Optional[str], always_index: bool
+        self, path: str | None, role: str | None, unit: str | None, always_index: bool
     ) -> None:
         self.path = path
         self.role = role
@@ -72,13 +91,17 @@ class _Field:
         self.always_index = always_index
 
 
+# What json.loads gives; the registered schema specs are JSON documents.
+JsonValue: TypeAlias = Union[None, bool, int, float, str, List["JsonValue"], Dict[str, "JsonValue"]]
+
+
 def field(
     *,
-    path: Optional[str] = None,
-    role: Optional[str] = None,
-    unit: Optional[str] = None,
+    path: str | None = None,
+    role: str | None = None,
+    unit: str | None = None,
     always_index: bool = False,
-) -> Any:
+) -> Any:  # noqa: ANN401  (a dataclass_transform field specifier stands for the annotated type)
     """Options of a schema class field: the JSON ``path`` (the attribute name
     when None), a ``role`` ("time", "duration", "entity", "lane" or "name"),
     the ``unit`` of a time or duration ("ns", "us", "ms" or "s"; microseconds
@@ -87,7 +110,7 @@ def field(
     return _Field(path, role, unit, always_index)
 
 
-def _own_annotations(cls: type) -> Dict[str, Any]:
+def _own_annotations(cls: type) -> dict[str, Any]:
     if sys.version_info >= (3, 10):
         import inspect
 
@@ -95,9 +118,9 @@ def _own_annotations(cls: type) -> Dict[str, Any]:
     return dict(cls.__dict__.get("__annotations__", {}))
 
 
-def _field_type(cls: type, name: str, hint: Any) -> "tuple[str, bool]":
+def _field_type(cls: type, name: str, hint: object) -> tuple[str, bool]:
     origin = typing.get_origin(hint)
-    union_types: tuple = (Union,)
+    union_types: tuple[object, ...] = (Union,)
     if sys.version_info >= (3, 10):
         union_types = (Union, types.UnionType)
     if origin in union_types:
@@ -112,16 +135,16 @@ def _field_type(cls: type, name: str, hint: Any) -> "tuple[str, bool]":
     )
 
 
-def _spec(cls: Type[RecordSchema], schema_id_: str) -> Dict[str, Any]:
+def _spec(cls: type[RecordSchema], schema_id_: str) -> dict[str, Any]:
     hints = typing.get_type_hints(cls)
-    fields: Dict[str, Any] = {}
-    paths: Dict[str, str] = {}
+    fields: dict[str, Any] = {}
+    paths: dict[str, str] = {}
     for name in _own_annotations(cls):
         hint = hints[name]
         if typing.get_origin(hint) is ClassVar or hint is ClassVar:
             continue
         type_name, optional = _field_type(cls, name, hint)
-        entry: Dict[str, Any] = {"type": type_name}
+        entry: dict[str, Any] = {"type": type_name}
         if optional:
             entry["optional"] = True
         default = cls.__dict__.get(name)
@@ -156,7 +179,7 @@ def _spec(cls: Type[RecordSchema], schema_id_: str) -> Dict[str, Any]:
     )
     cls._paths = {**parent._paths, **paths}
     cls._json = parent._json | {n for n, e in fields.items() if e["type"] == "json"}
-    spec: Dict[str, Any] = {"id": schema_id_, "extends": parent.id or "generic"}
+    spec: dict[str, Any] = {"id": schema_id_, "extends": parent.id or "generic"}
     if fields:
         spec["fields"] = fields
     own_source = cls.__dict__.get("source")
@@ -182,7 +205,7 @@ class RecordSchema:
     _paths: ClassVar[Dict[str, str]] = {}
     _json: ClassVar[FrozenSet[str]] = frozenset()
 
-    def __init__(self, **values: Any) -> None:
+    def __init__(self, **values: Scalar) -> None:
         paths = type(self)._paths
         for name in values:
             if name not in paths:
@@ -199,9 +222,15 @@ class RecordSchema:
             getattr(self, n) == getattr(other, n) for n in type(self)._paths
         )
 
-    __hash__ = None  # type: ignore[assignment]
+    if TYPE_CHECKING:
 
-    def __init_subclass__(cls, id: Optional[str] = None, _builtin: bool = False, **kwargs: Any):
+        def __hash__(self) -> NoReturn: ...
+    else:
+        __hash__ = None
+
+    def __init_subclass__(
+        cls, id: str | None = None, _builtin: bool = False, **kwargs: object
+    ) -> None:
         super().__init_subclass__(**kwargs)
         if not id:
             raise DFTUtilsValueError(
@@ -221,7 +250,7 @@ class Generic(RecordSchema, id="generic", _builtin=True):
     """The built-in generic schema (no fields), to extend by subclassing."""
 
 
-def schema_id(schema: Union[str, Type[RecordSchema]]) -> str:
+def schema_id(schema: str | type[RecordSchema]) -> str:
     """The id of a schema given as an id or a schema class."""
     if isinstance(schema, str):
         return schema
@@ -230,39 +259,41 @@ def schema_id(schema: Union[str, Type[RecordSchema]]) -> str:
     raise TypeError(f"a schema is an id or a RecordSchema class, got {schema!r}")
 
 
-def register(spec: Union[Dict[str, Any], str], source: str = "<python>") -> str:
+def register(spec: Mapping[str, JsonValue] | str, source: str = "<python>") -> str:
     """Register a schema from a dict or a YAML/JSON text; return its id.
 
     Raises ``DFTUtilsValueError`` for a malformed spec, an unknown key or
     ``extends``, a built-in id, or an id already registered with another
     definition.
     """
-    text = json.dumps(spec) if isinstance(spec, dict) else spec
+    text = spec if isinstance(spec, str) else json.dumps(spec)
     return _ext._schema_register(text, source)
 
 
-def load(path: Union[str, "os.PathLike[str]"]) -> List[Dict[str, Any]]:
+def load(path: str | os.PathLike[str]) -> builtins.list[dict[str, JsonValue]]:
     """Register every spec at ``path`` (a file, or a directory's ``.yaml``,
     ``.yml`` and ``.json`` files); return the registered schemas."""
-    return json.loads(_ext._schema_load(os.fspath(path)))
+    return cast(
+        "builtins.list[dict[str, JsonValue]]", json.loads(_ext._schema_load(os.fspath(path)))
+    )
 
 
-def list() -> List[Dict[str, Any]]:  # noqa: A001
+def list() -> builtins.list[dict[str, JsonValue]]:  # noqa: A001
     """The registered schemas, built-ins first: ``id``, ``decoder``,
     ``fields``, ``require``, ``path_budget``, ``stats_share`` and the dictionary names."""
-    return json.loads(_ext._schema_list())
+    return cast("builtins.list[dict[str, JsonValue]]", json.loads(_ext._schema_list()))
 
 
-def detect(path: Union[str, "os.PathLike[str]"]) -> str:
+def detect(path: str | os.PathLike[str]) -> str:
     """The id of the schema detected for the trace at ``path``."""
     return _ext._schema_detect(os.fspath(path))
 
 
-def explain(path: Union[str, "os.PathLike[str]"]) -> Dict[str, Any]:
+def explain(path: str | os.PathLike[str]) -> dict[str, JsonValue]:
     """Why the trace at ``path`` gets its schema: ``chosen`` (the id),
     ``objects`` (sampled JSON objects), ``records`` (objects no schema's
     ``data`` row set leaves out; 0 for an empty or metadata-only file) and
     ``scores``, each with ``id``, ``required`` (required path count) and
     ``share`` (of the objects the schema judges, those its ``data`` keeps,
     that match it)."""
-    return json.loads(_ext._schema_explain(os.fspath(path)))
+    return cast("dict[str, JsonValue]", json.loads(_ext._schema_explain(os.fspath(path))))

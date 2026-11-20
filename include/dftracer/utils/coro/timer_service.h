@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/queue.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/memory/detail/manager.h>
 
@@ -24,7 +25,7 @@ namespace dftracer::utils::coro {
 class TimerService {
    public:
     using Callback = dstd::Function<void()>;
-    using TimerId = uint64_t;
+    using TimerId = std::uint64_t;
 
     /// The id of a timeout that was not registered, so nothing fires it.
     static constexpr TimerId NO_TIMER = 0;
@@ -69,14 +70,22 @@ class TimerService {
     TimerService(TimerService&&) = delete;
     TimerService& operator=(TimerService&&) = delete;
 
-    void start() {
-        if (retired_.load(std::memory_order_acquire)) return;
+    /// Starts the timer thread. An error when the thread cannot be created,
+    /// and then the service stays stopped.
+    dstd::Result<void> start() {
+        if (retired_.load(std::memory_order_acquire)) return {};
         bool expected = false;
         if (!running_.compare_exchange_strong(expected, true)) {
-            return;
+            return {};
         }
 
-        timer_thread_ = dstd::Thread([this]() { timer_loop(); });
+        auto thread = dstd::Thread::try_start([this]() { timer_loop(); });
+        if (!thread) {
+            running_.store(false, std::memory_order_release);
+            return dstd::Unexpected(thread.error());
+        }
+        timer_thread_ = std::move(*thread);
+        return {};
     }
 
     void stop() {

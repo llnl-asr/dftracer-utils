@@ -25,7 +25,12 @@ const DFTU_WINDOW_UNBOUNDED 9223372036854775807
 enum DFTU_AGG_ACTIVE 19
 enum DFTU_AGG_APPROX_TOPK 27
 enum DFTU_AGG_ARGMAX 13
+enum DFTU_AGG_ARGMAX_POS 41
 enum DFTU_AGG_ARGMIN 21
+enum DFTU_AGG_ARGMIN_POS 42
+enum DFTU_AGG_BITWISE_AND 43
+enum DFTU_AGG_BITWISE_OR 44
+enum DFTU_AGG_BITWISE_XOR 45
 enum DFTU_AGG_BIT_OR 22
 enum DFTU_AGG_BOTTOMK 26
 enum DFTU_AGG_BUSY 16
@@ -40,6 +45,7 @@ enum DFTU_AGG_FIRST 9
 enum DFTU_AGG_HAS_RETRACT 4
 enum DFTU_AGG_HIST 12
 enum DFTU_AGG_KURT 8
+enum DFTU_AGG_KURT_UNBIASED 39
 enum DFTU_AGG_LAST 10
 enum DFTU_AGG_LIST_SORTED 24
 enum DFTU_AGG_MAX 3
@@ -49,6 +55,7 @@ enum DFTU_AGG_NULL_AWARE 8
 enum DFTU_AGG_PARALLEL_SAFE 2
 enum DFTU_AGG_PCT 11
 enum DFTU_AGG_PROD 35
+enum DFTU_AGG_QUANTILE 40
 enum DFTU_AGG_REGR_INTERCEPT 33
 enum DFTU_AGG_REGR_R2 34
 enum DFTU_AGG_REGR_SLOPE 32
@@ -56,6 +63,7 @@ enum DFTU_AGG_SAMPLE 28
 enum DFTU_AGG_SET_UNION 15
 enum DFTU_AGG_SKETCH_QUANTILE 36
 enum DFTU_AGG_SKEW 7
+enum DFTU_AGG_SKEW_UNBIASED 38
 enum DFTU_AGG_STATE_POD 1
 enum DFTU_AGG_STD 6
 enum DFTU_AGG_SUM 1
@@ -113,6 +121,8 @@ enum DFTU_DT_NANOSECOND 8
 enum DFTU_DT_QUARTER 11
 enum DFTU_DT_ROUND 2
 enum DFTU_DT_SECOND 5
+enum DFTU_DT_UNIT_FLOOR 0
+enum DFTU_DT_UNIT_POLARS 1
 enum DFTU_DT_YEAR 0
 enum DFTU_DUQL_CMP_EQ 0
 enum DFTU_DUQL_CMP_GE 4
@@ -145,6 +155,10 @@ enum DFTU_FILE_SYMLINK 3
 enum DFTU_FILE_UNKNOWN 0
 enum DFTU_FN_NULL_AWARE 2
 enum DFTU_FN_VOLATILE 1
+enum DFTU_FRAME_INDEX_BAD_ARGUMENT 1
+enum DFTU_FRAME_INDEX_INVALID 3
+enum DFTU_FRAME_INDEX_NOT_FOUND 2
+enum DFTU_FRAME_INDEX_OK 0
 enum DFTU_GAP_FILL_LINEAR 2
 enum DFTU_GAP_FILL_LOCF 1
 enum DFTU_GAP_FILL_NONE 0
@@ -180,6 +194,11 @@ enum DFTU_INDEX_LT 2
 enum DFTU_INDEX_NE 1
 enum DFTU_INDEX_NOT_IN 7
 enum DFTU_INDEX_REGEX 10
+enum DFTU_INTERP_HIGHER 3
+enum DFTU_INTERP_LINEAR 0
+enum DFTU_INTERP_LOWER 2
+enum DFTU_INTERP_MIDPOINT 4
+enum DFTU_INTERP_NEAREST 1
 enum DFTU_JOB_BLOCKING 2
 enum DFTU_JOB_CPU 0
 enum DFTU_JOB_INLINE 1
@@ -261,6 +280,7 @@ enum DFTU_ROLLING_SUM 0
 enum DFTU_SCALAR_TAG_ERR 4
 enum DFTU_SCALAR_TAG_F64 2
 enum DFTU_SCALAR_TAG_I64 0
+enum DFTU_SCALAR_TAG_NULL 5
 enum DFTU_SCALAR_TAG_STR 3
 enum DFTU_SCALAR_TAG_U64 1
 enum DFTU_STR_ALNUM 0
@@ -382,6 +402,23 @@ enum DFTU_TYPE_UINT32 8
 enum DFTU_TYPE_UINT64 9
 enum DFTU_TYPE_UINT8 6
 enum DFTU_TYPE_UNKNOWN 0
+enum DFTU_TZ_AMBIGUOUS_EARLIEST 1
+enum DFTU_TZ_AMBIGUOUS_INFER 4
+enum DFTU_TZ_AMBIGUOUS_LATEST 2
+enum DFTU_TZ_AMBIGUOUS_NAT 3
+enum DFTU_TZ_AMBIGUOUS_RAISE 0
+enum DFTU_TZ_ERROR_AMBIGUOUS 3
+enum DFTU_TZ_ERROR_INVALID_ZONE 2
+enum DFTU_TZ_ERROR_NONE 0
+enum DFTU_TZ_ERROR_NONEXISTENT 4
+enum DFTU_TZ_ERROR_OTHER 6
+enum DFTU_TZ_ERROR_OUT_OF_RANGE 5
+enum DFTU_TZ_ERROR_UNKNOWN_ZONE 1
+enum DFTU_TZ_NONEXISTENT_NAT 3
+enum DFTU_TZ_NONEXISTENT_RAISE 0
+enum DFTU_TZ_NONEXISTENT_SHIFT 4
+enum DFTU_TZ_NONEXISTENT_SHIFT_BACKWARD 2
+enum DFTU_TZ_NONEXISTENT_SHIFT_FORWARD 1
 enum DFTU_T_BYTES 4
 enum DFTU_T_F32 13
 enum DFTU_T_F64 1
@@ -450,6 +487,7 @@ field dftu_agg_col.out offset 16 size 8
 field dftu_agg_col.param offset 24 size 8
 field dftu_agg_col.value offset 8 size 8
 field dftu_agg_spec.by offset 32 size 8
+field dftu_agg_spec.interp offset 40 size 4
 field dftu_agg_spec.op offset 0 size 4
 field dftu_agg_spec.out offset 16 size 8
 field dftu_agg_spec.param offset 24 size 8
@@ -515,6 +553,7 @@ field dftu_ctx.reserved offset 4 size 4
 field dftu_ctx.struct_size offset 0 size 4
 field dftu_ctx.vt offset 8 size 8
 field dftu_ctx_vt.check offset 16 size 8
+field dftu_ctx_vt.counter offset 24 size 8
 field dftu_ctx_vt.set_error offset 8 size 8
 field dftu_ctx_vt.struct_size offset 0 size 4
 field dftu_cursor_vt.destroy offset 16 size 8
@@ -526,12 +565,19 @@ field dftu_error.domain offset 0 size 8
 field dftu_error.message offset 16 size 8
 field dftu_error.release offset 24 size 8
 field dftu_error.status offset 12 size 4
+field dftu_explain_out.add offset 16 size 8
+field dftu_explain_out.self offset 8 size 8
+field dftu_explain_out.struct_size offset 0 size 4
 field dftu_file_format_vt.chunk_stats offset 48 size 8
+field dftu_file_format_vt.chunk_token offset 80 size 8
 field dftu_file_format_vt.chunks offset 40 size 8
 field dftu_file_format_vt.close offset 64 size 8
 field dftu_file_format_vt.destroy offset 72 size 8
+field dftu_file_format_vt.explain offset 88 size 8
 field dftu_file_format_vt.extensions offset 8 size 8
 field dftu_file_format_vt.open offset 24 size 8
+field dftu_file_format_vt.plan offset 96 size 8
+field dftu_file_format_vt.plan_duql offset 104 size 8
 field dftu_file_format_vt.probe offset 16 size 8
 field dftu_file_format_vt.scan offset 56 size 8
 field dftu_file_format_vt.schema offset 32 size 8
@@ -563,6 +609,7 @@ field dftu_gz_summary.lines offset 16 size 8
 field dftu_gz_summary.members offset 8 size 8
 field dftu_gz_summary.parts offset 0 size 8
 field dftu_gz_summary.uc_bytes offset 24 size 8
+field dftu_index_extension.columns offset 96 size 8
 field dftu_index_extension.compile offset 64 size 8
 field dftu_index_extension.destroy_builder offset 56 size 8
 field dftu_index_extension.file_may_match offset 80 size 8
@@ -574,12 +621,14 @@ field dftu_index_extension.may_match offset 72 size 8
 field dftu_index_extension.params_hash offset 8 size 8
 field dftu_index_extension.release offset 88 size 8
 field dftu_index_extension.step offset 32 size 8
+field dftu_index_extension.step_column offset 104 size 8
 field dftu_index_extension.struct_size offset 0 size 4
 field dftu_index_extension.version offset 4 size 4
 field dftu_index_leaf.any offset 12 size 4
 field dftu_index_leaf.op offset 16 size 4
 field dftu_index_leaf.path offset 0 size 8
 field dftu_index_leaf.path_len offset 8 size 4
+field dftu_index_leaf.type offset 32 size 4
 field dftu_index_leaf.value offset 24 size 8
 field dftu_index_out.append offset 16 size 8
 field dftu_index_out.self offset 8 size 8
@@ -651,6 +700,7 @@ field dftu_member.value offset 16 size 8
 field dftu_named_expr.expr offset 8 size 8
 field dftu_named_expr.name offset 0 size 8
 field dftu_node_vt.destroy offset 24 size 8
+field dftu_node_vt.explain offset 32 size 8
 field dftu_node_vt.open offset 16 size 8
 field dftu_node_vt.output_schema offset 8 size 8
 field dftu_node_vt.struct_size offset 0 size 4
@@ -689,6 +739,16 @@ field dftu_path_entry.mtime_ns offset 16 size 8
 field dftu_path_entry.path offset 0 size 8
 field dftu_path_entry.path_len offset 24 size 4
 field dftu_path_entry.size offset 8 size 8
+field dftu_plan_duql.filter_index offset 24 size 8
+field dftu_plan_duql.n_filters offset 32 size 4
+field dftu_plan_duql.struct_size offset 0 size 4
+field dftu_plan_duql.text offset 8 size 8
+field dftu_plan_duql.text_len offset 16 size 8
+field dftu_plan_result.cost offset 16 size 8
+field dftu_plan_result.est_rows offset 24 size 8
+field dftu_plan_result.struct_size offset 0 size 4
+field dftu_plan_result.token offset 32 size 8
+field dftu_plan_result.votes offset 8 size 8
 field dftu_plugin.config_keys offset 88 size 8
 field dftu_plugin.consumes offset 80 size 8
 field dftu_plugin.destroy offset 64 size 8
@@ -738,6 +798,7 @@ field dftu_scan_request.limit offset 32 size 8
 field dftu_scan_request.memory_budget offset 40 size 8
 field dftu_scan_request.n_filters offset 24 size 4
 field dftu_scan_request.n_projection offset 8 size 4
+field dftu_scan_request.plan offset 48 size 8
 field dftu_scan_request.projection offset 0 size 8
 field dftu_sink_vt.abort offset 32 size 8
 field dftu_sink_vt.bind offset 8 size 8
@@ -747,6 +808,9 @@ field dftu_sink_vt.struct_size offset 0 size 4
 field dftu_sink_vt.write offset 16 size 8
 field dftu_source_vt.apply offset 40 size 8
 field dftu_source_vt.destroy offset 24 size 8
+field dftu_source_vt.explain offset 48 size 8
+field dftu_source_vt.plan offset 56 size 8
+field dftu_source_vt.plan_duql offset 64 size 8
 field dftu_source_vt.scan offset 16 size 8
 field dftu_source_vt.schema offset 8 size 8
 field dftu_source_vt.schema_types offset 32 size 8
@@ -847,6 +911,9 @@ field dftu_svc_fs.stat_batch offset 104 size 8
 field dftu_svc_fs.struct_size offset 0 size 4
 field dftu_svc_fs.write_at offset 32 size 8
 field dftu_svc_fs.write_file offset 16 size 8
+field dftu_svc_index.hash_series offset 32 size 8
+field dftu_svc_index.hash_value offset 24 size 8
+field dftu_svc_index.hash_version offset 16 size 4
 field dftu_svc_index.register_extension offset 8 size 8
 field dftu_svc_index.struct_size offset 0 size 4
 field dftu_svc_memory.alloc offset 8 size 8
@@ -1006,16 +1073,22 @@ field dftu_window_spec.param.udaf.preceding offset 32 size 8
 field dftu_window_spec.value offset 8 size 8
 fnptr dftu_bytes.free_fn void (*)(void*, void*)
 fnptr dftu_ctx_vt.check dftu_status (*)(dftu_ctx*)
+fnptr dftu_ctx_vt.counter void (*)(dftu_ctx*, const char*, uint32_t, int64_t)
 fnptr dftu_ctx_vt.set_error dftu_status (*)(dftu_ctx*, dftu_status, const char*, uint32_t)
 fnptr dftu_cursor_vt.destroy void (*)(void*)
 fnptr dftu_cursor_vt.narrow dftu_status (*)(dftu_ctx*, void*, const dftu_expr*, int32_t*, dftu_task**)
 fnptr dftu_cursor_vt.next dftu_status (*)(dftu_ctx*, void*, int64_t, dftu_dataframe**, dftu_task**)
 fnptr dftu_error.release void (*)(struct dftu_error*)
+fnptr dftu_explain_out.add void (*)(void*, const char*, uint64_t, const char*, uint64_t)
 fnptr dftu_file_format_vt.chunk_stats dftu_status (*)(dftu_ctx*, void*, uint64_t, dftu_chunk_stats*)
+fnptr dftu_file_format_vt.chunk_token dftu_status (*)(dftu_ctx*, void*, uint64_t, uint64_t*)
 fnptr dftu_file_format_vt.chunks dftu_status (*)(dftu_ctx*, void*, uint64_t*)
 fnptr dftu_file_format_vt.close void (*)(void*)
 fnptr dftu_file_format_vt.destroy void (*)(void*)
+fnptr dftu_file_format_vt.explain dftu_status (*)(dftu_ctx*, void*, const dftu_scan_request*, const dftu_explain_out*)
 fnptr dftu_file_format_vt.open dftu_status (*)(dftu_ctx*, void*, const char*, void**)
+fnptr dftu_file_format_vt.plan dftu_status (*)(dftu_ctx*, void*, const dftu_scan_request*, dftu_plan_result*)
+fnptr dftu_file_format_vt.plan_duql dftu_status (*)(dftu_ctx*, void*, const dftu_scan_request*, const dftu_plan_duql*, dftu_plan_result*)
 fnptr dftu_file_format_vt.probe int32_t (*)(void*, const uint8_t*, uint64_t, const char*)
 fnptr dftu_file_format_vt.scan dftu_status (*)(dftu_ctx*, void*, uint64_t, const dftu_plugin_host*, const dftu_scan_request*, int32_t*, void**, const dftu_cursor_vt**)
 fnptr dftu_file_format_vt.schema dftu_status (*)(dftu_ctx*, void*, dftu_schema*)
@@ -1028,6 +1101,7 @@ fnptr dftu_index_extension.make_builder dftu_status (*)(dftu_ctx*, void*, void**
 fnptr dftu_index_extension.may_match int (*)(void*, const uint8_t*, uint64_t)
 fnptr dftu_index_extension.release void (*)(void*)
 fnptr dftu_index_extension.step dftu_status (*)(dftu_ctx*, void*, const dftu_bytes*, uint64_t)
+fnptr dftu_index_extension.step_column dftu_status (*)(dftu_ctx*, void*, const char*, uint32_t, const dftu_series*)
 fnptr dftu_index_out.append void (*)(void*, const void*, uint64_t)
 fnptr dftu_io.accept dftu_status (*)(dftu_ctx*, void*, int32_t, struct sockaddr*, socklen_t*, int32_t*, dftu_task**)
 fnptr dftu_io.bind dftu_status (*)(dftu_ctx*, void*, int32_t, const struct sockaddr*, socklen_t, dftu_task**)
@@ -1076,6 +1150,7 @@ fnptr dftu_io.writev dftu_status (*)(dftu_ctx*, void*, int32_t, const struct iov
 fnptr dftu_job_desc.free_state void (*)(void*)
 fnptr dftu_job_fn dftu_status (*)(dftu_ctx*, void*, const void*, void*, dftu_task**)
 fnptr dftu_node_vt.destroy void (*)(void*)
+fnptr dftu_node_vt.explain dftu_status (*)(dftu_ctx*, void*, const dftu_op_arg*, const dftu_explain_out*)
 fnptr dftu_node_vt.open dftu_status (*)(dftu_ctx*, void*, const dftu_plugin_host*, void*, const dftu_cursor_vt*, const dftu_op_arg*, uint64_t, void**, const dftu_cursor_vt**)
 fnptr dftu_node_vt.output_schema dftu_status (*)(dftu_ctx*, void*, const dftu_schema*, const dftu_op_arg*, dftu_schema*)
 fnptr dftu_op_generic_fn void (*)(void)
@@ -1103,6 +1178,9 @@ fnptr dftu_sink_vt.finalize dftu_status (*)(dftu_ctx*, void*)
 fnptr dftu_sink_vt.write dftu_status (*)(dftu_ctx*, void*, const dftu_dataframe*)
 fnptr dftu_source_vt.apply dftu_status (*)(dftu_ctx*, void*, const dftu_apply_request*, dftu_apply_result*)
 fnptr dftu_source_vt.destroy void (*)(void*)
+fnptr dftu_source_vt.explain dftu_status (*)(dftu_ctx*, void*, const dftu_scan_request*, const dftu_explain_out*)
+fnptr dftu_source_vt.plan dftu_status (*)(dftu_ctx*, void*, const dftu_scan_request*, dftu_plan_result*)
+fnptr dftu_source_vt.plan_duql dftu_status (*)(dftu_ctx*, void*, const dftu_scan_request*, const dftu_plan_duql*, dftu_plan_result*)
 fnptr dftu_source_vt.scan dftu_status (*)(dftu_ctx*, void*, const dftu_plugin_host*, const dftu_scan_request*, int32_t*, void**, const dftu_cursor_vt**)
 fnptr dftu_source_vt.schema dftu_status (*)(dftu_ctx*, void*, const char* const**, int32_t*)
 fnptr dftu_source_vt.schema_types dftu_status (*)(dftu_ctx*, void*, dftu_schema*)
@@ -1174,6 +1252,8 @@ fnptr dftu_svc_fs.remove dftu_status (*)(dftu_ctx*, void*, const char*, int32_t*
 fnptr dftu_svc_fs.stat_batch dftu_status (*)(dftu_ctx*, void*, const char* const*, uint64_t, dftu_fs_stat*, dftu_status*, dftu_task**)
 fnptr dftu_svc_fs.write_at dftu_status (*)(dftu_ctx*, void*, const char*, uint64_t, const void*, uint64_t, int64_t*, dftu_task**)
 fnptr dftu_svc_fs.write_file dftu_status (*)(dftu_ctx*, void*, const char*, const void*, uint64_t, dftu_task**)
+fnptr dftu_svc_index.hash_series dftu_status (*)(const dftu_series*, uint64_t*, uint64_t)
+fnptr dftu_svc_index.hash_value uint64_t (*)(const dftu_value*)
 fnptr dftu_svc_index.register_extension dftu_status (*)(dftu_ctx*, void*, const char*, const dftu_index_extension*, void*)
 fnptr dftu_svc_memory.alloc void* (*)(void*, uint64_t, uint32_t)
 fnptr dftu_svc_memory.free void (*)(void*, void*, uint64_t, uint32_t)
@@ -1276,7 +1356,7 @@ fnptr dftu_udf_desc.bind dftu_status (*)(dftu_ctx*, void*, const dftu_type_info*
 fnptr dftu_udf_desc.exec dftu_status (*)(dftu_ctx*, void*, const dftu_series* const*, uint32_t, uint64_t, dftu_series**)
 fnptr dftu_udf_desc.free_bound void (*)(void*)
 struct dftu_agg_col size 40 align 8
-struct dftu_agg_spec size 40 align 8
+struct dftu_agg_spec size 48 align 8
 struct dftu_apply_agg size 40 align 8
 struct dftu_apply_aggregation_args size 32 align 8
 struct dftu_apply_filter_args size 8 align 8
@@ -1293,17 +1373,18 @@ struct dftu_channel_desc size 32 align 8
 struct dftu_chunk_stats size 16 align 8
 struct dftu_config_key size 24 align 8
 struct dftu_ctx size 24 align 8
-struct dftu_ctx_vt size 24 align 8
+struct dftu_ctx_vt size 32 align 8
 struct dftu_cursor_vt size 32 align 8
 struct dftu_error size 32 align 8
-struct dftu_file_format_vt size 80 align 8
+struct dftu_explain_out size 24 align 8
+struct dftu_file_format_vt size 112 align 8
 struct dftu_find_options size 48 align 8
 struct dftu_fs_stat size 40 align 8
 struct dftu_group_agg size 24 align 8
 struct dftu_gz_options size 24 align 8
 struct dftu_gz_summary size 40 align 8
-struct dftu_index_extension size 96 align 8
-struct dftu_index_leaf size 32 align 8
+struct dftu_index_extension size 112 align 8
+struct dftu_index_leaf size 40 align 8
 struct dftu_index_out size 24 align 8
 struct dftu_io size 360 align 8
 struct dftu_job_desc size 48 align 8
@@ -1312,21 +1393,23 @@ struct dftu_job_slots size 16 align 8
 struct dftu_line_batch size 24 align 8
 struct dftu_member size 24 align 8
 struct dftu_named_expr size 16 align 8
-struct dftu_node_vt size 32 align 8
+struct dftu_node_vt size 40 align 8
 struct dftu_op_arg size 112 align 8
 struct dftu_op_desc size 24 align 8
 struct dftu_op_val size 16 align 8
 struct dftu_open_how size 24 align 8
 struct dftu_path_entry size 32 align 8
+struct dftu_plan_duql size 40 align 8
+struct dftu_plan_result size 40 align 8
 struct dftu_plugin size 112 align 8
 struct dftu_plugin_host size 48 align 8
 struct dftu_plugin_info size 24 align 8
 struct dftu_quantiles size 64 align 8
 struct dftu_result_value size 24 align 8
 struct dftu_scalar size 16 align 8
-struct dftu_scan_request size 48 align 8
+struct dftu_scan_request size 56 align 8
 struct dftu_sink_vt size 48 align 8
-struct dftu_source_vt size 48 align 8
+struct dftu_source_vt size 72 align 8
 struct dftu_stat size 24 align 8
 struct dftu_state_desc size 80 align 8
 struct dftu_statx size 112 align 8
@@ -1336,7 +1419,7 @@ struct dftu_svc_file_formats size 24 align 8
 struct dftu_svc_fileio size 168 align 8
 struct dftu_svc_format size 144 align 8
 struct dftu_svc_fs size 112 align 8
-struct dftu_svc_index size 16 align 8
+struct dftu_svc_index size 40 align 8
 struct dftu_svc_memory size 72 align 8
 struct dftu_svc_nodes size 16 align 8
 struct dftu_svc_ops size 72 align 8
@@ -1365,6 +1448,7 @@ typedef dftu_dataframe struct dftu_dataframe
 typedef dftu_doc struct dftu_doc
 typedef dftu_dt_part int32_t
 typedef dftu_dt_round_mode int32_t
+typedef dftu_dt_unit_rounding int32_t
 typedef dftu_dtype int32_t
 typedef dftu_duql struct dftu_duql
 typedef dftu_expr struct dftu_expr
@@ -1374,6 +1458,7 @@ typedef dftu_gap_fill_mode int32_t
 typedef dftu_groupwise_op int32_t
 typedef dftu_gz_writer struct dftu_gz_writer
 typedef dftu_index_op int32_t
+typedef dftu_interpolation int32_t
 typedef dftu_job struct dftu_job
 typedef dftu_job_where int32_t
 typedef dftu_join_how int32_t
@@ -1418,6 +1503,9 @@ typedef dftu_task struct dftu_task
 typedef dftu_time_unit int32_t
 typedef dftu_trace_writer struct dftu_trace_writer
 typedef dftu_type int32_t
+typedef dftu_tz_ambiguous int32_t
+typedef dftu_tz_error_kind int32_t
+typedef dftu_tz_nonexistent int32_t
 typedef dftu_value struct dftu_value
 typedef dftu_value_kind int32_t
 typedef dftu_window_frame_mode int32_t

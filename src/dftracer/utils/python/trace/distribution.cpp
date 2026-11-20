@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/method.h>
 #include <dftracer/utils/python/core/runtime_mixin.h>
@@ -33,6 +34,10 @@
 #include <cstdint>
 #include <new>
 
+using dftracer::utils::python::core::guard;
+using dftracer::utils::python::core::parse_kw;
+using dftracer::utils::python::core::parse_seq;
+
 using dftracer::utils::Runtime;
 using dftracer::utils::python::core::parse_string_seq;
 using dftracer::utils::runtime::fs::FoundFile;
@@ -47,15 +52,13 @@ using dftracer::utils::trace::index::build::plan_lpt_partition;
 
 static PyObject *scan_files_fn(PyObject * /*self*/, PyObject *args,
                                PyObject *kwds) {
-    static const char *kwlist[] = {"directory", "patterns", "recursive",
-                                   "runtime", NULL};
     const char *directory;
     PyObject *patterns_obj = NULL;
     int recursive = 0;
     PyObject *runtime_arg = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|OpO",
-                                     const_cast<char **>(kwlist), &directory,
-                                     &patterns_obj, &recursive, &runtime_arg)) {
+    if (!parse_kw<"s|OpO">(
+            args, kwds, {"directory", "patterns", "recursive", "runtime"},
+            &directory, &patterns_obj, &recursive, &runtime_arg)) {
         return NULL;
     }
 
@@ -142,27 +145,21 @@ static PyObject *plan_lpt_partition_fn(PyObject * /*self*/, PyObject *args) {
     if (worker_count <= 0) worker_count = 1;
 
     dftracer::utils::dstd::Vector<FoundFile> entries;
-    PyObject *seq = PySequence_Fast(entries_obj,
-                                    "entries must be a sequence of "
-                                    "(path, size) tuples");
-    if (!seq) return NULL;
-    Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-    entries.reserve(n);
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        PyObject *item = PySequence_Fast_GET_ITEM(seq, i);
-        const char *path = nullptr;
-        Py_ssize_t size = 0;
-        if (!PyArg_ParseTuple(item, "sn", &path, &size)) {
-            Py_DECREF(seq);
-            return NULL;
-        }
-        FoundFile fe;
-        fe.path = dftracer::utils::dstd::Path(
-            dftracer::utils::dstd::StringView(path));
-        fe.size = static_cast<std::size_t>(size);
-        entries.push_back(std::move(fe));
-    }
-    Py_DECREF(seq);
+    if (!parse_seq<FoundFile>(
+            entries_obj, "entries must be a sequence of (path, size) tuples",
+            entries,
+            [](PyObject *item, dftracer::utils::dstd::Vector<FoundFile> &o) {
+                const char *path = nullptr;
+                Py_ssize_t size = 0;
+                if (!PyArg_ParseTuple(item, "sn", &path, &size)) return false;
+                FoundFile fe;
+                fe.path = dftracer::utils::dstd::Path(
+                    dftracer::utils::dstd::StringView(path));
+                fe.size = static_cast<std::size_t>(size);
+                o.push_back(std::move(fe));
+                return true;
+            }))
+        return NULL;
 
     auto buckets = plan_lpt_partition(std::move(entries),
                                       static_cast<std::size_t>(worker_count));
@@ -192,11 +189,6 @@ static PyObject *plan_lpt_partition_fn(PyObject * /*self*/, PyObject *args) {
 
 static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
                                       PyObject *kwds) {
-    static const char *kwlist[] = {
-        "files",         "index_dir",   "checkpoint_size",
-        "force_rebuild", "build_bloom", "bloom_dimensions",
-        "parallelism",   "runtime",     "aggregation_config",
-        "progress",      NULL};
     PyObject *files_obj;
     const char *index_dir;
     Py_ssize_t checkpoint_size = static_cast<Py_ssize_t>(
@@ -209,10 +201,13 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     PyObject *aggregation_config_obj = NULL;
     PyObject *progress_obj = NULL;
 
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "Os|nppOnOOO", const_cast<char **>(kwlist), &files_obj,
-            &index_dir, &checkpoint_size, &force_rebuild, &build_bloom,
-            &bloom_dims_obj, &parallelism, &runtime_arg,
+    if (!parse_kw<"Os|nppOnOOO">(
+            args, kwds,
+            {"files", "index_dir", "checkpoint_size", "force", "build_bloom",
+             "bloom_dimensions", "parallelism", "runtime", "aggregation_config",
+             "progress"},
+            &files_obj, &index_dir, &checkpoint_size, &force_rebuild,
+            &build_bloom, &bloom_dims_obj, &parallelism, &runtime_arg,
             &aggregation_config_obj, &progress_obj)) {
         return NULL;
     }
@@ -327,9 +322,20 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     }
 
     {
+        auto agg_index = dftracer::utils::trace::index::Index::open(
+            dftracer::utils::trace::index::normalize_index_root(build_dir));
+        if (!agg_index) {
+            dftracer::utils::python::core::set_py_error(agg_index.error());
+            return NULL;
+        }
+        auto agg_generation = agg_index->generation();
+        if (!agg_generation) {
+            dftracer::utils::python::core::set_py_error(agg_generation.error());
+            return NULL;
+        }
         auto agg_intern =
             dftracer::utils::trace::index::schemas::dft::agg::intern_for_index(
-                index_dir);
+                build_dir, *agg_generation);
         batch_config->agg_fold_factory =
             [agg_config_ptr,
              agg_intern](dftracer::utils::dstd::StringIntern &build_intern)
@@ -361,7 +367,8 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
     if (result.failed > 0) {
         for (const auto &r : result.results) {
             if (!r.success) {
-                PyErr_SetString(PyExc_RuntimeError, r.error_message.c_str());
+                PyErr_SetString(dftracer::utils::python::core::g_dft_error,
+                                r.error_message.c_str());
                 return NULL;
             }
         }
@@ -381,9 +388,7 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
             dftracer::utils::dstd::PathView(
                 dftracer::utils::trace::index::store_dir(final_root)));
         if (!published) {
-            dftracer::utils::python::core::set_typed_py_error(
-                dftracer::utils::python::core::PyErrorException(
-                    published.error()));
+            dftracer::utils::python::core::set_py_error(published.error());
             return NULL;
         }
     }
@@ -399,7 +404,7 @@ static PyObject *write_shard_set_fn(PyObject * /*self*/, PyObject *args) {
     if (!parse_string_seq(shard_dirs_obj, "shard_dirs must be a sequence",
                           shard_dirs))
         return NULL;
-    try {
+    return guard([&]() -> PyObject * {
         const auto normalized_root =
             dftracer::utils::trace::index::normalize_index_root(root);
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> dirs;
@@ -409,28 +414,21 @@ static PyObject *write_shard_set_fn(PyObject * /*self*/, PyObject *args) {
         dftracer::utils::python::core::py_unwrap(
             dftracer::utils::trace::views::write_shard_set(
                 dftracer::utils::dstd::String(normalized_root), dirs));
-    } catch (const std::exception &e) {
-        dftracer::utils::python::core::set_typed_py_error(e);
-        return NULL;
-    }
-    Py_RETURN_NONE;
+        Py_RETURN_NONE;
+    });
 }
 
 static PyObject *consolidate_shard_set_fn(PyObject * /*self*/, PyObject *args) {
     const char *root;
     if (!PyArg_ParseTuple(args, "s", &root)) return NULL;
-    std::size_t files = 0;
-    try {
+    return guard([&]() -> PyObject * {
         const auto normalized_root =
             dftracer::utils::trace::index::normalize_index_root(root);
-        files = dftracer::utils::python::core::py_unwrap(
+        const std::size_t files = dftracer::utils::python::core::py_unwrap(
             dftracer::utils::trace::views::consolidate_shard_set(
                 dftracer::utils::dstd::String(normalized_root)));
-    } catch (const std::exception &e) {
-        dftracer::utils::python::core::set_typed_py_error(e);
-        return NULL;
-    }
-    return PyLong_FromSize_t(files);
+        return PyLong_FromSize_t(files);
+    });
 }
 
 static PyObject *enable_aggregation_deterministic_ids_fn(PyObject * /*self*/,
@@ -473,12 +471,12 @@ static PyMethodDef DistributionMethods[] = {
      "so the same string maps to the same 32-bit id in every worker "
      "process. Call once at worker startup BEFORE any aggregation work."},
     {"write_shard_set", DFTU_PYCFUNCTION(write_shard_set_fn), METH_VARARGS,
-     "write_shard_set(index_root, shard_dirs) -> None\n"
+     "write_shard_set(index_dir, shard_dirs) -> None\n"
      "Catalog `shard_dirs` as the shards of the index root, in the root's "
      "shards.json. A shard under the root is stored relative to it."},
     {"consolidate_shard_set", DFTU_PYCFUNCTION(consolidate_shard_set_fn),
      METH_VARARGS,
-     "consolidate_shard_set(index_root) -> int\n"
+     "consolidate_shard_set(index_dir) -> int\n"
      "Merge the shards the root's shards.json names into the root's own "
      "store by moving their data files, then remove the manifest and the "
      "shard directories. Returns the number of trace files the shards "

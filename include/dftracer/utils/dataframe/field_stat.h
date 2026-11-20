@@ -2,9 +2,12 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_FIELD_STAT_H
 #define DFTRACER_UTILS_DATAFRAME_FIELD_STAT_H
 
+#include <dftracer/utils/dstd/int128.h>
+
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 namespace dftracer::utils::dataframe {
 
@@ -304,7 +307,34 @@ struct FieldStat {
     /// group-row count, finalize from the raw sums directly). Sample
     /// variance/std; population (biased) skewness and excess kurtosis -
     /// matching kernels/stats.cpp so the two surfaces agree.
-    double mean() const { return n ? sum / static_cast<double>(n) : 0.0; }
+    /// The mean. Over an integer field it divides the exact 128-bit sum, so a
+    /// column of 1.7e18 nanosecond values keeps its digits; the double `sum`
+    /// loses them (about 1.5e6 ns off over a million rows).
+    double mean() const {
+        if (n == 0) return 0.0;
+        if (domain == FieldStatDomain::F64) return sum / static_cast<double>(n);
+        return static_cast<double>(exact_sum128()) / static_cast<double>(n);
+    }
+    /// The exact sum of an integer field: esum plus the wraps counted in
+    /// ecarry. Meaningful only when domain != F64.
+    dstd::int128_t exact_sum128() const {
+        const dstd::int128_t low = domain == FieldStatDomain::U64
+                                       ? static_cast<dstd::int128_t>(
+                                             std::bit_cast<std::uint64_t>(esum))
+                                       : static_cast<dstd::int128_t>(esum);
+        return low +
+               static_cast<dstd::int128_t>(ecarry) * (dstd::int128_t{1} << 64);
+    }
+    /// The mean of an integer field cut toward zero (Polars casts its float
+    /// mean the same way), exact where `mean` is rounded; the double mean
+    /// otherwise.
+    std::int64_t mean_int() const {
+        if (n == 0) return 0;
+        if (domain == FieldStatDomain::F64)
+            return static_cast<std::int64_t>(sum / static_cast<double>(n));
+        return static_cast<std::int64_t>(exact_sum128() /
+                                         static_cast<dstd::int128_t>(n));
+    }
     double variance(bool sample = true) const {
         if (n < 1) return 0.0;
         const double dn = static_cast<double>(n);
@@ -328,6 +358,26 @@ struct FieldStat {
         const double c2 = cm2 / dn;
         if (c2 <= 0.0) return 0.0;
         return (cm4 / dn) / (c2 * c2) - 3.0;
+    }
+    /// The pandas estimators: the sample skewness G1 (needs three values) and
+    /// the sample excess kurtosis G2 (needs four), NaN below that and for a
+    /// column with no spread. From the same moments as the population forms,
+    /// so a merged or spilled state gives the same value.
+    double skewness_unbiased() const {
+        if (n < 3) return std::numeric_limits<double>::quiet_NaN();
+        const double dn = static_cast<double>(n);
+        const double c2 = cm2 / dn;
+        if (c2 <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+        return (cm3 / dn) / std::pow(c2, 1.5) * std::sqrt(dn * (dn - 1.0)) /
+               (dn - 2.0);
+    }
+    double kurtosis_unbiased() const {
+        if (n < 4) return std::numeric_limits<double>::quiet_NaN();
+        const double dn = static_cast<double>(n);
+        const double c2 = cm2 / dn;
+        if (c2 <= 0.0) return std::numeric_limits<double>::quiet_NaN();
+        const double g2 = (cm4 / dn) / (c2 * c2) - 3.0;
+        return (dn - 1.0) / ((dn - 2.0) * (dn - 3.0)) * ((dn + 1.0) * g2 + 6.0);
     }
 
    private:

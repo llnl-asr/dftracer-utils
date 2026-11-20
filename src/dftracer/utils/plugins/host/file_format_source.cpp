@@ -6,6 +6,7 @@
 
 #include <dftracer/utils/common/c_api_error.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -16,20 +17,28 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi/file_formats.h>
 #include <dftracer/utils/plugins/abi/value.h>
 #include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/cursor_host.h>
+#include <dftracer/utils/plugins/host/explain_abi.h>
 #include <dftracer/utils/plugins/host/file_format_source.h>
+#include <dftracer/utils/plugins/host/plan_abi.h>
 #include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
 #include <dftracer/utils/plugins/host/provider_source.h>
+#include <dftracer/utils/trace/index/format_index.h>
+#include <dlfcn.h>
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -45,16 +54,21 @@ struct FormatHandle {
     dstd::SharedPtr<PluginLibrary> library;
     dstd::SharedPtr<PluginMemory> memory;
     dstd::String name;
+    dstd::String version;
     ::dftu_file_format_vt vt;
     void* self;
     bool owned;
+    // The files opened through this handle that are still open.
+    std::atomic<std::size_t> open_files{0};
 
     FormatHandle(dstd::SharedPtr<PluginLibrary> l,
                  dstd::SharedPtr<PluginMemory> m, dstd::StringView n,
-                 const ::dftu_file_format_vt& v, void* s, bool o)
+                 dstd::StringView ver, const ::dftu_file_format_vt& v, void* s,
+                 bool o)
         : library(std::move(l)),
           memory(std::move(m)),
           name(n),
+          version(ver),
           vt(v),
           self(s),
           owned(o) {}
@@ -77,14 +91,23 @@ struct FormatFile {
     void* file;
     std::uint64_t chunks;
     dataframe::Schema schema;
+    // The format's token of each chunk; empty when it gives none.
+    dstd::Vector<std::uint64_t> tokens;
 
     FormatFile(dstd::SharedPtr<FormatHandle> h, void* f, std::uint64_t c,
-               dataframe::Schema s)
-        : handle(std::move(h)), file(f), chunks(c), schema(std::move(s)) {}
+               dataframe::Schema s, dstd::Vector<std::uint64_t> t)
+        : handle(std::move(h)),
+          file(f),
+          chunks(c),
+          schema(std::move(s)),
+          tokens(std::move(t)) {
+        handle->open_files.fetch_add(1, std::memory_order_relaxed);
+    }
     FormatFile(const FormatFile&) = delete;
     FormatFile& operator=(const FormatFile&) = delete;
     ~FormatFile() {
         if (file) handle->close_file(file);
+        handle->open_files.fetch_sub(1, std::memory_order_relaxed);
     }
 };
 
@@ -97,11 +120,18 @@ struct OpenedChunk {
 
 class FormatCursor;
 
-class FormatSource final : public dataframe::Source,
+// Where the chunks a scan reads come from: the file's, less those the index
+// rules out, or exactly the ones asked for.
+enum class ChunkChoice : std::uint8_t { Indexed, Given };
+
+class FormatSource final : public dataframe::FormatFileSource,
                            public std::enable_shared_from_this<FormatSource> {
    public:
-    explicit FormatSource(dstd::SharedPtr<FormatFile> file)
-        : file_(std::move(file)) {}
+    FormatSource(dstd::SharedPtr<FormatFile> file, dstd::String path,
+                 dstd::String index_dir)
+        : file_(std::move(file)),
+          path_(std::move(path)),
+          index_dir_(std::move(index_dir)) {}
     FormatSource(const FormatSource&) = delete;
     FormatSource& operator=(const FormatSource&) = delete;
 
@@ -109,6 +139,31 @@ class FormatSource final : public dataframe::Source,
 
     dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override;
+
+    dataframe::SourceExplain explain(
+        const dataframe::ScanRequest& req) const override;
+
+    dstd::Result<dstd::Optional<dataframe::ScanPlan>> plan(
+        const dataframe::ScanRequest& req) const override;
+
+    dstd::StringView plugin_version() const override {
+        return file_->handle->version;
+    }
+    dstd::StringView format_name() const override {
+        return file_->handle->name;
+    }
+    dstd::StringView path() const override { return path_; }
+    std::uint64_t chunk_count() const override { return file_->chunks; }
+    dstd::Span<const std::uint64_t> chunk_tokens() const override {
+        return file_->tokens;
+    }
+    dstd::SharedPtr<const dataframe::Source> only_chunks(
+        dstd::Vector<std::uint64_t> chunks) const override {
+        auto source = dstd::make_shared<FormatSource>(file_, path_, index_dir_);
+        source->given_ = std::move(chunks);
+        source->choice_ = ChunkChoice::Given;
+        return source;
+    }
 
    private:
     friend class FormatCursor;
@@ -120,12 +175,34 @@ class FormatSource final : public dataframe::Source,
         dstd::Vector<dataframe::Pushed>* votes,
         const dstd::Vector<dataframe::Pushed>* expect) const;
 
+    // The chunks `req` reads, in order: the index drops those it proves hold no
+    // row the filters keep.
+    dstd::Vector<std::uint64_t> chunks_to_read(
+        const dataframe::ScanRequest& req) const;
+
     dstd::SharedPtr<FormatFile> file_;
+    dstd::String path_;
+    dstd::String index_dir_;
+    ChunkChoice choice_ = ChunkChoice::Indexed;
+    dstd::Vector<std::uint64_t> given_;
 };
 
-// Walks the chunks of one file in order: the cursor of chunk 0, then the one
-// chunk 1 opens when chunk 0 ends, and so on. Each chunk gets its own cursor
-// from the format, whose frames go through the provider frame checks.
+// A scan that reads no chunk: the index proved the file holds no row the
+// filters keep.
+class EmptyCursor final : public dataframe::Cursor {
+   public:
+    coro::CoroTask<dataframe::MorselResult> next(std::int64_t) override {
+        co_return dataframe::MorselResult(dstd::nullopt);
+    }
+    bool try_next(std::int64_t, dataframe::MorselResult& out) override {
+        out = dataframe::MorselResult(dstd::nullopt);
+        return true;
+    }
+};
+
+// Walks the chunks of one scan in order: the cursor of the first, then the one
+// the next opens when it ends, and so on. Each chunk gets its own cursor from
+// the format, whose frames go through the provider frame checks.
 class FormatCursor final : public dataframe::Cursor {
    public:
     FormatCursor(dstd::SharedPtr<FormatFile> file,
@@ -133,12 +210,13 @@ class FormatCursor final : public dataframe::Cursor {
                  dataframe::ScanRequest req,
                  dstd::Vector<dataframe::Pushed> votes,
                  dstd::Vector<dataframe::TypeId> expected_types,
-                 OpenedChunk first)
+                 dstd::Vector<std::uint64_t> chunks, OpenedChunk first)
         : source_(std::move(source)),
           file_(std::move(file)),
           req_(std::move(req)),
           votes_(std::move(votes)),
-          expected_types_(std::move(expected_types)) {
+          expected_types_(std::move(expected_types)),
+          chunks_(std::move(chunks)) {
         adopt(std::move(first));
     }
 
@@ -179,7 +257,8 @@ class FormatCursor final : public dataframe::Cursor {
         cursor_ = make_plugin_cursor(
             chunk.vt, chunk.cursor_self, std::move(host_), req_.projection,
             expected_types_, source_,
-            dstd::fmt<"file format '{}' next">(file_->handle->name));
+            dstd::fmt<"file format '{}' next">(file_->handle->name),
+            file_->handle->name, req_.counters);
     }
 
     // Releases the chunk just ended and opens the next one. No error means
@@ -187,8 +266,9 @@ class FormatCursor final : public dataframe::Cursor {
     dstd::Optional<dstd::Error> open_next_chunk() {
         cursor_.reset();
         const auto* source = static_cast<const FormatSource*>(source_.get());
-        if (next_chunk_ >= file_->chunks) return dstd::nullopt;
-        auto opened = source->scan_chunk(next_chunk_++, req_, nullptr, &votes_);
+        if (next_ >= chunks_.size()) return dstd::nullopt;
+        auto opened =
+            source->scan_chunk(chunks_[next_++], req_, nullptr, &votes_);
         if (!opened) return opened.error();
         adopt(std::move(*opened));
         return dstd::nullopt;
@@ -200,10 +280,11 @@ class FormatCursor final : public dataframe::Cursor {
     dataframe::ScanRequest req_;
     dstd::Vector<dataframe::Pushed> votes_;
     dstd::Vector<dataframe::TypeId> expected_types_;
+    dstd::Vector<std::uint64_t> chunks_;
     dstd::UniquePtr<CursorHost> host_;
     // The cursor of the chunk being read; null when the file is done.
     dstd::UniquePtr<dataframe::Cursor> cursor_;
-    std::uint64_t next_chunk_ = 1;
+    std::size_t next_ = 1;
 };
 
 class VtableFormat final : public dataframe::FileFormatFactory {
@@ -213,17 +294,23 @@ class VtableFormat final : public dataframe::FileFormatFactory {
 
     dstd::StringView name() const override { return handle_->name; }
 
+    dstd::StringView version() const override { return handle_->version; }
+
+    std::size_t open_file_count() const override {
+        return handle_->open_files.load(std::memory_order_relaxed);
+    }
+
     int probe(const std::uint8_t* head, std::uint64_t n,
               dstd::StringView path) const override {
         const dstd::String path_str(path);
         return handle_->vt.probe(handle_->self, head, n, path_str.c_str());
     }
 
-    dstd::Result<dstd::SharedPtr<const dataframe::Source>> open(
-        dstd::StringView path) override {
+    dstd::Result<dstd::SharedPtr<const dataframe::FormatFileSource>> open(
+        dstd::StringView path, dstd::StringView index_dir) override {
         const dstd::String path_str(path);
         void* file = nullptr;
-        plugins::AbiContext ctx;
+        plugins::AbiContext ctx({}, handle_->name);
         dftu_status status =
             handle_->vt.open(ctx.get(), handle_->self, path_str.c_str(), &file);
         if (status < 0) return plugin_error(ctx, status, "file format open");
@@ -233,7 +320,7 @@ class VtableFormat final : public dataframe::FileFormatFactory {
                 dstd::Condition::Internal, handle_->name);
 
         ::dftu_schema declared;
-        plugins::AbiContext schema_ctx;
+        plugins::AbiContext schema_ctx({}, handle_->name);
         status = handle_->vt.schema(schema_ctx.get(), file, &declared);
         if (status < 0) {
             handle_->close_file(file);
@@ -249,7 +336,7 @@ class VtableFormat final : public dataframe::FileFormatFactory {
         schema.fields = std::move(declared.top);
 
         std::uint64_t chunks = 0;
-        plugins::AbiContext chunks_ctx;
+        plugins::AbiContext chunks_ctx({}, handle_->name);
         status = handle_->vt.chunks(chunks_ctx.get(), file, &chunks);
         if (status < 0) {
             handle_->close_file(file);
@@ -262,10 +349,37 @@ class VtableFormat final : public dataframe::FileFormatFactory {
                 "least 1">(dstd::Condition::Internal, handle_->name);
         }
 
-        auto opened = dstd::make_shared<FormatFile>(handle_, file, chunks,
-                                                    std::move(schema));
-        return dstd::SharedPtr<const dataframe::Source>(
-            dstd::make_shared<FormatSource>(std::move(opened)));
+        dstd::Vector<std::uint64_t> tokens;
+        if (handle_->vt.chunk_token) {
+            tokens.reserve(chunks);
+            for (std::uint64_t chunk = 0; chunk < chunks; ++chunk) {
+                std::uint64_t token = 0;
+                plugins::AbiContext token_ctx({}, handle_->name);
+                status = handle_->vt.chunk_token(token_ctx.get(), file, chunk,
+                                                 &token);
+                if (status < 0) {
+                    handle_->close_file(file);
+                    return plugin_error(token_ctx, status,
+                                        "file format chunk_token");
+                }
+                if (!tokens.empty() && token <= tokens.back()) {
+                    handle_->close_file(file);
+                    return dstd::Error::from_format<
+                        "file format '{}': chunk {} has token {}, which is "
+                        "not above the token {} of the chunk before it">(
+                        dstd::Condition::Internal, handle_->name, chunk, token,
+                        tokens.back());
+                }
+                tokens.push_back(token);
+            }
+        }
+
+        auto opened = dstd::make_shared<FormatFile>(
+            handle_, file, chunks, std::move(schema), std::move(tokens));
+        return dstd::SharedPtr<const dataframe::FormatFileSource>(
+            dstd::make_shared<FormatSource>(std::move(opened),
+                                            dstd::String(path),
+                                            dstd::String(index_dir)));
     }
 
    private:
@@ -300,6 +414,8 @@ dstd::Result<OpenedChunk> FormatSource::scan_chunk(
     creq.n_filters = static_cast<std::int32_t>(filters.size());
     creq.limit = req.limit;
     creq.memory_budget = req.memory_budget;
+    const AbiPlan planned(req.plan);
+    creq.plan = planned.get();
 
     // Pre-filled DFTU_PUSHED_NO: a format that writes nothing, or writes only
     // some entries, degrades to "the engine re-applies", which is always sound.
@@ -309,7 +425,7 @@ dstd::Result<OpenedChunk> FormatSource::scan_chunk(
                                               "file format", req.memory_budget);
     void* cursor_self = nullptr;
     const ::dftu_cursor_vt* cursor_vt = nullptr;
-    plugins::AbiContext ctx;
+    plugins::AbiContext ctx({}, file_->handle->name, req.counters.get());
     const dftu_status status =
         vt.scan(ctx.get(), file_->file, chunk, host->host(), &creq,
                 out_pushed.data(), &cursor_self, &cursor_vt);
@@ -343,32 +459,119 @@ dstd::Result<OpenedChunk> FormatSource::scan_chunk(
             dstd::Condition::Internal, file_->handle->name, chunk);
     }
 
+    // The plan's votes are the scan's, the same for every chunk; what the scan
+    // wrote is ignored.
     dstd::Vector<dataframe::Pushed> chunk_votes;
-    chunk_votes.reserve(out_pushed.size());
-    for (std::int32_t v : out_pushed) chunk_votes.push_back(plugin_pushed(v));
+    if (req.plan) {
+        chunk_votes = req.plan->votes;
+    } else {
+        chunk_votes.reserve(out_pushed.size());
+        for (std::int32_t v : out_pushed)
+            chunk_votes.push_back(plugin_pushed(v));
+    }
     if (expect && *expect != chunk_votes) {
         discard_cursor();
         return dstd::Error::from_format<
             "file format '{}': chunk {} reported other pushed filters than "
-            "chunk 0; every chunk of one scan must report the same votes">(
-            dstd::Condition::InvalidArgument, file_->handle->name, chunk);
+            "the first chunk of the scan; every chunk of one scan must "
+            "report the same votes">(dstd::Condition::InvalidArgument,
+                                     file_->handle->name, chunk);
     }
     if (votes) *votes = std::move(chunk_votes);
 
     return OpenedChunk{std::move(host), cursor_self, cursor_vt};
 }
 
+dstd::Vector<std::uint64_t> FormatSource::chunks_to_read(
+    const dataframe::ScanRequest& req) const {
+    if (choice_ == ChunkChoice::Given) return given_;
+    if (!req.filters.empty()) {
+        const dataframe::Schema declared = file_->schema;
+        trace::index::FormatScan asked;
+        asked.index_dir = index_dir_;
+        asked.path = path_;
+        asked.format = file_->handle->name;
+        asked.plugin_version = file_->handle->version;
+        asked.tokens = file_->tokens;
+        asked.schema = &declared;
+        asked.projection = req.projection;
+        asked.filters = req.filters;
+        if (auto kept = trace::index::format_candidate_chunks(asked))
+            return std::move(*kept);
+    }
+    dstd::Vector<std::uint64_t> all;
+    all.reserve(file_->chunks);
+    for (std::uint64_t chunk = 0; chunk < file_->chunks; ++chunk)
+        all.push_back(chunk);
+    return all;
+}
+
+dataframe::SourceExplain FormatSource::explain(
+    const dataframe::ScanRequest& req) const {
+    const ::dftu_file_format_vt& vt = file_->handle->vt;
+    dataframe::SourceExplain said;
+    said.label = dstd::fmt<"file format '{}'">(file_->handle->name);
+    said.lines.push_back(dataframe::ExplainLine{
+        "chunks",
+        dstd::fmt<"{} of {} read">(chunks_to_read(req).size(), file_->chunks)});
+    // First, so an explain hook sees what the plan hook has just done.
+    const auto planned = plan(req);
+    if (vt.explain) {
+        const dataframe::ScanRequest planned_req = with_plan(req, planned);
+        const AbiScanRequest creq(planned_req);
+        ExplainLines lines;
+        plugins::AbiContext ctx({}, file_->handle->name);
+        const dftu_status status =
+            vt.explain(ctx.get(), file_->file, creq.get(), lines.out());
+        if (status < 0)
+            DFTRACER_UTILS_LOG_WARN(
+                "{}",
+                plugin_error(ctx, status, "file format explain").format());
+        else
+            for (dataframe::ExplainLine& l : lines.take())
+                said.lines.push_back(std::move(l));
+    }
+    for (dataframe::ExplainLine& l : plan_lines(planned))
+        said.lines.push_back(std::move(l));
+    return said;
+}
+
+dstd::Result<dstd::Optional<dataframe::ScanPlan>> FormatSource::plan(
+    const dataframe::ScanRequest& req) const {
+    const ::dftu_file_format_vt& vt = file_->handle->vt;
+    if (!vt.plan && !vt.plan_duql) return dstd::Optional<dataframe::ScanPlan>{};
+    dstd::Vector<dstd::String> names;
+    names.reserve(file_->schema.fields.size());
+    for (const dataframe::Field& f : file_->schema.fields)
+        names.push_back(f.name);
+    PlanHooks hooks;
+    hooks.self = file_->file;
+    hooks.plan = vt.plan;
+    hooks.plan_duql = vt.plan_duql;
+    hooks.owner = file_->handle->name;
+    hooks.what = "file format plan";
+    return run_plan(hooks, req, names);
+}
+
 dstd::Result<dataframe::ScanResult> FormatSource::scan(
     const dataframe::ScanRequest& req) const {
+    dstd::Vector<std::uint64_t> chunks = chunks_to_read(req);
+    dataframe::ScanResult r;
+    if (chunks.empty()) {
+        // No chunk is opened, so no format voted: the engine applies every
+        // filter, over the rows there are none of.
+        r.filters.assign(req.filters.size(), dataframe::Pushed::No);
+        r.cursor = dstd::make_unique<EmptyCursor>();
+        return r;
+    }
     dstd::Vector<dataframe::Pushed> votes;
-    auto first = scan_chunk(0, req, &votes, nullptr);
+    auto first = scan_chunk(chunks.front(), req, &votes, nullptr);
     if (!first) return first.error();
     auto expected_types = declared_types(file_->schema, req.projection);
-    dataframe::ScanResult r;
     r.filters = votes;
     r.cursor = dstd::make_unique<FormatCursor>(
         file_, shared_from_this(), req, std::move(votes),
-        std::move(expected_types), std::move(*first));
+        std::move(expected_types), std::move(chunks), std::move(*first));
     return r;
 }
 
@@ -397,7 +600,7 @@ struct SinkHandle {
 class OptionsTree {
    public:
     explicit OptionsTree(
-        const dstd::Vector<dstd::Pair<dstd::String, dstd::String>>& options) {
+        dstd::Span<const dstd::Pair<dstd::String, dstd::String>> options) {
         const std::size_t n = options.size();
         strings_.reserve(2 * n);
         for (const dstd::Pair<dstd::String, dstd::String>& option : options) {
@@ -494,9 +697,9 @@ class VtableSink final : public dataframe::SinkFactory {
     dstd::StringView name() const override { return handle_->name; }
 
     dstd::Result<dstd::UniquePtr<dataframe::SinkWriter>> bind(
-        const dstd::Vector<dstd::String>& names,
-        const dstd::Vector<dataframe::TypeId>& types,
-        const dstd::Vector<dstd::Pair<dstd::String, dstd::String>>& options)
+        dstd::Span<const dstd::String> names,
+        dstd::Span<const dataframe::TypeId> types,
+        dstd::Span<const dstd::Pair<dstd::String, dstd::String>> options)
         override {
         dstd::Vector<const char*> name_ptrs;
         name_ptrs.reserve(names.size());
@@ -556,8 +759,22 @@ dstd::Result<void> register_file_format_vtable(
             "be set">(dstd::Condition::InvalidArgument, name);
     // Not owned until registered, so a refused registration leaves `self` to
     // the caller.
-    auto handle = dstd::make_shared<FormatHandle>(
-        std::move(library), std::move(memory), name, vt_copy, self, false);
+    // The loader has already checked the record, so the symbol is there.
+    dstd::StringView version;
+    if (library && library->handle()) {
+        using InfoFn = const ::dftu_plugin_info* (*)();
+        const auto info_fn = reinterpret_cast<InfoFn>(
+            dlsym(library->handle(), DFTRACER_UTILS_PLUGIN_INFO_SYMBOL));
+        const ::dftu_plugin_info* info = info_fn ? info_fn() : nullptr;
+        if (info &&
+            info->struct_size >=
+                offsetof(::dftu_plugin_info, version) + sizeof(info->version) &&
+            info->version)
+            version = info->version;
+    }
+    auto handle =
+        dstd::make_shared<FormatHandle>(std::move(library), std::move(memory),
+                                        name, version, vt_copy, self, false);
     auto registered = dataframe::register_file_format(
         dstd::make_shared<VtableFormat>(handle));
     if (registered) handle->owned = true;

@@ -7,6 +7,7 @@
 #include <dftracer/utils/domains/server/trace_index.h>
 #include <dftracer/utils/domains/server/viz/density.h>
 #include <dftracer/utils/domains/server/viz_api.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
@@ -57,8 +58,7 @@ dstd::String regular_event(long ts) {
            dstd::to_string(ts) + ",\"dur\":40,\"ph\":1,\"pid\":1,\"tid\":1}\n";
 }
 
-void write_single_member(const dstd::String& path,
-                         const dstd::String& content) {
+void write_single_member(dstd::StringView path, dstd::StringView content) {
     fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
@@ -67,7 +67,7 @@ void write_single_member(const dstd::String& path,
               static_cast<std::streamsize>(member->size()));
 }
 
-dstd::String density_body(Router& router, const dstd::String& target) {
+dstd::String density_body(Router& router, dstd::StringView target) {
     HttpRequest req;
     req.method = "GET";
     req.path = target;
@@ -84,7 +84,7 @@ dstd::String density_body(Router& router, const dstd::String& target) {
     return body;
 }
 
-dstd::UniquePtr<TraceIndex> build_index(const dstd::String& content,
+dstd::UniquePtr<TraceIndex> build_index(dstd::StringView content,
                                         const dstd::Path& dir) {
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     write_single_member(dstd::String((dir / "trace.pfw.gz").str()), content);
@@ -191,13 +191,13 @@ TEST_SUITE("viz_aggregated") {
     // density reads no value from is still an event of the window.
     TEST_CASE("density keeps events whose line is refused by a DOM parse") {
         dstd::String trace = "[\n";
-        auto event = [](const char* name, long ts, long dur,
-                        const char* extra) {
-            return dstd::String("{\"name\":\"") + name +
+        auto event = [](dstd::CStringView name, long ts, long dur,
+                        dstd::StringView extra) {
+            return dstd::String("{\"name\":\"") + name.c_str() +
                    "\",\"cat\":\"POSIX\",\"ph\":1,\"pid\":1,\"tid\":1,"
                    "\"ts\":" +
                    dstd::to_string(ts) + ",\"dur\":" + dstd::to_string(dur) +
-                   extra + "}\n";
+                   dstd::String(extra) + "}\n";
         };
         trace += event("a", 1000, 500, R"(,"args":{"x":1e400})");
         trace += event("b", 2000, 500, R"(,"args":{"s":"p\qq"})");

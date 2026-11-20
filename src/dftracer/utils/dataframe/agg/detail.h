@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg/lower.h>
 #include <dftracer/utils/dataframe/field_stat.h>
+#include <dftracer/utils/dataframe/internal/float_key.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dataframe/udaf_states.h>
@@ -53,7 +54,7 @@ std::uint64_t read_bits(const Series& c, std::int64_t i, FieldStatDomain d);
 bool is_bytes_key_type(TypeId t);
 
 /// Reorder the groups of `st` so group i becomes old group perm[i].
-void agg_permute_groups(AggState& st, const dstd::Vector<std::int64_t>& perm);
+void agg_permute_groups(AggState& st, dstd::Span<const std::int64_t> perm);
 
 /// `st` with its groups in first-row order (the order they were first
 /// seen in a frame accumulated in parallel); untouched when they already
@@ -119,23 +120,22 @@ struct AggPages {
 /// The packed layout of `st` over these columns, initializing `st`; false
 /// when the shape does not pack (a reducer past mean, a null key, a
 /// value column that is not 8 bytes wide).
-bool agg_pack_shape(AggState& st, const dstd::Vector<const Series*>& keys,
-                    const dstd::Vector<const Series*>& values, AggPacked& out);
+bool agg_pack_shape(AggState& st, dstd::Span<const Series* const> keys,
+                    dstd::Span<const Series* const> values, AggPacked& out);
 
 /// Scatter the rows [begin, end) into `out[p]`, p from the hash's top
 /// word scaled to out.size(), calling `full(p)` whenever out[p] holds a
 /// page's worth (the caller takes the page there); false when a row does
 /// not pack (a string over 16 bytes), leaving `out` partly filled.
-bool agg_pack(const AggState& st, const dstd::Vector<const Series*>& keys,
-              const dstd::Vector<const Series*>& values, std::int64_t begin,
+bool agg_pack(const AggState& st, dstd::Span<const Series* const> keys,
+              dstd::Span<const Series* const> values, std::int64_t begin,
               std::int64_t end, const AggPacked& shape,
               dstd::Vector<AggPages>& out,
               dstd::FunctionRef<void(std::size_t)> full);
 
 /// Accumulate packed rows into `st`.
-void agg_accumulate_packed(AggState& st,
-                           const dstd::Vector<const Series*>& keys,
-                           const dstd::Vector<const Series*>& values,
+void agg_accumulate_packed(AggState& st, dstd::Span<const Series* const> keys,
+                           dstd::Span<const Series* const> values,
                            const AggPacked& shape, const AggPages& rows);
 
 /// Merge the partials into one state: the groups the widest partial holds
@@ -152,8 +152,53 @@ inline std::size_t agg_param_k(double param, std::size_t fallback) {
     return param > 0.0 ? static_cast<std::size_t>(param) : fallback;
 }
 
+/// Whether `op` is one of the three bitwise reductions.
+inline bool agg_is_bitwise(AggOp op) {
+    return op == AggOp::BitwiseAnd || op == AggOp::BitwiseOr ||
+           op == AggOp::BitwiseXor;
+}
+
+/// Folds the present word `v` into a bitwise slot: the first value is taken
+/// as is, the next ones combine with the slot's operation.
+inline void bw_fold(AggOp op, std::uint64_t& acc, std::uint8_t& seen,
+                    std::uint64_t v, std::uint8_t v_seen) {
+    if (!v_seen) return;
+    if (!seen)
+        acc = v;
+    else if (op == AggOp::BitwiseAnd)
+        acc &= v;
+    else if (op == AggOp::BitwiseOr)
+        acc |= v;
+    else
+        acc ^= v;
+    seen = 1;
+}
+
 /// Which extremum an ArgMax/ArgMin slot tracks over its `by` column.
 enum class ArgDir { Min = 0, Max = 1 };
+
+/// Whether `cand` beats `cur` for an ArgMaxPos/ArgMinPos slot: the bits are in
+/// the domain `dom` (1 signed, 2 unsigned, 3 float: a FieldStatDomain + 1). A
+/// float NaN holds the slot only until a number arrives, and a tie never
+/// replaces the first row.
+inline bool apos_better(ArgDir dir, std::uint8_t dom, std::uint64_t cand,
+                        std::uint64_t cur) {
+    switch (dom) {
+        case 1: {
+            const auto a = std::bit_cast<std::int64_t>(cand);
+            const auto b = std::bit_cast<std::int64_t>(cur);
+            return dir == ArgDir::Max ? a > b : a < b;
+        }
+        case 2:
+            return dir == ArgDir::Max ? cand > cur : cand < cur;
+        default: {
+            const auto a = std::bit_cast<double>(cand);
+            const auto b = std::bit_cast<double>(cur);
+            if (std::isnan(b)) return !std::isnan(a);
+            return dir == ArgDir::Max ? a > b : a < b;
+        }
+    }
+}
 
 /// A bounded ordered-list slot's readout order: ascending `by` (Sorted,
 /// Bottom) or descending `by` (Top), the repr breaking ties either way.
@@ -201,7 +246,7 @@ using SpaceSavingMap = dstd::Map<dstd::String, std::uint64_t>;
 /// Metwally, Agrawal, El Abbadi, "Efficient Computation of Frequent and Top-k
 /// Elements in Data Streams", ICDT 2005.
 inline void space_saving_offer(SpaceSavingMap& m, std::size_t k,
-                               const dstd::String& value, std::uint64_t count) {
+                               dstd::StringView value, std::uint64_t count) {
     if (k == 0) return;
     auto it = m.find(value);
     if (it != m.end()) {
@@ -292,14 +337,14 @@ inline DDSketch& dyn_sketch_cell_of(dstd::Vector<DynSketchCell>& cells,
 }
 
 /// The stat of `id` in `cells`, or null when the group has not seen the name.
-inline const FieldStat* dyn_find_cell(const dstd::Vector<DynCell>& cells,
+inline const FieldStat* dyn_find_cell(dstd::Span<const DynCell> cells,
                                       std::uint32_t id) {
     const auto it =
         std::lower_bound(cells.begin(), cells.end(), id, dyn_stat_before);
     return it != cells.end() && it->id == id ? &it->stat : nullptr;
 }
 
-inline const DDSketch* dyn_find_sketch(const dstd::Vector<DynSketchCell>& cells,
+inline const DDSketch* dyn_find_sketch(dstd::Span<const DynSketchCell> cells,
                                        std::uint32_t id) {
     const auto it =
         std::lower_bound(cells.begin(), cells.end(), id, dyn_sketch_before);
@@ -315,6 +360,13 @@ class AggState : public dstd::HeapObject {
     dstd::Vector<int> spec_field;         // spec -> field index, or -1 (Count)
     dstd::Vector<std::int32_t> field_vc;  // field -> value_col
     dstd::Vector<FieldStatDomain> field_domain;  // field -> accumulation domain
+    // field -> the value column's exact type, with the unit and timezone of a
+    // temporal one (all widen to the I64 domain above); finalize types the
+    // aggregate through agg_output_type from this. Unknown where the state
+    // never saw the column (a seeded state).
+    dstd::Vector<TypeId> field_type;
+    dstd::Vector<TimeUnit> field_time_unit;
+    dstd::Vector<dstd::String> field_timezone;
     std::size_t nf = 0;
     bool inited = false;
 
@@ -518,6 +570,37 @@ class AggState : public dstd::HeapObject {
     dstd::Vector<char> arg_has;                      // groups * n_arg
     dstd::Vector<dstd::String> arg_repr;             // groups * n_arg_repr
 
+    // ArgMaxPos/ArgMinPos: a slot per spec. Per group and slot, `apos_dom` is 0
+    // until a present value is seen, then the domain (a FieldStatDomain + 1) of
+    // the winning value held in `apos_bits`, and `apos_rank` the winner's
+    // position among the group's rows. States merge in row order: the rank of
+    // the other side's winner is shifted by the rows this side holds, and a
+    // tie keeps this side's winner. `apos_unordered` marks a merge whose other
+    // side starts before this one (agg_check reports it).
+    bool has_apos = false;
+    std::size_t n_apos = 0;
+    dstd::Vector<int> spec_apos;            // spec -> slot, or -1
+    dstd::Vector<std::int32_t> apos_col;    // slot -> value_col
+    dstd::Vector<ArgDir> apos_dir;          // slot -> direction
+    dstd::Vector<std::uint64_t> apos_bits;  // groups * n_apos
+    dstd::Vector<std::int64_t> apos_rank;   // groups * n_apos
+    dstd::Vector<std::uint8_t> apos_dom;    // groups * n_apos
+    bool apos_unordered = false;
+
+    // BitwiseAnd/Or/Xor: a slot per spec. `bw_acc` is the 64-bit word the
+    // present values fold into (an integer sign-extended, a Bool as 0 or 1) and
+    // `bw_seen` is 0 until a present value arrives; merge folds a seen other
+    // side with the slot's operation, so the order of the merge does not
+    // matter.
+    bool has_bw = false;
+    std::size_t n_bw = 0;
+    dstd::Vector<int> spec_bw;           // spec -> slot, or -1
+    dstd::Vector<std::int32_t> bw_col;   // slot -> value_col
+    dstd::Vector<AggOp> bw_op;           // slot -> operation
+    dstd::Vector<TypeId> bw_type;        // slot -> column type, once seen
+    dstd::Vector<std::uint64_t> bw_acc;  // groups * n_bw
+    dstd::Vector<std::uint8_t> bw_seen;  // groups * n_bw
+
     // BitOr: one slot per distinct value column; the accumulator is the u64 OR
     // (identity 0), so merge is an OR.
     bool has_bitor = false;
@@ -533,6 +616,15 @@ class AggState : public dstd::HeapObject {
     dstd::Vector<int> spec_prod;    // spec -> slot, or -1
     dstd::Vector<std::int32_t> prod_val_col;
     dstd::Vector<double> prod_acc;  // groups * n_prod
+
+    // Quantile: one slot per distinct value column holding every present
+    // value of the group as a double, so merge is a concatenation and the
+    // quantile is read at finalize.
+    bool has_qv = false;
+    std::size_t n_qv = 0;
+    dstd::Vector<int> spec_qv;              // spec -> slot, or -1
+    dstd::Vector<std::int32_t> qv_val_col;
+    dstd::Vector<dstd::Vector<double>> qv;  // groups * n_qv
 
     // SketchQuantile: one slot per distinct value column holding the merge of
     // every valid serialized DDSketch of the group; the quantile is read at
@@ -637,11 +729,11 @@ class AggState : public dstd::HeapObject {
     void init_udaf_layout();
     /// Binds each slot on its first batch and checks the later ones against
     /// it; `values` are the columns accumulate reads.
-    dstd::Result<void> udaf_prepare(const dstd::Vector<const Series*>& values);
+    dstd::Result<void> udaf_prepare(dstd::Span<const Series* const> values);
     /// Feeds rows [begin, end) of `values`: row begin + i goes to group
     /// gids[i].
-    dstd::Result<void> udaf_update(const dstd::Vector<std::int64_t>& gids,
-                                   const dstd::Vector<const Series*>& values,
+    dstd::Result<void> udaf_update(dstd::Span<const std::int64_t> gids,
+                                   dstd::Span<const Series* const> values,
                                    std::int64_t begin, std::int64_t end);
     /// The table of slot `i`, made from its binding when it has none.
     dstd::Result<UdafStates*> udaf_table(std::size_t i) const;
@@ -650,11 +742,11 @@ class AggState : public dstd::HeapObject {
     /// Merges group from[i] of `other` into group into[i] of this state, each
     /// slot, `other` unchanged. Failures go to udaf_error.
     void udaf_combine(const AggState& other,
-                      const dstd::Vector<std::int64_t>& into,
-                      const dstd::Vector<std::int64_t>& from);
+                      dstd::Span<const std::int64_t> into,
+                      dstd::Span<const std::int64_t> from);
     /// Puts each table's groups in perm order (group i becomes old group
     /// perm[i]).
-    void udaf_permute(const dstd::Vector<std::int64_t>& perm);
+    void udaf_permute(dstd::Span<const std::int64_t> perm);
     /// Copies slot bindings and argument types of `other`, which hold no
     /// states here.
     void udaf_adopt(const AggState& other);
@@ -808,7 +900,7 @@ class AggState : public dstd::HeapObject {
 
     /// The word index of `id`'s cell in a group's `words`, or its size when the
     /// cell is absent.
-    std::size_t dyn_light_lower(const dstd::Vector<std::uint64_t>& w,
+    std::size_t dyn_light_lower(dstd::Span<const std::uint64_t> w,
                                 std::uint32_t id) const {
         std::size_t lo = 0, hi = w.size() / dyn_light_stride;
         // A call's dyn inputs come in the same order in every row, so the id
@@ -1034,8 +1126,9 @@ class AggState : public dstd::HeapObject {
             const AggSpec& sp = specs[s];
             if (sp.op == AggOp::Count || sp.op == AggOp::BitOr ||
                 sp.op == AggOp::Prod || sp.op == AggOp::Udaf ||
-                agg_uses_raw_value(sp.op) || agg_uses_by_col(sp.op) ||
-                sp.value_col < 0)
+                sp.op == AggOp::ArgMaxPos || sp.op == AggOp::ArgMinPos ||
+                agg_is_bitwise(sp.op) || agg_uses_raw_value(sp.op) ||
+                agg_uses_by_col(sp.op) || sp.value_col < 0)
                 continue;
             auto it = seen.find(sp.value_col);
             if (it == seen.end()) {
@@ -1052,6 +1145,9 @@ class AggState : public dstd::HeapObject {
         // accumulate) so a state finalized with no accumulate/seed still has
         // valid slots.
         field_domain.assign(nf, FieldStatDomain::F64);
+        field_type.assign(nf, TypeId::Unknown);
+        field_time_unit.assign(nf, TimeUnit::Micro);
+        field_timezone.assign(nf, dstd::String());
         field_is_str.assign(nf, 0);
         has_fl = false;
         for (const AggSpec& sp : specs)
@@ -1104,6 +1200,36 @@ class AggState : public dstd::HeapObject {
         }
         has_arg = n_arg > 0;
 
+        spec_apos.assign(specs.size(), -1);
+        apos_col.clear();
+        apos_dir.clear();
+        n_apos = 0;
+        for (std::size_t s = 0; s < specs.size(); ++s) {
+            const AggSpec& sp = specs[s];
+            if (sp.op != AggOp::ArgMaxPos && sp.op != AggOp::ArgMinPos)
+                continue;
+            spec_apos[s] = static_cast<int>(n_apos++);
+            apos_col.push_back(sp.value_col);
+            apos_dir.push_back(sp.op == AggOp::ArgMaxPos ? ArgDir::Max
+                                                         : ArgDir::Min);
+        }
+        has_apos = n_apos > 0;
+
+        spec_bw.assign(specs.size(), -1);
+        bw_col.clear();
+        bw_op.clear();
+        bw_type.clear();
+        n_bw = 0;
+        for (std::size_t s = 0; s < specs.size(); ++s) {
+            const AggSpec& sp = specs[s];
+            if (!agg_is_bitwise(sp.op)) continue;
+            spec_bw[s] = static_cast<int>(n_bw++);
+            bw_col.push_back(sp.value_col);
+            bw_op.push_back(sp.op);
+            bw_type.push_back(TypeId::Unknown);
+        }
+        has_bw = n_bw > 0;
+
         spec_bitor.assign(specs.size(), -1);
         bitor_val_col.clear();
         n_bitor = 0;
@@ -1141,6 +1267,36 @@ class AggState : public dstd::HeapObject {
             spec_prod[s] = slot;
         }
         has_prod = n_prod > 0;
+
+        spec_qv.assign(specs.size(), -1);
+        qv_val_col.clear();
+        n_qv = 0;
+        for (std::size_t s = 0; s < specs.size(); ++s) {
+            if (specs[s].op != AggOp::Quantile) continue;
+            if (!(specs[s].param >= 0.0 && specs[s].param <= 1.0) &&
+                init_error.empty())
+                init_error = dstd::fmt<
+                    "group_by: the quantile level of '{}' must be in [0, 1]">(
+                    specs[s].out);
+            if ((specs[s].interp < Interpolation::Linear ||
+                 specs[s].interp > Interpolation::Midpoint) &&
+                init_error.empty())
+                init_error = dstd::fmt<
+                    "group_by: the quantile interpolation of '{}' is "
+                    "unknown">(specs[s].out);
+            int slot = -1;
+            for (std::size_t k = 0; k < n_qv; ++k)
+                if (qv_val_col[k] == specs[s].value_col) {
+                    slot = static_cast<int>(k);
+                    break;
+                }
+            if (slot < 0) {
+                slot = static_cast<int>(n_qv++);
+                qv_val_col.push_back(specs[s].value_col);
+            }
+            spec_qv[s] = slot;
+        }
+        has_qv = n_qv > 0;
 
         spec_msk.assign(specs.size(), -1);
         msk_val_col.clear();
@@ -1361,8 +1517,18 @@ class AggState : public dstd::HeapObject {
             arg_has.resize(arg_has.size() + n_arg, 0);
             arg_repr.resize(arg_repr.size() + n_arg_repr);
         }
+        if (has_apos) {
+            apos_bits.resize(apos_bits.size() + n_apos, 0);
+            apos_rank.resize(apos_rank.size() + n_apos, 0);
+            apos_dom.resize(apos_dom.size() + n_apos, 0);
+        }
+        if (has_bw) {
+            bw_acc.resize(bw_acc.size() + n_bw, 0);
+            bw_seen.resize(bw_seen.size() + n_bw, 0);
+        }
         if (has_bitor) bitor_acc.resize(bitor_acc.size() + n_bitor, 0);
         if (has_prod) prod_acc.resize(prod_acc.size() + n_prod, 1.0);
+        if (has_qv) qv.resize(qv.size() + n_qv);
         if (has_msk) msk.resize(msk.size() + n_msk);
         if (has_kmv) kmv.resize(kmv.size() + n_kmv);
         if (has_lst) lst.resize(lst.size() + n_lst);
@@ -1524,7 +1690,7 @@ class AggState : public dstd::HeapObject {
         grow_group();
         return g;
     }
-    std::int64_t group_of(const dstd::Vector<const Series*>& keys,
+    std::int64_t group_of(dstd::Span<const Series* const> keys,
                           std::int64_t i) {
         // A non-string key column widens to int64 by its own domain, not
         // plain read_i64: a Uint64/Float64 key (e.g. a hash or a fractional
@@ -1532,8 +1698,11 @@ class AggState : public dstd::HeapObject {
         // group.
         return find_or_add_group(
             [&](std::size_t k) {
-                return static_cast<std::int64_t>(
-                    read_bits(*keys[k], i, col_domain(keys[k]->type())));
+                const FieldStatDomain d = col_domain(keys[k]->type());
+                const std::uint64_t bits = read_bits(*keys[k], i, d);
+                return static_cast<std::int64_t>(d == FieldStatDomain::F64
+                                                     ? canonical_f64_bits(bits)
+                                                     : bits);
             },
             [&](std::size_t k) -> dstd::StringView {
                 // String/LargeString are length-delimited (string_at handles
@@ -1631,6 +1800,13 @@ class AggState : public dstd::HeapObject {
     /// states share one name table.
     void merge_group(std::int64_t g, const AggState& other, std::int64_t j,
                      const dstd::Vector<std::uint32_t>* dyn_map = nullptr) {
+        const std::int64_t rows_before = counts[static_cast<std::size_t>(g)];
+        if (has_apos && rows_before > 0 &&
+            static_cast<std::size_t>(j) < other.group_first_row.size() &&
+            static_cast<std::size_t>(g) < group_first_row.size() &&
+            other.group_first_row[static_cast<std::size_t>(j)] <
+                group_first_row[static_cast<std::size_t>(g)])
+            apos_unordered = true;
         counts[static_cast<std::size_t>(g)] +=
             other.counts[static_cast<std::size_t>(j)];
         if (static_cast<std::size_t>(j) < other.group_first_row.size()) {
@@ -1695,6 +1871,30 @@ class AggState : public dstd::HeapObject {
                         other.arg_repr[sr + static_cast<std::size_t>(ri)];
             }
         }
+        if (has_apos) {
+            const std::size_t da = static_cast<std::size_t>(g) * n_apos;
+            const std::size_t sa = static_cast<std::size_t>(j) * n_apos;
+            for (std::size_t slot = 0; slot < n_apos; ++slot) {
+                const std::uint8_t dom = other.apos_dom[sa + slot];
+                if (dom == 0) continue;
+                const bool adopt = apos_dom[da + slot] == 0 ||
+                                   (apos_dom[da + slot] == dom &&
+                                    apos_better(apos_dir[slot], dom,
+                                                other.apos_bits[sa + slot],
+                                                apos_bits[da + slot]));
+                if (!adopt) continue;
+                apos_dom[da + slot] = dom;
+                apos_bits[da + slot] = other.apos_bits[sa + slot];
+                apos_rank[da + slot] = other.apos_rank[sa + slot] + rows_before;
+            }
+        }
+        if (has_bw) {
+            const std::size_t dw = static_cast<std::size_t>(g) * n_bw;
+            const std::size_t sw = static_cast<std::size_t>(j) * n_bw;
+            for (std::size_t slot = 0; slot < n_bw; ++slot)
+                bw_fold(bw_op[slot], bw_acc[dw + slot], bw_seen[dw + slot],
+                        other.bw_acc[sw + slot], other.bw_seen[sw + slot]);
+        }
         if (has_bitor) {
             const std::size_t dbo = static_cast<std::size_t>(g) * n_bitor;
             const std::size_t sbo = static_cast<std::size_t>(j) * n_bitor;
@@ -1706,6 +1906,15 @@ class AggState : public dstd::HeapObject {
             const std::size_t sp = static_cast<std::size_t>(j) * n_prod;
             for (std::size_t slot = 0; slot < n_prod; ++slot)
                 prod_acc[dp + slot] *= other.prod_acc[sp + slot];
+        }
+        if (has_qv) {
+            const std::size_t dq = static_cast<std::size_t>(g) * n_qv;
+            const std::size_t sq = static_cast<std::size_t>(j) * n_qv;
+            for (std::size_t slot = 0; slot < n_qv; ++slot) {
+                dstd::Vector<double>& dst = qv[dq + slot];
+                const dstd::Vector<double>& src = other.qv[sq + slot];
+                dst.insert(dst.end(), src.begin(), src.end());
+            }
         }
         if (has_msk) {
             const std::size_t dm = static_cast<std::size_t>(g) * n_msk;
@@ -1801,6 +2010,9 @@ class AggState : public dstd::HeapObject {
         spec_field = other.spec_field;
         field_vc = other.field_vc;
         field_domain = other.field_domain;
+        field_type = other.field_type;
+        field_time_unit = other.field_time_unit;
+        field_timezone = other.field_timezone;
         field_is_str = other.field_is_str;
         nf = other.nf;
         has_fl = other.has_fl;
@@ -1816,6 +2028,17 @@ class AggState : public dstd::HeapObject {
         arg_dir = other.arg_dir;
         arg_slot_reprs = other.arg_slot_reprs;
         arg_val_col = other.arg_val_col;
+        has_apos = other.has_apos;
+        n_apos = other.n_apos;
+        spec_apos = other.spec_apos;
+        apos_col = other.apos_col;
+        apos_dir = other.apos_dir;
+        has_bw = other.has_bw;
+        n_bw = other.n_bw;
+        spec_bw = other.spec_bw;
+        bw_col = other.bw_col;
+        bw_op = other.bw_op;
+        bw_type = other.bw_type;
         has_bitor = other.has_bitor;
         n_bitor = other.n_bitor;
         spec_bitor = other.spec_bitor;
@@ -1824,6 +2047,10 @@ class AggState : public dstd::HeapObject {
         n_prod = other.n_prod;
         spec_prod = other.spec_prod;
         prod_val_col = other.prod_val_col;
+        has_qv = other.has_qv;
+        n_qv = other.n_qv;
+        spec_qv = other.spec_qv;
+        qv_val_col = other.qv_val_col;
         has_msk = other.has_msk;
         n_msk = other.n_msk;
         spec_msk = other.spec_msk;

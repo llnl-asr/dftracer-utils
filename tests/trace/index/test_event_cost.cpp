@@ -2,6 +2,7 @@
 // The cases count work, not time.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -35,7 +36,7 @@ constexpr int SHAPES = 3;
 constexpr std::time_t FIXED_MTIME = 1700000000;
 constexpr std::uint64_t LEAF_PATHS = 24;
 constexpr std::uint64_t MIN_REDUCTION = 20;
-dstd::String write_trace(const dstd::String& dir) {
+dstd::String write_trace(dstd::CStringView dir) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < EVENTS; ++i) {
@@ -46,7 +47,7 @@ dstd::String write_trace(const dstd::String& dir) {
             case 0:
                 dstd::fmt_append<
                     ",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":1,"
-                    "\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/"
+                    "\"ph\":1,\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/"
                     "data/"
                     "f{}\",\"size\":{},\"hhash\":\"a1b2c3d4e5f60718\","
                     "\"level\":{}}}\n">(out, pid, ts, i % 37, i % 4096, i % 3);
@@ -54,25 +55,25 @@ dstd::String write_trace(const dstd::String& dir) {
             case 1:
                 dstd::fmt_append<
                     ",\"name\":\"compute\",\"cat\":\"APP\",\"pid\":{},\"tid\":"
-                    "2,\"ph\":\"X\",\"ts\":{},\"dur\":7}\n">(out, pid, ts);
+                    "2,\"ph\":1,\"ts\":{},\"dur\":7}\n">(out, pid, ts);
                 break;
             default:
                 dstd::fmt_append<
                     ",\"name\":\"write\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
-                    "1,\"ph\":\"X\",\"ts\":{},\"dur\":5,\"args\":{\"io\":{"
+                    "1,\"ph\":1,\"ts\":{},\"dur\":5,\"args\":{\"io\":{"
                     "\"off\":{},\"len\":512},\"hosts\":[\"n1\",\"n2\"],"
                     "\"note\":null,\"ratio\":0.5}}\n">(out, pid, ts, i);
         }
     }
     out += "]\n";
-    const dstd::String path =
-        dftu_utils_test::write_stored_gz_trace(dir + "/trace.pfw.gz", out);
+    const dstd::String path = dftu_utils_test::write_stored_gz_trace(
+        dstd::String(dir) + "/trace.pfw.gz", out);
     const timespec fixed[2] = {{FIXED_MTIME, 0}, {FIXED_MTIME, 0}};
     REQUIRE(::utimensat(AT_FDCWD, path.c_str(), fixed, 0) == 0);
     return path;
 }
 
-void build_one(const dstd::String& file, const dstd::String& index_dir) {
+void build_one(dstd::CStringView file, dstd::CStringView index_dir) {
     Runtime rt(4);
     trace::index::build::IndexBuildBatchResult result;
     auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {

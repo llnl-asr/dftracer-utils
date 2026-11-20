@@ -25,7 +25,7 @@ class StreamBase : public ReaderStream {
      * Internal method used by stream factories to set up the stream.
      */
     virtual void initialize(
-        const dstd::String &gz_path, std::size_t start_bytes,
+        dstd::StringView gz_path, std::size_t start_bytes,
         std::size_t end_bytes,
         dftracer::utils::trace::index::gzip::CheckpointIndexer &indexer) = 0;
 };

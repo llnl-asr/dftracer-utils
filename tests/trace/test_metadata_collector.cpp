@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/archive_format.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -25,9 +26,9 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::trace;
 
 // Helper to create a test trace file
-static dstd::String create_test_trace_file(const dstd::String& dir,
+static dstd::String create_test_trace_file(dstd::CStringView dir,
                                            int event_count) {
-    dstd::String file_path = dir + "/test.trace.gz";
+    dstd::String file_path = dstd::String(dir) + "/test.trace.gz";
     dftu_utils_test::TextOut ofs;
 
     const char* io_names[] = {"pread", "pwrite", "read",
@@ -36,15 +37,15 @@ static dstd::String create_test_trace_file(const dstd::String& dir,
 
     for (int i = 1; i <= event_count; ++i) {
         // Create valid JSON events similar to DFTracer format
-        uint64_t timestamp_us =
-            1000000000ULL + static_cast<uint64_t>(i * 100000);
+        std::uint64_t timestamp_us =
+            1000000000ULL + static_cast<std::uint64_t>(i * 100000);
         const char* op_name = io_names[i % name_count];
         int size = 1024 * i;
 
         ofs << R"({"id":)" << i << R"(,"pid":)" << (1000 + i) << R"(,"tid":)"
             << (2000 + i) << R"(,"name":")" << op_name << R"(")"
             << R"(,"cat":"IO")"
-            << R"(,"ph":"C")"
+            << R"(,"ph":2)"
             << R"(,"ts":)" << timestamp_us << R"(,"dur":)" << (100 + i * 10)
             << R"(,"args":{"ret":)" << size << R"(})"
             << R"(})" << "\n";
@@ -332,7 +333,7 @@ TEST_SUITE("MetadataCollectorRoot") {
             REQUIRE(dstd::fs::create_directories(sub).has_value());
             files.push_back(create_test_trace_file(sub, 20 + i));
         }
-        auto collect = [&](const dstd::String& file) {
+        auto collect = [&](dstd::CStringView file) {
             MetadataCollectorUtility collector;
             return collector(MetadataCollectorUtilityInput::from_file(
                                  dstd::String(file))

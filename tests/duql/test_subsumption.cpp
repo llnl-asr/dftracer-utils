@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/subsumption.h>
 #include <doctest/doctest.h>
@@ -10,7 +11,8 @@ using namespace dftracer::utils::duql;
 namespace {
 
 // True if an MV filtered by `mv` can answer a query filtered by `q`.
-bool subsumes(const char* mv, const char* q) {
+bool subsumes(dftracer::utils::dstd::StringView mv,
+              dftracer::utils::dstd::StringView q) {
     return query_subsumes(dftracer::utils::duql::detail::QueryAccess::root(
                               dftu_utils_test::ok(Query::from_string(mv))),
                           dftracer::utils::duql::detail::QueryAccess::root(

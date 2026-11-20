@@ -7,7 +7,7 @@ DataFrame
 ordered set of typed :doc:`Series <series>`, computed with SIMD kernels and
 bridged zero-copy to Arrow, pandas, NumPy, and polars only at the edge. It is
 what :class:`~dftracer.utils.TraceViewer` terminals (``collect``,
-``collect_typed``, ``merge_partials``) return, and what the constructors below
+``merge_partials``) return, and what the constructors below
 build from other sources.
 
 .. code-block:: python
@@ -40,7 +40,7 @@ How the DataFrame wrapper relates to Series and its native base:
 --------------------
 
 ``df.apply(expr)`` is the frame-first spelling of evaluating a
-:class:`~dftracer.utils.columnar.ColumnExpr`, equivalent to
+:class:`~dftracer.utils.Expr`, equivalent to
 ``expr.apply(df)``:
 
 .. code-block:: python

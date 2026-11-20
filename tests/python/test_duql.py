@@ -1,66 +1,65 @@
 # SPDX-License-Identifier: MIT
-"""duql (Field/Expr) serialization and TraceViewer.filter(Expr) wiring."""
+"""duql (col/Expr) serialization and TraceViewer.filter(Expr) wiring."""
 
 import gzip
 import os
 
 import pytest
 
-from dftracer.utils import Field
-from dftracer.utils.columnar import Expr
+from dftracer.utils import Expr, col
 
 
 def test_comparisons():
-    assert str(Field("cat") == "POSIX") == 'cat == "POSIX"'
-    assert str(Field("dur") > 1000) == "dur > 1000"
-    assert str(Field("dur") <= 5) == "dur <= 5"
-    assert str(Field("ok") == True) == "ok == true"  # noqa: E712
+    assert str(col("cat") == "POSIX") == 'cat == "POSIX"'
+    assert str(col("dur") > 1000) == "dur > 1000"
+    assert str(col("dur") <= 5) == "dur <= 5"
+    assert str(col("ok") == True) == "ok == true"  # noqa: E712
 
 
 def test_boolean_composition():
-    q = (Field("cat") == "POSIX") & (Field("dur") > 1000)
+    q = (col("cat") == "POSIX") & (col("dur") > 1000)
     assert str(q) == '(cat == "POSIX" and dur > 1000)'
-    q = (Field("cat") == "POSIX") | (Field("cat") == "STDIO")
+    q = (col("cat") == "POSIX") | (col("cat") == "STDIO")
     assert str(q) == '(cat == "POSIX" or cat == "STDIO")'
-    assert str(~(Field("cat") == "POSIX")) == 'not (cat == "POSIX")'
+    assert str(~(col("cat") == "POSIX")) == 'not (cat == "POSIX")'
 
 
 def test_in_and_not_in():
-    assert str(Field("cat").is_in(["POSIX", "STDIO"])) == 'cat in ["POSIX", "STDIO"]'
-    assert str(Field("cat").not_in(["MPI"])) == 'cat not in ["MPI"]'
+    assert str(col("cat").is_in(["POSIX", "STDIO"])) == 'cat in ["POSIX", "STDIO"]'
+    assert str(col("cat").not_in(["MPI"])) == 'cat not in ["MPI"]'
 
 
 def test_string_match_ops():
-    assert str(Field("name").like("%read%")) == 'name like "%read%"'
-    assert str(Field("name").ilike("READ")) == 'name ilike "READ"'
-    assert str(Field("name").regex("^p?read$")) == 'name ~ "^p?read$"'
-    assert str(Field("name").iregex("READ")) == 'name ~* "READ"'
+    assert str(col("name").like("%read%")) == 'name like "%read%"'
+    assert str(col("name").ilike("READ")) == 'name ilike "READ"'
+    assert str(col("name").regex("^p?read$")) == 'name ~ "^p?read$"'
+    assert str(col("name").iregex("READ")) == 'name ~* "READ"'
     # Substring is case-sensitive (pandas / polars), so it serializes as an
     # escaped LIKE; the DSL's literal-first `"sub" in field` is the
     # case-insensitive form.
-    assert str(Field("args.file").contains("tmp")) == 'args.file like "%tmp%"'
+    assert str(col("args.file").contains("tmp")) == 'args.file like "%tmp%"'
     assert (
-        str(Field("args.file").contains("a%b_c", case=True))
+        str(col("args.file").contains("a%b_c", case=True))
         == 'args.file like "%a\\\\%b\\\\_c%" escape "\\\\"'
     )
-    assert str(Field("args.file").contains("tmp", case=False)) == '"tmp" in args.file'
-    assert str(Field("name").starts_with("pre")) == 'name like "pre%"'
-    assert str(Field("name").ends_with("64")) == 'name like "%64"'
+    assert str(col("args.file").contains("tmp", case=False)) == '"tmp" in args.file'
+    assert str(col("name").starts_with("pre")) == 'name like "pre%"'
+    assert str(col("name").ends_with("64")) == 'name like "%64"'
     with pytest.raises(TypeError, match="not an index-pushable"):
-        Field("name").fullmatch("x").to_duql()
+        col("name").fullmatch("x").to_duql()
     with pytest.raises(TypeError, match="not an index-pushable"):
-        Field("name").lower().like("x").to_duql()
+        col("name").lower().like("x").to_duql()
 
 
 def test_nested_field_path():
-    assert str(Field("args.level") == "DEBUG") == 'args.level == "DEBUG"'
+    assert str(col("args.level") == "DEBUG") == 'args.level == "DEBUG"'
 
 
 def test_flat_dotted_arg_key_serializes():
     # A flat arg key that itself contains dots ("cqe.raw_ns") serializes as
     # written, bare or with the explicit args. prefix.
-    assert str(Field("cqe.raw_ns") > 100) == "cqe.raw_ns > 100"
-    assert str(Field("args.cqe.raw_ns") > 100) == "args.cqe.raw_ns > 100"
+    assert str(col("cqe.raw_ns") > 100) == "cqe.raw_ns > 100"
+    assert str(col("args.cqe.raw_ns") > 100) == "args.cqe.raw_ns > 100"
 
 
 def _write_trace(path):
@@ -69,7 +68,7 @@ def _write_trace(path):
             name = ["read", "write"][i % 2]
             cat = ["POSIX", "STDIO"][i % 2]
             f.write(
-                '{"ph":"X","name":"%s","cat":"%s","pid":1,"tid":1,'
+                '{"ph":1,"name":"%s","cat":"%s","pid":1,"tid":1,'
                 '"ts":%d,"dur":%d,"args":{}}\n' % (name, cat, 1000 + i, 5 + i)
             )
 
@@ -82,7 +81,7 @@ def _write_dotted_arg_trace(path):
             op = "SEND" if i % 2 == 0 else "RECV"
             raw = 100 if i % 2 == 0 else 200
             f.write(
-                '{"ph":"X","name":"rdma","cat":"ib","pid":1,"tid":1,'
+                '{"ph":1,"name":"rdma","cat":"ib","pid":1,"tid":1,'
                 '"ts":%d,"dur":5,"args":{"cqe.raw_ns":%d,"mlx5.op":"%s"}}\n' % (1000 + i, raw, op)
             )
 
@@ -97,15 +96,15 @@ def test_flat_dotted_arg_key_resolves_at_runtime(tmp_path):
     _write_dotted_arg_trace(trace)
     idx = os.path.join(tmp_path, "idx")
     with Indexer(
-        directory=str(tmp_path),
+        str(tmp_path),
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     def count(pred):
         tbl = (
-            TraceViewer(str(tmp_path), index_path=idx)
+            TraceViewer(str(tmp_path), index_dir=idx)
             .phase("events")
             .filter(pred)
             .group_by("mlx5.op")
@@ -116,11 +115,11 @@ def test_flat_dotted_arg_key_resolves_at_runtime(tmp_path):
         return int(df["count"].sum())
 
     # Group-by a flat dotted key returns both groups.
-    all_ops = count(Field("cat") == "ib")
+    all_ops = count(col("cat") == "ib")
     assert all_ops == 20
     # Filter on the flat dotted key, bare and prefixed, agree and select half.
-    assert count(Field("cqe.raw_ns") > 150) == 10
-    assert count(Field("args.cqe.raw_ns") > 150) == 10
+    assert count(col("cqe.raw_ns") > 150) == 10
+    assert count(col("args.cqe.raw_ns") > 150) == 10
 
 
 def test_traceviewer_filter_accepts_expr(tmp_path):
@@ -132,18 +131,18 @@ def test_traceviewer_filter_accepts_expr(tmp_path):
     _write_trace(trace)
     idx = os.path.join(tmp_path, "idx")
     with Indexer(
-        directory=str(tmp_path),
+        str(tmp_path),
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
-    expr = Field("cat") == "POSIX"
+    expr = col("cat") == "POSIX"
     assert isinstance(expr, Expr)
 
     def count(pred):
         tbl = (
-            TraceViewer(str(tmp_path), index_path=idx)
+            TraceViewer(str(tmp_path), index_dir=idx)
             .phase("events")
             .filter(pred)
             .group_by("cat")
@@ -160,16 +159,19 @@ def test_traceviewer_filter_accepts_expr(tmp_path):
 def test_unified_f_is_one_object():
     """The two historical `F`s (columnar value builder, query predicate builder)
     are now the same object, exported from every entry point."""
+    from dftracer.utils import F as columnar_f
     from dftracer.utils import F as top_f
-    from dftracer.utils import Field as top_field
-    from dftracer.utils.columnar import F as columnar_f
-    from dftracer.utils.columnar import Field as query_field
+    from dftracer.utils import col as columnar_col
+    from dftracer.utils import col as top_col
 
     assert top_f is columnar_f
-    assert top_field is query_field
-    # Field("dur") and F.dur are the same field leaf.
-    assert isinstance(query_field("dur"), Expr)
-    assert str(query_field("dur") == 1) == str(top_f.dur == 1)
+    assert top_col is columnar_col
+    # col("dur") and F.dur are the same field leaf.
+    assert isinstance(columnar_col("dur"), Expr)
+    assert str(columnar_col("dur") == 1) == str(top_f.dur == 1)
+    import dftracer.utils as dft
+
+    assert not hasattr(dft, "Field") and not hasattr(dft, "ColumnExpr")
 
 
 def test_unified_f_value_and_predicate():
@@ -272,15 +274,15 @@ def test_traceviewer_filter_unified_predicates(tmp_path):
     _write_trace(trace)
     idx = os.path.join(tmp_path, "idx")
     with Indexer(
-        directory=str(tmp_path),
+        str(tmp_path),
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
-        ix.ensure_indexed()
+        ix.ensure()
 
     def count(pred):
         tbl = (
-            TraceViewer(str(tmp_path), index_path=idx)
+            TraceViewer(str(tmp_path), index_dir=idx)
             .phase("events")
             .filter(pred)
             .group_by("cat")
@@ -293,11 +295,11 @@ def test_traceviewer_filter_unified_predicates(tmp_path):
     assert count(F.dur > 0) == count("dur > 0")
 
     # filter accepts like predicates (built and pushed down).
-    v = TraceViewer(str(tmp_path), index_path=idx).phase("events").filter(F.cat.like("POS%"))
+    v = TraceViewer(str(tmp_path), index_dir=idx).phase("events").filter(F.cat.like("POS%"))
     assert isinstance(v, TraceViewer)
 
     # A non-pushable predicate filters the collected rows, not the index.
-    events = TraceViewer(str(tmp_path), index_path=idx).phase("events")
+    events = TraceViewer(str(tmp_path), index_dir=idx).phase("events")
     v3 = events.filter((F.dur + F.ts) > 1005)
     assert isinstance(v3, TraceViewer)
     every = pa.table(events.collect()).to_pandas()
@@ -311,7 +313,7 @@ def test_string_predicates_match_literal_wildcards_in_a_scan(tmp_path):
     """starts_with, ends_with and contains take `_` and `%` literally when the
     scan filters a trace, as str.startswith does."""
     import dftracer.utils as dftu
-    from dftracer.utils.columnar import col
+    from dftracer.utils import col
 
     names = ["MPI_Send", "MPIX", "MPI%x", "a_b", "axb", "mpi_send"]
     path = tmp_path / "names.ndjson.gz"
@@ -331,9 +333,9 @@ def test_string_predicates_match_literal_wildcards_in_a_scan(tmp_path):
 
 def test_any_renders_and_filters_array_elements(tmp_path):
     import dftracer.utils as dftu
-    from dftracer.utils.columnar import F
+    from dftracer.utils import F
 
-    assert str(Field("tags").any() == "a") == 'any(tags) == "a"'
+    assert str(col("tags").any() == "a") == 'any(tags) == "a"'
     assert str(F.sizes.any() > 10) == "any(sizes) > 10"
     assert str(F.tags.any().is_in(["a", "b"])) == 'any(tags) in ["a", "b"]'
     with pytest.raises(dftu.DFTUtilsValueError, match="any"):

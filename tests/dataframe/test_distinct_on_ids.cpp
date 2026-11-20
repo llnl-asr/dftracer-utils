@@ -207,7 +207,8 @@ TEST_SUITE("distinct on ids") {
                 CHECK(cells(col.unique()) == cells(ref.unique()));
                 CHECK(col.unique().length() == ref.unique().length());
                 CHECK(col.nunique() == ref.nunique());
-                CHECK(col.nunique() == col.unique().length());
+                CHECK(col.nunique() ==
+                      col.unique().length() - (col.null_count() > 0 ? 1 : 0));
                 const DataFrame vc = dftu_utils_test::ok(col.value_counts());
                 const DataFrame rc = dftu_utils_test::ok(ref.value_counts());
                 CHECK(frame_cells(vc) == frame_cells(rc));
@@ -276,21 +277,22 @@ TEST_SUITE("distinct on ids") {
         CHECK(dftu_utils_test::ok(df.unique()).num_rows() == 0);
     }
 
-    TEST_CASE("float unique keeps every NaN row and the sorted order") {
+    TEST_CASE("float unique keeps one NaN row and the sorted order") {
         dstd::Vector<double> v{std::nan(""), std::nan(""), 1.0, 0.0,
                                -0.0,         7.0,          5.0};
         dstd::Vector<std::uint8_t> valid{0b0111111};
         Series s = Series::flat(TypeId::Float64, v.data(), 7, valid.data());
         Series u = s.unique();
         REQUIRE(u.length() == 5);
-        CHECK(s.nunique() == 5);
+        CHECK(s.nunique() == 4);
+        CHECK(u.is_null(0));
+        CHECK(u.null_count() == 1);
         const double* d = u.values<double>().data();
-        // The sorted order puts NaN last, with or without nulls in the column.
-        CHECK(d[0] == 0.0);
-        CHECK(!std::signbit(d[0]));
-        CHECK(d[1] == 1.0);
-        CHECK(d[2] == 7.0);
-        CHECK(std::isnan(d[3]));
+        // The sorted order puts the null first and NaN last.
+        CHECK(d[1] == 0.0);
+        CHECK(!std::signbit(d[1]));
+        CHECK(d[2] == 1.0);
+        CHECK(d[3] == 7.0);
         CHECK(std::isnan(d[4]));
     }
 }

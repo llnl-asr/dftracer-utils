@@ -14,7 +14,7 @@ ops. Anything not listed here is not part of the drop-in surface.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence, Tuple, Union
+from typing import Literal, Sequence
 
 from .dataframe import DataFrame, JoinHow
 from .series import Series
@@ -33,12 +33,14 @@ __all__ = [
 ]
 
 
-def read_parquet(path: str, columns: Optional[Sequence[str]] = None) -> DataFrame:
+def read_parquet(path: str, columns: Sequence[str] | None = None) -> DataFrame:
     """Read a Parquet file into a :class:`DataFrame`."""
     return DataFrame.from_parquet(path, columns=columns)
 
 
-def concat(objs: Sequence[DataFrame], how: str = "vertical") -> DataFrame:
+def concat(
+    objs: Sequence[DataFrame], how: Literal["vertical", "diagonal"] = "vertical"
+) -> DataFrame:
     """Vertically concatenate frames (UNION ALL). ``how="diagonal"`` unions the
     columns, null-filling those absent from a part."""
     frames = list(objs)
@@ -46,17 +48,17 @@ def concat(objs: Sequence[DataFrame], how: str = "vertical") -> DataFrame:
         raise ValueError("concat() needs at least one frame")
     if how not in ("vertical", "diagonal"):
         raise ValueError("how must be 'vertical' or 'diagonal'")
-    return frames[0].concat(*frames[1:], how=how)  # type: ignore[arg-type]
+    return frames[0].concat(*frames[1:], how=how)
 
 
 def merge(
     left: DataFrame,
     right: DataFrame,
     how: JoinHow = "inner",
-    on: Union[str, Sequence[str], None] = None,
-    left_on: Union[str, Sequence[str], None] = None,
-    right_on: Union[str, Sequence[str], None] = None,
-    suffixes: Tuple[str, str] = ("_x", "_y"),
+    on: str | Sequence[str] | None = None,
+    left_on: str | Sequence[str] | None = None,
+    right_on: str | Sequence[str] | None = None,
+    suffixes: tuple[str, str] = ("_x", "_y"),
     nulls_equal: bool = False,
 ) -> DataFrame:
     """Join two frames (:meth:`DataFrame.merge`): with no key, on the columns
@@ -73,7 +75,7 @@ def merge(
     )
 
 
-def get_dummies(df: DataFrame, columns: Union[str, Sequence[str]]) -> DataFrame:
+def get_dummies(df: DataFrame, columns: str | Sequence[str]) -> DataFrame:
     """One-hot encode ``columns`` into one Int8 column per distinct value."""
     out = df
     for name in [columns] if isinstance(columns, str) else list(columns):

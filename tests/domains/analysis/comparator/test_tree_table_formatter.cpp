@@ -60,8 +60,8 @@ static dstd::String render_to_string(const ComparisonOutput& output) {
     return result;
 }
 
-static std::size_t count_occurrences(const dstd::String& haystack,
-                                     const dstd::String& needle) {
+static std::size_t count_occurrences(dstd::StringView haystack,
+                                     dstd::StringView needle) {
     std::size_t count = 0;
     std::size_t pos = 0;
     while ((pos = haystack.find(needle, pos)) != dstd::String::npos) {

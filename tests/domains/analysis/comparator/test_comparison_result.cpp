@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/agg_query.h>
+#include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -20,8 +21,10 @@ using namespace dftracer::utils::trace;
 // `m2` holds the central second moment, sum((x - mean)^2), about the running
 // mean (held as `shift`, with `cmean` the remainder); the caller passes both.
 static dataframe::FieldStat make_stats(double mean, double central_m2,
-                                       uint64_t total, uint64_t min_val,
-                                       uint64_t max_val, uint64_t count = 0) {
+                                       std::uint64_t total,
+                                       std::uint64_t min_val,
+                                       std::uint64_t max_val,
+                                       std::uint64_t count = 0) {
     dataframe::FieldStat s;
     s.sum = static_cast<double>(total);
     s.min = static_cast<double>(min_val);
@@ -44,8 +47,9 @@ static dstd::StringIntern& test_intern() {
 // A row of a query grouped by pid and window, with `count` events of equal
 // duration and, when `size_total` is set, equal size.
 static void add_row(AggQueryResult& result, dstd::StringView cat,
-                    dstd::StringView name, uint64_t pid, uint64_t window,
-                    uint64_t count, uint64_t dur_total, uint64_t size_total) {
+                    dstd::StringView name, std::uint64_t pid,
+                    std::uint64_t window, std::uint64_t count,
+                    std::uint64_t dur_total, std::uint64_t size_total) {
     AggKey key;
     key.cat = result.strings().get_or_insert(cat);
     key.name = result.strings().get_or_insert(name);
@@ -53,7 +57,7 @@ static void add_row(AggQueryResult& result, dstd::StringView cat,
     key.window = window;
     AggSums p;
     p.count = count;
-    for (uint64_t i = 0; i < count; ++i) {
+    for (std::uint64_t i = 0; i < count; ++i) {
         p.duration.add(dur_total / count);
         if (size_total > 0) p.size.add(size_total / count);
     }
@@ -66,8 +70,9 @@ static CollapsedMap collapse(const AggQueryResult& windows) {
                              test_intern());
 }
 
-static void add_events(CollapsedMetrics& cm, uint64_t count, uint64_t dur) {
-    for (uint64_t i = 0; i < count; ++i) {
+static void add_events(CollapsedMetrics& cm, std::uint64_t count,
+                       std::uint64_t dur) {
+    for (std::uint64_t i = 0; i < count; ++i) {
         ++cm.merged.count;
         cm.merged.duration.add(dur);
     }
@@ -75,7 +80,8 @@ static void add_events(CollapsedMetrics& cm, uint64_t count, uint64_t dur) {
 
 static CollapsedMetrics make_collapsed(double count_mean, double dur_mean,
                                        double size_mean, double xfer_mean,
-                                       double bw_mean, size_t window_count) {
+                                       double bw_mean,
+                                       std::size_t window_count) {
     CollapsedMetrics cm;
     cm.count_mean = count_mean;
     cm.dur_mean_of_means = dur_mean;
@@ -83,8 +89,8 @@ static CollapsedMetrics make_collapsed(double count_mean, double dur_mean,
     cm.xfer_mean = xfer_mean;
     cm.bw_mean = bw_mean;
     cm.window_count = window_count;
-    add_events(cm, static_cast<size_t>(count_mean),
-               static_cast<uint64_t>(dur_mean));
+    add_events(cm, static_cast<std::size_t>(count_mean),
+               static_cast<std::uint64_t>(dur_mean));
     return cm;
 }
 
@@ -221,7 +227,7 @@ TEST_SUITE("CollapseByGroup") {
 }
 
 TEST_SUITE("ComparisonFilter") {
-    static ComparisonFilter filter_of(const dstd::String& text) {
+    static ComparisonFilter filter_of(dstd::StringView text) {
         auto q = dftracer::utils::duql::Query::from_string(text);
         REQUIRE(q.has_value());
         auto f = filter_from_query(*q);
@@ -260,7 +266,7 @@ TEST_SUITE("ComparisonFilter") {
     TEST_CASE("pid and ts bounds") {
         auto f = filter_of("pid in [3, 1] AND ts >= 10 AND ts < 20");
         REQUIRE(f.has_pids);
-        CHECK(f.pids == dstd::Vector<uint64_t>{1, 3});
+        CHECK(f.pids == dstd::Vector<std::uint64_t>{1, 3});
         CHECK(f.ts_begin == 10);
         CHECK(f.ts_end == 20);
         CHECK(f.same_cut(f));
@@ -310,7 +316,7 @@ TEST_SUITE("ComparisonFilter") {
         key.cat = merged.strings().get_or_insert("posix");
         key.name = merged.strings().get_or_insert("read");
         trace::index::schemas::dft::agg::AggPartial p;
-        for (uint64_t v : {10, 20, 30, 40, 50}) {
+        for (std::uint64_t v : {10, 20, 30, 40, 50}) {
             ++p.count;
             p.duration.add(v);
             p.duration_q.add(static_cast<double>(v));
@@ -326,8 +332,9 @@ TEST_SUITE("ComparisonFilter") {
 
     TEST_CASE("metadata counts processes, threads and file pairs") {
         AggQueryResult merged;
-        auto row = [&](dstd::StringView name, uint64_t ts, uint64_t te,
-                       uint64_t dur_total, auto&& observe) {
+        auto row = [&](dstd::StringView name, std::uint64_t ts,
+                       std::uint64_t te, std::uint64_t dur_total,
+                       auto&& observe) {
             AggKey key;
             key.cat = merged.strings().get_or_insert("posix");
             key.name = merged.strings().get_or_insert(name);
@@ -336,7 +343,7 @@ TEST_SUITE("ComparisonFilter") {
             p.ts = ts;
             p.te = te;
             p.duration.add(dur_total);
-            p.size.add(uint64_t{100});
+            p.size.add(std::uint64_t{100});
             observe(p);
             merged.rows.emplace(key, std::move(p));
         };
@@ -369,7 +376,8 @@ TEST_SUITE("CompareMetrics") {
         auto base = make_collapsed(100.0, 500.0, 0.0, 0.0, 0.0, 1);
         auto var = make_collapsed(150.0, 500.0, 0.0, 0.0, 0.0, 1);
 
-        auto results = compare_metrics(base, var, {"count"}, {});
+        const dstd::String names[] = {"count"};
+        auto results = compare_metrics(base, var, names, {});
         REQUIRE(results.size() == 1);
         const auto& cmp = results[0];
         CHECK(cmp.metric_name == "count");
@@ -381,7 +389,8 @@ TEST_SUITE("CompareMetrics") {
         auto base = make_collapsed(10.0, 200.0, 0.0, 0.0, 0.0, 1);
         auto var = make_collapsed(10.0, 300.0, 0.0, 0.0, 0.0, 1);
 
-        auto results = compare_metrics(base, var, {"duration"}, {});
+        const dstd::String names[] = {"duration"};
+        auto results = compare_metrics(base, var, names, {});
         // At least the mean entry; no percentile entries since percentiles={}
         REQUIRE_FALSE(results.empty());
         auto it = std::find_if(results.begin(), results.end(),
@@ -397,7 +406,8 @@ TEST_SUITE("CompareMetrics") {
         auto base = make_collapsed(10.0, 100.0, 512.0, 0.0, 0.0, 1);
         auto var = make_collapsed(10.0, 100.0, 1024.0, 0.0, 0.0, 1);
 
-        auto results = compare_metrics(base, var, {"size"}, {});
+        const dstd::String names[] = {"size"};
+        auto results = compare_metrics(base, var, names, {});
         REQUIRE_FALSE(results.empty());
         auto it = std::find_if(results.begin(), results.end(),
                                [](const MetricComparison& c) {
@@ -412,7 +422,8 @@ TEST_SUITE("CompareMetrics") {
         auto base = make_collapsed(10.0, 100.0, 0.0, 0.0, 0.0, 1);
         auto var = make_collapsed(10.0, 100.0, 0.0, 0.0, 0.0, 1);
 
-        auto results = compare_metrics(base, var, {"transfer_size"}, {});
+        const dstd::String names[] = {"transfer_size"};
+        auto results = compare_metrics(base, var, names, {});
         auto it = std::find_if(results.begin(), results.end(),
                                [](const MetricComparison& c) {
                                    return c.metric_name == "transfer_size";
@@ -425,7 +436,8 @@ TEST_SUITE("CompareMetrics") {
         auto base = make_collapsed(10.0, 100.0, 0.0, 0.0, 1000.0, 1);
         auto var = make_collapsed(10.0, 100.0, 0.0, 0.0, 500.0, 1);
 
-        auto results = compare_metrics(base, var, {"bandwidth"}, {});
+        const dstd::String names[] = {"bandwidth"};
+        auto results = compare_metrics(base, var, names, {});
         REQUIRE(results.size() == 1);
         CHECK(results[0].metric_name == "bandwidth");
         CHECK(results[0].is_regression == true);
@@ -442,8 +454,18 @@ TEST_SUITE("CompareMetrics") {
         var.window_count = 1;
         add_events(var, 100, 10);
 
-        auto results = compare_metrics(base, var, {"count"}, {});
+        const dstd::String names[] = {"count"};
+        auto results = compare_metrics(base, var, names, {});
         REQUIRE(results.size() == 1);
         CHECK(results[0].pct_change == doctest::Approx(100.0).epsilon(0.01));
     }
+}
+
+TEST_CASE("name_in_query quotes and joins operation names") {
+    const dstd::StringView one[] = {"read"};
+    CHECK(trace::internal::posix_ops::name_in_query(one) ==
+          "name in [\"read\"]");
+    const dstd::StringView two[] = {"read", "pread64"};
+    CHECK(trace::internal::posix_ops::name_in_query(two) ==
+          "name in [\"read\", \"pread64\"]");
 }

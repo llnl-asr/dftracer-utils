@@ -53,11 +53,11 @@ comm::Communicator start_mpi() {
 
 /// The string codec, refusing to decode the text "bad".
 struct PickyCodec {
-    std::size_t serialized_size(const dstd::String& value) const noexcept {
+    std::size_t serialized_size(dstd::StringView value) const noexcept {
         return comm::StringCodec{}.serialized_size(value);
     }
 
-    dstd::Result<std::size_t> serialize(const dstd::String& value,
+    dstd::Result<std::size_t> serialize(dstd::StringView value,
                                         dstd::Span<std::byte> out) const {
         return comm::StringCodec{}.serialize(value, out);
     }
@@ -103,8 +103,8 @@ std::uint32_t bits_of(float value) {
     return bits;
 }
 
-dstd::Span<const std::byte> view_of(const dstd::Vector<std::byte>& bytes) {
-    return dstd::Span<const std::byte>(bytes.data(), bytes.size());
+dstd::Span<const std::byte> view_of(dstd::Span<const std::byte> bytes) {
+    return bytes;
 }
 
 dstd::Vector<std::byte> filled(std::size_t size, std::uint32_t value) {

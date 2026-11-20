@@ -126,7 +126,8 @@ struct Captured {
     }
     static dftu_status running(dftu_ctx*) { return DFTU_OK; }
 
-    static constexpr dftu_ctx_vt VT{sizeof(dftu_ctx_vt), &record, &running};
+    static constexpr dftu_ctx_vt VT{sizeof(dftu_ctx_vt), &record, &running,
+                                    nullptr};
 
     Captured() {
         ctx.struct_size = sizeof(dftu_ctx);

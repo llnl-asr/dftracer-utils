@@ -9,6 +9,7 @@
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
+#include <span_list.h>
 
 #include <cstdint>
 
@@ -26,7 +27,8 @@ DataFrame make_frame() {
     df.columns.push_back(Series::flat_i64(a.data(), 4));
     df.columns.push_back(Series::flat_i64(b.data(), 4));
     df.columns.push_back(Series::flat_i64(dur.data(), 4));
-    df.columns.push_back(Series::strings({"io", "cpu", "io", "io"}));
+    df.columns.push_back(Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"io", "cpu", "io", "io"})));
     return df;
 }
 

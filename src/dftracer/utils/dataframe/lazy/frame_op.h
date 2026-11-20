@@ -5,6 +5,8 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
+#include <dftracer/utils/dataframe/internal/op_failure.h>
+#include <dftracer/utils/dataframe/internal/tz.h>
 #include <dftracer/utils/dataframe/lazy/common.h>
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -118,7 +120,7 @@ class OwnedFrameOpArgs {
                                                      : dstd::String());
                     break;
                 case DFTU_TOK_STRLIST:
-                    for (int32_t k = 0; k < v.list.n; ++k)
+                    for (std::int32_t k = 0; k < v.list.n; ++k)
                         s.strings.emplace_back(v.list.items[k]);
                     break;
                 case DFTU_TOK_I32LIST:
@@ -130,7 +132,7 @@ class OwnedFrameOpArgs {
                                   v.i64list.items + v.i64list.n);
                     break;
                 case DFTU_TOK_AGGLIST:
-                    for (int32_t k = 0; k < v.agglist.n; ++k) {
+                    for (std::int32_t k = 0; k < v.agglist.n; ++k) {
                         const dftu_group_agg& a = v.agglist.items[k];
                         s.strings.emplace_back(a.op ? a.op : "");
                         s.strings.emplace_back(a.column ? a.column : "");
@@ -139,7 +141,7 @@ class OwnedFrameOpArgs {
                     }
                     break;
                 case DFTU_TOK_WINLIST:
-                    for (int32_t k = 0; k < v.winlist.n; ++k) {
+                    for (std::int32_t k = 0; k < v.winlist.n; ++k) {
                         const dftu_window_spec& w = v.winlist.items[k];
                         s.strings.emplace_back(w.value ? w.value : "");
                         s.has_value.push_back(w.value != nullptr);
@@ -264,21 +266,22 @@ class OwnedFrameOpArgs {
                     break;
                 case DFTU_TOK_STR:
                     v.str.ptr = s.strings.front().c_str();
-                    v.str.len = static_cast<int32_t>(s.strings.front().size());
+                    v.str.len =
+                        static_cast<std::int32_t>(s.strings.front().size());
                     break;
                 case DFTU_TOK_STRLIST:
                     for (const dstd::String& str : s.strings)
                         cstrs[i].push_back(str.c_str());
                     v.list.items = cstrs[i].data();
-                    v.list.n = static_cast<int32_t>(cstrs[i].size());
+                    v.list.n = static_cast<std::int32_t>(cstrs[i].size());
                     break;
                 case DFTU_TOK_I32LIST:
                     v.i32list.items = s.i32s.data();
-                    v.i32list.n = static_cast<int32_t>(s.i32s.size());
+                    v.i32list.n = static_cast<std::int32_t>(s.i32s.size());
                     break;
                 case DFTU_TOK_I64LIST:
                     v.i64list.items = s.i64s.data();
-                    v.i64list.n = static_cast<int32_t>(s.i64s.size());
+                    v.i64list.n = static_cast<std::int32_t>(s.i64s.size());
                     break;
                 case DFTU_TOK_AGGLIST:
                     for (std::size_t k = 0; k < s.aggs.size(); ++k) {
@@ -289,7 +292,7 @@ class OwnedFrameOpArgs {
                         aggs[i].push_back(a);
                     }
                     v.agglist.items = aggs[i].data();
-                    v.agglist.n = static_cast<int32_t>(aggs[i].size());
+                    v.agglist.n = static_cast<std::int32_t>(aggs[i].size());
                     break;
                 case DFTU_TOK_WINLIST: {
                     std::size_t udaf_at = 0;
@@ -326,7 +329,7 @@ class OwnedFrameOpArgs {
                         wins[i].push_back(w);
                     }
                     v.winlist.items = wins[i].data();
-                    v.winlist.n = static_cast<int32_t>(wins[i].size());
+                    v.winlist.n = static_cast<std::int32_t>(wins[i].size());
                     break;
                 }
             }
@@ -427,6 +430,9 @@ inline constexpr dstd::StringView ELEMENTWISE_COLUMN_OPS[] = {
     "dftu.series.dt_part",
     "dftu.series.dt_round",
     "dftu.series.dt_format",
+    "dftu.series.dt_as_unit",
+    "dftu.series.dt_date",
+    "dftu.series.dt_time",
     "dftu.series.with_timezone"};
 
 inline bool column_op_elementwise(dstd::StringView series_op) {
@@ -445,7 +451,7 @@ inline constexpr std::int64_t NATIVE_SHIFT_MAX = 1024;
 // operand's plan, and returns its result.
 inline coro::CoroTask<dstd::Result<DataFrame>> run_frame_op(
     const dftu_op_desc* op, const OwnedFrameOpArgs& args, DataFrame primary,
-    const dstd::String& name, const dstd::Vector<dstd::String>& sch) {
+    dstd::String name, dstd::Vector<dstd::String> sch) {
     dstd::Vector<dftu_dataframe*> handles;
     struct Free {
         dstd::Vector<dftu_dataframe*>& h;
@@ -469,17 +475,36 @@ inline coro::CoroTask<dstd::Result<DataFrame>> run_frame_op(
         // Run here, not through the C runner, which has no error channel.
         const dftu_op_val* g = bag.args;
         dstd::Result<DataFrame> win = window_checked(
-            dataframe_handle_view(handles[0]), g[1].list.items, g[1].list.n,
-            g[2].list.items, g[2].list.n, g[3].winlist.items, g[3].winlist.n);
+            dataframe_handle_view(handles[0]),
+            dstd::Span<const char* const>(
+                g[1].list.items, static_cast<std::size_t>(g[1].list.n)),
+            dstd::Span<const char* const>(
+                g[2].list.items, static_cast<std::size_t>(g[2].list.n)),
+            dstd::Span<const dftu_window_spec>(
+                g[3].winlist.items, static_cast<std::size_t>(g[3].winlist.n)));
         if (!win) co_return dstd::Unexpected(std::move(win.error()));
         out = std::move(*win);
     } else {
+        tz::clear_failure();
         dftu_dataframe* result = dftu_op_run_frame(
-            op, frames.data(), static_cast<uint32_t>(frames.size()), &bag);
-        if (!result)
+            op, frames.data(), static_cast<std::uint32_t>(frames.size()), &bag);
+        if (!result) {
+            // The op ran on this thread with no suspension since, so its time
+            // zone failure is still the thread's last one.
+            dstd::String tz_text;
+            if (tz::take_failure(&tz_text) != tz::Failure::None)
+                co_return common::make_error<"{}">(
+                    common::ErrorCode::InvalidArgument, tz_text);
+            const char* why = dataframe::op_failure_reason(
+                name == COLUMN_OP ? dstd::StringView(args.strings_at(2).front())
+                                  : dstd::StringView(name));
+            if (why)
+                co_return common::make_error<"lazy frame op '{}' failed: {}">(
+                    common::ErrorCode::Internal, name.c_str(), why);
             co_return common::make_error<
                 "lazy frame op '{}' failed: the op returned no frame">(
                 common::ErrorCode::Internal, name.c_str());
+        }
         out = dataframe_handle_take(result);
     }
     if (has_rest(sch)) {

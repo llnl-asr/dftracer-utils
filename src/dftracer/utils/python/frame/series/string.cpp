@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/frame/series_detail.h>
 
 #include <cstddef>
@@ -34,182 +35,151 @@ bool as_fill_char(PyObject* arg, char* out) {
 }  // namespace
 
 PyObject* Series_str_eq(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView rhs;
     if (!as_str_view(arg, &rhs)) return nullptr;
-    return make_series(a->str_eq(rhs));
+    return make_series(kernel(*a, [&] { return a->str_eq(rhs); }));
 }
 PyObject* Series_str_contains(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView needle;
     if (!as_str_view(arg, &needle)) return nullptr;
-    return make_series(a->str_contains(needle));
+    return make_series(kernel(*a, [&] { return a->str_contains(needle); }));
 }
 PyObject* Series_str_starts_with(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView prefix;
     if (!as_str_view(arg, &prefix)) return nullptr;
-    return make_series(a->str_starts_with(prefix));
+    return make_series(kernel(*a, [&] { return a->str_starts_with(prefix); }));
 }
 PyObject* Series_str_ends_with(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView suffix;
     if (!as_str_view(arg, &suffix)) return nullptr;
-    return make_series(a->str_ends_with(suffix));
+    return make_series(kernel(*a, [&] { return a->str_ends_with(suffix); }));
 }
 PyObject* Series_str_matches(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView pattern;
     if (!as_str_view(arg, &pattern)) return nullptr;
-    return make_series(a->str_matches(pattern));
+    return make_series(kernel(*a, [&] { return a->str_matches(pattern); }));
 }
 PyObject* Series_str_search(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView pattern;
     if (!as_str_view(arg, &pattern)) return nullptr;
-    return make_series(a->str_search(pattern));
+    return make_series(kernel(*a, [&] { return a->str_search(pattern); }));
 }
 PyObject* Series_str_like(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView pattern;
     if (!as_str_view(arg, &pattern)) return nullptr;
-    return make_series(a->str_like(pattern));
-}
-PyObject* Series_str_len_bytes(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
-    if (!a) return nullptr;
-    return make_series(a->str_len_bytes());
-}
-PyObject* Series_str_len_chars(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
-    if (!a) return nullptr;
-    return make_series(a->str_len_chars());
+    return make_series(kernel(*a, [&] { return a->str_like(pattern); }));
 }
 PyObject* Series_str_find(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView needle;
     if (!as_str_view(arg, &needle)) return nullptr;
-    return make_series(a->str_find(needle));
-}
-PyObject* Series_fnv1a(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
-    if (!a) return nullptr;
-    return make_series(a->fnv1a());
-}
-PyObject* Series_hex64_parse(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
-    if (!a) return nullptr;
-    return make_series(a->hex64_parse());
-}
-PyObject* Series_hex64_format(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
-    if (!a) return nullptr;
-    return make_series(a->hex64_format());
-}
-PyObject* Series_to_lowercase(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
-    if (!a) return nullptr;
-    return make_series(a->to_lowercase());
-}
-PyObject* Series_to_uppercase(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
-    if (!a) return nullptr;
-    return make_series(a->to_uppercase());
-}
-PyObject* Series_str_strip(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
-    if (!a) return nullptr;
-    return make_series(a->str_strip());
-}
-PyObject* Series_str_lstrip(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
-    if (!a) return nullptr;
-    return make_series(a->str_lstrip());
-}
-PyObject* Series_str_rstrip(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
-    if (!a) return nullptr;
-    return make_series(a->str_rstrip());
+    return make_series(kernel(*a, [&] { return a->str_find(needle); }));
 }
 PyObject* Series_str_replace(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* pat = nullptr;
     PyObject* repl = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &pat, &repl)) return nullptr;
     dstd::StringView p, r;
     if (!as_str_view(pat, &p) || !as_str_view(repl, &r)) return nullptr;
-    return make_series(a->str_replace(p, r));
+    return make_series(kernel(*a, [&] { return a->str_replace(p, r); }));
 }
 PyObject* Series_str_replace_all(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* pat = nullptr;
     PyObject* repl = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &pat, &repl)) return nullptr;
     dstd::StringView p, r;
     if (!as_str_view(pat, &p) || !as_str_view(repl, &r)) return nullptr;
-    return make_series(a->str_replace_all(p, r));
+    return make_series(kernel(*a, [&] { return a->str_replace_all(p, r); }));
 }
 PyObject* Series_str_slice(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long start = 0;
     long long length = -1;
     if (!PyArg_ParseTuple(args, "L|L", &start, &length)) return nullptr;
-    return make_series(a->str_slice(static_cast<std::int64_t>(start),
-                                    static_cast<std::int64_t>(length)));
+    return make_series(kernel(*a, [&] {
+        return a->str_slice(static_cast<std::int64_t>(start),
+                            static_cast<std::int64_t>(length));
+    }));
 }
 PyObject* Series_str_pad_start(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long width = 0;
     PyObject* fill = nullptr;
-    static const char* kwlist[] = {"width", "fill", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "L|O",
-                                     const_cast<char**>(kwlist), &width, &fill))
+    if (!parse_kw<"L|O">(args, kwds, {"width", "fill"}, &width, &fill))
         return nullptr;
     char f = ' ';
     if (fill && !as_fill_char(fill, &f)) return nullptr;
-    return make_series(a->str_pad_start(static_cast<std::int64_t>(width), f));
+    return make_series(kernel(*a, [&] {
+        return a->str_pad_start(static_cast<std::int64_t>(width), f);
+    }));
 }
 PyObject* Series_str_pad_end(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long width = 0;
     PyObject* fill = nullptr;
-    static const char* kwlist[] = {"width", "fill", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "L|O",
-                                     const_cast<char**>(kwlist), &width, &fill))
+    if (!parse_kw<"L|O">(args, kwds, {"width", "fill"}, &width, &fill))
         return nullptr;
     char f = ' ';
     if (fill && !as_fill_char(fill, &f)) return nullptr;
-    return make_series(a->str_pad_end(static_cast<std::int64_t>(width), f));
+    return make_series(kernel(*a, [&] {
+        return a->str_pad_end(static_cast<std::int64_t>(width), f);
+    }));
 }
 PyObject* Series_str_zfill(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long width = PyLong_AsLongLong(arg);
     if (width == -1 && PyErr_Occurred()) return nullptr;
-    return make_series(a->str_zfill(static_cast<std::int64_t>(width)));
+    return make_series(kernel(
+        *a, [&] { return a->str_zfill(static_cast<std::int64_t>(width)); }));
 }
 PyObject* Series_str_split(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView sep;
     if (!as_str_view(arg, &sep)) return nullptr;
-    return make_series(a->str_split(sep));
+    return make_series(kernel(*a, [&] { return a->str_split(sep); }));
 }
 PyObject* Series_str_extract(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* pat = nullptr;
     long long group = 1;
@@ -220,48 +190,44 @@ PyObject* Series_str_extract(PyObject* self, PyObject* args) {
         PyErr_SetString(PyExc_ValueError, "str_extract: group must be >= 0");
         return nullptr;
     }
-    Series out = a->str_extract(pattern, static_cast<std::int64_t>(group));
+    Series out = kernel(*a, [&] {
+        return a->str_extract(pattern, static_cast<std::int64_t>(group));
+    });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_ValueError,
+        PyErr_SetString(core::g_dft_value_error,
                         "str_extract: the pattern does not compile");
         return nullptr;
     }
     return make_series(std::move(out));
 }
 PyObject* Series_str_regex_replace(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject *pat = nullptr, *to = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &pat, &to)) return nullptr;
     dstd::StringView pattern, repl;
     if (!as_str_view(pat, &pattern) || !as_str_view(to, &repl)) return nullptr;
-    Series out = a->str_regex_replace(pattern, repl);
+    Series out =
+        kernel(*a, [&] { return a->str_regex_replace(pattern, repl); });
     if (!out.valid()) {
         PyErr_SetString(
-            PyExc_ValueError,
+            core::g_dft_value_error,
             "str_regex_replace: the pattern or the replacement is invalid");
         return nullptr;
     }
     return make_series(std::move(out));
 }
-PyObject* Series_list_len(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
-    if (!a) return nullptr;
-    Series out = a->list_size();
-    if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "list_len: not a List column");
-        return nullptr;
-    }
-    return make_series(std::move(out));
-}
 PyObject* Series_list_get(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long index = PyLong_AsLongLong(arg);
     if (index == -1 && PyErr_Occurred()) return nullptr;
-    Series out = a->list_get(static_cast<std::int64_t>(index));
+    Series out = kernel(
+        *a, [&] { return a->list_get(static_cast<std::int64_t>(index)); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "list_get: not a List column");
+        PyErr_SetString(core::g_dft_value_error, "list_get: not a List column");
         return nullptr;
     }
     return make_series(std::move(out));
@@ -272,13 +238,14 @@ namespace {
 // A kernel that takes one str argument, refusing a non-String column.
 template <Series (Series::*Method)(dstd::StringView) const>
 PyObject* str_arg_op(PyObject* self, PyObject* arg, const char* name) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView s;
     if (!as_str_view(arg, &s)) return nullptr;
-    Series out = (a->*Method)(s);
+    Series out = kernel(*a, [&] { return (a->*Method)(s); });
     if (!out.valid()) {
-        PyErr_Format(PyExc_TypeError, "%s: not a String column", name);
+        PyErr_Format(core::g_dft_value_error, "%s: not a String column", name);
         return nullptr;
     }
     return make_series(std::move(out));
@@ -287,7 +254,8 @@ PyObject* str_arg_op(PyObject* self, PyObject* arg, const char* name) {
 }  // namespace
 
 PyObject* Series_str_case(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     const long code = PyLong_AsLong(arg);
     if (code == -1 && PyErr_Occurred()) return nullptr;
@@ -297,15 +265,18 @@ PyObject* Series_str_case(PyObject* self, PyObject* arg) {
                         "or 2 (swapcase)");
         return nullptr;
     }
-    Series out = a->str_case(static_cast<std::int32_t>(code));
+    Series out = kernel(
+        *a, [&] { return a->str_case(static_cast<std::int32_t>(code)); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "str_case: not a String column");
+        PyErr_SetString(core::g_dft_value_error,
+                        "str_case: not a String column");
         return nullptr;
     }
     return make_series(std::move(out));
 }
 PyObject* Series_str_is(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     const long code = PyLong_AsLong(arg);
     if (code == -1 && PyErr_Occurred()) return nullptr;
@@ -315,9 +286,10 @@ PyObject* Series_str_is(PyObject* self, PyObject* arg) {
                         "decimal, numeric, space, lower, upper, title)");
         return nullptr;
     }
-    Series out = a->str_is(static_cast<std::int32_t>(code));
+    Series out =
+        kernel(*a, [&] { return a->str_is(static_cast<std::int32_t>(code)); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "str_is: not a String column");
+        PyErr_SetString(core::g_dft_value_error, "str_is: not a String column");
         return nullptr;
     }
     return make_series(std::move(out));
@@ -337,13 +309,14 @@ PyObject* Series_str_remove_suffix(PyObject* self, PyObject* arg) {
                                                   "str_remove_suffix");
 }
 PyObject* Series_str_findall(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView pattern;
     if (!as_str_view(arg, &pattern)) return nullptr;
-    Series out = a->str_findall(pattern);
+    Series out = kernel(*a, [&] { return a->str_findall(pattern); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_ValueError,
+        PyErr_SetString(core::g_dft_value_error,
                         "str_findall: not a String column, or the pattern "
                         "does not compile");
         return nullptr;
@@ -351,20 +324,22 @@ PyObject* Series_str_findall(PyObject* self, PyObject* arg) {
     return make_series(std::move(out));
 }
 PyObject* Series_list_join(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView sep;
     if (!as_str_view(arg, &sep)) return nullptr;
-    Series out = a->list_join(sep);
+    Series out = kernel(*a, [&] { return a->list_join(sep); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError,
+        PyErr_SetString(core::g_dft_value_error,
                         "list_join: not a List column of strings");
         return nullptr;
     }
     return make_series(std::move(out));
 }
 PyObject* Series_str_repeat(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     const long long n = PyLong_AsLongLong(arg);
     if (n == -1 && PyErr_Occurred()) return nullptr;
@@ -372,53 +347,58 @@ PyObject* Series_str_repeat(PyObject* self, PyObject* arg) {
         PyErr_SetString(PyExc_ValueError, "str_repeat: n must be >= 0");
         return nullptr;
     }
-    Series out = a->str_repeat(static_cast<std::int64_t>(n));
+    Series out =
+        kernel(*a, [&] { return a->str_repeat(static_cast<std::int64_t>(n)); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "str_repeat: not a String column");
+        PyErr_SetString(core::g_dft_value_error,
+                        "str_repeat: not a String column");
         return nullptr;
     }
     return make_series(std::move(out));
 }
 PyObject* Series_str_center(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long width = 0;
     PyObject* fill = nullptr;
-    static const char* kwlist[] = {"width", "fill", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "L|O",
-                                     const_cast<char**>(kwlist), &width, &fill))
+    if (!parse_kw<"L|O">(args, kwds, {"width", "fill"}, &width, &fill))
         return nullptr;
     char f = ' ';
     if (fill && !as_fill_char(fill, &f)) return nullptr;
-    Series out = a->str_center(static_cast<std::int64_t>(width), f);
+    Series out = kernel(
+        *a, [&] { return a->str_center(static_cast<std::int64_t>(width), f); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "str_center: not a String column");
+        PyErr_SetString(core::g_dft_value_error,
+                        "str_center: not a String column");
         return nullptr;
     }
     return make_series(std::move(out));
 }
 PyObject* Series_str_cat(PyObject* self, PyObject* other) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
-    Series* b = as_series(other);
+    Held held_b(other);
+    Series* b = held_b.get();
     if (!b) return nullptr;
-    Series out = a->str_cat(*b);
+    Series out = kernel(*a, [&] { return a->str_cat(*b); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError,
-                        "str_cat: both must be String columns of one length");
+        PyErr_SetString(core::g_dft_value_error,
+                        "str_cat: both must be String columns of one length "
+                        "with the same row labels");
         return nullptr;
     }
     return make_series(std::move(out));
 }
 PyObject* Series_str_partition(PyObject* self, PyObject* args, PyObject* kwds) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* sep_obj = nullptr;
     int from_right = 0;
-    static const char* kwlist[] = {"sep", "from_right", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|p",
-                                     const_cast<char**>(kwlist), &sep_obj,
-                                     &from_right))
+    if (!parse_kw<"O|p">(args, kwds, {"sep", "from_right"}, &sep_obj,
+                         &from_right))
         return nullptr;
     dstd::StringView sep;
     if (!as_str_view(sep_obj, &sep)) return nullptr;
@@ -426,15 +406,18 @@ PyObject* Series_str_partition(PyObject* self, PyObject* args, PyObject* kwds) {
         PyErr_SetString(PyExc_ValueError, "str_partition: empty separator");
         return nullptr;
     }
-    Series out = a->str_partition(sep, from_right != 0);
+    Series out =
+        kernel(*a, [&] { return a->str_partition(sep, from_right != 0); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "str_partition: not a String column");
+        PyErr_SetString(core::g_dft_value_error,
+                        "str_partition: not a String column");
         return nullptr;
     }
     return make_series(std::move(out));
 }
 PyObject* Series_str_normalize(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     const long form = PyLong_AsLong(arg);
     if (form == -1 && PyErr_Occurred()) return nullptr;
@@ -443,26 +426,31 @@ PyObject* Series_str_normalize(PyObject* self, PyObject* arg) {
                         "str_normalize: form must be 0 (NFC) to 3 (NFKD)");
         return nullptr;
     }
-    Series out = a->str_normalize(static_cast<std::int32_t>(form));
+    Series out = kernel(
+        *a, [&] { return a->str_normalize(static_cast<std::int32_t>(form)); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError, "str_normalize: not a String column");
+        PyErr_SetString(core::g_dft_value_error,
+                        "str_normalize: not a String column");
         return nullptr;
     }
     return make_series(std::move(out));
 }
 PyObject* Series_str_translate(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* from_obj = nullptr;
     PyObject* to_obj = nullptr;
     if (!PyArg_ParseTuple(args, "OO", &from_obj, &to_obj)) return nullptr;
-    Series* from = as_series(from_obj);
+    Held held_from(from_obj);
+    Series* from = held_from.get();
     if (!from) return nullptr;
-    Series* to = as_series(to_obj);
+    Held held_to(to_obj);
+    Series* to = held_to.get();
     if (!to) return nullptr;
-    Series out = a->str_translate(*from, *to);
+    Series out = kernel(*a, [&] { return a->str_translate(*from, *to); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_ValueError,
+        PyErr_SetString(core::g_dft_value_error,
                         "str_translate: not a String column, or the table is "
                         "not one distinct codepoint per key");
         return nullptr;
@@ -470,7 +458,8 @@ PyObject* Series_str_translate(PyObject* self, PyObject* args) {
     return make_series(std::move(out));
 }
 PyObject* Series_str_wrap(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long width = 0;
     int flags = 0;
@@ -479,17 +468,36 @@ PyObject* Series_str_wrap(PyObject* self, PyObject* args) {
         PyErr_SetString(PyExc_ValueError, "str_wrap: width must be >= 1");
         return nullptr;
     }
-    Series out = a->str_wrap(static_cast<std::int64_t>(width), flags);
+    Series out = kernel(*a, [&] {
+        return a->str_wrap(static_cast<std::int64_t>(width), flags);
+    });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError,
+        PyErr_SetString(core::g_dft_value_error,
                         "str_wrap: not a String column, or bad flags");
         return nullptr;
     }
     return make_series(std::move(out));
 }
 
+// Sets the Python error of the last time zone failure of this thread and
+// returns true; false when there was none. A name that is in no zone
+// directory is a KeyError, as zoneinfo and pytz; every other failure is a
+// ValueError, as pandas' AmbiguousTimeError, NonExistentTimeError and
+// OutOfBoundsDatetime.
+bool raise_tz_failure() {
+    const char* text = nullptr;
+    const std::int32_t kind = dftu_tz_take_error(&text);
+    if (kind == DFTU_TZ_ERROR_NONE) return false;
+    if (kind == DFTU_TZ_ERROR_UNKNOWN_ZONE)
+        PyErr_SetString(PyExc_KeyError, text);
+    else
+        PyErr_SetString(core::g_dft_value_error, text);
+    return true;
+}
+
 PyObject* Series_dt_part(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     int part = 0;
     int unit = DFTU_TIME_UNIT_MICRO;
@@ -502,9 +510,10 @@ PyObject* Series_dt_part(PyObject* self, PyObject* args) {
         PyErr_SetString(PyExc_ValueError, "dt_part: unit must be 0..3");
         return nullptr;
     }
-    Series out = a->dt_part(part, unit);
+    Series out = kernel(*a, [&] { return a->dt_part(part, unit); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError,
+        if (raise_tz_failure()) return nullptr;
+        PyErr_SetString(core::g_dft_value_error,
                         "dt_part: not a Timestamp, Date, Duration or Int64 "
                         "column");
         return nullptr;
@@ -512,7 +521,8 @@ PyObject* Series_dt_part(PyObject* self, PyObject* args) {
     return make_series(std::move(out));
 }
 PyObject* Series_dt_format(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     PyObject* fmt_obj = nullptr;
     int unit = DFTU_TIME_UNIT_MICRO;
@@ -523,18 +533,22 @@ PyObject* Series_dt_format(PyObject* self, PyObject* args) {
         PyErr_SetString(PyExc_ValueError, "dt_format: unit must be 0..3");
         return nullptr;
     }
-    Series out = a->dt_format(fmt, static_cast<dataframe::TimeUnit>(unit));
+    Series out = kernel(*a, [&] {
+        return a->dt_format(fmt, static_cast<dataframe::TimeUnit>(unit));
+    });
     if (!out.valid()) {
+        if (raise_tz_failure()) return nullptr;
         dstd::String msg = "dt_format: invalid format '";
         msg.append(fmt);
         msg.append("' or not a Timestamp, Date or Int64 column");
-        PyErr_SetString(PyExc_ValueError, msg.c_str());
+        PyErr_SetString(core::g_dft_value_error, msg.c_str());
         return nullptr;
     }
     return make_series(std::move(out));
 }
 PyObject* Series_dt_round(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     long long every = 0;
     int mode = 0;
@@ -549,24 +563,105 @@ PyObject* Series_dt_round(PyObject* self, PyObject* args) {
                         "(round)");
         return nullptr;
     }
-    Series out = a->dt_round(static_cast<std::int64_t>(every), mode);
+    Series out = kernel(*a, [&] {
+        return a->dt_round(static_cast<std::int64_t>(every), mode);
+    });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError,
+        if (raise_tz_failure()) return nullptr;
+        PyErr_SetString(core::g_dft_value_error,
                         "dt_round: not a Timestamp, Duration or Int64 column");
         return nullptr;
     }
     return make_series(std::move(out));
 }
 
+PyObject* Series_dt_as_unit(PyObject* self, PyObject* args) {
+    Held held_a(self);
+    Series* a = held_a.get();
+    if (!a) return nullptr;
+    int unit = 0;
+    int mode = DFTU_DT_UNIT_FLOOR;
+    if (!PyArg_ParseTuple(args, "i|i", &unit, &mode)) return nullptr;
+    if (unit < DFTU_TIME_UNIT_SECOND || unit > DFTU_TIME_UNIT_NANO) {
+        PyErr_SetString(PyExc_ValueError, "dt_as_unit: unit must be 0..3");
+        return nullptr;
+    }
+    if (mode < DFTU_DT_UNIT_FLOOR || mode > DFTU_DT_UNIT_POLARS) {
+        PyErr_SetString(PyExc_ValueError,
+                        "dt_as_unit: mode must be 0 (floor) or 1 (polars)");
+        return nullptr;
+    }
+    const dataframe::TypeId id = a->type();
+    if (id != dataframe::TypeId::Timestamp &&
+        id != dataframe::TypeId::Duration) {
+        PyErr_SetString(core::g_dft_value_error,
+                        "dt_as_unit: not a Timestamp or Duration column");
+        return nullptr;
+    }
+    Series out = kernel(*a, [&] {
+        return a->dt_as_unit(static_cast<dataframe::TimeUnit>(unit), mode);
+    });
+    if (!out.valid()) {
+        PyErr_SetString(core::g_dft_value_error,
+                        "dt_as_unit: a value does not fit 64 bits in the "
+                        "finer unit");
+        return nullptr;
+    }
+    return make_series(std::move(out));
+}
+
 PyObject* Series_with_timezone(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Held held_a(self);
+    Series* a = held_a.get();
     if (!a) return nullptr;
     dstd::StringView tz;
     if (!as_str_view(arg, &tz)) return nullptr;
-    Series out = a->with_timezone(tz);
+    Series out = kernel(*a, [&] { return a->with_timezone(tz); });
     if (!out.valid()) {
-        PyErr_SetString(PyExc_TypeError,
+        if (raise_tz_failure()) return nullptr;
+        PyErr_SetString(core::g_dft_value_error,
                         "with_timezone: not a Timestamp column");
+        return nullptr;
+    }
+    return make_series(std::move(out));
+}
+
+PyObject* Series_tz_localize(PyObject* self, PyObject* args, PyObject* kwds) {
+    Held held_a(self);
+    Series* a = held_a.get();
+    if (!a) return nullptr;
+    PyObject* tz_obj = nullptr;
+    int ambiguous = DFTU_TZ_AMBIGUOUS_RAISE;
+    int nonexistent = DFTU_TZ_NONEXISTENT_RAISE;
+    long long shift = 0;
+    if (!core::parse_kw<"O|iiL:dt_tz_localize">(
+            args, kwds, {"tz", "ambiguous", "nonexistent", "shift"}, &tz_obj,
+            &ambiguous, &nonexistent, &shift))
+        return nullptr;
+    dstd::StringView tz;
+    if (!as_str_view(tz_obj, &tz)) return nullptr;
+    if (ambiguous < DFTU_TZ_AMBIGUOUS_RAISE ||
+        ambiguous > DFTU_TZ_AMBIGUOUS_INFER ||
+        nonexistent < DFTU_TZ_NONEXISTENT_RAISE ||
+        nonexistent > DFTU_TZ_NONEXISTENT_SHIFT) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "dt_tz_localize: ambiguous must be 0..4 and nonexistent "
+            "0..4");
+        return nullptr;
+    }
+    if (a->type() != dataframe::TypeId::Timestamp) {
+        PyErr_SetString(core::g_dft_value_error,
+                        "dt_tz_localize: not a Timestamp column");
+        return nullptr;
+    }
+    Series out = kernel(*a, [&] {
+        return a->tz_localize(tz, ambiguous, nonexistent,
+                              static_cast<std::int64_t>(shift));
+    });
+    if (!out.valid()) {
+        if (raise_tz_failure()) return nullptr;
+        PyErr_SetString(core::g_dft_value_error, "dt_tz_localize failed");
         return nullptr;
     }
     return make_series(std::move(out));

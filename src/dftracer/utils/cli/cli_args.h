@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -159,7 +160,7 @@ class ArgParser {
 
     /// Parse @p args, which hold no program name. Text bound by the parse
     /// views into the strings @p args views.
-    ParseOutcome parse(const dstd::Vector<dstd::StringView>& args);
+    ParseOutcome parse(dstd::Span<const dstd::StringView> args);
 
    private:
     ArgSpec& add_value(Names names, dstd::StringView help,

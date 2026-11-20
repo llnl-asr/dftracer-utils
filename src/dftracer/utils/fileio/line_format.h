@@ -47,11 +47,12 @@ consteval bool line_safe() {
 
 using dstd::fmt_detail::View;
 
-inline bool is_null(const char* p) { return p == nullptr; }
-inline bool is_null(char* p) { return p == nullptr; }
 template <class T>
-bool is_null(const T&) {
-    return false;
+bool is_null(const T& value) {
+    if constexpr (std::is_pointer_v<T>)
+        return value == nullptr;
+    else
+        return false;
 }
 
 }  // namespace detail

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // A native LazyFrame exposed to Python: a deferred query over an in-memory
 // dataframe::DataFrame. Builder methods record ops and return a new LazyFrame;
-// nothing runs until collect(), which materializes a native _DataFrame. A
+// nothing runs until collect(), which materializes a native DataFrame. A
 // filter/with_column expr's col(i) refers to the i-th column of the frame at
 // that point, so the Python wrapper resolves names to indices against schema().
 
@@ -17,6 +17,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/budget.h>  // NO_SPILL_BUDGET
 #include <dftracer/utils/python/core/arrow_helpers.h>
+#include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/list_helpers.h>
 #include <dftracer/utils/python/core/method.h>
@@ -40,6 +41,10 @@
 #include <stdexcept>
 #include <utility>
 
+using dftracer::utils::python::core::as_native;
+using dftracer::utils::python::core::guard;
+using dftracer::utils::python::core::parse_kw;
+
 using namespace dftracer::utils;
 
 namespace {
@@ -48,71 +53,80 @@ using dataframe::GroupAgg;
 using dataframe::LazyFrame;
 using dftracer::utils::python::core::parse_string_seq;
 using dftracer::utils::python::frame::aggs_from_seq;
+using dftracer::utils::python::frame::descending_from_obj;
 using dftracer::utils::python::frame::group_agg_from_spec;
 using dftracer::utils::python::frame::strings_from_str_or_seq;
 
 struct LazyFrameObject {
-    PyObject_HEAD LazyFrame lf;
+    PyObject_HEAD PyObject* weaklist;
+    LazyFrame lf;
 };
 
 PyTypeObject LazyFrameType;
+// The type the factories allocate: LazyFrameType until _bind_types gives the
+// Python subclass.
+PyTypeObject* g_lazyframe_type = &LazyFrameType;
 
-LazyFrameObject* as_lazyframe(PyObject* o) {
-    if (!PyObject_TypeCheck(o, &LazyFrameType)) {
-        PyErr_SetString(PyExc_TypeError, "expected a LazyFrame");
-        return nullptr;
+}  // namespace
+
+template <>
+struct dftracer::utils::python::core::NativeTraits<LazyFrameObject> {
+    static PyTypeObject* type() { return &LazyFrameType; }
+    static constexpr const char* EXPECTED = "expected a LazyFrame";
+    static LazyFrameObject* get(PyObject* o) {
+        return reinterpret_cast<LazyFrameObject*>(o);
     }
-    return reinterpret_cast<LazyFrameObject*>(o);
-}
+};
+
+namespace {
 
 PyObject* make_lazyframe(LazyFrame&& lf) {
     auto* self = reinterpret_cast<LazyFrameObject*>(
-        LazyFrameType.tp_alloc(&LazyFrameType, 0));
+        g_lazyframe_type->tp_alloc(g_lazyframe_type, 0));
     if (!self) return nullptr;
     new (&self->lf) LazyFrame(std::move(lf));
     return reinterpret_cast<PyObject*>(self);
 }
 
 void LazyFrame_dealloc(LazyFrameObject* self) {
+    if (self->weaklist)
+        PyObject_ClearWeakRefs(reinterpret_cast<PyObject*>(self));
     self->lf.~LazyFrame();
     Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
 }
 
 // Wrap a builder call that returns a LazyFrame or a LazyFrame result, turning
-// its error and any C++ exception into a Python ValueError.
+// its error and any C++ exception into a typed Python error.
 template <class Fn>
 PyObject* run_lazy_op(Fn&& fn) {
-    try {
+    return guard([&]() -> PyObject* {
         auto out = fn();
         if constexpr (std::is_same_v<decltype(out), LazyFrame>) {
             const auto built = out.status();
             if (!built) {
-                PyErr_SetString(PyExc_ValueError, built.error().c_str());
+                dftracer::utils::python::core::set_py_error(built.error());
                 return nullptr;
             }
             return make_lazyframe(std::move(out));
         } else {
             if (!out) {
-                PyErr_SetString(PyExc_ValueError, out.error().c_str());
+                dftracer::utils::python::core::set_py_error(out.error());
                 return nullptr;
             }
             const auto built = out->status();
             if (!built) {
-                PyErr_SetString(PyExc_ValueError, built.error().c_str());
+                dftracer::utils::python::core::set_py_error(built.error());
                 return nullptr;
             }
             return make_lazyframe(std::move(*out));
         }
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_ValueError, e.what());
-        return nullptr;
-    }
+    });
 }
 
-// filter(ast) -> LazyFrame. `ast` is the columnar.py post-order Expr AST; the
+// filter(ast) -> LazyFrame. `ast` is the expr.py post-order Expr AST; the
 // engine rebuilds a dataframe::Expr referencing columns by position.
 PyObject* LazyFrame_filter(PyObject* self, PyObject* ast) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     dataframe::Expr pred;
     if (!dftracer::utils::python::frame::build_expr_from_ast(ast, &pred))
@@ -121,7 +135,7 @@ PyObject* LazyFrame_filter(PyObject* self, PyObject* ast) {
 }
 
 PyObject* LazyFrame_with_column(PyObject* self, PyObject* args) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const char* name = nullptr;
     PyObject* ast = nullptr;
@@ -133,7 +147,7 @@ PyObject* LazyFrame_with_column(PyObject* self, PyObject* args) {
 }
 
 PyObject* LazyFrame_select(PyObject* self, PyObject* names) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ns;
     if (!parse_str_list(names, "names", ns)) return nullptr;
@@ -141,7 +155,7 @@ PyObject* LazyFrame_select(PyObject* self, PyObject* names) {
 }
 
 PyObject* LazyFrame_rename(PyObject* self, PyObject* names) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ns;
     if (!parse_str_list(names, "names", ns)) return nullptr;
@@ -149,7 +163,7 @@ PyObject* LazyFrame_rename(PyObject* self, PyObject* names) {
 }
 
 PyObject* LazyFrame_drop(PyObject* self, PyObject* names) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ns;
     if (!parse_str_list(names, "names", ns)) return nullptr;
@@ -157,7 +171,7 @@ PyObject* LazyFrame_drop(PyObject* self, PyObject* names) {
 }
 
 PyObject* LazyFrame_rename_columns(PyObject* self, PyObject* args) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     PyObject* from = nullptr;
     PyObject* to = nullptr;
@@ -170,7 +184,7 @@ PyObject* LazyFrame_rename_columns(PyObject* self, PyObject* args) {
 }
 
 PyObject* LazyFrame_slice(PyObject* self, PyObject* args) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     long long offset = 0, len = 0;
     if (!PyArg_ParseTuple(args, "LL", &offset, &len)) return nullptr;
@@ -178,7 +192,7 @@ PyObject* LazyFrame_slice(PyObject* self, PyObject* args) {
 }
 
 PyObject* LazyFrame_head(PyObject* self, PyObject* n) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     long long v = PyLong_AsLongLong(n);
     if (v == -1 && PyErr_Occurred()) return nullptr;
@@ -186,7 +200,7 @@ PyObject* LazyFrame_head(PyObject* self, PyObject* n) {
 }
 
 PyObject* LazyFrame_take(PyObject* self, PyObject* seq) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     dftracer::utils::dstd::Vector<std::int64_t> idx;
     if (!dftracer::utils::python::core::parse_int_seq(
@@ -196,7 +210,7 @@ PyObject* LazyFrame_take(PyObject* self, PyObject* seq) {
 }
 
 PyObject* LazyFrame_filter_mask(PyObject* self, PyObject* mask) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const dataframe::Series* m =
         dftracer::utils::python::frame::unwrap_vec_column(mask);
@@ -208,46 +222,89 @@ PyObject* LazyFrame_filter_mask(PyObject* self, PyObject* mask) {
     return run_lazy_op([&] { return b->lf.filter_mask(m->share()); });
 }
 
+// _replace(other): this plan becomes `other`'s, in place. The Python state of
+// the object (index names, runtime) is left alone. A collect or sink that runs
+// on another thread works on a copy of the plan taken under the GIL.
+PyObject* LazyFrame_replace(PyObject* self, PyObject* other) {
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
+    LazyFrameObject* o = as_native<LazyFrameObject>(other);
+    if (!b || !o) return nullptr;
+    if (b != o) b->lf = o->lf;
+    Py_RETURN_NONE;
+}
+
+// share() -> LazyFrame: a new object over the same plan, with no state of its
+// own.
+PyObject* LazyFrame_share(PyObject* self, PyObject*) {
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
+    if (!b) return nullptr;
+    return run_lazy_op([&] { return b->lf; });
+}
+
+// index_names() -> list[str]: the row index columns of the plan's result.
+PyObject* LazyFrame_index_names(PyObject* self, PyObject*) {
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
+    if (!b) return nullptr;
+    return guard([&]() -> PyObject* {
+        const auto names = b->lf.index_names();
+        PyObject* list = PyList_New(static_cast<Py_ssize_t>(names.size()));
+        if (!list) return nullptr;
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            PyObject* item = PyUnicode_FromString(names[i].c_str());
+            if (!item) {
+                Py_DECREF(list);
+                return nullptr;
+            }
+            PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), item);
+        }
+        return list;
+    });
+}
+
+// with_index(names) -> LazyFrame with the row index `names` ([] drops it).
+PyObject* LazyFrame_with_index(PyObject* self, PyObject* names) {
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
+    if (!b) return nullptr;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ns;
+    if (!parse_str_list(names, "names", ns)) return nullptr;
+    return run_lazy_op([&] { return b->lf.with_index(std::move(ns)); });
+}
+
 PyObject* LazyFrame_reverse(PyObject* self, PyObject*) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     return run_lazy_op([&] { return b->lf.reverse(); });
 }
 
 PyObject* LazyFrame_sort_by_multi(PyObject* self, PyObject* args,
                                   PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     PyObject* names_obj = nullptr;
     PyObject* descending_obj = nullptr;
-    static const char* kw[] = {"names", "descending", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O", const_cast<char**>(kw),
-                                     &names_obj, &descending_obj))
+    PyObject* nulls_last_obj = nullptr;
+    if (!parse_kw<"O|OO">(args, kwds, {"names", "descending", "nulls_last"},
+                          &names_obj, &descending_obj, &nulls_last_obj))
         return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
     if (!strings_from_str_or_seq(names_obj, names)) return nullptr;
     dftracer::utils::dstd::Vector<bool> descending;
-    if (!descending_obj) {
-        descending.push_back(false);
-    } else if (PyBool_Check(descending_obj) || PyLong_Check(descending_obj)) {
-        descending.push_back(PyObject_IsTrue(descending_obj) != 0);
-    } else {
-        PyObject* dseq = PySequence_Fast(
-            descending_obj, "descending must be a bool or a sequence of bool");
-        if (!dseq) return nullptr;
-        const Py_ssize_t n = PySequence_Fast_GET_SIZE(dseq);
-        for (Py_ssize_t i = 0; i < n; ++i)
-            descending.push_back(
-                PyObject_IsTrue(PySequence_Fast_GET_ITEM(dseq, i)) != 0);
-        Py_DECREF(dseq);
-    }
+    if (!descending_from_obj(descending_obj, descending)) return nullptr;
+    dftracer::utils::dstd::Vector<bool> nulls_last;
+    if (!nulls_last_obj)
+        nulls_last.push_back(true);
+    else if (!descending_from_obj(
+                 nulls_last_obj, nulls_last,
+                 "nulls_last must be a bool or a sequence of bool"))
+        return nullptr;
     return run_lazy_op([&] {
-        return b->lf.sort_by_multi(std::move(names), std::move(descending));
+        return b->lf.sort_by_multi(std::move(names), std::move(descending),
+                                   std::move(nulls_last));
     });
 }
 
 PyObject* LazyFrame_tail(PyObject* self, PyObject* n) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     long long v = PyLong_AsLongLong(n);
     if (v == -1 && PyErr_Occurred()) return nullptr;
@@ -255,13 +312,13 @@ PyObject* LazyFrame_tail(PyObject* self, PyObject* n) {
 }
 
 PyObject* LazyFrame_drop_nulls(PyObject* self, PyObject*) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     return run_lazy_op([&] { return b->lf.drop_nulls(); });
 }
 
 PyObject* LazyFrame_fill_null(PyObject* self, PyObject* value) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     dftu_scalar s{};
     if (!py_to_scalar(value, &s)) return nullptr;
@@ -269,7 +326,7 @@ PyObject* LazyFrame_fill_null(PyObject* self, PyObject* value) {
 }
 
 PyObject* LazyFrame_with_row_index(PyObject* self, PyObject* name) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const char* s = PyUnicode_AsUTF8(name);
     if (!s) return nullptr;
@@ -277,13 +334,13 @@ PyObject* LazyFrame_with_row_index(PyObject* self, PyObject* name) {
 }
 
 PyObject* LazyFrame_null_count(PyObject* self, PyObject*) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     return run_lazy_op([&] { return b->lf.null_count(); });
 }
 
 PyObject* LazyFrame_reduce(PyObject* self, PyObject* arg) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const char* agg = PyUnicode_AsUTF8(arg);
     if (!agg) return nullptr;
@@ -296,7 +353,7 @@ PyObject* LazyFrame_reduce(PyObject* self, PyObject* arg) {
 
 PyObject* LazyFrame_group_transform(PyObject* self, PyObject* args,
                                     PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     dftracer::utils::python::frame::GroupwiseArgs a;
     if (!dftracer::utils::python::frame::parse_groupwise_args(
@@ -312,7 +369,7 @@ PyObject* LazyFrame_group_transform(PyObject* self, PyObject* args,
 // reduce_specs(agg, keys) -> list[str]: the "op:column:out" specs that
 // broadcast `agg` over every eligible non-key column of the plan's schema.
 PyObject* LazyFrame_reduce_specs(PyObject* self, PyObject* args) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const char* agg = nullptr;
     PyObject* keys_obj = Py_None;
@@ -328,12 +385,7 @@ PyObject* LazyFrame_reduce_specs(PyObject* self, PyObject* args) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> specs;
     const auto reduced = b->lf.reduce_specs(*op, keys);
     if (!reduced) {
-        PyErr_SetString(
-            dftracer::utils::common::errorcode_of(reduced.error()) ==
-                    dftracer::utils::common::ErrorCode::NotFound
-                ? PyExc_KeyError
-                : PyExc_ValueError,
-            reduced.error().c_str());
+        dftracer::utils::python::core::set_py_error(reduced.error());
         return nullptr;
     }
     specs = dftracer::utils::python::frame::reduce_spec_strings(*reduced);
@@ -351,7 +403,7 @@ PyObject* LazyFrame_reduce_specs(PyObject* self, PyObject* args) {
 }
 
 PyObject* LazyFrame_explode(PyObject* self, PyObject* column) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const char* s = PyUnicode_AsUTF8(column);
     if (!s) return nullptr;
@@ -359,24 +411,23 @@ PyObject* LazyFrame_explode(PyObject* self, PyObject* column) {
 }
 
 PyObject* LazyFrame_unnest(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const char* column = nullptr;
     int keep_empty = 0;
-    static const char* kw[] = {"column", "keep_empty", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|p", const_cast<char**>(kw),
-                                     &column, &keep_empty))
+    if (!parse_kw<"s|p">(args, kwds, {"column", "keep_empty"}, &column,
+                         &keep_empty))
         return nullptr;
     return run_lazy_op([&] { return b->lf.unnest(column, keep_empty != 0); });
 }
 
 PyObject* LazyFrame_compare_agg(PyObject* self, PyObject* args) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     PyObject* other = nullptr;
     Py_ssize_t n_key = 1;
     if (!PyArg_ParseTuple(args, "On", &other, &n_key)) return nullptr;
-    LazyFrameObject* o = as_lazyframe(other);
+    LazyFrameObject* o = as_native<LazyFrameObject>(other);
     if (!o) return nullptr;
     return run_lazy_op([&] {
         return b->lf.compare_agg(o->lf, static_cast<std::int64_t>(n_key));
@@ -388,14 +439,13 @@ PyObject* LazyFrame_compare_agg(PyObject* self, PyObject* args) {
 // frame_op, which copies every operand into the plan; asof and interval are
 // LazyFrame methods.
 PyObject* LazyFrame_window(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
-    static const char* kw[] = {"partition_by", "order_by", "specs", nullptr};
     PyObject* part = nullptr;
     PyObject* order = nullptr;
     PyObject* specs = nullptr;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO", const_cast<char**>(kw),
-                                     &part, &order, &specs))
+    if (!parse_kw<"OOO">(args, kwds, {"partition_by", "order_by", "specs"},
+                         &part, &order, &specs))
         return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> pcols;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> ocols;
@@ -412,9 +462,7 @@ PyObject* LazyFrame_window(PyObject* self, PyObject* args, PyObject* kwds) {
     for (const dftracer::utils::dstd::String& s : ocols)
         oc.push_back(s.c_str());
     dataframe::OpArgs a;
-    a.strlist(1, pc.data(), static_cast<std::int32_t>(pc.size()))
-        .strlist(2, oc.data(), static_cast<std::int32_t>(oc.size()))
-        .winlist(3, parsed.specs);
+    a.strlist(1, pc).strlist(2, oc).winlist(3, parsed.specs);
     return run_lazy_op([&] {
         // A window keeps every input column and appends one per spec.
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names =
@@ -430,19 +478,17 @@ PyObject* LazyFrame_window(PyObject* self, PyObject* args, PyObject* kwds) {
 // column op `op` over `column` as a plan step (dftu.frame.column_op, a
 // breaker), the column replaced in place.
 PyObject* LazyFrame_column_op(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
-    static const char* kw[] = {"column", "op",   "column2", "a",
-                               "b",      "text", nullptr};
     const char* column = nullptr;
     const char* op = nullptr;
     const char* column2 = nullptr;
     PyObject* a_obj = nullptr;
     PyObject* b_obj = nullptr;
     const char* text = nullptr;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "ss|zOOz",
-                                     const_cast<char**>(kw), &column, &op,
-                                     &column2, &a_obj, &b_obj, &text))
+    if (!parse_kw<"ss|zOOz">(args, kwds,
+                             {"column", "op", "column2", "a", "b", "text"},
+                             &column, &op, &column2, &a_obj, &b_obj, &text))
         return nullptr;
     dftu_scalar sa{};
     dftu_scalar sb{};
@@ -461,10 +507,8 @@ PyObject* LazyFrame_column_op(PyObject* self, PyObject* args, PyObject* kwds) {
 }
 
 PyObject* LazyFrame_gap_fill(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
-    static const char* kw[] = {"partition_by", "time",  "bucket", "values",
-                               "mode",         "start", "end",    nullptr};
     PyObject* part = nullptr;
     const char* time = nullptr;
     long long bucket = 0;
@@ -472,9 +516,11 @@ PyObject* LazyFrame_gap_fill(PyObject* self, PyObject* args, PyObject* kwds) {
     const char* mode = nullptr;
     PyObject* start_obj = Py_None;
     PyObject* end_obj = Py_None;
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "OsLOs|OO", const_cast<char**>(kw), &part, &time,
-            &bucket, &values, &mode, &start_obj, &end_obj))
+    if (!parse_kw<"OsLOs|OO">(args, kwds,
+                              {"partition_by", "time", "bucket", "values",
+                               "mode", "start", "end"},
+                              &part, &time, &bucket, &values, &mode, &start_obj,
+                              &end_obj))
         return nullptr;
     dftu_gap_fill_mode m;
     if (!dftracer::utils::python::frame::gap_fill_mode_from_str(mode, &m))
@@ -499,10 +545,10 @@ PyObject* LazyFrame_gap_fill(PyObject* self, PyObject* args, PyObject* kwds) {
     for (const dftracer::utils::dstd::String& s : vcols)
         vc.push_back(s.c_str());
     dataframe::OpArgs a;
-    a.strlist(1, pc.data(), static_cast<std::int32_t>(pc.size()))
+    a.strlist(1, pc)
         .str(2, time)
         .i64(3, static_cast<std::int64_t>(bucket))
-        .strlist(4, vc.data(), static_cast<std::int32_t>(vc.size()))
+        .strlist(4, vc)
         .i32(5, static_cast<std::int32_t>(m))
         .i64list(6, range);
     return run_lazy_op([&] {
@@ -511,20 +557,18 @@ PyObject* LazyFrame_gap_fill(PyObject* self, PyObject* args, PyObject* kwds) {
 }
 
 PyObject* LazyFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
-    static const char* kw[] = {"other",     "on",        "by",
-                               "direction", "tolerance", nullptr};
     PyObject* other = nullptr;
     const char* on = nullptr;
     PyObject* by = nullptr;
     const char* direction = nullptr;
     PyObject* tol_obj = Py_None;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OsOsO",
-                                     const_cast<char**>(kw), &other, &on, &by,
-                                     &direction, &tol_obj))
+    if (!parse_kw<"OsOsO">(args, kwds,
+                           {"other", "on", "by", "direction", "tolerance"},
+                           &other, &on, &by, &direction, &tol_obj))
         return nullptr;
-    LazyFrameObject* o = as_lazyframe(other);
+    LazyFrameObject* o = as_native<LazyFrameObject>(other);
     if (!o) return nullptr;
     dftu_asof_direction dir;
     if (!dftracer::utils::python::frame::asof_direction_from_str(direction,
@@ -550,21 +594,19 @@ PyObject* LazyFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
 }
 
 PyObject* LazyFrame_interval(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
-    static const char* kw[] = {"other", "point", "lo",   "hi",
-                               "by",    "outer", nullptr};
     PyObject* other = nullptr;
     const char* point = nullptr;
     const char* lo = nullptr;
     const char* hi = nullptr;
     PyObject* by = nullptr;
     int outer = 0;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OsssOp",
-                                     const_cast<char**>(kw), &other, &point,
-                                     &lo, &hi, &by, &outer))
+    if (!parse_kw<"OsssOp">(args, kwds,
+                            {"other", "point", "lo", "hi", "by", "outer"},
+                            &other, &point, &lo, &hi, &by, &outer))
         return nullptr;
-    LazyFrameObject* o = as_lazyframe(other);
+    LazyFrameObject* o = as_native<LazyFrameObject>(other);
     if (!o) return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> equi;
     if (!parse_string_seq(by, "interval: by must be names", equi))
@@ -577,7 +619,7 @@ PyObject* LazyFrame_interval(PyObject* self, PyObject* args, PyObject* kwds) {
 
 // unpivot(id_vars, value_vars); melt is the same call.
 PyObject* LazyFrame_unpivot(PyObject* self, PyObject* args) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     PyObject* id_obj = nullptr;
     PyObject* val_obj = nullptr;
@@ -593,14 +635,13 @@ PyObject* LazyFrame_unpivot(PyObject* self, PyObject* args) {
 }
 
 PyObject* LazyFrame_topk(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const char* name = nullptr;
     long long k = 0;
     int largest = 1;
-    static const char* kw[] = {"name", "k", "largest", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "sL|p", const_cast<char**>(kw),
-                                     &name, &k, &largest))
+    if (!parse_kw<"sL|p">(args, kwds, {"name", "k", "largest"}, &name, &k,
+                          &largest))
         return nullptr;
     return run_lazy_op([&] { return b->lf.topk(name, k, largest != 0); });
 }
@@ -608,7 +649,7 @@ PyObject* LazyFrame_topk(PyObject* self, PyObject* args, PyObject* kwds) {
 // group_by(key, aggs): key is a column name or a sequence of names (composite
 // key); aggs is a sequence of "op[:column]" string specs.
 PyObject* LazyFrame_group_by(PyObject* self, PyObject* args) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     PyObject* key_obj = nullptr;
     PyObject* aggs_obj = nullptr;
@@ -622,19 +663,20 @@ PyObject* LazyFrame_group_by(PyObject* self, PyObject* args) {
 }
 
 PyObject* LazyFrame_sort_by(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const char* name = nullptr;
     int descending = 0;
-    static const char* kw[] = {"name", "descending", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|p", const_cast<char**>(kw),
-                                     &name, &descending))
+    int nulls_last = 1;
+    if (!parse_kw<"s|pp">(args, kwds, {"name", "descending", "nulls_last"},
+                          &name, &descending, &nulls_last))
         return nullptr;
-    return run_lazy_op([&] { return b->lf.sort_by(name, descending != 0); });
+    return run_lazy_op(
+        [&] { return b->lf.sort_by(name, descending != 0, nulls_last != 0); });
 }
 
 PyObject* LazyFrame_join(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     PyObject* other = nullptr;
     PyObject* on = nullptr;
@@ -643,13 +685,13 @@ PyObject* LazyFrame_join(PyObject* self, PyObject* args, PyObject* kwds) {
     PyObject* right_on = nullptr;
     const char* suffix = "_right";
     int nulls_equal = 0;
-    static const char* kw[] = {"other",    "on",     "how",         "left_on",
-                               "right_on", "suffix", "nulls_equal", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "O|OsOOsp", const_cast<char**>(kw), &other, &on, &how,
-            &left_on, &right_on, &suffix, &nulls_equal))
+    if (!parse_kw<"O|OsOOsp">(args, kwds,
+                              {"other", "on", "how", "left_on", "right_on",
+                               "suffix", "nulls_equal"},
+                              &other, &on, &how, &left_on, &right_on, &suffix,
+                              &nulls_equal))
         return nullptr;
-    LazyFrameObject* o = as_lazyframe(other);
+    LazyFrameObject* o = as_native<LazyFrameObject>(other);
     if (!o) return nullptr;
     dataframe::JoinHow jh;
     if (!dftracer::utils::python::frame::join_how_from_str(how, jh))
@@ -666,13 +708,14 @@ PyObject* LazyFrame_join(PyObject* self, PyObject* args, PyObject* kwds) {
 }
 
 PyObject* LazyFrame_concat(PyObject* self, PyObject* args) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const Py_ssize_t n = PyTuple_GET_SIZE(args);
     dftracer::utils::dstd::Vector<LazyFrameObject*> others;
     others.reserve(static_cast<std::size_t>(n));
     for (Py_ssize_t i = 0; i < n; ++i) {
-        LazyFrameObject* o = as_lazyframe(PyTuple_GET_ITEM(args, i));
+        LazyFrameObject* o =
+            as_native<LazyFrameObject>(PyTuple_GET_ITEM(args, i));
         if (!o) return nullptr;
         others.push_back(o);
     }
@@ -684,13 +727,10 @@ PyObject* LazyFrame_concat(PyObject* self, PyObject* args) {
 }
 
 PyObject* LazyFrame_unique(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     PyObject* subset_obj = Py_None;
-    static const char* kw[] = {"subset", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O", const_cast<char**>(kw),
-                                     &subset_obj))
-        return nullptr;
+    if (!parse_kw<"|O">(args, kwds, {"subset"}, &subset_obj)) return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> subset;
     if (subset_obj != Py_None && !strings_from_str_or_seq(subset_obj, subset))
         return nullptr;
@@ -698,25 +738,20 @@ PyObject* LazyFrame_unique(PyObject* self, PyObject* args, PyObject* kwds) {
 }
 
 PyObject* LazyFrame_sample(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     long long n = 0;
     unsigned long long seed = 0;
-    static const char* kw[] = {"n", "seed", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "L|K", const_cast<char**>(kw),
-                                     &n, &seed))
-        return nullptr;
+    if (!parse_kw<"L|K">(args, kwds, {"n", "seed"}, &n, &seed)) return nullptr;
     return run_lazy_op([&] { return b->lf.sample(n, seed); });
 }
 
 PyObject* LazyFrame_head_by(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     PyObject* keys_obj = nullptr;
     long long n = 0;
-    static const char* kw[] = {"keys", "n", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OL", const_cast<char**>(kw),
-                                     &keys_obj, &n))
+    if (!parse_kw<"OL">(args, kwds, {"keys", "n"}, &keys_obj, &n))
         return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     if (!strings_from_str_or_seq(keys_obj, keys)) return nullptr;
@@ -724,13 +759,13 @@ PyObject* LazyFrame_head_by(PyObject* self, PyObject* args, PyObject* kwds) {
 }
 
 PyObject* LazyFrame_is_duplicated(PyObject* self, PyObject*) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     return run_lazy_op([&] { return b->lf.is_duplicated(); });
 }
 
 PyObject* LazyFrame_is_unique(PyObject* self, PyObject*) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     return run_lazy_op([&] { return b->lf.is_unique(); });
 }
@@ -739,7 +774,7 @@ PyObject* LazyFrame_is_unique(PyObject* self, PyObject*) {
 // origin_min=False). period defaults to every (tumbling window).
 PyObject* LazyFrame_group_by_dynamic(PyObject* self, PyObject* args,
                                      PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const char* time_col = nullptr;
     long long every = 0;
@@ -747,11 +782,10 @@ PyObject* LazyFrame_group_by_dynamic(PyObject* self, PyObject* args,
     PyObject* aggs_obj = nullptr;
     long long origin = 0;
     int origin_min = 0;
-    static const char* kw[] = {"time_col", "every",      "period", "aggs",
-                               "origin",   "origin_min", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "sL|OOLp", const_cast<char**>(kw), &time_col, &every,
-            &period_obj, &aggs_obj, &origin, &origin_min))
+    if (!parse_kw<"sL|OOLp">(
+            args, kwds,
+            {"time_col", "every", "period", "aggs", "origin", "origin_min"},
+            &time_col, &every, &period_obj, &aggs_obj, &origin, &origin_min))
         return nullptr;
     long long period = every;
     if (period_obj && period_obj != Py_None) {
@@ -768,22 +802,20 @@ PyObject* LazyFrame_group_by_dynamic(PyObject* self, PyObject* args,
 }
 
 PyObject* LazyFrame_pivot(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const char* index = nullptr;
     const char* on = nullptr;
     const char* values = nullptr;
     const char* agg = "first";
-    static const char* kw[] = {"index", "on", "values", "agg", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "sss|s",
-                                     const_cast<char**>(kw), &index, &on,
-                                     &values, &agg))
+    if (!parse_kw<"sss|s">(args, kwds, {"index", "on", "values", "agg"}, &index,
+                           &on, &values, &agg))
         return nullptr;
     return run_lazy_op([&] { return b->lf.pivot(index, on, values, agg); });
 }
 
 PyObject* LazyFrame_to_dummies(PyObject* self, PyObject* column) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const char* s = PyUnicode_AsUTF8(column);
     if (!s) return nullptr;
@@ -791,13 +823,13 @@ PyObject* LazyFrame_to_dummies(PyObject* self, PyObject* column) {
 }
 
 PyObject* LazyFrame_describe(PyObject* self, PyObject*) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     return run_lazy_op([&] { return b->lf.describe(); });
 }
 
 PyObject* LazyFrame_memory_budget(PyObject* self, PyObject* bytes) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     unsigned long long v = PyLong_AsUnsignedLongLong(bytes);
     if (v == static_cast<unsigned long long>(-1) && PyErr_Occurred())
@@ -806,71 +838,78 @@ PyObject* LazyFrame_memory_budget(PyObject* self, PyObject* bytes) {
 }
 
 PyObject* LazyFrame_auto_spill(PyObject* self, PyObject*) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     return run_lazy_op([&] { return b->lf.auto_spill(); });
 }
 
 PyObject* LazyFrame_schema(PyObject* self, PyObject*) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names;
-    try {
-        names = b->lf.schema();
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_ValueError, e.what());
-        return nullptr;
-    }
-    return str_list_from(names);
+    return guard([&] { return str_list_from(b->lf.schema()); });
 }
 
-PyObject* LazyFrame_explain(PyObject* self, PyObject*) {
-    LazyFrameObject* b = as_lazyframe(self);
+PyObject* LazyFrame_explain(PyObject* self, PyObject* args, PyObject* kwds) {
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
-    dftracer::utils::dstd::String text;
-    try {
-        text = b->lf.explain();
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_ValueError, e.what());
+    int analyze = 0;
+    long long batch_size = 0;
+    PyObject* runtime_arg = nullptr;
+    if (!parse_kw<"|pLO">(args, kwds, {"analyze", "batch_size", "runtime"},
+                          &analyze, &batch_size, &runtime_arg))
         return nullptr;
+    dftracer::utils::dstd::String text;
+    if (analyze == 0) {
+        return guard([&] {
+            text = b->lf.explain();
+            return PyUnicode_FromStringAndSize(
+                text.data(), static_cast<Py_ssize_t>(text.size()));
+        });
     }
+    dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
+        runtime_from_arg(runtime_arg);
+    if (!rt) return nullptr;
+    const LazyFrame lf = b->lf;
+    if (!run_blocking([&] {
+            text = dftracer::utils::python::core::py_unwrap(
+                rt->submit(lf.explain_analyze(batch_size)).get());
+        }))
+        return nullptr;
     return PyUnicode_FromStringAndSize(text.data(),
                                        static_cast<Py_ssize_t>(text.size()));
 }
 
 PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     long long batch_size = 0;
     PyObject* runtime_arg = nullptr;
-    static const char* kw[] = {"batch_size", "runtime", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|LO", const_cast<char**>(kw),
-                                     &batch_size, &runtime_arg))
+    if (!parse_kw<"|LO">(args, kwds, {"batch_size", "runtime"}, &batch_size,
+                         &runtime_arg))
         return nullptr;
     dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
     dataframe::DataFrame out;
+    const LazyFrame lf = b->lf;
     if (!run_blocking([&] {
             out = dftracer::utils::python::core::py_unwrap(
-                rt->submit(b->lf.collect(batch_size)).get());
+                rt->submit(lf.collect(batch_size)).get());
         }))
         return nullptr;
     return dftracer::utils::python::frame::wrap_dataframe(std::move(out));
 }
 
 PyObject* LazyFrame_sink(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const char* name = nullptr;
     PyObject* options_arg = nullptr;
     long long batch_size = 0;
     PyObject* runtime_arg = nullptr;
-    static const char* kw[] = {"name", "options", "batch_size", "runtime",
-                               nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|OLO",
-                                     const_cast<char**>(kw), &name,
-                                     &options_arg, &batch_size, &runtime_arg))
+    if (!parse_kw<"s|OLO">(args, kwds,
+                           {"name", "options", "batch_size", "runtime"}, &name,
+                           &options_arg, &batch_size, &runtime_arg))
         return nullptr;
     dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
@@ -912,9 +951,10 @@ PyObject* LazyFrame_sink(PyObject* self, PyObject* args, PyObject* kwds) {
         }
     }
     dataframe::SinkSummary summary;
+    const LazyFrame lf = b->lf;
     if (!run_blocking([&] {
             summary = dftracer::utils::python::core::py_unwrap(
-                rt->submit(b->lf.sink(name, std::move(options), batch_size))
+                rt->submit(lf.sink(name, std::move(options), batch_size))
                     .get());
         }))
         return nullptr;
@@ -931,13 +971,12 @@ collect_owned(LazyFrame lf, std::int64_t batch_size) {
 
 PyObject* LazyFrame_collect_async(PyObject* self, PyObject* args,
                                   PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     long long batch_size = 0;
     PyObject* runtime_arg = nullptr;
-    static const char* kw[] = {"batch_size", "runtime", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|LO", const_cast<char**>(kw),
-                                     &batch_size, &runtime_arg))
+    if (!parse_kw<"|LO">(args, kwds, {"batch_size", "runtime"}, &batch_size,
+                         &runtime_arg))
         return nullptr;
     dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
@@ -987,13 +1026,12 @@ dftracer::utils::coro::CoroTask<void> drain_stream(
 }
 
 PyObject* LazyFrame_stream(PyObject* self, PyObject* args, PyObject* kwds) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     long long batch_size = 0;
     PyObject* runtime_arg = nullptr;
-    static const char* kw[] = {"batch_size", "runtime", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|LO", const_cast<char**>(kw),
-                                     &batch_size, &runtime_arg))
+    if (!parse_kw<"|LO">(args, kwds, {"batch_size", "runtime"}, &batch_size,
+                         &runtime_arg))
         return nullptr;
     dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
@@ -1018,21 +1056,28 @@ PyObject* LazyFrame_stream(PyObject* self, PyObject* args, PyObject* kwds) {
 }
 
 PyObject* LazyFrame_output_schema(PyObject* self, PyObject*) {
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     dataframe::Schema schema;
-    try {
-        schema = b->lf.output_schema();
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_ValueError, e.what());
+    if (!guard([&] {
+            schema = b->lf.output_schema();
+            return true;
+        }))
         return nullptr;
-    }
     PyObject* out = PyList_New(static_cast<Py_ssize_t>(schema.fields.size()));
     if (!out) return nullptr;
     for (std::size_t i = 0; i < schema.fields.size(); ++i) {
         const dataframe::Field& f = schema.fields[i];
+        const dstd::StringView zone = f.type.timezone();
+        PyObject* zone_name = PyUnicode_FromStringAndSize(
+            zone.data(), static_cast<Py_ssize_t>(zone.size()));
+        if (!zone_name) {
+            Py_DECREF(out);
+            return nullptr;
+        }
         PyObject* item =
-            Py_BuildValue("(si)", f.name.c_str(), static_cast<int>(f.type.id));
+            Py_BuildValue("(siiN)", f.name.c_str(), static_cast<int>(f.type.id),
+                          static_cast<int>(f.type.time_unit()), zone_name);
         if (!item) {
             Py_DECREF(out);
             return nullptr;
@@ -1102,7 +1147,7 @@ PyObject* LazyFrame_arrow_c_stream(PyObject* self, PyObject* args) {
         return nullptr;
     if (!dftracer::utils::python::core::no_requested_schema(requested_schema))
         return nullptr;
-    LazyFrameObject* b = as_lazyframe(self);
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime);
@@ -1110,7 +1155,7 @@ PyObject* LazyFrame_arrow_c_stream(PyObject* self, PyObject* args) {
     auto wrapped = dftracer::utils::dstd::make_unique<WrappedStream>();
     auto status = arrow::to_arrow_stream(b->lf, *rt, &wrapped->inner);
     if (!status) {
-        PyErr_SetString(PyExc_RuntimeError, status.error().c_str());
+        dftracer::utils::python::core::set_py_error(status.error());
         return nullptr;
     }
     auto outer = dftracer::utils::dstd::make_unique<ArrowArrayStream>();
@@ -1157,14 +1202,14 @@ PyMethodDef LazyFrame_methods[] = {
     {"reduce", LazyFrame_reduce, METH_O,
      "reduce(agg) -> LazyFrame: the aggregate named `agg` over every eligible "
      "column, a streaming one-group group-by."},
-    {"group_transform", DFTU_PYCFUNCTION(LazyFrame_group_transform),
+    {"_group_transform", DFTU_PYCFUNCTION(LazyFrame_group_transform),
      METH_VARARGS | METH_KEYWORDS,
-     "group_transform(keys, kind, n=0, method='average', ascending=True) -> "
+     "_group_transform(keys, kind, n=0, method='average', ascending=True) -> "
      "LazyFrame: the group-wise transform `kind` (cumsum, cummax, cummin, "
      "cumcount, shift, diff, pct_change, rank, ngroup, head, tail, nth) over "
      "the groups of `keys`, one value per input row in input order."},
-    {"reduce_specs", LazyFrame_reduce_specs, METH_VARARGS,
-     "reduce_specs(agg, keys=None) -> list[str]: the 'op:column:out' specs "
+    {"_reduce_specs", LazyFrame_reduce_specs, METH_VARARGS,
+     "_reduce_specs(agg, keys=None) -> list[str]: the 'op:column:out' specs "
      "that broadcast `agg` over every eligible non-key column, for group_by."},
     {"explode", LazyFrame_explode, METH_O,
      "explode(column) -> LazyFrame with the List column expanded per element."},
@@ -1178,9 +1223,9 @@ PyMethodDef LazyFrame_methods[] = {
     {"window", DFTU_PYCFUNCTION(LazyFrame_window), METH_VARARGS | METH_KEYWORDS,
      "window(partition_by, order_by, specs) -> LazyFrame: SQL window "
      "functions over the collected plan; specs are normalized 12-tuples."},
-    {"column_op", DFTU_PYCFUNCTION(LazyFrame_column_op),
+    {"_column_op", DFTU_PYCFUNCTION(LazyFrame_column_op),
      METH_VARARGS | METH_KEYWORDS,
-     "column_op(column, op, column2=None, a=0, b=0, text=None) -> the "
+     "_column_op(column, op, column2=None, a=0, b=0, text=None) -> the "
      "registered column op over `column` as a plan step (a breaker)."},
     {"gap_fill", DFTU_PYCFUNCTION(LazyFrame_gap_fill),
      METH_VARARGS | METH_KEYWORDS,
@@ -1204,13 +1249,24 @@ PyMethodDef LazyFrame_methods[] = {
      "group_by(key, aggs) -> LazyFrame grouped by key with string-spec aggs."},
     {"sort_by", DFTU_PYCFUNCTION(LazyFrame_sort_by),
      METH_VARARGS | METH_KEYWORDS,
-     "sort_by(name, descending=False) -> LazyFrame sorted by one column."},
+     "sort_by(name, descending=False, nulls_last=True) -> LazyFrame sorted "
+     "by one column."},
     {"take", LazyFrame_take, METH_O,
      "take(indices) -> LazyFrame keeping the rows at indices (any order, "
      "repeats allowed)."},
     {"filter_mask", LazyFrame_filter_mask, METH_O,
      "filter_mask(mask) -> LazyFrame keeping rows where the precomputed Bool "
      "mask is true."},
+    {"_replace", LazyFrame_replace, METH_O,
+     "_replace(other) -> None\n\nBecome the plan of `other`, in place."},
+    {"index_names", LazyFrame_index_names, METH_NOARGS,
+     "index_names() -> list[str]\n\nThe row index columns of the plan's "
+     "result; [] for none."},
+    {"with_index", LazyFrame_with_index, METH_O,
+     "with_index(names) -> LazyFrame\n\nThe plan with the row index `names` "
+     "([] drops it)."},
+    {"share", LazyFrame_share, METH_NOARGS,
+     "share() -> LazyFrame\n\nA new LazyFrame over the same plan."},
     {"reverse", LazyFrame_reverse, METH_NOARGS,
      "reverse() -> LazyFrame with rows in reverse order."},
     {"sort_by_multi", DFTU_PYCFUNCTION(LazyFrame_sort_by_multi),
@@ -1257,51 +1313,50 @@ PyMethodDef LazyFrame_methods[] = {
     {"auto_spill", LazyFrame_auto_spill, METH_NOARGS,
      "auto_spill() -> LazyFrame with the spill budget at ~1/3 of memory."},
     {"output_schema", LazyFrame_output_schema, METH_NOARGS,
-     "output_schema() -> [(name, dtype id)] without running; a type the "
+     "output_schema() -> [(name, dtype id, time unit, timezone)] without "
+     "running; the unit (0 s, 1 ms, 2 us, 3 ns) and the zone are those of "
+     "a Timestamp, Time or Duration column. A type the "
      "plan cannot know statically is 0 (unknown)."},
     {"stream", DFTU_PYCFUNCTION(LazyFrame_stream), METH_VARARGS | METH_KEYWORDS,
      "stream(batch_size=0, runtime=None) -> iterator of DataFrame chunks."},
     {"schema", LazyFrame_schema, METH_NOARGS,
      "schema() -> list[str] of output column names, or [] if data-dependent."},
-    {"explain", LazyFrame_explain, METH_NOARGS,
-     "explain() -> str of the optimized plan."},
+    {"explain", DFTU_PYCFUNCTION(LazyFrame_explain),
+     METH_VARARGS | METH_KEYWORDS,
+     "explain(analyze=False, batch_size=0, runtime=None) -> str of the "
+     "optimized plan; analyze=True runs it and adds rows, time, votes and "
+     "plugin counters."},
     {"collect", DFTU_PYCFUNCTION(LazyFrame_collect),
      METH_VARARGS | METH_KEYWORDS,
-     "collect(batch_size=65536) -> _DataFrame, running the pipeline."},
+     "collect(batch_size=65536) -> DataFrame, running the pipeline."},
     {"sink", DFTU_PYCFUNCTION(LazyFrame_sink), METH_VARARGS | METH_KEYWORDS,
      "sink(name, options=None, batch_size=0, runtime=None) -> (rows, "
      "batches), writing the pipeline's rows to the sink the plugin "
      "registered as name."},
     {"collect_async", DFTU_PYCFUNCTION(LazyFrame_collect_async),
      METH_VARARGS | METH_KEYWORDS,
-     "collect_async(batch_size=0) -> TaskHandle[_DataFrame], running the "
+     "collect_async(batch_size=0) -> TaskHandle[DataFrame], running the "
      "pipeline on the Runtime and returning at once."},
     {nullptr, nullptr, 0, nullptr}};
 
 PyObject* collect_all_py(PyObject*, PyObject* args, PyObject* kwds) {
     PyObject* arg = nullptr;
     PyObject* runtime_arg = nullptr;
-    static const char* kw[] = {"plans", "runtime", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O", const_cast<char**>(kw),
-                                     &arg, &runtime_arg))
+    if (!parse_kw<"O|O">(args, kwds, {"plans", "runtime"}, &arg, &runtime_arg))
         return nullptr;
     dftracer::utils::dstd::SharedPtr<dftracer::utils::Runtime> rt =
         runtime_from_arg(runtime_arg);
     if (!rt) return nullptr;
-    PyObject* seq = PySequence_Fast(arg, "collect_all expects a sequence");
-    if (!seq) return nullptr;
-    const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
     dftracer::utils::dstd::Vector<LazyFrame> plans;
-    plans.reserve(static_cast<std::size_t>(n));
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        LazyFrameObject* b = as_lazyframe(PySequence_Fast_GET_ITEM(seq, i));
-        if (!b) {
-            Py_DECREF(seq);
-            return nullptr;
-        }
-        plans.push_back(b->lf);
-    }
-    Py_DECREF(seq);
+    if (!dftracer::utils::python::core::parse_seq<LazyFrame>(
+            arg, "collect_all expects a sequence", plans,
+            [](PyObject* item, dftracer::utils::dstd::Vector<LazyFrame>& o) {
+                LazyFrameObject* b = as_native<LazyFrameObject>(item);
+                if (!b) return false;
+                o.push_back(b->lf);
+                return true;
+            }))
+        return nullptr;
     dftracer::utils::dstd::Vector<dataframe::DataFrame> frames;
     if (!run_blocking([&] {
             frames = dftracer::utils::python::core::py_unwrap(
@@ -1336,15 +1391,20 @@ namespace dftracer::utils::python::frame {
 int init_lazyframe(PyObject* m) {
     LazyFrameType = {};
     LazyFrameType.ob_base = {PyObject_HEAD_INIT(nullptr) 0};
-    LazyFrameType.tp_name = "dftracer_utils_ext._LazyFrame";
+    LazyFrameType.tp_name = "dftracer_utils_ext.LazyFrame";
     LazyFrameType.tp_basicsize = sizeof(LazyFrameObject);
-    LazyFrameType.tp_flags = Py_TPFLAGS_DEFAULT;
+    LazyFrameType.tp_weaklistoffset = WEAKLIST_OFFSET;
+    LazyFrameType.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE;
     LazyFrameType.tp_doc = "A deferred query over a native vec batch.";
     LazyFrameType.tp_dealloc = reinterpret_cast<destructor>(LazyFrame_dealloc);
     LazyFrameType.tp_methods = LazyFrame_methods;
     LazyFrameType.tp_new = nullptr;  // created only by DataFrame.lazy()
-    if (register_type(m, &LazyFrameType, "_LazyFrame") < 0) return -1;
+    if (register_type(m, &LazyFrameType, "LazyFrame") < 0) return -1;
     return PyModule_AddFunctions(m, lazyframe_module_methods);
+}
+
+TypeBinding lazyframe_binding() {
+    return {"LazyFrame", &LazyFrameType, &g_lazyframe_type};
 }
 
 PyObject* wrap_lazyframe(dataframe::LazyFrame&& lf) {
@@ -1352,7 +1412,7 @@ PyObject* wrap_lazyframe(dataframe::LazyFrame&& lf) {
 }
 
 const dataframe::LazyFrame* lazyframe_of(PyObject* o) {
-    LazyFrameObject* b = as_lazyframe(o);
+    LazyFrameObject* b = as_native<LazyFrameObject>(o);
     return b ? &b->lf : nullptr;
 }
 

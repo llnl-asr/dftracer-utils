@@ -8,7 +8,6 @@ developer tools.
 it, so a format a plugin adds is readable from Python without the trace index.
 """
 
-import os
 from pathlib import Path
 
 import pytest
@@ -17,7 +16,7 @@ import dftracer.utils as dft  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
 from dftracer.utils.plugins import PluginInfo, Plugins  # noqa: E402
 
-from .common import find_example_plugin  # noqa: E402
+from .common import find_example_plugin, newest_test_plugin  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _UDFS_PLUGIN = find_example_plugin(
@@ -25,19 +24,8 @@ _UDFS_PLUGIN = find_example_plugin(
 )
 
 
-def _built_fixture(name: str) -> str:
-    """The newest built ``tests/plugins/<name>`` shared library under any build
-    tree in the checkout, or an empty string."""
-    found = []
-    for suffix in ("dylib", "so"):
-        found += _REPO_ROOT.glob(f"build/**/tests/plugins/{name}.{suffix}")
-    if not found:
-        return ""
-    return str(max(found, key=os.path.getmtime))
-
-
 def test_a_file_no_format_claims_is_a_notfound_error(tmp_path):
-    if not hasattr(_ext, "_LazyFrame"):
+    if not hasattr(_ext, "LazyFrame"):
         pytest.skip("extension built without Arrow support")
     plain = tmp_path / "plain.dft"
     plain.write_text("nothing here claims this file\n")
@@ -82,10 +70,10 @@ def test_describe_of_an_example_plugin_lists_its_udfs():
     assert info.file_formats == []
 
 
-_TOY_FORMAT_PLUGIN = _built_fixture("toy_format_plugin")
+_TOY_FORMAT_PLUGIN = newest_test_plugin("toy_format_plugin", _REPO_ROOT)
 
 
-@pytest.mark.skipif(not hasattr(_ext, "_LazyFrame"), reason="extension built without Arrow support")
+@pytest.mark.skipif(not hasattr(_ext, "LazyFrame"), reason="extension built without Arrow support")
 @pytest.mark.skipif(not _TOY_FORMAT_PLUGIN, reason="no built toy_format_plugin")
 def test_describe_lists_a_file_format_and_scan_file_reads_through_it(tmp_path):
     plugins = Plugins([_TOY_FORMAT_PLUGIN])

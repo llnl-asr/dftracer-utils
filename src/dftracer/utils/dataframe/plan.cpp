@@ -5,16 +5,6 @@
 
 namespace dftracer::utils::dataframe {
 
-namespace {
-DataFrame share_batch(const DataFrame& b) {
-    DataFrame out;
-    out.names = b.names;
-    out.columns.reserve(b.columns.size());
-    for (const Series& c : b.columns) out.columns.push_back(c.share());
-    return out;
-}
-}  // namespace
-
 dstd::Result<DataFrame> execute(const QueryPlan& plan, const DataFrame& input) {
     DataFrame cur;
     if (plan.where) {
@@ -22,7 +12,7 @@ dstd::Result<DataFrame> execute(const QueryPlan& plan, const DataFrame& input) {
         if (!mask) return mask.error();
         cur = filter(input, *mask);
     } else {
-        cur = share_batch(input);
+        cur = input.share();
     }
     if (!plan.group_by.empty()) {
         dstd::Result<DataFrame> grouped =

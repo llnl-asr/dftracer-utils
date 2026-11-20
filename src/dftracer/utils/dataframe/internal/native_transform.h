@@ -20,12 +20,12 @@ namespace dftracer::utils::dataframe {
 /// those columns, in the input row order. Empty when the kind, a column type or
 /// a column name is not covered, and the caller then composes the plan.
 dstd::Optional<LazyFrame> native_group_transform(
-    const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
+    const LazyFrame& plan, dstd::Span<const dstd::String> keys,
     GroupwiseOp kind, std::int64_t n, const Schema& typed);
 
 /// The window plan of the same transform: what the native step must equal.
 dstd::Result<LazyFrame> composed_group_transform(
-    const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
+    const LazyFrame& plan, dstd::Span<const dstd::String> keys,
     GroupwiseOp kind, std::int64_t n, RankMethod method, bool ascending);
 
 /// The rows the native transform has grouped on one numeric key column with no

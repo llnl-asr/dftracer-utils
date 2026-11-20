@@ -20,7 +20,7 @@ TEST_CASE("HttpRequest - parse valid GET") {
         "\r\n";
 
     HttpRequest req;
-    int consumed = req.parse(raw.data(), raw.size());
+    int consumed = req.parse(raw);
 
     REQUIRE(consumed > 0);
     CHECK(req.method == "GET");
@@ -33,7 +33,7 @@ TEST_CASE("HttpRequest - parse incomplete returns -2") {
     dstd::String raw = "GET /path HTTP/1.1\r\n";
 
     HttpRequest req;
-    int result = req.parse(raw.data(), raw.size());
+    int result = req.parse(raw);
     CHECK(result == -2);
 }
 
@@ -43,7 +43,7 @@ TEST_CASE("HttpRequest - parse malformed returns -1") {
         "\r\n";
 
     HttpRequest req;
-    int result = req.parse(raw.data(), raw.size());
+    int result = req.parse(raw);
     CHECK(result == -1);
 }
 
@@ -60,7 +60,7 @@ TEST_CASE("HttpRequest - header lookup case-insensitive") {
         "\r\n";
 
     HttpRequest req;
-    int consumed = req.parse(raw.data(), raw.size());
+    int consumed = req.parse(raw);
     REQUIRE(consumed > 0);
 
     SUBCASE("exact case match") {
@@ -91,7 +91,7 @@ TEST_CASE("HttpRequest - has_header") {
         "\r\n";
 
     HttpRequest req;
-    int consumed = req.parse(raw.data(), raw.size());
+    int consumed = req.parse(raw);
     REQUIRE(consumed > 0);
 
     SUBCASE("exact match") {

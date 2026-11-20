@@ -102,8 +102,8 @@ dstd::String substituted(const cli::PluginTemplate& file,
 }
 
 /// Write one file, creating the folders above it.
-dstd::Result<void> write_project_file(const dstd::String& path,
-                                      const dstd::String& data) {
+dstd::Result<void> write_project_file(dstd::StringView path,
+                                      dstd::StringView data) {
     const dstd::StringView view(path);
     const std::size_t slash = view.find_last_of('/');
     if (slash != dstd::StringView::npos) {
@@ -114,7 +114,7 @@ dstd::Result<void> write_project_file(const dstd::String& path,
     return dstd::fs::write_file(dstd::PathView(path), data);
 }
 
-int run_new(const dstd::String& kind, const dstd::String& name,
+int run_new(dstd::StringView kind, dstd::StringView name,
             dstd::StringView dir) {
     const dstd::String root =
         dir.empty() ? dstd::String(".") : dstd::String(dir);
@@ -153,8 +153,8 @@ int run_new(const dstd::String& kind, const dstd::String& name,
         DFTRACER_UTILS_LOG_ERROR("Error: no template for kind '{}'", kind);
         return 1;
     }
-    std::printf("made a %s plugin in %s:\n%s", kind.c_str(), project.c_str(),
-                listing.c_str());
+    std::printf("made a %.*s plugin in %s:\n%s", static_cast<int>(kind.size()),
+                kind.data(), project.c_str(), listing.c_str());
     return 0;
 }
 
@@ -189,8 +189,9 @@ class TempIndexRoot {
     dstd::String path_;
 };
 
-void print_line(const char* prefix, dstd::StringView text) {
-    std::printf("%s%.*s\n", prefix, static_cast<int>(text.size()), text.data());
+void print_line(dstd::StringView prefix, dstd::StringView text) {
+    std::printf("%.*s%.*s\n", static_cast<int>(prefix.size()), prefix.data(),
+                static_cast<int>(text.size()), text.data());
 }
 
 int report_golden(dstd::StringView tests_dir, bool record,
@@ -279,13 +280,13 @@ int report_golden(dstd::StringView tests_dir, bool record,
     return failed == 0 ? 0 : 1;
 }
 
-int report_plugin(const dstd::String& lib, dstd::StringView tests_dir,
+int report_plugin(dstd::StringView lib, dstd::StringView tests_dir,
                   bool record) {
     int code = 0;
-    std::printf("checking: %s\n", lib.c_str());
+    std::printf("checking: %.*s\n", static_cast<int>(lib.size()), lib.data());
     {
         auto builder = plugins::host::Plugins::builder();
-        builder.add(lib);
+        builder.add(dstd::String(lib));
         auto loaded = builder.build();
         if (!loaded.has_value()) {
             print_line("load error: ", loaded.error().message());
@@ -311,7 +312,7 @@ int report_plugin(const dstd::String& lib, dstd::StringView tests_dir,
 
 // --------------------------------------------------------------- parent ----
 
-dstd::String self_path(const char* argv0) {
+dstd::String self_path(dstd::StringView argv0) {
     char path[4096];
 #if defined(__APPLE__)
     std::uint32_t size = sizeof(path);
@@ -319,7 +320,8 @@ dstd::String self_path(const char* argv0) {
 #endif
     const ssize_t got = ::readlink("/proc/self/exe", path, sizeof(path) - 1);
     if (got > 0) return dstd::String(dstd::StringView(path, got));
-    return dstd::String(argv0 == nullptr ? "dftracer_plugin" : argv0);
+    return dstd::String(argv0.empty() ? dstd::StringView("dftracer_plugin")
+                                      : argv0);
 }
 
 const char* signal_name(int number) {
@@ -370,12 +372,12 @@ dstd::Vector<dstd::String> child_env() {
     return env;
 }
 
-int run_check(const char* argv0, const dstd::String& lib,
+int run_check(dstd::StringView argv0, dstd::StringView lib,
               dstd::StringView tests, bool record) {
     dstd::Vector<dstd::String> owned;
     owned.push_back(self_path(argv0));
     owned.push_back(dstd::String(CHECK_CHILD_FLAG));
-    owned.push_back(lib);
+    owned.push_back(dstd::String(lib));
     if (!tests.empty()) {
         owned.push_back(dstd::String("--tests"));
         owned.push_back(dstd::String(tests));

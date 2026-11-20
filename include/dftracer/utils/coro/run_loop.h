@@ -56,9 +56,11 @@ class RunLoop final : public Executor {
     bool runs_remote_wakeups() const noexcept override { return false; }
 
     /// The loop's own timers, started on the first call from any thread and
-    /// stopped when the loop is destroyed.
+    /// stopped when the loop is destroyed. Null when their thread cannot be
+    /// created, as for an executor without timers; a caller then uses the
+    /// process timers, which end the process if their thread cannot start.
     TimerService* timers() noexcept override {
-        timer_service_.start();
+        if (!timer_service_.start()) return nullptr;
         return &timer_service_;
     }
 

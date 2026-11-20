@@ -12,11 +12,13 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/host/config.h>
 #include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/plugins/result_registry.h>
+#include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/dict_helpers.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/method.h>
@@ -42,6 +44,8 @@
 #include <new>
 #include <utility>
 #include <variant>
+
+using dftracer::utils::python::core::parse_kw;
 
 using namespace dftracer::utils;
 
@@ -182,7 +186,7 @@ PyObject* result_to_py(NamedResult& result) {
             static_cast<Py_ssize_t>(blob->size()));
     if (auto* frame = std::get_if<OwnedDataFrame>(&result)) {
         // Adopt the handle's columns into a native DataFrame (shared buffers,
-        // zero-copy) and hand it back as a _DataFrame; the OwnedDataFrame frees
+        // zero-copy) and hand it back as a DataFrame; the OwnedDataFrame frees
         // the emptied handle.
         dftu_dataframe* h = frame->get();
         dataframe::DataFrame df;
@@ -275,13 +279,11 @@ bool parse_result_names(
 // gate, and capability resolution all run here, so a load/symbol/ABI/
 // capability failure raises ImportError from the constructor.
 int ph_init(PluginHostObject* self, PyObject* args, PyObject* kwds) {
-    static const char* kwlist[] = {"specs", "result_names", "runtime", nullptr};
     PyObject* specs = nullptr;
     PyObject* result_names_obj = nullptr;
     PyObject* runtime_arg = nullptr;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|OO",
-                                     const_cast<char**>(kwlist), &specs,
-                                     &result_names_obj, &runtime_arg))
+    if (!parse_kw<"O|OO">(args, kwds, {"specs", "result_names", "runtime"},
+                          &specs, &result_names_obj, &runtime_arg))
         return -1;
     if (bind_runtime_arg(self, runtime_arg) != 0) return -1;
 
@@ -336,14 +338,11 @@ int ph_init(PluginHostObject* self, PyObject* args, PyObject* kwds) {
 // run(traces, index_dir=None, auto_index=True) -> (results, stats). Drives the
 // fused scan with the GIL released.
 PyObject* ph_run(PluginHostObject* self, PyObject* args, PyObject* kwds) {
-    static const char* kwlist[] = {"traces", "index_dir", "auto_index",
-                                   nullptr};
     PyObject* traces = nullptr;
     const char* index_dir = nullptr;
     int auto_index = 1;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|zp",
-                                     const_cast<char**>(kwlist), &traces,
-                                     &index_dir, &auto_index))
+    if (!parse_kw<"O|zp">(args, kwds, {"traces", "index_dir", "auto_index"},
+                          &traces, &index_dir, &auto_index))
         return nullptr;
 
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> inputs;
@@ -392,11 +391,12 @@ PyObject* ph_run(PluginHostObject* self, PyObject* args, PyObject* kwds) {
 // set on failure.
 bool dict_set_list(
     PyObject* d, const char* key,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& items) {
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> items) {
     PyObject* list = PyList_New(0);
     if (!list) return false;
     for (const auto& s : items) {
-        PyObject* item = PyUnicode_FromString(s.c_str());
+        PyObject* item = PyUnicode_FromStringAndSize(
+            s.data(), static_cast<Py_ssize_t>(s.size()));
         if (!item) {
             Py_DECREF(list);
             return false;

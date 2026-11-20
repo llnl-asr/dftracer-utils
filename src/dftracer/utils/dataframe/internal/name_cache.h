@@ -7,6 +7,8 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
+#include <algorithm>
+
 namespace dftracer::utils::dataframe {
 
 // The names a cursor puts on its frames. A name is built once and every later
@@ -24,7 +26,7 @@ class NameCache {
     // built on the first call, copied by reference count afterwards. `names`
     // is read only on the first call.
     const dstd::Vector<dstd::SharedString>& fixed(
-        const dstd::Vector<dstd::String>& names) {
+        dstd::Span<const dstd::String> names) {
         if (!has_fixed_) {
             for (const dstd::String& n : names) fixed_.push_back(shared(n));
             has_fixed_ = true;
@@ -35,9 +37,9 @@ class NameCache {
     // The names of `key`, rebuilt only when `key` differs from the last one.
     // For a schema that can change between morsels.
     const dstd::Vector<dstd::SharedString>& schema(
-        const dstd::Vector<dstd::String>& key) {
-        if (key != key_) {
-            key_ = key;
+        dstd::Span<const dstd::String> key) {
+        if (!std::equal(key.begin(), key.end(), key_.begin(), key_.end())) {
+            key_.assign(key.begin(), key.end());
             schema_.clear();
             for (const dstd::String& n : key) schema_.push_back(shared(n));
         }

@@ -9,6 +9,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -38,7 +39,7 @@ struct TestMetadata {
     std::size_t total_events;
 
     TestMetadata() : name(""), total_events(0) {}
-    TestMetadata(const dstd::String& n, std::size_t t)
+    TestMetadata(dstd::StringView n, std::size_t t)
         : name(n), total_events(t) {}
 };
 
@@ -70,8 +71,8 @@ TEST_SUITE("ChunkVerifier") {
         SUBCASE("Verify matching chunks") {
             printf("Starting test: Verify matching chunks\n");
 
-            auto input_hasher = [](const dstd::Vector<TestMetadata>& metadata)
-                -> std::uint64_t {
+            auto input_hasher =
+                [](dstd::Span<const TestMetadata> metadata) -> std::uint64_t {
                 std::uint64_t hash = 0;
                 for (const auto& meta : metadata) {
                     hash ^= dstd::Hash<dstd::String>{}(meta.name);
@@ -90,7 +91,7 @@ TEST_SUITE("ChunkVerifier") {
             };
 
             auto event_hasher =
-                [](const dstd::Vector<TestEvent>& /*events*/) -> std::uint64_t {
+                [](dstd::Span<const TestEvent> /*events*/) -> std::uint64_t {
                 std::uint64_t hash = 0;
                 hash ^= dstd::Hash<dstd::String>{}("test");
                 hash ^= dstd::Hash<std::size_t>{}(9);  // total events
@@ -123,7 +124,7 @@ TEST_SUITE("ChunkVerifier") {
 
         SUBCASE("Detect mismatched chunks") {
             auto input_hasher =
-                [](const dstd::Vector<TestMetadata>&) -> std::uint64_t {
+                [](dstd::Span<const TestMetadata>) -> std::uint64_t {
                 return 12345;
             };
 
@@ -131,7 +132,7 @@ TEST_SUITE("ChunkVerifier") {
                 -> dstd::Vector<TestEvent> { return chunk.data; };
 
             auto event_hasher =
-                [](const dstd::Vector<TestEvent>&) -> std::uint64_t {
+                [](dstd::Span<const TestEvent>) -> std::uint64_t {
                 return 67890;
             };
 
@@ -156,7 +157,7 @@ TEST_SUITE("ChunkVerifier") {
     TEST_CASE("ChunkVerifier - Parallel Processing") {
         SUBCASE("Process multiple chunks in parallel") {
             auto input_hasher =
-                [](const dstd::Vector<TestMetadata>&) -> std::uint64_t {
+                [](dstd::Span<const TestMetadata>) -> std::uint64_t {
                 return 435;  // Expected sum of all event values
             };
 
@@ -168,7 +169,7 @@ TEST_SUITE("ChunkVerifier") {
             };
 
             auto event_hasher =
-                [](const dstd::Vector<TestEvent>& events) -> std::uint64_t {
+                [](dstd::Span<const TestEvent> events) -> std::uint64_t {
                 std::uint64_t hash = 0;
                 for (const auto& event : events) {
                     hash += event;
@@ -205,7 +206,7 @@ TEST_SUITE("ChunkVerifier") {
     TEST_CASE("ChunkVerifier - Empty and Edge Cases") {
         SUBCASE("Empty chunks") {
             auto input_hasher =
-                [](const dstd::Vector<TestMetadata>&) -> std::uint64_t {
+                [](dstd::Span<const TestMetadata>) -> std::uint64_t {
                 return 0;
             };
 
@@ -215,9 +216,7 @@ TEST_SUITE("ChunkVerifier") {
             };
 
             auto event_hasher =
-                [](const dstd::Vector<TestEvent>&) -> std::uint64_t {
-                return 0;
-            };
+                [](dstd::Span<const TestEvent>) -> std::uint64_t { return 0; };
 
             auto verifier = dstd::make_shared<
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
@@ -238,8 +237,8 @@ TEST_SUITE("ChunkVerifier") {
         SUBCASE("Single chunk") {
             printf("Starting single chunk test\n");
 
-            auto input_hasher = [](const dstd::Vector<TestMetadata>& metadata)
-                -> std::uint64_t {
+            auto input_hasher =
+                [](dstd::Span<const TestMetadata> metadata) -> std::uint64_t {
                 auto hash = metadata.empty() ? 0 : metadata[0].total_events;
                 printf("Input hash: %lu\n", (unsigned long)hash);
                 return hash;
@@ -253,7 +252,7 @@ TEST_SUITE("ChunkVerifier") {
             };
 
             auto event_hasher =
-                [](const dstd::Vector<TestEvent>& events) -> std::uint64_t {
+                [](dstd::Span<const TestEvent> events) -> std::uint64_t {
                 auto hash = events.size();
                 printf("Event hash: %zu (from %zu events)\n", hash,
                        events.size());
@@ -285,7 +284,7 @@ TEST_SUITE("ChunkVerifier") {
     TEST_CASE("ChunkVerifier - Builder Pattern") {
         SUBCASE("Using from_chunks builder") {
             auto input_hasher =
-                [](const dstd::Vector<TestMetadata>&) -> std::uint64_t {
+                [](dstd::Span<const TestMetadata>) -> std::uint64_t {
                 return 100;
             };
 
@@ -293,7 +292,7 @@ TEST_SUITE("ChunkVerifier") {
                 -> dstd::Vector<TestEvent> { return chunk.data; };
 
             auto event_hasher =
-                [](const dstd::Vector<TestEvent>&) -> std::uint64_t {
+                [](dstd::Span<const TestEvent>) -> std::uint64_t {
                 return 100;  // Match input hash
             };
 

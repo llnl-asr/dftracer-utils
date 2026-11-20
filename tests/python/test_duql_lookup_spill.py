@@ -16,7 +16,7 @@ def _events(seed, calls, phases):
     rng = random.Random(seed)
     ev = [
         {
-            "ph": "X",
+            "ph": 1,
             "name": "call",
             "cat": "c",
             "pid": rng.randint(1, 4),
@@ -28,7 +28,7 @@ def _events(seed, calls, phases):
     ]
     ev += [
         {
-            "ph": "X",
+            "ph": 1,
             "name": "phase",
             "cat": "c",
             "pid": rng.randint(1, 4),

@@ -18,14 +18,14 @@ construct, so the caller can fall back and say why.
 from __future__ import annotations
 
 import ast
-import inspect
 import io
 import math
 import textwrap
 import tokenize
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Sequence, cast
 
-from .columnar import Expr, _Select, col, lit
+from ._eval import COMPARE_NAME, ENGINE_ARITH_SYMBOL
+from .expr import Expr, Select, col, lit
 
 # Python 3.8 wraps a subscript's slice in ast.Index; 3.9+ stores the value
 # directly.
@@ -34,7 +34,7 @@ _AST_INDEX = getattr(ast, "Index", None)
 
 def _unwrap_index(node: ast.expr) -> ast.expr:
     if _AST_INDEX is not None and isinstance(node, _AST_INDEX):
-        return getattr(node, "value", node)
+        return cast("ast.expr", getattr(node, "value", node))
     return node
 
 
@@ -50,8 +50,6 @@ def _missing(method: str) -> ast.expr:
 # without a replacement (the expression language has no null literal).
 NULL_COLUMN = "__eval_null__"
 
-_BIN = {ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/"}
-_CMP = {ast.Lt: "lt", ast.LtE: "le", ast.Gt: "gt", ast.GtE: "ge", ast.Eq: "eq", ast.NotEq: "ne"}
 _FLIP = {"lt": "gt", "le": "ge", "gt": "lt", "ge": "le", "eq": "eq", "ne": "ne"}
 _MATH = {"sqrt": "sqrt", "log": "log", "exp": "exp", "floor": "floor", "ceil": "ceil"}
 _NULL_TESTS = {"isna": True, "isnull": True, "notna": False, "notnull": False}  # True: is null
@@ -64,9 +62,11 @@ _STR_MAP = {
 }
 
 
-def _source_node(func: Callable[..., object]) -> ast.AST:
+def source_node(func: Callable[..., object]) -> ast.AST:
     """The ``FunctionDef`` or ``Lambda`` node of ``func``'s own source."""
     try:
+        import inspect
+
         src = textwrap.dedent(inspect.getsource(func))
     except (OSError, TypeError) as e:
         raise TranspileError(f"no source available ({e})") from None
@@ -111,30 +111,30 @@ class _Lowering:
 
     def __init__(
         self,
-        func: Optional[Callable[..., object]],
+        func: Callable[..., object] | None,
         node: ast.AST,
-        columns: Optional[Sequence[str]],
-        bound: Optional[Dict[str, Expr]] = None,
+        columns: Sequence[str] | None,
+        bound: dict[str, Expr] | None = None,
         depth: int = 0,
-        int_inputs: Optional[Dict[str, bool]] = None,
-        bound_int: Optional[Dict[str, bool]] = None,
-        consts: Optional[Dict[str, Any]] = None,
+        int_inputs: dict[str, bool] | None = None,
+        bound_int: dict[str, bool] | None = None,
+        consts: dict[str, Any] | None = None,
     ) -> None:
         self.func = func
         self.node = node
         self.uses_null = False
         self.columns = list(columns) if columns is not None else None
         self.depth = depth
-        self.int_inputs: Dict[str, bool] = dict(int_inputs or {})
-        self.bound_int: Dict[str, bool] = dict(bound_int or {})
-        self.local_int: Dict[str, bool] = {}
+        self.int_inputs: dict[str, bool] = dict(int_inputs or {})
+        self.bound_int: dict[str, bool] = dict(bound_int or {})
+        self.local_int: dict[str, bool] = {}
         args = node.args.args if isinstance(node, (ast.FunctionDef, ast.Lambda)) else []
         names = [a.arg for a in args]
         if columns is not None:
             if len(names) != 1:
                 raise TranspileError("a row function takes exactly one argument")
-            self.row_param: Optional[str] = names[0]
-            self.bound: Dict[str, Expr] = {}
+            self.row_param: str | None = names[0]
+            self.bound: dict[str, Expr] = {}
         else:
             self.row_param = None
             if bound is None:
@@ -147,10 +147,12 @@ class _Lowering:
                     f"{getattr(func, '__name__', 'function')} takes {len(names)} argument(s), got {len(bound)}"
                 )
             self.bound = dict(bound)
-        self.locals: Dict[str, Expr] = {}
+        self.locals: dict[str, Expr] = {}
         if func is None:  # a source string (transpile_expr): only the names it is given
-            self.consts: Dict[str, Any] = dict(consts or {})
+            self.consts: dict[str, Any] = dict(consts or {})
         else:
+            import inspect
+
             cv = inspect.getclosurevars(func)
             self.consts = {**cv.globals, **cv.nonlocals}
 
@@ -167,7 +169,7 @@ class _Lowering:
         return out
 
     # -- statements ------------------------------------------------------------
-    def block(self, stmts: List[ast.stmt]) -> Optional[Expr]:
+    def block(self, stmts: list[ast.stmt]) -> Expr | None:
         """The value a statement list returns, or None if it falls through."""
         for i, s in enumerate(stmts):
             if isinstance(s, ast.Return):
@@ -190,7 +192,7 @@ class _Lowering:
                 self.locals = saved
                 if then is None or otherwise is None:
                     raise TranspileError("every branch of an `if` must return")
-                return _Select(cond, then, otherwise)
+                return Select(cond, then, otherwise)
             if isinstance(s, ast.Pass):
                 continue
             raise TranspileError(f"statement {type(s).__name__} has no engine form")
@@ -217,7 +219,7 @@ class _Lowering:
                 inner = self.scalar_or_expr(n.operand)
                 if isinstance(inner, Expr):
                     return inner * -1
-                return lit(-inner)
+                return lit(-cast("int | float", inner))
             if isinstance(n.op, ast.UAdd):
                 inner = self.scalar_or_expr(n.operand)
                 return inner if isinstance(inner, Expr) else lit(inner)
@@ -233,31 +235,35 @@ class _Lowering:
         if isinstance(n, ast.Compare):
             return self.compare(n)
         if isinstance(n, ast.IfExp):
-            return _Select(self.expr(n.test), self.expr(n.body), self.expr(n.orelse))
+            return Select(self.expr(n.test), self.expr(n.body), self.expr(n.orelse))
         if isinstance(n, ast.Call):
             return self.call(n)
         raise TranspileError(f"expression {type(n).__name__} has no engine form")
 
     def binop(self, n: ast.BinOp) -> Expr:
-        left, right = self.scalar_or_expr(n.left), self.scalar_or_expr(n.right)
+        left = cast("Expr | int | float", self.scalar_or_expr(n.left))
+        right = cast("Expr | int | float", self.scalar_or_expr(n.right))
         if not isinstance(left, Expr) and not isinstance(right, Expr):
             raise TranspileError("arithmetic on two constants")
-        op = _BIN.get(type(n.op))
+        op = ENGINE_ARITH_SYMBOL.get(type(n.op))
         if op is not None:
-            return {
-                "+": lambda a, b: a + b,
-                "-": lambda a, b: a - b,
-                "*": lambda a, b: a * b,
-                "/": lambda a, b: a / b,
-            }[op](left, right)
+            return cast(
+                "Expr",
+                {
+                    "+": lambda a, b: a + b,
+                    "-": lambda a, b: a - b,
+                    "*": lambda a, b: a * b,
+                    "/": lambda a, b: a / b,
+                }[op](left, right),
+            )
         both_int = self.is_int(n.left) and self.is_int(n.right)
         if isinstance(n.op, ast.FloorDiv):
             # Python floors toward -inf: floor(a / b), back to int for ints.
-            q = (left / right).floor()
+            q = cast("Expr", left / right).floor()
             return q.cast("int64") if both_int else q
         if isinstance(n.op, ast.Mod):
             # Python's sign follows the divisor: a - floor(a / b) * b.
-            r = left - (left / right).floor() * right
+            r = left - cast("Expr", left / right).floor() * right
             return r.cast("int64") if both_int else r
         if isinstance(n.op, ast.Pow):
             if not isinstance(left, Expr):
@@ -301,7 +307,7 @@ class _Lowering:
                 return all(self.is_int(a) for a in n.args)
         return False
 
-    def field_name(self, n: ast.expr) -> Optional[str]:
+    def field_name(self, n: ast.expr) -> str | None:
         if isinstance(n, ast.Attribute):
             if isinstance(n.value, ast.Name) and n.value.id == self.row_param:
                 return n.attr
@@ -313,14 +319,14 @@ class _Lowering:
                 return k if isinstance(k, str) else None
         return None
 
-    def scalar_or_expr(self, n: ast.expr) -> Any:
+    def scalar_or_expr(self, n: ast.expr) -> Expr | int | float | str:
         """A Python number for a constant subtree, else an Expr."""
         v = self.constant(n)
         if v is not None:
             return v
         return self.expr(n)
 
-    def constant(self, n: ast.expr) -> Any:
+    def constant(self, n: ast.expr) -> int | float | str | None:
         if (
             isinstance(n, ast.Constant)
             and isinstance(n.value, (int, float, str))
@@ -370,14 +376,14 @@ class _Lowering:
 
     def compare(self, n: ast.Compare) -> Expr:
         pairs = list(zip([n.left, *n.comparators[:-1]], n.ops, n.comparators))
-        out: Optional[Expr] = None
+        out: Expr | None = None
         for left, op, right in pairs:
             if isinstance(op, (ast.In, ast.NotIn)):
                 part = self.membership(left, right, negate=isinstance(op, ast.NotIn))
             elif isinstance(op, (ast.Is, ast.IsNot)):
                 part = self.null_test(left, right, negate=isinstance(op, ast.IsNot))
             else:
-                code = _CMP.get(type(op))
+                code = COMPARE_NAME.get(type(op))
                 if code is None:
                     raise TranspileError(f"comparison {type(op).__name__} has no engine form")
                 lv, rv = self.scalar_or_expr(left), self.scalar_or_expr(right)
@@ -398,12 +404,12 @@ class _Lowering:
         assert out is not None
         return out
 
-    def inline(self, callee: Callable[..., object], args: List[ast.expr]) -> Expr:
+    def inline(self, callee: Callable[..., object], args: list[ast.expr]) -> Expr:
         """A call to another plain Python function: lower its body with each
         parameter bound to the argument expression (or constant)."""
         if self.depth >= _MAX_INLINE_DEPTH:
             raise TranspileError("calls nest too deep (recursion?)")
-        node = _source_node(callee)
+        node = source_node(callee)
         params = (
             [a.arg for a in node.args.args]
             if isinstance(node, (ast.FunctionDef, ast.Lambda))
@@ -413,8 +419,8 @@ class _Lowering:
             raise TranspileError(
                 f"{getattr(callee, '__name__', 'function')} takes {len(params)} argument(s), called with {len(args)}"
             )
-        bound: Dict[str, Expr] = {}
-        ints: Dict[str, bool] = {}
+        bound: dict[str, Expr] = {}
+        ints: dict[str, bool] = {}
         for p, a in zip(params, args):
             v = self.scalar_or_expr(a)
             bound[p] = v if isinstance(v, Expr) else lit(v)
@@ -447,14 +453,15 @@ class _Lowering:
             raise TranspileError("`in` needs a literal list or a constant on the right")
         if any(v is None for v in values):
             raise TranspileError("`in` needs a list of constants")
-        return lv.not_in(values) if negate else lv.is_in(values)
+        members = cast("list[str | int | float | bool]", values)
+        return lv.not_in(members) if negate else lv.is_in(members)
 
-    def _bind(self, method: str, n: ast.Call, params: Sequence[str]) -> Dict[str, ast.expr]:
+    def _bind(self, method: str, n: ast.Call, params: Sequence[str]) -> dict[str, ast.expr]:
         """The positional and keyword arguments of a method call by parameter
         name; an unknown or repeated one raises, naming it."""
         if len(n.args) > len(params):
             raise TranspileError(f".{method} takes at most {len(params)} argument(s)")
-        got: Dict[str, ast.expr] = dict(zip(params, n.args))
+        got: dict[str, ast.expr] = dict(zip(params, n.args))
         for k in n.keywords:
             if k.arg is None or k.arg not in params:
                 raise TranspileError(f"keyword {k.arg!r} has no engine form for .{method}")
@@ -464,14 +471,14 @@ class _Lowering:
         return got
 
     @staticmethod
-    def _flag(node: Optional[ast.expr], default: bool, what: str) -> bool:
+    def _flag(node: ast.expr | None, default: bool, what: str) -> bool:
         if node is None:
             return default
         if isinstance(node, ast.Constant) and isinstance(node.value, bool):
             return node.value
         raise TranspileError(f"{what} needs True or False")
 
-    def _bound(self, node: Optional[ast.expr], what: str) -> Optional[Union[int, float]]:
+    def _bound(self, node: ast.expr | None, what: str) -> int | float | None:
         """A number, or None for an absent bound (omitted or the literal None)."""
         if node is None or (isinstance(node, ast.Constant) and node.value is None):
             return None
@@ -484,7 +491,7 @@ class _Lowering:
         self.uses_null = True
         return col(NULL_COLUMN)
 
-    def method(self, target: Expr, method: str, n: ast.Call) -> Optional[Expr]:
+    def method(self, target: Expr, method: str, n: ast.Call) -> Expr | None:
         """The pandas methods with an engine form beyond the string and null
         tests; None when ``method`` is not one of them."""
         if method == "abs":
@@ -495,8 +502,8 @@ class _Lowering:
                 self._bind(method, n, ("value",)).get("value") or _missing("fillna")
             )
             if isinstance(v, Expr):
-                return _Select(target.is_null(), v, target)
-            return target.fillna(v)
+                return Select(target.is_null(), v, target)
+            return target.fillna(cast("int | float", v))
         if method == "clip":
             a = self._bind(method, n, ("lower", "upper"))
             lo, hi = (
@@ -507,9 +514,9 @@ class _Lowering:
                 return target.clip(lo, hi)
             # one bound: a null condition takes the else branch, so a null stays null
             if lo is not None:
-                return _Select(_cmp(target, "lt", lo), lit(lo), target)
+                return Select(_cmp(target, "lt", lo), lit(lo), target)
             if hi is not None:
-                return _Select(_cmp(target, "gt", hi), lit(hi), target)
+                return Select(_cmp(target, "gt", hi), lit(hi), target)
             raise TranspileError("clip needs a lower or an upper bound")
         if method == "round":
             digits = (
@@ -521,7 +528,7 @@ class _Lowering:
             if digits == 0:
                 return target.round()
             scale = 10**digits
-            return (target * scale).round() / scale
+            return cast("Expr", (target * scale).round() / scale)
         if method in ("where", "mask"):
             a = self._bind(method, n, ("cond", "other"))
             if "cond" not in a:
@@ -529,9 +536,9 @@ class _Lowering:
             cond = self.expr(a["cond"])
             other = a.get("other")
             if other is None or (isinstance(other, ast.Constant) and other.value is None):
-                other_e: Union[Expr, int, float] = self._null()
+                other_e: Expr | int | float = self._null()
             else:
-                other_e = self.scalar_or_expr(other)
+                other_e = cast("Expr | int | float", self.scalar_or_expr(other))
             return target.where(cond, other_e) if method == "where" else target.mask(cond, other_e)
         return None
 
@@ -559,7 +566,7 @@ class _Lowering:
                 for v in vals[1:]:
                     ve = v if isinstance(v, Expr) else lit(v)
                     cond = _cmp(out - ve, "lt" if name == "min" else "gt", 0)
-                    out = _Select(cond, out, ve)
+                    out = Select(cond, out, ve)
                 return out
             if name == "int" and len(args) == 1:
                 return self.expr(args[0]).cast("int64")
@@ -578,11 +585,11 @@ class _Lowering:
                 op = _MATH.get(f.attr)
                 if op is None or len(n.args) != 1:
                     raise TranspileError(f"math.{f.attr} has no engine form")
-                return getattr(self.expr(n.args[0]), op)()
+                return cast("Expr", getattr(self.expr(n.args[0]), op)())
             target = self.expr(f.value)
             method = f.attr
             if method in _STR_MAP and not n.args:
-                return getattr(target, _STR_MAP[method])()
+                return cast("Expr", getattr(target, _STR_MAP[method])())
             if method in ("startswith", "endswith") and len(n.args) == 1:
                 pat = self.constant(n.args[0])
                 if not isinstance(pat, str):
@@ -614,7 +621,7 @@ class _Lowering:
         raise TranspileError("call target has no engine form")
 
 
-def _cmp(e: Expr, code: str, value: Any) -> Expr:
+def _cmp(e: Expr, code: str, value: Expr | int | float | str) -> Expr:
     return {"lt": e.__lt__, "le": e.__le__, "gt": e.__gt__, "ge": e.__ge__, "eq": e.eq, "ne": e.ne}[
         code
     ](value)
@@ -630,8 +637,8 @@ def _is_docstring(s: ast.stmt) -> bool:
 
 def transpile(
     func: Callable[..., object],
-    columns: Optional[Sequence[str]] = None,
-    int_inputs: Optional[Dict[str, bool]] = None,
+    columns: Sequence[str] | None = None,
+    int_inputs: dict[str, bool] | None = None,
 ) -> Expr:
     """``func`` as an ``Expr``. With ``columns`` the one argument is a row and
     its fields are those columns; without, it is a value, ``col("__x0__")``.
@@ -639,7 +646,7 @@ def transpile(
     integers, so ``//`` and ``%`` come back as Int64 the way Python does.
     Raises :class:`TranspileError` naming the first unsupported construct, and
     ``KeyError`` for a field that is not a column."""
-    return _Lowering(func, _source_node(func), columns, None, 0, int_inputs).lower()
+    return _Lowering(func, source_node(func), columns, None, 0, int_inputs).lower()
 
 
 _ROW = "__row__"
@@ -674,12 +681,12 @@ class _Columns(ast.NodeTransformer):
         if isinstance(node.value, ast.Name) and node.value.id == "math":  # math.sqrt(...)
             return node
         if node.attr == "str":  # pandas' accessor: `x.str.contains(...)` is `x.contains(...)`
-            return self.visit(node.value)
+            return cast("ast.AST", self.visit(node.value))
         node.value = self.visit(node.value)
         return node
 
 
-def eval_statements(source: str) -> List[str]:
+def eval_statements(source: str) -> list[str]:
     """The text of each statement of a ``DataFrame.eval`` source, in order, so each is
     lowered against the frame the statements before it made."""
     _reject_at(source)
@@ -709,8 +716,8 @@ def _reject_at(source: str) -> None:
 
 
 def transpile_expr(
-    source: str, columns: Sequence[str], int_inputs: Optional[Dict[str, bool]] = None
-) -> "Tuple[Optional[str], Expr]":
+    source: str, columns: Sequence[str], int_inputs: dict[str, bool] | None = None
+) -> tuple[str | None, Expr]:
     """``(target, expr)`` for ``DataFrame.eval``: a Python expression over column names
     (``"a / b"``) or one assignment (``"m = a / b"``, target ``"m"``) lowered by the same
     code as :func:`transpile`. A bare name that is a column is its row field; any

@@ -13,9 +13,11 @@ constexpr std::size_t PAGE = 4096;
 
 int failures = 0;
 
-void check_moved(const char* name, std::uint64_t before, std::uint64_t after) {
+void check_moved(std::string_view name, std::uint64_t before,
+                 std::uint64_t after) {
     const bool ok = after >= before && after - before >= MIN_MOVE;
-    std::printf("%-12s before %8.1f MiB after %8.1f MiB  %s\n", name,
+    std::printf("%-12.*s before %8.1f MiB after %8.1f MiB  %s\n",
+                static_cast<int>(name.size()), name.data(),
                 static_cast<double>(before) / MIB,
                 static_cast<double>(after) / MIB, ok ? "ok" : "FAIL");
     if (!ok) ++failures;

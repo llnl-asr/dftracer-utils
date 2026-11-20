@@ -19,15 +19,12 @@ Timer::Timer(bool autostart, bool verbose)
     }
 }
 
-Timer::Timer(dstd::StringView name, bool autostart, bool verbose)
+Timer::Timer(dstd::StringView name, bool autostart, bool verbose, NameTag)
     : verbose_(verbose), running_(false), name_(name) {
     if (autostart) {
         start();
     }
 }
-
-Timer::Timer(const char* name, bool autostart, bool verbose)
-    : Timer(dstd::StringView(name), autostart, verbose) {}
 
 Timer::~Timer() {
     stop();

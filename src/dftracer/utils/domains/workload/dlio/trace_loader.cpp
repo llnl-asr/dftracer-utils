@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/agg_query.h>
@@ -87,7 +88,7 @@ void synthesize_samples(
 // vectors, in pid-ascending and then bucket-ascending order.
 dstd::Vector<dstd::Vector<double>> flatten_per_rank(
     const ComponentAccumulator& acc,
-    const dstd::Vector<std::uint64_t>& rank_pids) {
+    dstd::Span<const std::uint64_t> rank_pids) {
     dstd::Vector<dstd::Vector<double>> out;
     out.reserve(rank_pids.size());
     for (auto pid : rank_pids) {
@@ -110,7 +111,7 @@ dstd::Vector<dstd::Vector<double>> flatten_per_rank(
 }  // namespace
 
 dstd::Result<AggregatedTraces> load_aggregated_traces(
-    dstd::StringView index_path, const dstd::Vector<dstd::String>& files,
+    dstd::StringView index_path, dstd::Span<const dstd::String> files,
     const trace::index::schemas::dft::agg::AggregationConfig& config,
     const TraceLoaderOptions& options) {
     AggregatedTraces out;
@@ -122,7 +123,7 @@ dstd::Result<AggregatedTraces> load_aggregated_traces(
     trace::AggQuery query;
     trace::AggQuerySource source;
     source.index_path = dstd::String(index_path);
-    source.files = files;
+    source.files.assign(files.begin(), files.end());
     query.sources.push_back(std::move(source));
     query.config = config;
     query.by_pid = true;

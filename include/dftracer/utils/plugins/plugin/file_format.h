@@ -16,6 +16,7 @@
 #include <dftracer/utils/plugins/plugin/types.h>
 
 #include <algorithm>
+#include <concepts>
 #include <cstdint>
 #include <type_traits>
 #include <utility>
@@ -61,6 +62,14 @@ class FormatFile {
 ///   dstd::Result<dstd::UniquePtr<FormatFile>> open(dstd::StringView path);
 /// Register it with PluginBuilder::file_format<F>(). The extension hint of
 /// dftu_file_format_vt stays NULL for a C++ format: a host matches on probe().
+///
+/// A format whose chunks have a stable identity (such as the byte offset of the
+/// chunk's first row) names its file class and gives it a token per chunk:
+///   using File = MyFile;  // derives from FormatFile, and open() returns it
+///   dstd::Result<std::uint64_t> MyFile::chunk_token(std::uint64_t chunk);
+/// The host then sets dftu_file_format_vt::chunk_token, which an index of the
+/// file needs to skip chunks; tokens must rise strictly with the chunk number.
+/// A format without both stays one granule per file to the index.
 ///
 /// As everywhere else in the SDK, a callback reports failure as a dstd::Result
 /// or a std::int32_t score, and the trampolines hold no catch, so a callback
@@ -132,6 +141,48 @@ struct SinkWriterBox {
 };
 
 template <class F>
+concept HasChunkToken = requires(typename F::File& file, std::uint64_t chunk) {
+    requires std::is_base_of_v<FormatFile, typename F::File>;
+    { file.chunk_token(chunk) } -> std::same_as<dstd::Result<std::uint64_t>>;
+};
+
+/// A file that says what scan() of a chunk would do for a request:
+///   using File = MyFile;  // derives from FormatFile, and open() returns it
+///   dstd::Result<void> MyFile::explain(const ScanView&, const ExplainOut&);
+/// The host then sets dftu_file_format_vt::explain and prints its lines after
+/// its own (the chunks the index keeps).
+template <class F>
+concept HasFileExplain = requires(typename F::File& file, const ScanView& view,
+                                  const ExplainOut& out) {
+    requires std::is_base_of_v<FormatFile, typename F::File>;
+    { file.explain(view, out) } -> std::same_as<dstd::Result<void>>;
+};
+
+/// A file that plans a scan of its chunks before the first one opens:
+///   using File = MyFile;  // derives from FormatFile, and open() returns it
+///   dstd::Result<PlanResult> MyFile::plan(const ScanView&);
+/// The host then sets dftu_file_format_vt::plan; the votes and the token hold
+/// for every chunk of the scan (see @ref PlanResult).
+template <class F>
+concept HasFilePlan = requires(typename F::File& file, const ScanView& view) {
+    requires std::is_base_of_v<FormatFile, typename F::File>;
+    { file.plan(view) } -> std::same_as<dstd::Result<PlanResult>>;
+};
+
+/// As HasFilePlan, for a plan that reads the filters as one duql text:
+///   dstd::Result<PlanResult> MyFile::plan_duql(const ScanView&,
+///       dstd::StringView text, dstd::Span<const std::int32_t> filter_index);
+template <class F>
+concept HasFilePlanDuql =
+    requires(typename F::File& file, const ScanView& view,
+             dstd::StringView text, dstd::Span<const std::int32_t> index) {
+        requires std::is_base_of_v<FormatFile, typename F::File>;
+        {
+            file.plan_duql(view, text, index)
+        } -> std::same_as<dstd::Result<PlanResult>>;
+    };
+
+template <class F>
 struct FileFormatVt {
     using Box = FormatBox;
 
@@ -189,12 +240,7 @@ struct FileFormatVt {
                             std::int32_t* out_pushed, void** out_cursor_self,
                             const dftu_cursor_vt** out_vt) noexcept {
         return to_status(ctx, [&]() -> dftu_status {
-            ScanView view;
-            view.projection = string_views(req->projection, req->n_projection);
-            for (std::int32_t i = 0; i < req->n_filters; ++i)
-                view.filters.emplace_back(req->filters[i]);
-            view.limit = req->limit;
-            view.memory_budget = req->memory_budget;
+            const ScanView view = scan_view_of(*req);
             auto scanned =
                 static_cast<FormatFileBox*>(file)->file->scan(chunk, view);
             if (!scanned.has_value()) return report(ctx, scanned.error());
@@ -214,6 +260,95 @@ struct FileFormatVt {
         });
     }
 
+    static dftu_status chunk_token(dftu_ctx* ctx, void* file,
+                                   std::uint64_t chunk,
+                                   std::uint64_t* token) noexcept {
+        if constexpr (HasChunkToken<F>) {
+            return to_status(ctx, [&]() -> dftu_status {
+                auto got = static_cast<typename F::File*>(
+                               static_cast<FormatFileBox*>(file)->file.get())
+                               ->chunk_token(chunk);
+                if (!got.has_value()) return report(ctx, got.error());
+                *token = *got;
+                return DFTU_OK;
+            });
+        } else {
+            (void)ctx;
+            (void)file;
+            (void)chunk;
+            (void)token;
+            return DFTU_E_INTERNAL;
+        }
+    }
+
+    static dftu_status explain(dftu_ctx* ctx, void* file,
+                               const dftu_scan_request* req,
+                               const dftu_explain_out* out) noexcept {
+        if constexpr (HasFileExplain<F>) {
+            return to_status(ctx, [&]() {
+                return static_cast<typename F::File*>(
+                           static_cast<FormatFileBox*>(file)->file.get())
+                    ->explain(scan_view_of(*req), ExplainOut(out));
+            });
+        } else {
+            (void)ctx;
+            (void)file;
+            (void)req;
+            (void)out;
+            return DFTU_E_INTERNAL;
+        }
+    }
+
+    static dftu_status plan(dftu_ctx* ctx, void* file,
+                            const dftu_scan_request* req,
+                            dftu_plan_result* out) noexcept {
+        if constexpr (HasFilePlan<F>) {
+            return to_status(ctx, [&]() -> dftu_status {
+                auto planned =
+                    static_cast<typename F::File*>(
+                        static_cast<FormatFileBox*>(file)->file.get())
+                        ->plan(scan_view_of(*req));
+                if (!planned.has_value()) return report(ctx, planned.error());
+                write_plan(*planned, *req, out);
+                return DFTU_OK;
+            });
+        } else {
+            (void)ctx;
+            (void)file;
+            (void)req;
+            (void)out;
+            return DFTU_E_INTERNAL;
+        }
+    }
+
+    static dftu_status plan_duql(dftu_ctx* ctx, void* file,
+                                 const dftu_scan_request* req,
+                                 const dftu_plan_duql* q,
+                                 dftu_plan_result* out) noexcept {
+        if constexpr (HasFilePlanDuql<F>) {
+            return to_status(ctx, [&]() -> dftu_status {
+                auto planned =
+                    static_cast<typename F::File*>(
+                        static_cast<FormatFileBox*>(file)->file.get())
+                        ->plan_duql(
+                            scan_view_of(*req),
+                            dstd::StringView(q->text, q->text_len),
+                            dstd::Span<const std::int32_t>(
+                                q->filter_index, abi_count(q->n_filters)));
+                if (!planned.has_value()) return report(ctx, planned.error());
+                write_plan(*planned, *req, out);
+                return DFTU_OK;
+            });
+        } else {
+            (void)ctx;
+            (void)file;
+            (void)req;
+            (void)q;
+            (void)out;
+            return DFTU_E_INTERNAL;
+        }
+    }
+
     static void close(void* file) { delete static_cast<FormatFileBox*>(file); }
 
     static void destroy(void* self) { delete static_cast<Box*>(self); }
@@ -230,6 +365,10 @@ struct FileFormatVt {
             t.scan = scan;
             t.close = close;
             t.destroy = destroy;
+            if constexpr (HasChunkToken<F>) t.chunk_token = chunk_token;
+            if constexpr (HasFileExplain<F>) t.explain = explain;
+            if constexpr (HasFilePlan<F>) t.plan = plan;
+            if constexpr (HasFilePlanDuql<F>) t.plan_duql = plan_duql;
             return t;
         }();
         return &VT;

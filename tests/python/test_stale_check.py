@@ -13,7 +13,7 @@ from .common import Environment, determine_index_path
 
 def _build_index(directory):
     with dftu_utils.Indexer(directory) as indexer:
-        indexer.ensure_indexed()
+        indexer.ensure()
 
 
 class TestFindStaleFiles:

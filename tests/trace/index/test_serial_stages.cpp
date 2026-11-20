@@ -4,9 +4,11 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -42,24 +44,24 @@ constexpr std::size_t WORKERS = 8;
 constexpr int VIEW_FILES = 12;
 constexpr std::size_t VIEW_WORKERS = 4;
 
-void write_sized_file(const dstd::String& path, std::size_t bytes) {
+void write_sized_file(dstd::CStringView path, std::size_t bytes) {
     dstd::fs::write_file(dstd::PathView(path), dstd::String(bytes, 'x'))
         .discard();
 }
 
-dstd::String write_small_trace(const dstd::String& dir, int n) {
+dstd::String write_small_trace(dstd::CStringView dir, int n) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < 40; ++i) {
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":"
-            "1,\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
+            "1,\"ph\":1,\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
             "f{}\"}}\n">(out, i, 1000 + i * 10, n);
     }
     out += "]\n";
     char name[32];
     std::snprintf(name, sizeof(name), "/t%04d.pfw.gz", n);
-    return dftu_utils_test::write_gz_trace(dir + name, out);
+    return dftu_utils_test::write_gz_trace(dstd::String(dir) + name, out);
 }
 
 runtime::fs::FindOptions input_options(bool with_stat) {
@@ -100,29 +102,28 @@ dstd::Vector<runtime::fs::FoundFile> cli_scan(dstd::StringView dir) {
     return dftu_utils_test::ok(cli_scan_task(dstd::String(dir)).get());
 }
 
-dstd::Vector<dstd::String> write_view_traces(const dstd::String& dir,
-                                             int count) {
+dstd::Vector<dstd::String> write_view_traces(dstd::CStringView dir, int count) {
     dstd::Vector<dstd::String> files;
     for (int i = 0; i < count; ++i) files.push_back(write_small_trace(dir, i));
     return files;
 }
 
-dstd::String write_corrupt_trace(const dstd::String& dir, int n) {
+dstd::String write_corrupt_trace(dstd::CStringView dir, int n) {
     char name[32];
     std::snprintf(name, sizeof(name), "/t%04d.pfw.gz", n);
-    const auto path = dir + name;
+    const auto path = dstd::String(dir) + name;
     dstd::fs::write_file(dstd::PathView(path), dstd::String(4096, 'x'))
         .discard();
     return path;
 }
 
-dstd::String view_index_root(const dstd::String& file,
-                             const dstd::String& index_dir) {
+dstd::String view_index_root(dstd::CStringView file,
+                             dstd::CStringView index_dir) {
     return dstd::String(trace::internal::determine_index_path(file, index_dir));
 }
 
-dstd::Result<void> cold_count(const dstd::Vector<dstd::String>& files,
-                              const dstd::String& index_dir) {
+dstd::Result<void> cold_count(dstd::Span<const dstd::String> files,
+                              dstd::CStringView index_dir) {
     dstd::Vector<trace::views::ViewFile> view_files;
     for (const auto& f : files) {
         trace::views::ViewFile vf;

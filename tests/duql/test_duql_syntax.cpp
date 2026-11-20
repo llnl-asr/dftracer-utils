@@ -142,7 +142,7 @@ dstd::String compile_error(dstd::StringView text) {
     return p.error().message;
 }
 
-bool has(const dstd::String& text, dstd::StringView part) {
+bool has(dstd::StringView text, dstd::StringView part) {
     return text.find(part) != dstd::String::npos;
 }
 
@@ -238,6 +238,36 @@ TEST_CASE("parse - duql pragma") {
         auto bad = duql::syntax::parse(text);
         REQUIRE_FALSE(bad.has_value());
         CHECK(bad.error().line == 1);
+    }
+}
+
+TEST_CASE("parse - the explain prefix") {
+    using duql::ExplainMode;
+    CHECK(parsed("where a == 1").explain == ExplainMode::None);
+    CHECK(parsed("explain where a == 1").explain == ExplainMode::Plan);
+    CHECK(parsed("EXPLAIN Analyze from data | where a == 1").explain ==
+          ExplainMode::Analyze);
+    // After the version line and before the declarations.
+    const auto q = parsed("duql 0\nexplain analyze\nlet a = from d;\nfrom a");
+    CHECK(q.explain == ExplainMode::Analyze);
+    CHECK(q.decls.size() == 1);
+    CHECK(q.pipeline);
+    // A field of that name is written with backticks.
+    CHECK(parsed("`explain` == 1").explain == ExplainMode::None);
+
+    // The printed text keeps the prefix and parses back to the same tree.
+    const auto printed =
+        duql::syntax::to_text(parsed("explain analyze from d"));
+    CHECK(printed.find("\nexplain analyze\n") != dstd::String::npos);
+    CHECK(
+        duql::syntax::equal(parsed(printed), parsed("explain analyze from d")));
+    CHECK_FALSE(duql::syntax::equal(parsed("explain from d"),
+                                    parsed("explain analyze from d")));
+
+    for (const char* bad : {"explain analyze analyze from d",
+                            "explain explain from d", "from d | explain"}) {
+        CAPTURE(bad);
+        CHECK_FALSE(duql::syntax::parse(bad).has_value());
     }
 }
 
@@ -829,7 +859,7 @@ TEST_CASE("parse - lookup kinds and inline sides print back") {
 }
 
 TEST_CASE("parse - lookup kind errors") {
-    const auto message = [](const char* text) {
+    const auto message = [](dstd::StringView text) {
         const auto r = duql::syntax::parse(text);
         REQUIRE_FALSE(r.has_value());
         return r.error().format();
@@ -1271,7 +1301,7 @@ TEST_CASE("lower - expression leaves print text that parses back to them") {
 }
 
 TEST_CASE("pipeline - reshaping stages") {
-    auto compiled = [](const char* text) {
+    auto compiled = [](dstd::StringView text) {
         auto p = compile_pipeline(
             text, {{"n", duql::LiteralValue{std::int64_t{2}}}}, nullptr);
         REQUIRE_MESSAGE(p.has_value(), (p ? "" : p.error().format()));
@@ -1541,7 +1571,9 @@ dftu_series* plug_unary(const dftu_series*) { return nullptr; }
 dftu_series* plug_binary(const dftu_series*, const dftu_series*) {
     return nullptr;
 }
-dftu_dataframe* plug_frame(const dftu_dataframe*, int64_t) { return nullptr; }
+dftu_dataframe* plug_frame(const dftu_dataframe*, std::int64_t) {
+    return nullptr;
+}
 double plug_total(const dftu_series*, double) { return 0; }
 
 struct PluginOps {

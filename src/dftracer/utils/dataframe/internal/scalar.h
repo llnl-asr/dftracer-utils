@@ -9,13 +9,15 @@
 namespace dftracer::utils::dataframe {
 
 /// Read a dftu_scalar as the column type T (converting from its tagged
-/// domain). The inverse of to_scalar; used inside the kernels. A STR or ERR
-/// scalar has no numeric reading (its union member is a pointer), so it reads
-/// as T{}; an unknown tag is read as F64 (its widest domain).
+/// domain). The inverse of to_scalar; used inside the kernels. A STR, ERR or
+/// NULL scalar has no numeric reading (its union member is a pointer or
+/// unset), so it reads as T{}; an unknown tag is read as F64 (its widest
+/// domain).
 template <class T>
 inline T scalar_as(const dftu_scalar& s) {
     if (s.kind == static_cast<std::int32_t>(ScalarTag::Str) ||
-        s.kind == static_cast<std::int32_t>(ScalarTag::Err))
+        s.kind == static_cast<std::int32_t>(ScalarTag::Err) ||
+        s.kind == static_cast<std::int32_t>(ScalarTag::Null))
         return T{};
     if (s.kind < static_cast<std::int32_t>(ScalarTag::I64) ||
         s.kind > static_cast<std::int32_t>(ScalarTag::F64))
@@ -29,6 +31,7 @@ inline T scalar_as(const dftu_scalar& s) {
             return static_cast<T>(s.value.d);
         case ScalarTag::Str:
         case ScalarTag::Err:
+        case ScalarTag::Null:
             return T{};
     }
     return static_cast<T>(s.value.d);

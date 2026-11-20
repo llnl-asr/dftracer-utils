@@ -64,8 +64,10 @@ enum class ScopeMode : std::uint8_t {
  */
 class Scope {
    public:
+    /// @param executor The executor the children run on.
     /// @param owner The promise of the frame that holds this scope, which must
     ///        reach the join. A cancel of that task stops the children.
+    /// @param mode How a failed child affects the other children.
     explicit Scope(Executor* executor = Executor::current(),
                    const PromiseBase* owner = nullptr,
                    ScopeMode mode = ScopeMode::FailFast) noexcept

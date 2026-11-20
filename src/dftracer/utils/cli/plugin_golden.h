@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -75,7 +76,7 @@ dstd::Expected<GoldenFile, dstd::Error> parse_golden_file(
 /// The file as text again, with each block's expected output replaced by
 /// `actuals[i]`; a block whose `actuals` entry is empty keeps what it had.
 dstd::String render_golden_file(const GoldenFile& file,
-                                const dstd::Vector<dstd::String>& actuals);
+                                dstd::Span<const dstd::String> actuals);
 
 /// The one-line-per-row text of a table: the column names, tab separated, then
 /// one row per line with the same separators.

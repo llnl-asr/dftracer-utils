@@ -329,8 +329,8 @@ dftu_series* dftu_series_compare(const dftu_series* v, dftu_cmp_op op,
     if (v->encoding != Encoding::Flat) return nullptr;
     const TypeId phys = physical_type(v->type);
     if (!is_numeric_dispatchable(phys)) return nullptr;
-    if (op < static_cast<int32_t>(CmpOp::Gt) ||
-        op > static_cast<int32_t>(CmpOp::Ne))
+    if (op < static_cast<std::int32_t>(CmpOp::Gt) ||
+        op > static_cast<std::int32_t>(CmpOp::Ne))
         return nullptr;
     std::int32_t exact_op = op;
     dftracer::utils::dataframe::exact_rhs(phys, exact_op, rhs);
@@ -418,8 +418,8 @@ dftu_series* dftu_series_compare_series(const dftu_series* a,
     using dftracer::utils::dataframe::Series;
     using dftracer::utils::dataframe::TypeId;
     using dftracer::utils::dataframe::writable;
-    if (op < static_cast<int32_t>(CmpOp::Gt) ||
-        op > static_cast<int32_t>(CmpOp::Ne))
+    if (op < static_cast<std::int32_t>(CmpOp::Gt) ||
+        op > static_cast<std::int32_t>(CmpOp::Ne))
         return nullptr;
     const std::int64_t n = a->length;
     const TypeId ta = physical_type(a->type), tb = physical_type(b->type);

@@ -147,7 +147,7 @@ class Hooked : public Source {
     bool typed_;
 };
 
-dstd::Vector<std::int64_t> ints(const DataFrame& f, const dstd::String& name) {
+dstd::Vector<std::int64_t> ints(const DataFrame& f, dstd::StringView name) {
     const auto it = std::find(f.names.begin(), f.names.end(), name);
     REQUIRE(it != f.names.end());
     const Series c =
@@ -258,7 +258,7 @@ LazyFrame window_lag(const LazyFrame& plan) {
     specs[0].out = "lag_k";
     specs[0].param.offset = 1;
     OpArgs args;
-    args.strlist(1, part, 1).strlist(2, order, 1).winlist(3, specs);
+    args.strlist(1, {part, 1}).strlist(2, {order, 1}).winlist(3, specs);
     dstd::Vector<dstd::String> names = plan.schema();
     names.emplace_back("lag_k");
     return plan.frame_op("dftu.frame.window", args, {}, std::move(names));

@@ -63,25 +63,23 @@ class ArgsValueProxy {
             if (auto* p = std::get_if<dstd::String>(val_))
                 return dstd::StringView(*p);
             return default_val;
-        } else if constexpr (std::is_same_v<T, const char*>) {
-            if (auto* p = std::get_if<dstd::String>(val_)) return p->c_str();
-            return default_val;
         } else if constexpr (std::is_same_v<T, std::uint64_t>) {
             if (auto* p = std::get_if<std::uint64_t>(val_)) return *p;
             if (auto* p = std::get_if<std::int64_t>(val_)) {
                 if (*p >= 0) return static_cast<std::uint64_t>(*p);
             }
             if (auto* p = std::get_if<double>(val_)) {
-                if (*p >= 0 && *p <= static_cast<double>(
-                                         std::numeric_limits<uint64_t>::max()))
+                if (*p >= 0 &&
+                    *p <= static_cast<double>(
+                              std::numeric_limits<std::uint64_t>::max()))
                     return static_cast<std::uint64_t>(*p);
             }
             return default_val;
         } else if constexpr (std::is_same_v<T, std::int64_t>) {
             if (auto* p = std::get_if<std::int64_t>(val_)) return *p;
             if (auto* p = std::get_if<std::uint64_t>(val_)) {
-                if (*p <=
-                    static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+                if (*p <= static_cast<std::uint64_t>(
+                              std::numeric_limits<std::int64_t>::max()))
                     return static_cast<std::int64_t>(*p);
             }
             if (auto* p = std::get_if<double>(val_)) {
@@ -131,8 +129,8 @@ class ArgsValueProxy {
         } else if constexpr (std::is_same_v<T, std::int64_t>) {
             if (auto* p = std::get_if<std::int64_t>(val_)) return *p;
             if (auto* p = std::get_if<std::uint64_t>(val_)) {
-                if (*p <=
-                    static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+                if (*p <= static_cast<std::uint64_t>(
+                              std::numeric_limits<std::int64_t>::max()))
                     return static_cast<std::int64_t>(*p);
             }
             return dstd::nullopt;
@@ -196,16 +194,6 @@ class ArgsMap {
                                  : ArgsValueProxy{};
     }
 
-    ArgsValueProxy operator[](const char* key) const {
-        return (*this)[dstd::StringView(key)];
-    }
-
-    ArgsValueProxy operator[](const dstd::String& key) const {
-        return (*this)[dstd::StringView(key)];
-    }
-
-    ArgsValueProxy at(const char* key) const { return (*this)[key]; }
-    ArgsValueProxy at(const dstd::String& key) const { return (*this)[key]; }
     ArgsValueProxy at(dstd::StringView key) const { return (*this)[key]; }
 
     template <typename Fn>

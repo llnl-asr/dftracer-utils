@@ -70,7 +70,7 @@ struct ChunkVerificationUtilityOutput {
 
     static ChunkVerificationUtilityOutput failure(std::uint64_t input_h,
                                                   std::uint64_t output_h,
-                                                  const dstd::String& error) {
+                                                  dstd::StringView error) {
         ChunkVerificationUtilityOutput result;
         result.passed = false;
         result.input_hash = input_h;

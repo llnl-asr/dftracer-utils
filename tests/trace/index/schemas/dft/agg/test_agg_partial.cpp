@@ -192,7 +192,7 @@ struct Truth {
     dstd::Vector<double> dur, size, off;
 };
 
-dstd::Map<Key, Truth> truth_of(const dstd::Vector<Ev>& events,
+dstd::Map<Key, Truth> truth_of(dstd::Span<const Ev> events,
                                const AggregationConfig& cfg) {
     dstd::Map<Key, Truth> out;
     for (const Ev& e : events) {
@@ -218,7 +218,7 @@ dstd::Map<Key, Truth> truth_of(const dstd::Vector<Ev>& events,
     return out;
 }
 
-dstd::Map<Key, AggregationMetrics> reference(const dstd::Vector<Ev>& events,
+dstd::Map<Key, AggregationMetrics> reference(dstd::Span<const Ev> events,
                                              const AggregationConfig& cfg) {
     dstd::Map<Key, AggregationMetrics> out;
     for (const Ev& e : events) {
@@ -230,7 +230,7 @@ dstd::Map<Key, AggregationMetrics> reference(const dstd::Vector<Ev>& events,
 
 using Partials = dstd::Map<Key, AggPartial>;
 
-void feed(Partials& into, const dstd::Vector<Ev>& events, std::size_t b,
+void feed(Partials& into, dstd::Span<const Ev> events, std::size_t b,
           std::size_t e, const AggregationConfig& cfg) {
     for (std::size_t i = b; i < e; ++i) {
         auto it =
@@ -254,7 +254,7 @@ bool near(double a, double b, double scale, double tol) {
 // tol 0 means bit-exact moments after a round trip. Otherwise it is a relative
 // bound for a different order of merges.
 void check_stat(const dataframe::FieldStat& a, const dataframe::FieldStat& b,
-                double tol, const char* what) {
+                double tol, dstd::StringView what) {
     INFO("field: ", what);
     REQUIRE(a.n == b.n);
     if (a.n == 0) return;
@@ -276,7 +276,8 @@ void check_stat(const dataframe::FieldStat& a, const dataframe::FieldStat& b,
                std::max(std::abs(a.moment_mean()), 1.0), tol));
 }
 
-double exact_rule(dstd::Vector<double> v, double q) {
+double exact_rule(dstd::Span<const double> values, double q) {
+    dstd::Vector<double> v(values.begin(), values.end());
     std::sort(v.begin(), v.end());
     const std::size_t n = v.size();
     if (q <= 0.0) return v.front();
@@ -291,8 +292,8 @@ double exact_rule(dstd::Vector<double> v, double q) {
 constexpr double QS[] = {0.1, 0.5, 0.9, 0.99};
 constexpr double SKETCH_BOUND = 0.03;
 
-void check_quantiles(const QuantileStore& q, const dstd::Vector<double>& truth,
-                     const char* what) {
+void check_quantiles(const QuantileStore& q, dstd::Span<const double> truth,
+                     dstd::StringView what) {
     INFO("quantiles of ", what);
     REQUIRE(q.count() == truth.size());
     if (truth.empty()) return;
@@ -374,9 +375,8 @@ dstd::Vector<std::size_t> bounds(std::size_t n, std::size_t chunks) {
     return out;
 }
 
-Partials merged_chunks(const dstd::Vector<Ev>& events,
-                       const AggregationConfig& cfg, std::size_t chunks,
-                       const dstd::Vector<std::size_t>& order,
+Partials merged_chunks(dstd::Vector<Ev> events, const AggregationConfig& cfg,
+                       std::size_t chunks, dstd::Vector<std::size_t> order,
                        bool through_wire) {
     const auto cut = bounds(events.size(), chunks);
     dstd::Vector<Partials> per_chunk(chunks);
@@ -863,7 +863,7 @@ TEST_SUITE("AggPartial") {
         }
         REQUIRE(dftracer::utils::memory::detail::debug_allocation_count() > 0);
 
-        auto count_for = [&](const dstd::Vector<Ev>& evs) {
+        auto count_for = [&](dstd::Span<const Ev> evs) {
             const auto before =
                 dftracer::utils::memory::detail::debug_allocation_count();
             AggPartial p;

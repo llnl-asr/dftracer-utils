@@ -43,7 +43,7 @@ DataFrame run(dftracer::utils::coro::CoroTask<dstd::Result<DataFrame>> t) {
 
 struct SpillDirVar {
     dstd::Path dir;
-    explicit SpillDirVar(const dstd::String& name) {
+    explicit SpillDirVar(dstd::StringView name) {
         dir =
             dstd::fs::temp_directory() / (dstd::fmt<"{}_{}">(name, ::getpid()));
         REQUIRE(dstd::fs::remove_all(dir).has_value());

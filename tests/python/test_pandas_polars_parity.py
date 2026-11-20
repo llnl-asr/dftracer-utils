@@ -7,7 +7,7 @@ import pytest
 
 pa = pytest.importorskip("pyarrow")
 
-from dftracer.utils import DataFrame, Series, col  # noqa: E402
+from dftracer.utils import DataFrame, DFTUtilsNotFoundError, Series, col  # noqa: E402
 from dftracer.utils import pandas as upd  # noqa: E402
 from dftracer.utils import polars as upl  # noqa: E402
 from dftracer.utils.enums import DType  # noqa: E402
@@ -30,7 +30,7 @@ def test_constructors_take_python_data():
     assert _dict(df) == {"a": [1, 2, 3], "b": ["x", "y", "z"]}
     s = Series([3, 1, 2])
     assert _lst(s) == [3, 1, 2]
-    assert isinstance(Series(s._native), Series)
+    assert isinstance(Series(s), Series)
 
 
 def test_dataframe_properties_and_indexing():
@@ -41,7 +41,9 @@ def test_dataframe_properties_and_indexing():
     assert df.dtypes == [DType.INT64, DType.FLOAT64]
     assert df.schema == {"a": DType.INT64, "b": DType.FLOAT64}
     assert _dict(df[["b", "a"]]) == {"b": [1.5, None, 3.5], "a": [1, 2, 3]}
-    assert _dict(df[df["a"] > 1]) == {"a": [2, 3], "b": [None, 3.5]}
+    kept = df[df["a"] > 1]
+    assert _dict(kept.reset_index(drop=True)) == {"a": [2, 3], "b": [None, 3.5]}
+    assert kept.index.to_list() == [1, 2]
     assert _dict(df.limit(1)) == _dict(df.head(1)) == {"a": [1], "b": [1.5]}
     assert _dict(df.head()) == _dict(df)
     assert df.to_dict() == {"a": [1, 2, 3], "b": [1.5, None, 3.5]}
@@ -49,7 +51,8 @@ def test_dataframe_properties_and_indexing():
 
 def test_dataframe_pandas_spellings_match_native():
     df = _df({"a": [3, 1, 2, 1], "b": [1.5, None, 3.5, 4.0], "c": ["x", "y", "x", "z"]})
-    assert _dict(df.dropna()) == _dict(df.drop_nulls())
+    assert _dict(df.dropna().reset_index(drop=True)) == _dict(df.drop_nulls())
+    assert df.dropna().index.to_list() == [0, 2, 3]
     assert _dict(df.fillna(0)) == _dict(df.fill_null(0))
     assert _lst(df.duplicated(keep=False)) == _lst(df.is_duplicated())
     assert _dict(df.drop("b")) == _dict(df.select("a", "c"))
@@ -57,13 +60,17 @@ def test_dataframe_pandas_spellings_match_native():
     with pytest.raises(KeyError):
         df.drop("nope")
     assert _dict(df.rename(columns={"a": "A"})) == _dict(df.rename({"a": "A"}))
-    assert _dict(df.nlargest(2, "a")) == _dict(df.topk("a", 2))
-    assert _dict(df.nsmallest(2, "a")) == _dict(df.topk("a", 2, largest=False))
-    assert _dict(df.sort_values("a")) == _dict(df.sort_by("a"))
-    assert _dict(df.sort_values(["a", "b"], ascending=[False, True])) == _dict(
-        df.sort_by_multi(["a", "b"], descending=[True, False])
+    assert _dict(df.nlargest(2, "a").reset_index(drop=True)) == _dict(df.topk("a", 2))
+    assert _dict(df.nsmallest(2, "a").reset_index(drop=True)) == _dict(
+        df.topk("a", 2, largest=False)
     )
-    assert _dict(df.gather(Series([0, 0]))) == _dict(df.take(Series([0, 0])))
+    assert _dict(df.sort_values("a").reset_index(drop=True)) == _dict(df.sort_by("a"))
+    assert df.sort_values("a").index.to_list() == [1, 3, 2, 0]
+    assert _dict(
+        df.sort_values(["a", "b"], ascending=[False, True]).reset_index(drop=True)
+    ) == _dict(df.sort_by_multi(["a", "b"], descending=[True, False]))
+    assert _dict(df.gather(Series([0, 0]))) == _dict(df.take(Series([0, 0])).reset_index(drop=True))
+    assert df.take(Series([0, 0])).index.to_list() == [0, 0]
     idx = df.with_row_index()
     assert idx.columns[0] == "index"
     assert _dict(df.sample(2, random_state=7)) == _dict(df.sample(2, seed=7))
@@ -108,7 +115,7 @@ def test_series_properties_and_pandas_spellings():
     assert s.to_list() == [3, None, 1, 3] == s.tolist()
     assert _lst(s.isna()) == [False, True, False, False] == _lst(s.is_null())
     assert _lst(s.notna()) == [True, False, True, True] == _lst(s.is_not_null())
-    assert s.is_null(1) is True and s.is_null(0) is False
+    assert s.is_null_at(1) is True and s.is_null_at(0) is False
     assert _lst(s.isin([3])) == [True, False, False, True] == _lst(s.is_in([3]))
     assert _lst(s.dropna()) == _lst(s.drop_nulls()) == [3, 1, 3]
     assert _lst(s.fill_null(0)) == _lst(s.fillna(0)) == [3, 0, 1, 3]
@@ -120,11 +127,11 @@ def test_series_properties_and_pandas_spellings():
     assert _lst(s.cum_sum()) == _lst(s.cumsum())
     assert _lst(s.cum_max()) == _lst(s.cummax())
     assert _lst(s.cum_min()) == _lst(s.cummin())
-    assert _lst(s.sort_values()) == _lst(s.sort())
-    assert _lst(s.sort_values(ascending=False)) == _lst(s.sort(descending=True))
+    assert _lst(s.sort_values()) == _lst(s.sort(nulls_last=True))
+    assert _lst(s.sort_values(ascending=False)) == _lst(s.sort(descending=True, nulls_last=True))
     assert _lst(s.nlargest(2)) == _lst(s.top_k(2))
     assert _lst(s.nsmallest(2)) == _lst(s.bottom_k(2))
-    assert _lst(s.arg_sort()) == _lst(s.argsort())
+    assert _lst(s.arg_sort(nulls_last=True)) == _lst(s.argsort())
     assert _lst(s.gather(Series([0, 2]))) == _lst(s.take(Series([0, 2]))) == [3, 1]
     assert _lst(s.head()) == _lst(s)
     assert _lst(s.shift(periods=1)) == _lst(s.shift(1))
@@ -138,8 +145,10 @@ def test_series_statistics_and_windows():
     assert s.std(ddof=0) == s.stddev(sample=False)
     with pytest.raises(ValueError):
         s.var(ddof=2)
-    assert s.skew() == s.skewness()
-    assert s.kurt() == s.kurtosis()
+    assert s.skew(bias=True) == pytest.approx(0.6568077344996993)
+    assert s.skew() == pytest.approx(1.1376243669576889)
+    assert s.kurt() == pytest.approx(0.7576559546313795)
+    assert s.kurtosis() == pytest.approx(-1.0989792060491494)
     assert _lst(s.rolling(2).mean()) == _lst(s.rolling(2, "mean")) == _lst(s.rolling_mean(2))
     assert _lst(s.rolling(2).sum()) == _lst(s.rolling_sum(2))
     assert _lst(s.rolling(2).std()) == _lst(s.rolling_std(2))
@@ -201,7 +210,7 @@ def test_lazyframe_polars_spellings():
         df.sort_by_multi(["a", "b"], descending=True)
     )
     assert _dict(lf.sort_values("a", ascending=False).collect()) == _dict(df.sort_by("a", True))
-    assert _dict(lf.gather([2, 0]).collect()) == _dict(df.take(Series([2, 0])))
+    assert _dict(lf.gather([2, 0]).collect()) == _dict(df.gather(Series([2, 0])))
     assert _dict(lf.filter(col("s").is_in(["x", "z"])).collect()) == {
         "a": [3, 2],
         "b": [1, 3],
@@ -257,8 +266,9 @@ def test_unique_subset_eager_and_lazy():
     by_k = {"k": [1, 2, 3], "v": [1, 3, 4]}
     assert _dict(df.unique("k")) == by_k
     assert _dict(df.unique(subset=["k"])) == by_k
-    assert _dict(df.drop_duplicates(subset="k")) == by_k
-    assert _dict(df.distinct("k")) == by_k
+    assert _dict(df.drop_duplicates(subset="k").reset_index(drop=True)) == by_k
+    assert df.drop_duplicates(subset="k").index.to_list() == [0, 2, 4]
+    assert _dict(df.unique(subset="k")) == by_k
     lazy = df.lazy().unique(subset="k")
     assert "unique [k]" in lazy.explain()
     assert _dict(lazy.collect()) == by_k
@@ -266,7 +276,7 @@ def test_unique_subset_eager_and_lazy():
     assert _dict(df.lazy().drop_duplicates("v").collect()) == {"k": [1, 1, 2, 3], "v": [1, 2, 3, 4]}
     with pytest.raises(KeyError):
         df.unique("nope")
-    with pytest.raises(ValueError):
+    with pytest.raises(DFTUtilsNotFoundError):
         df.lazy().unique("nope")
 
 
@@ -345,8 +355,9 @@ def test_pandas_agg_forms():
     assert ints.agg("sum", axis=1).to_list() == [4, 5]
     with pytest.raises(ValueError, match="sum, mean, min, max and count"):
         df.agg("var", axis=1)
-    # The pandas names whose engine form is a sketch are refused, not approximated.
-    with pytest.raises(ValueError, match="sketch"):
+    # A quantile name needs its level, and nunique's engine form is a sketch:
+    # both are refused, not approximated.
+    with pytest.raises(ValueError, match="needs its level"):
         df.agg("median")
     with pytest.raises(ValueError, match="sketch"):
         gb.agg({"a": "nunique"})
@@ -473,14 +484,14 @@ def test_pandas_semantics_rulings():
     # Series.compare diffs two Series; is_unique is a bool; mode is a Series.
     a = Series([1, 2, 3, 4])
     b = Series([1, 9, 3, 8])
-    assert _dict(a.compare(b)) == {"index": [1, 3], "self": [2, 4], "other": [9, 8]}
-    assert _dict(a.compare(b, keep_shape=True)) == {
-        "index": [0, 1, 2, 3],
+    assert a.compare(b).index.to_list() == [1, 3]
+    assert _dict(a.compare(b).reset_index(drop=True)) == {"self": [2, 4], "other": [9, 8]}
+    assert a.compare(b, keep_shape=True).index.to_list() == [0, 1, 2, 3]
+    assert _dict(a.compare(b, keep_shape=True).reset_index(drop=True)) == {
         "self": [None, 2, None, 4],
         "other": [None, 9, None, 8],
     }
-    assert _dict(a.compare(b, keep_shape=True, keep_equal=True)) == {
-        "index": [0, 1, 2, 3],
+    assert _dict(a.compare(b, keep_shape=True, keep_equal=True).reset_index(drop=True)) == {
         "self": [1, 2, 3, 4],
         "other": [1, 9, 3, 8],
     }
@@ -493,12 +504,12 @@ def test_pandas_semantics_rulings():
     assert _lst(Series([5, 1, 9, 1, 9]).mode()) == [1]
     assert _lst(a.ops.series.compare(0, 2)) == [False, False, True, True]
 
-    # value_counts keeps its frame shape and takes the pandas arguments.
+    # value_counts is the pandas Series of counts labelled by the values.
     s = Series([1, 1, 2, 3, 3, 3])
     vc = s.value_counts()
-    assert _dict(vc) == {"value": [3, 1, 2], "count": [3, 2, 1]}
-    assert _dict(s.value_counts(ascending=True)) == {"value": [2, 1, 3], "count": [1, 2, 3]}
-    assert _dict(s.value_counts(normalize=True)) == {
-        "value": [3, 1, 2],
-        "proportion": [0.5, 1 / 3, 1 / 6],
-    }
+    assert (vc.index.to_list(), vc.to_list()) == ([3, 1, 2], [3, 2, 1])
+    asc = s.value_counts(ascending=True)
+    assert (asc.index.to_list(), asc.to_list()) == ([2, 1, 3], [1, 2, 3])
+    prop = s.value_counts(normalize=True)
+    assert prop.index.to_list() == [3, 1, 2]
+    assert prop.to_list() == [0.5, 1 / 3, 1 / 6]

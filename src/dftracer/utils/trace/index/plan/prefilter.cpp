@@ -195,7 +195,7 @@ int rarity(char c) {
     return 3;
 }
 
-std::size_t pivot_of(const dstd::String& n) {
+std::size_t pivot_of(dstd::StringView n) {
     std::size_t best = 0;
     for (std::size_t i = 1; i < n.size(); ++i)
         if (rarity(n[i]) > rarity(n[best])) best = i;

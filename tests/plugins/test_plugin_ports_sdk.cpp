@@ -135,9 +135,9 @@ plugins::Task recv_into(plugins::Host h, plugins::ChannelId ch,
 }
 
 plugins::Task send_text(plugins::Host h, plugins::ChannelId ch,
-                        const char* text, Outcome* out) {
+                        dstd::String text, Outcome* out) {
     plugins::Ports ports = h.ports();
-    dstd::ByteView view(text, std::strlen(text));
+    dstd::ByteView view(text.data(), text.size());
     auto op = ports.send(ch, view);
     dstd::Result<void> sent = co_await op;
     if (!sent) out->error = sent.error();

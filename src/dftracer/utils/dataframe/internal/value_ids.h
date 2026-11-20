@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_VALUE_IDS_H
 
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
@@ -23,6 +24,13 @@ struct ValueIds {
 /// bytes, Bool by its bit, other fixed-width values by their raw bytes.
 /// Returns false, leaving `out` untouched, for a type with no per-row value.
 bool value_ids(const dftu_series& v, ValueIds& out);
+
+/// Ids of the pairs (`comb[i]`, `next[i]`) in first-seen order, replacing
+/// `comb`; on entry `first` holds the first row of each id of `comb`, on
+/// return the first row of each pair.
+void combine_value_ids(dstd::Vector<std::int32_t>& comb,
+                       dstd::Span<const std::int32_t> next,
+                       dstd::Vector<std::int64_t>& first);
 
 }  // namespace dftracer::utils::dataframe
 

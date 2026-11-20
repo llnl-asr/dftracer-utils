@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -48,34 +49,71 @@ struct TypeRow {
     double expect_sum;         // sum of build(), for the unpivot concat check
 };
 
-Series build_float16() { return make_float16({3.0f, 1.0f, 2.0f, 1.0f}); }
-Series build_decimal128() { return make_decimal128({300, 100, 200, 100}); }
-Series build_decimal256() { return make_decimal256({300, 100, 200, 100}); }
+Series build_float16() {
+    return make_float16(
+        dftu_utils_test::span_of<float>({3.0f, 1.0f, 2.0f, 1.0f}));
+}
+Series build_decimal128() {
+    return make_decimal128(
+        dftu_utils_test::span_of<std::int64_t>({300, 100, 200, 100}));
+}
+Series build_decimal256() {
+    return make_decimal256(
+        dftu_utils_test::span_of<std::int64_t>({300, 100, 200, 100}));
+}
 Series build_fixed_size_binary() {
-    return make_fixed_size_binary({"cccc", "aaaa", "bbbb", "aaaa"}, 4);
+    return make_fixed_size_binary(dftu_utils_test::span_of<dstd::String>(
+                                      {"cccc", "aaaa", "bbbb", "aaaa"}),
+                                  4);
 }
 Series build_large_string() { return make_large_utf8({"c", "a", "b", "a"}); }
 Series build_large_binary() { return make_large_binary({"c", "a", "b", "a"}); }
-Series build_large_list() { return make_large_list_i64({{3}, {1}, {2}, {1}}); }
+Series build_large_list() {
+    return make_large_list_i64(
+        dftu_utils_test::span_of<dstd::Vector<std::int64_t>>(
+            {{3}, {1}, {2}, {1}}));
+}
 Series build_fixed_size_list() {
-    return make_fixed_size_list_i64({{3, 3}, {1, 1}, {2, 2}, {1, 1}});
+    return make_fixed_size_list_i64(
+        dftu_utils_test::span_of<dstd::Vector<std::int64_t>>(
+            {{3, 3}, {1, 1}, {2, 2}, {1, 1}}));
 }
 Series build_map() {
     return make_map_string_i64(
-        {{{"c", 3}}, {{"a", 1}}, {{"b", 2}}, {{"a", 1}}});
+        dftu_utils_test::span_of<
+            dstd::Vector<dstd::Pair<dstd::String, std::int64_t>>>(
+            {{{"c", 3}}, {{"a", 1}}, {{"b", 2}}, {{"a", 1}}}));
 }
 
-Series needle_float16() { return make_float16({1.0f}); }
-Series needle_decimal128() { return make_decimal128({100}); }
-Series needle_decimal256() { return make_decimal256({100}); }
+Series needle_float16() {
+    return make_float16(dftu_utils_test::span_of<float>({1.0f}));
+}
+Series needle_decimal128() {
+    return make_decimal128(dftu_utils_test::span_of<std::int64_t>({100}));
+}
+Series needle_decimal256() {
+    return make_decimal256(dftu_utils_test::span_of<std::int64_t>({100}));
+}
 Series needle_fixed_size_binary() {
-    return make_fixed_size_binary({"aaaa"}, 4);
+    return make_fixed_size_binary(
+        dftu_utils_test::span_of<dstd::String>({"aaaa"}), 4);
 }
 Series needle_large_string() { return make_large_utf8({"a"}); }
 Series needle_large_binary() { return make_large_binary({"a"}); }
-Series needle_large_list() { return make_large_list_i64({{1}}); }
-Series needle_fixed_size_list() { return make_fixed_size_list_i64({{1, 1}}); }
-Series needle_map() { return make_map_string_i64({{{"a", 1}}}); }
+Series needle_large_list() {
+    return make_large_list_i64(
+        dftu_utils_test::span_of<dstd::Vector<std::int64_t>>({{1}}));
+}
+Series needle_fixed_size_list() {
+    return make_fixed_size_list_i64(
+        dftu_utils_test::span_of<dstd::Vector<std::int64_t>>({{1, 1}}));
+}
+Series needle_map() {
+    return make_map_string_i64(
+        dftu_utils_test::span_of<
+            dstd::Vector<dstd::Pair<dstd::String, std::int64_t>>>(
+            {{{"a", 1}}}));
+}
 
 const TypeRow TYPE_ROWS[] = {
     // id, build, needle, {sort_multi, unique, to_dummies, pivot,
@@ -159,7 +197,7 @@ constexpr bool is_audited(TypeId t) {
     return false;
 }
 
-DataFrame frame_of(const dstd::String& col_name, const Series& s) {
+DataFrame frame_of(dstd::StringView col_name, const Series& s) {
     DataFrame df;
     df.names = dstd::make_shared_strings({col_name});
     df.columns.push_back(s.share());
@@ -193,12 +231,13 @@ TEST_SUITE("dataframe_types_reshape") {
 
             if (row.ops[OpSortMulti] == Support::Refuses) {
                 dftu_utils_test::expect_error(
-                    df.sort_by_multi({"k"}, false),
+                    df.sort_by_multi(
+                        dftu_utils_test::span_of<dstd::String>({"k"}), false),
                     dftracer::utils::common::ErrorCode::InvalidArgument);
                 continue;
             }
-            DataFrame sorted =
-                dftu_utils_test::ok(df.sort_by_multi({"k"}, false));
+            DataFrame sorted = dftu_utils_test::ok(df.sort_by_multi(
+                dftu_utils_test::span_of<dstd::String>({"k"}), false));
             REQUIRE(sorted.num_rows() == 4);
             Series id_col = sorted.column("id");
             const std::int64_t* p = id_col.data<std::int64_t>();
@@ -313,11 +352,15 @@ TEST_SUITE("dataframe_types_reshape") {
 
             if (row.ops[OpUnpivotConcat] == Support::Refuses) {
                 dftu_utils_test::expect_error(
-                    df.unpivot({"id"}, {"v1", "v2"}),
+                    df.unpivot(
+                        dftu_utils_test::span_of<dstd::String>({"id"}),
+                        dftu_utils_test::span_of<dstd::String>({"v1", "v2"})),
                     dftracer::utils::common::ErrorCode::InvalidArgument);
                 continue;
             }
-            DataFrame m = dftu_utils_test::ok(df.unpivot({"id"}, {"v1", "v2"}));
+            DataFrame m = dftu_utils_test::ok(df.unpivot(
+                dftu_utils_test::span_of<dstd::String>({"id"}),
+                dftu_utils_test::span_of<dstd::String>({"v1", "v2"})));
             REQUIRE(m.num_rows() == 8);
             Series value = m.column("value");
             REQUIRE(value.valid());
@@ -360,13 +403,17 @@ TEST_SUITE("dataframe_types_reshape") {
         std::int64_t ids[3] = {1, 2, 3};
         std::int64_t counts[3] = {5, 7, 9};
         dstd::Vector<Series> fields;
-        fields.push_back(Series::strings({"read", "write", "open"}));
+        fields.push_back(
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"read", "write", "open"})));
         fields.push_back(Series::flat_i64(counts, 3));
         Series elems = Series::structs({"value", "count"}, std::move(fields));
         DataFrame df;
         df.names = dstd::make_shared_strings({"pid", "tk"});
         df.columns.push_back(Series::flat_i64(ids, 3));
-        df.columns.push_back(Series::list({0, 2, 2, 3}, std::move(elems)));
+        df.columns.push_back(
+            Series::list(dftu_utils_test::span_of<std::int32_t>({0, 2, 2, 3}),
+                         std::move(elems)));
 
         DataFrame dropped = dftu_utils_test::ok(df.unnest("tk"));
         CHECK(dstd::to_strings(dropped.names) ==

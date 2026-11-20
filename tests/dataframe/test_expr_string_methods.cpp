@@ -15,6 +15,7 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 
 #include <atomic>
 #include <cstdint>
@@ -57,7 +58,9 @@ void same(const Series& got, const Series& want) {
 Series run(const Expr& e, const Series& s) {
     dstd::Vector<const Series*> in{&s};
     Series out = dftu_utils_test::eval_ok(e, in);
-    DataType dt = dftu_utils_test::infer_type_ok(e, {s.data_type()});
+    DataType dt = dftu_utils_test::infer_type_ok(
+        e, dftu_utils_test::span_of<dftracer::utils::dataframe::DataType>(
+               {s.data_type()}));
     REQUIRE(out.valid());
     CHECK(dt.id == out.type());
     return out;
@@ -168,8 +171,11 @@ TEST_SUITE("expression string methods") {
             "\x00",
             4);
         same(run(fn(StrFn::Translate, "o-", 0, text2), s),
-             s.str_translate(Series::strings({"o", "-"}),
-                             Series::strings({"00", ""})));
+             s.str_translate(
+                 Series::strings(
+                     dftu_utils_test::span_of<dstd::StringView>({"o", "-"})),
+                 Series::strings(
+                     dftu_utils_test::span_of<dstd::StringView>({"00", ""}))));
         CHECK(run(fn(StrFn::Translate, "o-", 0, text2), s).string_at(0) ==
               "hell00 w00rld");
         CHECK(refused(fn(StrFn::Normalize, {}, 4), s));
@@ -196,7 +202,8 @@ TEST_SUITE("expression string methods") {
 
     TEST_CASE("cat joins two columns with a separator") {
         Series s = sample();
-        Series t = Series::strings({"1", "2", "3", "4", "5", "6", "7", "8"});
+        Series t = Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"1", "2", "3", "4", "5", "6", "7", "8"}));
         dstd::Vector<const Series*> in{&s, &t};
         Expr e = expr_str_fn(StrFn::Cat, expr_col(0), nullptr, "-", {}, 0, 0);
         CHECK(dftu_utils_test::is_invalid(
@@ -224,7 +231,8 @@ TEST_SUITE("expression string methods") {
         Series with_null = Series::strings(pair, &only_first);
         Series idx0 = run(fn(StrFn::Index, "o"), with_null);
         CHECK(idx0.is_null(1));
-        Series ok = Series::strings({"foo", "bo"});
+        Series ok = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"foo", "bo"}));
         Series idx = run(fn(StrFn::Index, "o"), ok);
         CHECK(idx.data<std::int64_t>()[0] == 1);
         Series ridx = run(fn(StrFn::Rindex, "o"), ok);

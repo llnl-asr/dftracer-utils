@@ -48,8 +48,7 @@ class AggSpiller {
     /// agg_finalize(live, key_names). A run that cannot be read gives an
     /// @ref ErrorCode::Io or @ref ErrorCode::Parse error.
     dstd::Result<DataFrame> drain(
-        const AggState& live,
-        const dstd::Vector<dstd::String>& key_names) const;
+        const AggState& live, dstd::Span<const dstd::String> key_names) const;
 
    private:
     struct Impl;

@@ -16,13 +16,22 @@ where each compressed member of the gzip file starts, so a chunk can be
 decompressed on its own, and four kinds of pruning evidence, each kept per
 chunk and per field (a JSON path):
 
-- ``zonemap``: the field's minimum, maximum and value type, and how many
-  records carried it. It answers "could this chunk hold ``dur > 1000``"
-  without reading an event. The ``ts`` zone also keeps a histogram of where
+- ``zonemap``: the field's minimum and maximum in the type of its values
+  (an integer, a double, or a string compared as unsigned bytes), how many
+  records carried it, how many of its values were null or NaN, and whether
+  each bound is exact. A NaN is never a bound, and a bound that is not exact
+  (an integer a double cannot hold) never rules out a value. It answers "could
+  this chunk hold ``dur > 1000``" without reading an event. The ``ts`` zone also keeps a histogram of where
   the timestamps fall, and ``te`` (event end) gives each chunk's time span.
 - ``bloom``: a bloom filter of the field's values, per chunk and for the
   whole file. A negative test is certain (no false negatives), so a chunk or
-  file can be dropped on it; a positive one means "maybe".
+  file can be dropped on it; a positive one means "maybe". A value is
+  hashed by its type: every integer is an int64, a whole double is that
+  integer (``42.0`` is ``42``, ``-0.0`` is ``0``), every NaN is one value and
+  a string is its bytes, so ``"42"`` is not ``42``. A number literal is also
+  probed as text on a path the catalog says may hold strings. Each stored
+  filter and posting carries a hash version; one this build does not know is
+  never used to prune.
 - ``counts``: the field's values with their counts, up to a size cap. Over the
   cap the chunk keeps no counts and is never pruned on them.
 - ``postings``: for ``name``, exactly which chunks hold each value.
@@ -174,7 +183,7 @@ When the View has a time range, ``prune_file`` then drops chunks whose
 recorded time bounds lie wholly outside it.
 
 The query and time evidence describe data events only, so metadata
-(``ph="M"``) records take their own path through ``dft.metadata``, which
+(``ph=4``) records take their own path through ``dft.metadata``, which
 counts each chunk's metadata records and its context records (thread and
 process names, ``PR``, ``CM``). A default View reads its source's ``data``,
 which for dftracer traces leaves the metadata records out. A scan of every

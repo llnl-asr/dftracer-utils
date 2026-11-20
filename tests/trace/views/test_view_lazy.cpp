@@ -3,10 +3,12 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -147,7 +149,7 @@ dstd::String optimized(const dataframe::LazyFrame& lf) {
     dstd::String ops = opt.explain();
     ops = ops.substr(ops.find('\n') == dstd::String::npos ? ops.size()
                                                           : ops.find('\n'));
-    return canonical(*src->plan()) + "\nops:" + dstd::String(ops);
+    return canonical(*src->scan_plan()) + "\nops:" + dstd::String(ops);
 }
 
 void check_same_rows(const dataframe::DataFrame& a,
@@ -549,7 +551,7 @@ struct FnameTrace {
         dstd::String pfw = env.dir() + "/fname.pfw";
         dftu_utils_test::FileOut ofs(pfw);
         for (int i = 0; i < 20; ++i)
-            ofs << R"({"ph":"X","name":"open","cat":"POSIX","pid":1,"tid":1,)"
+            ofs << R"({"ph":1,"name":"open","cat":"POSIX","pid":1,"tid":1,)"
                 << R"("ts":)" << (1000 + i * 100) << R"(,"dur":)" << (5 + i)
                 << R"(,"args":{"fname":")" << (i % 4 == 0 ? "/a" : "/b")
                 << R"("}})" << "\n";
@@ -618,7 +620,7 @@ TEST_SUITE("View - streamed batches") {
 
 namespace {
 
-std::int32_t column_at(const View& t, const dstd::String& name) {
+std::int32_t column_at(const View& t, dstd::StringView name) {
     const dstd::Vector<dstd::String> names = t.schema();
     for (std::size_t i = 0; i < names.size(); ++i)
         if (names[i] == name) return static_cast<std::int32_t>(i);
@@ -709,7 +711,7 @@ TEST_SUITE("View - expression keys") {
 
         // Materialize the rollup through the absorbed view.
         const views::detail::scan::ScanPlan absorbed =
-            absorbed_source(keyed(25).lazy())->plan();
+            absorbed_source(keyed(25).lazy())->scan_plan();
         const auto want25 =
             counts(test_view_common::run(views::detail::scan::collect_frame(
                 views::detail::scan::materialize(absorbed, 0, 0))));
@@ -764,9 +766,9 @@ struct NestedTrace {
     NestedTrace() {
         const dstd::String pfw = env.dir() + "/nested.pfw";
         dftu_utils_test::FileOut ofs(pfw);
-        auto ev = [&](const char* name, const char* cat, int tid, int ts,
-                      int dur) {
-            ofs << R"({"ph":"X","name":")" << name << R"(","cat":")" << cat
+        auto ev = [&](dstd::StringView name, dstd::StringView cat, int tid,
+                      int ts, int dur) {
+            ofs << R"({"ph":1,"name":")" << name << R"(","cat":")" << cat
                 << R"(","pid":1,"tid":)" << tid << R"(,"ts":)" << ts
                 << R"(,"dur":)" << dur << R"(,"args":{}})"
                 << "\n";
@@ -816,7 +818,7 @@ View nested_viewer() {
 // The rows of `f` over `cols`, one string each, in sorted order: containment
 // ids depend on scan order, so frames compare by content.
 dstd::Vector<dstd::String> rows_of(const dataframe::DataFrame& f,
-                                   const dstd::Vector<dstd::String>& cols) {
+                                   dstd::Vector<dstd::String> cols) {
     dstd::Vector<dstd::String> out;
     for (std::int64_t r = 0; r < f.num_rows(); ++r) {
         dstd::String row;
@@ -1042,21 +1044,22 @@ TEST_SUITE("View - trace terminals") {
         CHECK(rows.num_rows() == 16);
     }
 
-    TEST_CASE("collect_typed leaves dur null where the record has none") {
+    TEST_CASE(
+        "collect_index_records leaves dur null where the record has none") {
         TestEnvironment env(10);
         const dstd::String pfw = env.dir() + "/dur_gap.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"ph":"X","name":"a","cat":"APP","pid":1,"tid":1,"ts":100,"dur":50,"args":{}})"
+            ofs << R"({"ph":1,"name":"a","cat":"APP","pid":1,"tid":1,"ts":100,"dur":50,"args":{}})"
                 << "\n"
-                << R"({"ph":"X","name":"b","cat":"APP","pid":1,"tid":2,"ts":150,"args":{}})"
+                << R"({"ph":1,"name":"b","cat":"APP","pid":1,"tid":2,"ts":150,"args":{}})"
                 << "\n";
         }
         const dstd::String gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
         dstd::fs::remove(pfw).discard();
-        const TypedResult t =
-            test_view_common::run(views::detail::scan::collect_typed(
+        const IndexRecords t =
+            test_view_common::run(views::detail::scan::collect_index_records(
                 views::detail::scan::from_file(dstd::String(gz)), 0, 4096));
         REQUIRE(t.regular.num_rows() == 2);
         const dataframe::Series& dur =
@@ -1075,16 +1078,16 @@ TEST_SUITE("View - trace terminals") {
         Deferred<ExportStats> stats =
             s.sink_json(t.duql(R"(cat == "POSIX")"), sink);
         Deferred<dataframe::DataFrame> fg = s.collect(t.flamegraph());
-        Deferred<TypedResult> typed = s.collect(t.typed());
+        Deferred<IndexRecords> records = s.collect(t.index_records());
         test_view_common::run(s.execute());
         CHECK(both.get().call_tree.num_rows() == 32);
         CHECK(rows_of(fg.get(), FLAME_COLS) ==
               rows_of(both.get().flamegraph, FLAME_COLS));
         CHECK(stats.get().events_matched == 16);
         CHECK(sink.lines().size() == 16);
-        const TypedResult want = test_view_common::run(
-            views::detail::scan::collect_typed(nested_plan(), 0, 4096));
-        CHECK(typed.get().regular.num_rows() == want.regular.num_rows());
+        const IndexRecords want = test_view_common::run(
+            views::detail::scan::collect_index_records(nested_plan(), 0, 4096));
+        CHECK(records.get().regular.num_rows() == want.regular.num_rows());
     }
 
     TEST_CASE("a batched containment branch honors phase") {
@@ -1092,9 +1095,9 @@ TEST_SUITE("View - trace terminals") {
         const dstd::String pfw = env.dir() + "/phased.pfw";
         {
             dftu_utils_test::FileOut ofs(pfw);
-            ofs << R"({"ph":"X","name":"step","cat":"APP","pid":1,"tid":1,"ts":100,"dur":50,"args":{}})"
+            ofs << R"({"ph":1,"name":"step","cat":"APP","pid":1,"tid":1,"ts":100,"dur":50,"args":{}})"
                 << "\n"
-                << R"({"ph":"A","name":"folded","cat":"APP","pid":1,"tid":1,"ts":110,"dur":20,"args":{}})"
+                << R"({"ph":3,"name":"folded","cat":"APP","pid":1,"tid":1,"ts":110,"dur":20,"args":{}})"
                 << "\n";
         }
         const dstd::String gz = pfw + ".gz";
@@ -1257,7 +1260,7 @@ TEST_SUITE("View - trace terminals") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 4; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << 100 * i << R"(,"dur":10,"args":{"size":)" << i << "}}\n";
         }
         const dstd::String gz = pfw + ".gz";
@@ -1311,13 +1314,13 @@ TEST_SUITE("View - low-level scans") {
         View t = nested_viewer().duql(R"(cat == "POSIX")");
         std::atomic<std::int64_t> n{0};
         test_view_common::run(t.for_each_batch(
-            [&](std::size_t, const dstd::Vector<dstd::StringView>& events) {
+            [&](std::size_t, dstd::Span<const dstd::StringView> events) {
                 n += static_cast<std::int64_t>(events.size());
             },
             4));
         CHECK(n == 16);
         auto counted = test_view_common::run(t.map_batches<std::int64_t>(
-            [](std::int64_t& acc, const dstd::Vector<dstd::StringView>& ev) {
+            [](std::int64_t& acc, dstd::Span<const dstd::StringView> ev) {
                 acc += static_cast<std::int64_t>(ev.size());
             },
             [](std::int64_t&& a, std::int64_t&& b) { return a + b; }, 3));
@@ -1328,7 +1331,7 @@ TEST_SUITE("View - low-level scans") {
         View t = nested_viewer();
         std::atomic<std::int64_t> n{0};
         test_view_common::run(t.head(5).for_each_batch(
-            [&](std::size_t, const dstd::Vector<dstd::StringView>& events) {
+            [&](std::size_t, dstd::Span<const dstd::StringView> events) {
                 n += static_cast<std::int64_t>(events.size());
             },
             1));
@@ -1342,8 +1345,7 @@ TEST_SUITE("View - low-level scans") {
         test_view_common::expect_refused(
             dftracer::utils::default_runtime()
                 .submit(t.slice(2, 5).for_each_batch(
-                    [](std::size_t, const dstd::Vector<dstd::StringView>&) {},
-                    1))
+                    [](std::size_t, dstd::Span<const dstd::StringView>) {}, 1))
                 .get(),
             "head");
         test_view_common::expect_refused(t.head(5).flamegraph(), "slice");
@@ -1395,11 +1397,11 @@ dstd::String write_args_trace(TestEnvironment& env) {
     const dstd::String pfw = env.dir() + "/args.pfw";
     {
         dftu_utils_test::FileOut ofs(pfw);
-        ofs << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"args":{"x":1,"s":"a"}})"
+        ofs << R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"args":{"x":1,"s":"a"}})"
             << "\n"
-            << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":2,"dur":10,"args":{"x":null}})"
+            << R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":2,"dur":10,"args":{"x":null}})"
             << "\n"
-            << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":3,"dur":10,"args":{"x":3}})"
+            << R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":3,"dur":10,"args":{"x":3}})"
             << "\n";
     }
     const dstd::String gz = pfw + ".gz";
@@ -1409,7 +1411,7 @@ dstd::String write_args_trace(TestEnvironment& env) {
 }
 
 dstd::Vector<dstd::String> cells(const dataframe::DataFrame& df,
-                                 const dstd::String& name) {
+                                 dstd::StringView name) {
     const dftracer::utils::dataframe::Series c = df.column(name).materialize();
     dstd::Vector<dstd::String> out;
     for (std::int64_t i = 0; i < c.length(); ++i)
@@ -1466,7 +1468,7 @@ TEST_SUITE("View - computed columns over a trace scan") {
                 views::detail::scan::ordered(views::detail::scan::from_file(
                     dstd::String(gz), determine_index_path(gz, ""))));
             const dstd::Vector<dstd::String> names = lf.schema();
-            const auto at = [&](const char* n) {
+            const auto at = [&](dstd::StringView n) {
                 return static_cast<std::int32_t>(
                     std::find(names.begin(), names.end(), n) - names.begin());
             };
@@ -1559,11 +1561,11 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
         const dstd::String absent_pfw = env.dir() + "/absent.pfw";
         {
             dftu_utils_test::FileOut ofs(absent_pfw);
-            ofs << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"args":{"x":1}})"
+            ofs << R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"args":{"x":1}})"
                 << "\n"
-                << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":2,"dur":10,"args":{"y":2}})"
+                << R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":2,"dur":10,"args":{"y":2}})"
                 << "\n"
-                << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":3,"dur":10,"args":{"x":3}})"
+                << R"({"ph":1,"name":"op","cat":"POSIX","pid":1,"tid":1,"ts":3,"dur":10,"args":{"x":3}})"
                 << "\n";
         }
         const dstd::String absent = absent_pfw + ".gz";
@@ -1625,8 +1627,8 @@ struct BadPartTrace {
     BadPartTrace() {
         const dstd::String pfw = env.dir() + "/badpart.pfw";
         dftu_utils_test::FileOut ofs(pfw);
-        auto ev = [&](int ts, const char* tail) {
-            ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
+        auto ev = [&](int ts, dstd::StringView tail) {
+            ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,)"
                 << R"("ts":)" << ts << R"(,"dur":10,"args":{})" << tail
                 << "}\n";
         };
@@ -1656,10 +1658,9 @@ TEST_SUITE("View - malformed lines") {
         for (const dstd::String& line : lines)
             if (line.find("tru}") != dstd::String::npos) {
                 ++bad;
-                CHECK(
-                    line ==
-                    R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
-                    R"("ts":2,"dur":10,"args":{},"zz":tru})");
+                CHECK(line ==
+                      R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,)"
+                      R"("ts":2,"dur":10,"args":{},"zz":tru})");
             }
         CHECK(bad == 1);
     }
@@ -1673,8 +1674,7 @@ constexpr int BATCH_PER_MEMBER = 400;
 
 // BATCH_FILES gzip files of BATCH_MEMBERS members each, so a scan has many
 // units to hand out of order.
-View batch_viewer(const dstd::String& dir,
-                  dstd::SharedPtr<ScanCounter> counter) {
+View batch_viewer(dstd::CStringView dir, dstd::SharedPtr<ScanCounter> counter) {
     dstd::Vector<ViewFile> files;
     const char* names[] = {"read", "write", "open", "close"};
     for (int f = 0; f < BATCH_FILES; ++f) {
@@ -1683,13 +1683,12 @@ View batch_viewer(const dstd::String& dir,
             dstd::String text;
             if (f == 0 && m == 0)
                 text +=
-                    R"({"ph":"M","name":"process_name","pid":1,"tid":0,"args":{"name":"app"}})"
+                    R"({"ph":4,"name":"process_name","pid":1,"tid":0,"args":{"name":"app"}})"
                     "\n";
             for (int i = 0; i < BATCH_PER_MEMBER; ++i) {
                 const int n = (f * BATCH_MEMBERS + m) * BATCH_PER_MEMBER + i;
-                text += dstd::String("{\"ph\":\"X\",\"name\":\"") +
-                        names[n % 4] + "\",\"cat\":\"" +
-                        (n % 4 < 2 ? "POSIX" : "STDIO") +
+                text += dstd::String("{\"ph\":1,\"name\":\"") + names[n % 4] +
+                        "\",\"cat\":\"" + (n % 4 < 2 ? "POSIX" : "STDIO") +
                         "\",\"pid\":" + dstd::to_string(1 + n % 5) +
                         ",\"tid\":1,\"ts\":" + dstd::to_string(1000 + n * 7) +
                         ",\"dur\":" + dstd::to_string(1 + (n * 37) % 500) +
@@ -1703,8 +1702,9 @@ View batch_viewer(const dstd::String& dir,
             bytes.insert(bytes.end(), buf.begin(), buf.begin() + *len);
         }
         ViewFile vf;
-        vf.file_path = dir + "/b" + dstd::to_string(f) + ".pfw.gz";
-        vf.index_path = dir + "/b" + dstd::to_string(f) + ".idx";
+        vf.file_path =
+            dstd::String(dir) + "/b" + dstd::to_string(f) + ".pfw.gz";
+        vf.index_path = dstd::String(dir) + "/b" + dstd::to_string(f) + ".idx";
         {
             dftu_utils_test::FileOut out(vf.file_path);
             out.write(reinterpret_cast<const char*>(bytes.data()),

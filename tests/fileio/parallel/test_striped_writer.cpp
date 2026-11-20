@@ -21,15 +21,16 @@ using namespace dftracer::utils::fileio::parallel;
 
 namespace {
 
-dstd::String tmp_path(const char* name) {
-    return dstd::String(dftu_utils_test::make_unique_test_path(name).str());
+dstd::String tmp_path(dstd::StringView name) {
+    return dstd::String(
+        dftu_utils_test::make_unique_test_path(dstd::String(name)).str());
 }
 
-dstd::String read_all(const dstd::String& path) {
+dstd::String read_all(dstd::StringView path) {
     return dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
 }
 
-dstd::ByteView sv(const dstd::String& s) {
+dstd::ByteView sv(dstd::StringView s) {
     return dstd::ByteView(s.data(), s.size());
 }
 

@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/views/result_join.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <initializer_list>
@@ -23,9 +24,8 @@ using namespace dftracer::utils::trace;
 namespace {
 
 // A DataFrame of cat(String) + one Float64 value column.
-dataframe::DataFrame make(const dstd::Vector<dstd::String>& cats,
-                          const dstd::String& vname,
-                          const dstd::Vector<double>& vals) {
+dataframe::DataFrame make(dstd::Vector<dstd::String> cats,
+                          dstd::StringView vname, dstd::Vector<double> vals) {
     dataframe::DataFrame b;
     b.names = dstd::make_shared_strings({"cat", vname});
     b.columns.push_back(dataframe::Series::strings(cats));
@@ -34,12 +34,12 @@ dataframe::DataFrame make(const dstd::Vector<dstd::String>& cats,
     return b;
 }
 
-std::int64_t col_of(const dataframe::DataFrame& b, const dstd::String& name) {
+std::int64_t col_of(const dataframe::DataFrame& b, dstd::StringView name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return static_cast<std::int64_t>(i);
     return -1;
 }
-std::int64_t row_of(const dataframe::DataFrame& b, const dstd::String& cat) {
+std::int64_t row_of(const dataframe::DataFrame& b, dstd::StringView cat) {
     for (std::int64_t i = 0; i < b.num_rows(); ++i)
         if (b.columns[0].string_at(i) == cat) return i;
     return -1;
@@ -50,12 +50,12 @@ dstd::Set<dstd::String> keys_of(const dataframe::DataFrame& b) {
         out.insert(dstd::String(b.columns[0].string_at(i)));
     return out;
 }
-double num(const dataframe::DataFrame& b, const dstd::String& col,
+double num(const dataframe::DataFrame& b, dstd::StringView col,
            std::int64_t row) {
     return b.columns[static_cast<std::size_t>(col_of(b, col))]
         .data<double>()[row];
 }
-bool is_null(const dataframe::DataFrame& b, const dstd::String& col,
+bool is_null(const dataframe::DataFrame& b, dstd::StringView col,
              std::int64_t row) {
     return b.columns[static_cast<std::size_t>(col_of(b, col))].is_null(row);
 }
@@ -150,16 +150,20 @@ TEST_SUITE("ResultJoin") {
     TEST_CASE("multi-column group key joins on the full tuple") {
         dataframe::DataFrame l;
         l.names = dstd::make_shared_strings({"pid", "name", "count"});
-        l.columns.push_back(dataframe::Series::strings({"1", "1", "2"}));
-        l.columns.push_back(
-            dataframe::Series::strings({"read", "write", "read"}));
+        l.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"1", "1", "2"})));
+        l.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>(
+                {"read", "write", "read"})));
         dstd::Vector<double> lv{1.0, 2.0, 3.0};
         l.columns.push_back(dataframe::Series::flat_f64(lv.data(), 3));
         dataframe::DataFrame r;
         r.names = dstd::make_shared_strings({"pid", "name", "sum"});
-        r.columns.push_back(dataframe::Series::strings({"1", "2", "2"}));
-        r.columns.push_back(
-            dataframe::Series::strings({"write", "read", "open"}));
+        r.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"1", "2", "2"})));
+        r.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>(
+                {"write", "read", "open"})));
         dstd::Vector<double> rv{9.0, 8.0, 7.0};
         r.columns.push_back(dataframe::Series::flat_f64(rv.data(), 3));
 
@@ -175,8 +179,10 @@ TEST_SUITE("ResultJoin") {
     TEST_CASE("a text column survives the join opaquely") {
         dataframe::DataFrame l;
         l.names = dstd::make_shared_strings({"cat", "top"});
-        l.columns.push_back(dataframe::Series::strings({"a", "b"}));
-        l.columns.push_back(dataframe::Series::strings({"read", "write"}));
+        l.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"a", "b"})));
+        l.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"read", "write"})));
         dataframe::DataFrame r = make({"a"}, "sum", {2.5});
 
         dataframe::DataFrame j = dftu_utils_test::ok(
@@ -192,8 +198,10 @@ TEST_SUITE("ResultJoin") {
         dataframe::DataFrame l = make({"a"}, "count", {1.0});
         dataframe::DataFrame r;
         r.names = dstd::make_shared_strings({"pid", "name"});
-        r.columns.push_back(dataframe::Series::strings({"1"}));
-        r.columns.push_back(dataframe::Series::strings({"read"}));
+        r.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"1"})));
+        r.columns.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"read"})));
         dataframe::DataFrame j = dftu_utils_test::ok(
             views::join_batches(l, r, 1, views::JoinType::Inner));
         CHECK(j.num_columns() == 0);

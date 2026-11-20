@@ -12,7 +12,7 @@ import pytest
 pa = pytest.importorskip("pyarrow")
 pd = pytest.importorskip("pandas")
 
-from dftracer.utils import DataFrame, Series, col  # noqa: E402
+from dftracer.utils import DataFrame, DFTUtilsValueError, Series, col  # noqa: E402
 
 # include_groups= landed in pandas 2.2; before it, apply() forwards the keyword
 # to the function.
@@ -140,8 +140,8 @@ def test_frame_reductions_match_pandas():
     assert _d(df.median())["b"] == [num.median()["b"]]
     assert _d(df.quantile(0.5))["b"] == [num.quantile(0.5)["b"]]
     vc = df.value_counts(["s"])
-    assert _d(vc) == {"s": ["x", "y", "z"], "count": [2, 1, 1]}
-    assert _d(df.value_counts())["count"] == [1, 1, 1]  # the null row is dropped
+    assert (vc.index.to_list(), vc.to_list()) == (["x", "y", "z"], [2, 1, 1])
+    assert df.value_counts().to_list() == [1, 1, 1]  # the null row is dropped
 
 
 def test_frame_conveniences():
@@ -166,7 +166,7 @@ def test_frame_conveniences():
     with pytest.raises(ValueError):
         df.set_axis(["x"])
     assert df.equals(df.copy()) and not df.equals(df.head(2))
-    assert df.copy().set_index("a")._index == ["a"]
+    assert df.copy().set_index("a").index_names() == ["a"]
     assert df.select("a").squeeze().to_list() == [1, 2, None, 4]
     assert DataFrame({"a": [7]}).squeeze() == 7
     assert df.select_dtypes("number").columns == ["a", "b"]
@@ -213,7 +213,7 @@ def test_series_surface_matches_pandas():
     assert s.between(1, 3, "left").to_list() == [False, True, None, False, True]
     with pytest.raises(ValueError):
         s.between(1, 2, "sideways")
-    assert s.drop_duplicates().to_list() == [1, 2, 3]  # unique: sorted, nulls out
+    assert s.drop_duplicates().to_list() == [None if pd.isna(v) else v for v in p.drop_duplicates()]
     assert s.duplicated().to_list() == p.duplicated().tolist()
     assert s.duplicated("last").to_list() == p.duplicated("last").tolist()
     assert s.duplicated(False).to_list() == p.duplicated(False).tolist()
@@ -226,7 +226,8 @@ def test_series_surface_matches_pandas():
     with pytest.raises(ValueError):
         s.item()
     assert list(s.items())[:2] == [(0, 3), (1, 1)] and s.keys() == [0, 1, 2, 3, 4]
-    assert s.get(1) == 1 and s.get(-1) == 2 and s.get(9, "d") == "d"
+    # The positions are the labels, so -1 is no label, as pandas.
+    assert s.get(1) == 1 and s.get(-1) is None and s.get(9, "d") == "d"
     assert s.copy().to_list() == s.to_list() and s.pipe(len) == 5
     codes, uniques = s.factorize()
     assert uniques.to_list() == [1, 2, 3] and codes.to_list() == [2, 0, -1, 2, 1]
@@ -480,7 +481,7 @@ def test_str_batch_matches_pandas():
         s.str.get(-1)
     with pytest.raises(ValueError):
         s.str.findall("(")
-    with pytest.raises(TypeError):
+    with pytest.raises(DFTUtilsValueError):
         Series([1, 2]).str.count("a")
     dummies = p.str.get_dummies("-").to_dict("list")
     dummies.pop("", None)  # pandas 3 emits a column for the empty token
@@ -556,7 +557,7 @@ def test_dt_accessor_matches_pandas():
     assert Series([None, 0]).dt.year.to_list() == [None, 1970]
     with pytest.raises(ValueError):
         s.dt("weeks")
-    with pytest.raises(TypeError):
+    with pytest.raises(DFTUtilsValueError):
         Series(["x"]).dt.year
     with pytest.raises(ValueError):
         s.dt.floor("1ns")  # not a whole number of the column's unit
@@ -571,7 +572,7 @@ def test_dt_accessor_matches_pandas():
     assert ts.astype("int64").to_list() == [0, 1_700_000_000_123_456_789]
     dates = Series.from_arrow(pa.array([0, 19000], pa.date32()))
     assert dates.dt.day.to_list() == pd.to_datetime(pd.Series([0, 19000]), unit="D").dt.day.tolist()
-    with pytest.raises(TypeError):
+    with pytest.raises(DFTUtilsValueError):
         dates.dt.floor("1d")  # a date has no sub-day instant to round
     dur = Series.from_arrow(pa.array([1_500_000, 90_000_000], pa.duration("us")))
     assert dur.dt.total_seconds().to_list() == [1.5, 90.0]
@@ -729,8 +730,9 @@ def test_groupby_apply_and_filter_trace_into_the_engine(caplog):
 def test_datetime_index_methods_match_pandas():
     us = 1_000_000
     ts = [0, 30 * us, 60 * us, 45_000 * us, 45_030 * us, 86_430 * us, 172_800 * us]
-    df = DataFrame({"ts": ts, "v": list(range(7))}).set_index("ts")
-    p = pd.DataFrame({"v": list(range(7))}, index=pd.to_datetime(ts, unit="us"))
+    stamps = pd.to_datetime(ts, unit="us").astype("datetime64[us]")
+    p = pd.DataFrame({"v": list(range(7))}, index=pd.Index(stamps, name="ts"))
+    df = DataFrame.from_pandas(p)
     assert _d(df.at_time("00:00:30"))["v"] == p.at_time("00:00:30")["v"].tolist() == [1, 5]
     assert _d(df.at_time("12:30"))["v"] == p.at_time("12:30")["v"].tolist()
     assert (
@@ -749,15 +751,17 @@ def test_datetime_index_methods_match_pandas():
     )
     assert _d(df.first("1min"))["v"] == [0, 1]
     assert _d(df.last("1D"))["v"] == [5, 6]
-    assert _d(df.reset_index().at_time("00:00:30", on="ts"))["v"] == [1, 5]
     with pytest.raises(ValueError):
         df.at_time("25:00")
-    with pytest.raises(ValueError):
-        df.reset_index().at_time("00:00")  # no index column and no on=
+    with pytest.raises(TypeError):
+        df.reset_index().at_time("00:00")  # no index
 
-    small = DataFrame({"ts": [0, 2 * us, 3 * us], "v": [1.0, 2.0, 3.0]}).set_index("ts")
-    ps = pd.DataFrame({"v": [1.0, 2.0, 3.0]}, index=pd.to_datetime([0, 2 * us, 3 * us], unit="us"))
-    assert _d(small.asfreq("1s")) == {"ts": [0, us, 2 * us, 3 * us], "v": [1.0, None, 2.0, 3.0]}
+    ps = pd.DataFrame(
+        {"v": [1.0, 2.0, 3.0]},
+        index=pd.Index(pd.to_datetime([0, 2 * us, 3 * us], unit="us").astype("datetime64[us]")),
+    )
+    small = DataFrame.from_pandas(ps)
+    assert _d(small.asfreq("1s"))["v"] == [1.0, None, 2.0, 3.0]
     assert (
         _d(small.asfreq("1s", method="ffill"))["v"] == ps.asfreq("1s", method="ffill")["v"].tolist()
     )
@@ -765,17 +769,14 @@ def test_datetime_index_methods_match_pandas():
         _d(small.asfreq("1s", method="bfill"))["v"] == ps.asfreq("1s", method="bfill")["v"].tolist()
     )
     assert _d(small.asfreq("1s", fill_value=0))["v"] == ps.asfreq("1s", fill_value=0)["v"].tolist()
-    assert small.asfreq("1s")._index == ["ts"]
-    with pytest.raises(ValueError, match="more than once"):
-        DataFrame({"ts": [0, 0], "v": [1, 2]}).set_index("ts").asfreq("1s")
-    # A typed Timestamp column brings its own unit and type.
-    typed = DataFrame(
-        {"ts": pa.array(pd.to_datetime([0, 2 * us, 3 * us], unit="us")), "v": [1.0, 2.0, 3.0]}
-    ).set_index("ts")
-    assert _d(typed.asfreq("1s", method="bfill"))["v"] == [1.0, 2.0, 2.0, 3.0]
-    assert typed.asfreq("1s")["ts"].dtype == typed["ts"].dtype
-    assert _d(typed.first("2s"))["v"] == [1.0]
-    assert _d(typed.at_time("00:00:02"))["v"] == [2.0]
+    assert small.asfreq("1s").index_names() == small.index_names()
+    with pytest.raises(ValueError, match="duplicate"):
+        DataFrame.from_pandas(
+            pd.DataFrame({"v": [1, 2]}, index=pd.to_datetime([0, 0], unit="us"))
+        ).asfreq("1s")
+    assert small.asfreq("1s")[small.index_names()[0]].dtype == small[small.index_names()[0]].dtype
+    assert _d(small.first("2s"))["v"] == [1.0]
+    assert _d(small.at_time("00:00:02"))["v"] == [2.0]
 
 
 def test_groupby_fills_rolling_take_sample_resample_match_pandas():
@@ -850,7 +851,7 @@ def test_groupby_fills_rolling_take_sample_resample_match_pandas():
     assert _d(got) == {"k": ["a", "a", "b", "b"], "ts": [0, 2 * us, 0, 8 * us], "v": [1, 7, 2, 5]}
     assert _d(got)["v"] == ref.tolist()
     assert [int(ts.timestamp() * us) for _, ts in ref.index] == _d(got)["ts"]
-    assert got._index == ["k", "ts"]
+    assert got.index_names() == ["k", "ts"]
     assert _d(t.group_by("k").resample("2s").size())["size"] == [1, 2, 1, 1]
     assert _d(t.group_by("k").resample("2s").agg(vmax=("v", "max")))["vmax"] == [1, 4, 2, 5]
     assert _d(t.group_by("k").resample(2 * us).sum()) == _d(got)
@@ -880,33 +881,36 @@ def test_tz_localize_and_tz_convert_match_pandas():
     assert tokyo.astype("int64").to_list() == utc.astype("int64").to_list()
     assert tokyo.to_pandas().equals(ps.dt.tz_localize("UTC").dt.tz_convert("Asia/Tokyo"))
     assert tokyo.to_pandas().dt.hour.tolist() == [9, 10, 10]
-    # The .dt parts read UTC whatever the zone.
-    assert tokyo.dt.hour.to_list() == [0, 1, 1]
+    # The .dt parts read the wall time of the zone.
+    assert tokyo.dt.hour.to_list() == [9, 10, 10]
+    assert utc.dt.hour.to_list() == [0, 1, 1]
     assert tokyo.dt.tz_convert(None).dt.tz is None
     assert utc.dt.tz_localize(None).dt.tz is None
     assert utc.dt.tz_localize(None).astype("int64").to_list() == [t * 1000 for t in ticks]
-    with pytest.raises(ValueError, match="only UTC"):
-        s.dt.tz_localize("Asia/Tokyo")
-    with pytest.raises(TypeError, match="already"):
+    tokyo_wall = s.dt.tz_localize("Asia/Tokyo")
+    assert tokyo_wall.to_pandas().equals(ps.dt.tz_localize("Asia/Tokyo"))
+    assert tokyo_wall.astype("int64").to_list() == [
+        (t - 9 * 3600 * 1_000_000) * 1000 for t in ticks
+    ]
+    with pytest.raises(TypeError, match="(?i)already"):
         utc.dt.tz_localize("UTC")
     with pytest.raises(TypeError, match="naive"):
         s.dt.tz_convert("UTC")
-    with pytest.raises(TypeError):
+    with pytest.raises(DFTUtilsValueError):
         Series([1, 2]).dt.tz_localize("UTC")
 
     df = DataFrame({"ts": s, "v": [1, 2, 3]}).set_index("ts")
     paris = df.tz_localize("UTC").tz_convert("Europe/Paris")
     assert paris["ts"].dt.tz == "Europe/Paris"
-    assert paris._index == ["ts"]
+    assert paris.index_names() == ["ts"]
     assert _d(paris)["v"] == [1, 2, 3]
     pdf = pd.DataFrame({"v": [1, 2, 3]}, index=pd.to_datetime(ticks, unit="us"))
     assert (
-        paris.to_pandas()["ts"].tolist()
+        paris.to_pandas().index.tolist()
         == pdf.tz_localize("UTC").tz_convert("Europe/Paris").index.tolist()
     )
-    assert df.reset_index().tz_localize("UTC", on="ts")["ts"].dt.tz == "UTC"
-    with pytest.raises(ValueError):
-        df.reset_index().tz_localize("UTC")
+    with pytest.raises(TypeError):
+        df.reset_index().tz_localize("UTC")  # no Timestamp index
 
 
 def test_groupby_prod_cumprod_median_quantile_match_pandas():
@@ -937,7 +941,7 @@ def test_groupby_prod_cumprod_median_quantile_match_pandas():
     assert _d(holes.group_by("k").median()) == {"k": ["x", "y"], "v": [None, 2.0]}
     with pytest.raises(ValueError):
         g.quantile(1.5)
-    with pytest.raises(ValueError, match="exact group-by method"):
+    with pytest.raises(ValueError, match="group-by method"):
         g.agg("median")
     # describe now carries the exact quartiles.
     ours = _d(g.describe())
@@ -997,11 +1001,12 @@ def test_last_pandas_names_match_pandas():
     _same(q.corrwith(o), pq.corrwith(po, numeric_only=True).to_frame().T)
     text = q.info()
     assert text.startswith("DataFrame: 3 rows, 3 columns") and "a: int64, 2 present" in text
-    assert q.set_index("a").rename_axis("idx").columns[0] == "idx"
-    assert q.set_index("a").rename_axis("idx")._index == ["idx"]
-    with pytest.raises(ValueError):
-        q.rename_axis("idx")
-    _same(q.kurtosis(), pq.kurtosis(numeric_only=True).to_frame().T)
+    assert list(q.set_index("a").rename_axis("idx").schema)[0] == "idx"
+    assert q.set_index("a").rename_axis("idx").columns == ["b", "s"]
+    assert q.set_index("a").rename_axis("idx").index_names() == ["idx"]
+    named = q.rename_axis("idx")  # no index yet: the positions, under the name
+    assert named.index_names() == ["idx"] and named.to_pandas().index.tolist() == [0, 1, 2]
+    _same(q.kurt(), pq.kurtosis(numeric_only=True).to_frame().T)
     assert _d(q.select("a", "b").swapaxes()) == _d(q.select("a", "b").T)
 
     s = Series([1.0, None, 3.0, None, 5.0])
@@ -1120,8 +1125,11 @@ def test_groupby_column_selection_and_series_key_match_pandas():
     ours = _d(df.groupby("k")["b"].agg(["sum", "mean"]))
     ref = pdf.groupby("k")["b"].agg(["sum", "mean"])
     assert ours == {"k": ["x", "y"], "sum": ref["sum"].tolist(), "mean": ref["mean"].tolist()}
-    assert _d(df.groupby("k")["b"].sum())["b"] == pdf.groupby("k")["b"].sum().tolist()
-    assert list(df.groupby("k")[["a"]].agg("max").columns) == ["k", "a"]
+    one = df.groupby("k")["b"].sum()
+    assert one.name == "b" and one.index.to_list() == ["x", "y"]
+    assert one.to_list() == pdf.groupby("k")["b"].sum().tolist()
+    kept = df.groupby("k")[["a"]].agg("max")
+    assert list(kept.columns) == ["a"] and kept.index_names() == ["k"]
     # A Series key: the group column is named `key`, groups sorted as pandas.
     ours = _d(df.groupby(df["a"] // 2)["b"].agg(["count", "sum"]))
     ref = pdf.groupby(pdf["a"] // 2)["b"].agg(["count", "sum"])
@@ -1219,18 +1227,18 @@ def _sort_frame():
 def test_groupby_sorts_by_default():
     df = _sort_frame()
     gb = df.groupby("app")
-    assert gb.size()["app"].to_list() == ["a", "b", "c"]
-    assert gb.size()["size"].to_list() == [2, 2, 1]
+    assert gb.size().index.to_list() == ["a", "b", "c"]
+    assert gb.size().to_list() == [2, 2, 1]
     assert gb.sum()["v"].to_list() == [7.0, 4.0, 6.0]
     assert gb.agg(total=("v", "sum"))["app"].to_list() == ["a", "b", "c"]
     assert gb.median()["app"].to_list() == ["a", "b", "c"]
     keep = df.groupby("app", dropna=False).size()
-    assert keep["app"].to_list() == ["a", "b", "c", None]
+    assert keep.index.to_list() == ["a", "b", "c", None]
 
 
 def test_groupby_sorts_numeric_and_composite_keys():
     df = _sort_frame()
-    out = df.groupby(["app", "n"]).size()
+    out = df.groupby(["app", "n"]).size().reset_index()
     assert list(zip(out["app"].to_list(), out["n"].to_list())) == [
         ("a", 1),
         ("a", 2),
@@ -1244,8 +1252,8 @@ def test_groupby_sorts_numeric_and_composite_keys():
 def test_groupby_sort_false_keeps_engine_order():
     df = _sort_frame()
     expected = df.group_by("app").size()
-    for sort_false in (df.groupby("app", sort=False).size(), df.groupby("app", sort=False).sum()):
-        assert sort_false["app"].to_list() == expected["app"].to_list()
+    assert df.groupby("app", sort=False).size().index.to_list() == expected["app"].to_list()
+    assert df.groupby("app", sort=False).sum()["app"].to_list() == expected["app"].to_list()
     assert df.group_by("app").size()["app"].to_list() == expected["app"].to_list()
 
 
@@ -1584,7 +1592,7 @@ def test_sketch_quantile_matches_duql_merge(tmp_path):
     with gzip.open(trace, "wt") as f:
         for i in range(3000):
             f.write(
-                '{"ph":"X","name":"%s","cat":"c","pid":%d,"tid":1,"ts":%d,"dur":%d,"args":{}}\n'
+                '{"ph":1,"name":"%s","cat":"c","pid":%d,"tid":1,"ts":%d,"dur":%d,"args":{}}\n'
                 % ("abc"[i % 3], i % 7, i, rng.randint(1, 10**6))
             )
     tv = TraceViewer(trace, str(tmp_path / "idx"))
@@ -1595,7 +1603,7 @@ def test_sketch_quantile_matches_duql_merge(tmp_path):
         " | sort name"
     ).collect()
     aggs = {"q50": col("s").sketch_quantile(0.5), "q99": col("s").sketch_quantile(0.99)}
-    eager = parts.groupby("name").agg(**aggs)
+    eager = parts.groupby("name", as_index=False).agg(**aggs)
     lazy = parts.lazy().group_by("name").agg(**aggs).sort("name").collect()
     assert eager.to_dict() == want.to_dict()
     assert lazy.to_dict() == want.to_dict()

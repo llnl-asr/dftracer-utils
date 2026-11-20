@@ -117,7 +117,7 @@ coro::CoroTask<HttpResponse> handle_viz_calltree(const HttpRequest& req,
 
     const TraceFields fields(index.record_schema());
     ViewDefinition view = build_viz_view(params, begin, end, 0, fields);
-    // The flame tree keys on ts/dur containment and ignores ph=M metadata, so
+    // The flame tree keys on ts/dur containment and ignores ph=4 metadata, so
     // drop it at the reader to engage the no-metadata fast path.
     int limit = params.get_int("limit", 0);
     if (limit < 0) limit = 0;

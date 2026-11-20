@@ -54,7 +54,7 @@ namespace {
 // (canonical_row_column_name), so the group_by references the column the scan
 // emits. Empty field stays empty (Count()'s neutral value column). A
 // path-decoded record's field is named by its path.
-dstd::String value_col_name(const dstd::String& field, bool by_path) {
+dstd::String value_col_name(dstd::StringView field, bool by_path) {
     return field.empty()
                ? dstd::String()
                : dstd::String(canonical_row_column_name(field, by_path));
@@ -64,26 +64,27 @@ dstd::String value_col_name(const dstd::String& field, bool by_path) {
 // (size = io-cat byte size, te = ts+dur). The raw scan builds it as a typed
 // derived column (AGG_DERIVED_PREFIX / derived_agg_column) rather than reading
 // a stored field. A path-decoded record has no derived fields.
-bool is_derived_field(const dstd::String& f, bool by_path) {
+bool is_derived_field(dstd::StringView f, bool by_path) {
     return !by_path && (f == "size" || f == "te");
 }
 
 // The frame column name a value/by field's group agg reads: a derived field
 // (size/te) keeps its own name (build_row_frame emits it under that name from
 // the derived token), any other field maps through value_col_name.
-dstd::String value_col(const dstd::String& field, bool by_path) {
-    return is_derived_field(field, by_path) ? field
+dstd::String value_col(dstd::StringView field, bool by_path) {
+    return is_derived_field(field, by_path) ? dstd::String(field)
                                             : value_col_name(field, by_path);
 }
 
 // The raw-scan select token that produces a value/by field's column: a derived
 // field routes through AGG_DERIVED_PREFIX (a typed derived column), any other
 // field is selected by its own name. Empty field stays empty.
-dstd::String value_select_token(const dstd::String& field, bool by_path) {
+dstd::String value_select_token(dstd::StringView field, bool by_path) {
     if (field.empty()) return dstd::String();
-    return is_derived_field(field, by_path)
-               ? dstd::String(AGG_DERIVED_PREFIX) + field
-               : field;
+    if (!is_derived_field(field, by_path)) return dstd::String(field);
+    dstd::String token(AGG_DERIVED_PREFIX);
+    token.append(field);
+    return token;
 }
 
 bool has_occupancy(const ViewPlan& plan) {
@@ -112,7 +113,7 @@ bool clips_occupancy(const ViewPlan& plan) {
 
 // ts/dur/te accumulate in the unrounded time_scale domain (agg_fold.h's
 // field_scaled); a value agg over one needs the engine-side rescale path.
-bool is_scaled_field(const dstd::String& f) {
+bool is_scaled_field(dstd::StringView f) {
     return f == "ts" || f == "dur" || f == "te";
 }
 
@@ -417,7 +418,7 @@ dstd::Vector<dataframe::AggDynSpec> build_dyn_specs(const ViewPlan& plan) {
 // the AggState's dyn side-table reductions.
 dstd::Result<dataframe::DataFrame> finalize_engine_frame(
     dataframe::DataFrame r, const ViewPlan& plan,
-    const dstd::Vector<dataframe::AggDynSpec>& dyn_specs) {
+    dstd::Span<const dataframe::AggDynSpec> dyn_specs) {
     const std::size_t ng = plan.group_by.size();
     const std::size_t off = plan.time_bucket_us > 0 ? 1 : 0;
     dstd::Vector<dstd::String> key_names(ng);
@@ -634,20 +635,20 @@ dstd::Result<AggInputSpec> make_agg_input_spec(const ViewPlan& plan) {
     // occupancy reads the clipped interval, every other aggregate only the
     // events that start in the window.
     const auto win = occupancy_window(plan);
-    auto masked = [&](const dstd::String& tok) {
+    auto masked = [&](dstd::StringView tok) -> dstd::String {
         return win && !tok.empty() ? window_token(win->first, win->second, tok)
-                                   : tok;
+                                   : dstd::String(tok);
     };
     // Path-decoded records carry their bound time and duration on the event,
     // not as "ts"/"dur" fields; an unbounded clip reads them unchanged.
     const bool role_time =
         by_path && !plan_record_schema(plan).roles.time.empty();
-    const auto clip_or = [&](const char* part) -> dstd::String {
+    const auto clip_or = [&](dstd::StringView part) -> dstd::String {
         if (win) return clip_token(win->first, win->second, part);
         if (role_time)
             return clip_token(0, std::numeric_limits<std::uint64_t>::max(),
                               part);
-        return part;
+        return dstd::String(part);
     };
     const dstd::String clip_ts = clip_or("ts");
     const dstd::String clip_dur = clip_or("dur");
@@ -672,12 +673,12 @@ dstd::Result<AggInputSpec> make_agg_input_spec(const ViewPlan& plan) {
         });
     const bool needs_value_scale =
         plan.time_scale != 1.0 && (has_bucket || has_scaled_value_agg);
-    auto scaled_name = [&](const dstd::String& f) -> dstd::String {
-        if (!needs_value_scale) return f;
-        if (f == "ts") return SCALED_TS_COL;
-        if (f == "dur") return SCALED_DUR_COL;
-        if (f == "te") return SCALED_TE_COL;
-        return f;
+    auto scaled_name = [&](dstd::StringView f) -> dstd::String {
+        if (!needs_value_scale) return dstd::String(f);
+        if (f == "ts") return dstd::String(SCALED_TS_COL);
+        if (f == "dur") return dstd::String(SCALED_DUR_COL);
+        if (f == "te") return dstd::String(SCALED_TE_COL);
+        return dstd::String(f);
     };
 
     // Auto-discovered numeric args stream as the AggState dyn side-table
@@ -696,7 +697,7 @@ dstd::Result<AggInputSpec> make_agg_input_spec(const ViewPlan& plan) {
         g.out = agg_col_name(AggSpec(AggOp::Count));
         spec.gaggs.push_back(std::move(g));
     } else {
-        auto computed_name = [&](const dstd::String& f) {
+        auto computed_name = [&](dstd::StringView f) {
             return !f.empty() &&
                    std::any_of(
                        plan.computed.begin(), plan.computed.end(),
@@ -721,7 +722,7 @@ dstd::Result<AggInputSpec> make_agg_input_spec(const ViewPlan& plan) {
                         g.op = dataframe::Agg::CountValid;
                         g.column = window_token(win->first, win->second, "");
                     }
-                    auto mask_col = [&](const dstd::String& field,
+                    auto mask_col = [&](dstd::StringView field,
                                         dstd::String& col) {
                         if (field.empty() ||
                             (needs_value_scale && is_scaled_field(field)))
@@ -750,18 +751,18 @@ dstd::Result<AggInputSpec> make_agg_input_spec(const ViewPlan& plan) {
     // cannot misalign. A group key selects the field it folds on (a hash for a
     // resolved-name key), not the resolved output column. A computed column is
     // not an event field: its inputs are selected instead.
-    auto is_computed = [&](const dstd::String& f) {
+    auto is_computed = [&](dstd::StringView f) {
         return std::any_of(
             plan.computed.begin(), plan.computed.end(),
             [&](const ComputedColumn& c) { return c.name == f; });
     };
-    auto add_select = [&](const dstd::String& f) {
+    auto add_select = [&](dstd::StringView f) {
         if (f.empty()) return;
         if (std::find(spec.select.begin(), spec.select.end(), f) ==
             spec.select.end())
-            spec.select.push_back(f);
+            spec.select.emplace_back(f);
     };
-    auto add_field = [&](const dstd::String& f) {
+    auto add_field = [&](dstd::StringView f) {
         if (!is_computed(f)) add_select(f);
     };
     for (const dstd::String& f : key_fields) add_field(f);
@@ -790,13 +791,13 @@ dstd::Result<AggInputSpec> make_agg_input_spec(const ViewPlan& plan) {
         dstd::Vector<std::int32_t> at;
         at.reserve(c.inputs.size());
         for (const dstd::String& in : c.inputs) {
-            const dstd::String tok = mask ? masked(in) : in;
+            const dstd::String tok = mask ? masked(in) : dstd::String(in);
             add_select(tok);
             at.push_back(static_cast<std::int32_t>(
                 std::find(spec.select.begin(), spec.select.end(), tok) -
                 spec.select.begin()));
         }
-        spec.computed.push_back({mask ? masked(c.name) : c.name,
+        spec.computed.push_back({mask ? masked(c.name) : dstd::String(c.name),
                                  dataframe::expr_remap_cols(c.expr, at)});
     };
     for (const ComputedColumn& c : plan.computed) {
@@ -861,7 +862,7 @@ dstd::Result<AggInputSpec> make_agg_input_spec(const ViewPlan& plan) {
             need_dur = need_dur || s.field == "dur" || s.by == "dur";
             need_te = need_te || s.field == "te" || s.by == "te";
         }
-        auto in_select = [&](const dstd::String& tok) {
+        auto in_select = [&](dstd::StringView tok) {
             return std::find(spec.select.begin(), spec.select.end(), tok) !=
                    spec.select.end();
         };
@@ -896,7 +897,7 @@ static double cell_as_double(const dataframe::Series& c, std::int64_t r) {
 
 static void append_transform_columns(
     dataframe::DataFrame& frame,
-    const dstd::Vector<AggInputSpec::Transform>& transforms,
+    dstd::Span<const AggInputSpec::Transform> transforms,
     const dftracer::utils::trace::index::plan::GroupResolver* resolver) {
     const std::int64_t n = frame.num_rows();
     for (const AggInputSpec::Transform& t : transforms) {
@@ -1021,7 +1022,7 @@ class TransformSource final : public dataframe::Source {
 }  // namespace
 
 dstd::Result<dataframe::DataFrame> build_agg_input_frame(
-    const dstd::Vector<FoldEvent>& events,
+    dstd::Span<const FoldEvent> events,
     const dftracer::utils::dstd::StringIntern& intern, const AggInputSpec& spec,
     const dftracer::utils::trace::index::plan::GroupResolver* resolver) {
     dataframe::DataFrame f =
@@ -1058,8 +1059,7 @@ dstd::Result<dataframe::DataFrame> build_agg_input_frame(
 
     // cat/bucket/scale sources are select tokens; map each to its built frame
     // column (te's derived token resolves to "te").
-    auto col_by_token =
-        [&](const dstd::String& tok) -> const dataframe::Series& {
+    auto col_by_token = [&](dstd::StringView tok) -> const dataframe::Series& {
         return f.columns[static_cast<std::size_t>(
             f.column_index(canonical_row_column_name(tok, spec.by_path)))];
     };
@@ -1103,7 +1103,7 @@ dstd::Result<dataframe::DataFrame> build_agg_input_frame(
         f.columns.push_back(dataframe::Series::flat_i64(b.data(), n));
     }
 
-    auto scale_into = [&](const dstd::String& src_tok, const char* out) {
+    auto scale_into = [&](dstd::StringView src_tok, dstd::StringView out) {
         if (src_tok.empty()) return;
         const dataframe::Series& c = col_by_token(src_tok);
         dstd::Vector<double> vals(static_cast<std::size_t>(n));
@@ -1180,7 +1180,7 @@ coro::CoroTask<dstd::Result<EnginePrep>> prepare_engine_group(
     // Hidden columns index their source by its select position: expr_col is
     // positional, and the select columns keep positions 0..N-1 in both the
     // streaming morsel and the re-lazied transform frame.
-    auto col_index = [&](const dstd::String& tok) {
+    auto col_index = [&](dstd::StringView tok) {
         const auto it = std::find(spec.select.begin(), spec.select.end(), tok);
         return static_cast<std::int32_t>(it - spec.select.begin());
     };
@@ -1207,12 +1207,13 @@ coro::CoroTask<dstd::Result<EnginePrep>> prepare_engine_group(
         lf = lf.with_column(BUCKET_KEY_COL, bucket);
     }
 
-    auto scale_col = [&](const dstd::String& src_name, const char* out) {
+    auto scale_col = [&](dstd::StringView src_name, dstd::StringView out) {
         if (src_name.empty()) return;
-        lf = lf.with_column(out, dataframe::expr_cast(
-                                     dataframe::TypeId::Float64,
-                                     dataframe::expr_col(col_index(src_name))) *
-                                     dataframe::expr_lit(spec.value_scale));
+        lf = lf.with_column(
+            dstd::String(out),
+            dataframe::expr_cast(dataframe::TypeId::Float64,
+                                 dataframe::expr_col(col_index(src_name))) *
+                dataframe::expr_lit(spec.value_scale));
     };
     scale_col(spec.scale_ts_src, SCALED_TS_COL);
     scale_col(spec.scale_dur_src, SCALED_DUR_COL);

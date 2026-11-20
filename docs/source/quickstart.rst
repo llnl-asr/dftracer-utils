@@ -41,7 +41,7 @@ when one exists.
    )
 
 See :doc:`api/trace_viewer` for the full builder, aggregation specs, and
-``collect_typed``; :doc:`api/duql` for the duql builder; and :doc:`guides/index`
+``collect_index_records``; :doc:`api/duql` for the duql builder; and :doc:`guides/index`
 for task-oriented recipes. The rest of this page covers ``Runtime``,
 ``Indexer``, and Dask.
 
@@ -53,7 +53,7 @@ Nothing scans until ``collect()``, which materializes the result as a native
 at the edge, on the ``DataFrame``, not the ``TraceViewer``). A query with no
 ``group_by``/``agg`` returns the matching events, one row each. To split them
 into the ``regular`` / ``counters`` / ``aggregated`` phase families use
-``collect_typed()``, and use ``stream()`` for out-of-core reads.
+``collect_index_records()``, and use ``stream()`` for out-of-core reads.
 
 .. code-block:: python
 
@@ -69,7 +69,7 @@ into the ``regular`` / ``counters`` / ``aggregated`` phase families use
    events = view.filter('cat == "POSIX"').collect()
 
    # The same events by phase family.
-   regular = view.filter('cat == "POSIX"').collect_typed()["regular"]
+   regular = view.filter('cat == "POSIX"').collect_index_records().regular
 
    # Stream DataFrame chunks instead of materializing.
    for chunk in view.filter('cat == "POSIX"').stream(batch_size=10000):
@@ -211,16 +211,16 @@ Create and use indexes for faster access:
 
    from dftracer.utils import Indexer
 
-   # Create an indexer over a directory of traces (or pass files=[...])
+   # Create an indexer over a directory of traces (or pass a file or a list)
    indexer = Indexer("/path/to/traces")
 
-   # Resolve what is already indexed vs. what needs work
-   status = indexer.resolve()
+   # See what is already indexed vs. what needs work (builds nothing)
+   status = indexer.status()
    print(f"Total files: {status.total_files}")
    print(f"Ready: {len(status.ready)}, Needs work: {len(status.needs_work)}")
 
-   # Build any missing tiers (resolve + build in one call)
-   status = indexer.ensure_indexed()
+   # Build what is missing or stale; a no-op when fresh
+   status = indexer.ensure()
 
    # Get a checkpoint indexer for a single file
    ci = indexer.get_checkpoint_indexer("/path/to/traces/trace.pfw.gz")
@@ -259,6 +259,11 @@ The full set is ``DFTUtilsError`` (base) plus ``DFTUtilsValueError``,
 ``DFTUtilsIndexerError``, ``DFTUtilsPipelineError``, and
 ``DFTUtilsAggregationError``. See :doc:`cpp_api/runtime` for the
 underlying C++ model.
+
+``DFTUtilsValueError`` also derives ``ValueError``, so ``except ValueError``
+catches it. ``DFTUtilsNotFoundError`` also derives ``KeyError`` (its ``str`` is
+the plain message), so an unknown column name on an eager or a lazy op is
+caught by either.
 
 Controlling Log Output
 ~~~~~~~~~~~~~~~~~~~~~~~~

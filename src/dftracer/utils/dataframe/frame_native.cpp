@@ -3,7 +3,9 @@
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstring>
 
@@ -41,6 +43,13 @@ dstd::Result<dstd::String> frame_to_native(const DataFrame& f) {
         auto put_one = spill::put_series(out, f.columns[c]);
         if (!put_one) return put_one.error();
     }
+    const dstd::Span<const dstd::SharedString> index = f.index_names();
+    if (index.empty()) return out;
+    put<std::uint32_t>(out, static_cast<std::uint32_t>(index.size()));
+    for (const dstd::SharedString& name : index) {
+        put<std::uint32_t>(out, static_cast<std::uint32_t>(name.size()));
+        out += dstd::StringView(name);
+    }
     return out;
 }
 
@@ -71,8 +80,22 @@ dstd::Optional<DataFrame> frame_from_native(dstd::StringView bytes) noexcept {
         f.columns.push_back(std::move(*column));
         if (f.columns.back().length() != rows) return dstd::nullopt;
     }
+    if (p == end) return f;
+    std::uint32_t index_count = 0;
+    if (!take(p, end, index_count) || index_count == 0) return dstd::nullopt;
+    dstd::Vector<dstd::StringView> index;
+    for (std::uint32_t i = 0; i < index_count; ++i) {
+        std::uint32_t name_bytes = 0;
+        if (!take(p, end, name_bytes) ||
+            static_cast<std::size_t>(end - p) < name_bytes)
+            return dstd::nullopt;
+        index.emplace_back(reinterpret_cast<const char*>(p), name_bytes);
+        p += name_bytes;
+    }
     if (p != end) return dstd::nullopt;
-    return f;
+    auto indexed = f.with_index(index);
+    if (!indexed) return dstd::nullopt;
+    return dstd::Optional<DataFrame>(std::move(*indexed));
 }
 
 }  // namespace dftracer::utils::dataframe

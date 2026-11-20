@@ -177,7 +177,7 @@ void stop_or_resume(Executor* executor, ParkNode*& park,
     post_resumption(executor, handle);
 }
 
-void cancelled_unstoppable(const char* what) noexcept {
+void cancelled_unstoppable(dstd::StringView what) noexcept {
     dstd::fatal("coro: a cancel reached a wait that cannot stop", what);
 }
 

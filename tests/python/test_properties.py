@@ -88,7 +88,7 @@ _VIEW_OPS = [
     ("dftu.series.diff", ()),
     ("dftu.series.rank", (0, 0)),
     ("dftu.series.ffill", ()),
-    ("dftu.series.sort", (0,)),
+    ("dftu.series.sort", (0, 1)),
     ("dftu.series.rolling", (3, 1)),
     ("dftu.series.rolling_std", (3,)),
     ("dftu.series.ewm_mean", (0.3,)),
@@ -109,8 +109,8 @@ def test_view_equals_flat_twin(values, mask):
     nested = view.filter(Series(pa.array([True] * len(view), pa.bool_())))
     for op, args in _VIEW_OPS:
         for candidate in (view, nested):
-            got = Series(_ext.op_run(op, candidate._native, *args)).to_list()
-            want = Series(_ext.op_run(op, twin._native, *args)).to_list()
+            got = _ext.op_run(op, candidate, *args).to_list()
+            want = _ext.op_run(op, twin, *args).to_list()
             assert _same(got, want), (op, got, want)
 
 
@@ -145,7 +145,7 @@ def test_arithmetic_and_scans_match_pandas(a, b):
     assert _same(s.expanding().mean().to_list(), ps.expanding().mean().tolist())
     assert _same(s.ewm(alpha=0.4).mean().to_list(), ps.ewm(alpha=0.4).mean().tolist(), rel=1e-6)
     assert _same(s.rank().to_list(), ps.rank().tolist())
-    assert _same(s.sort().to_list(), ps.sort_values().tolist())
+    assert _same(s.sort(nulls_last=True).to_list(), ps.sort_values().tolist())
     present = [v for v in a if v is not None]
     if present:
         assert math.isclose(s.sum(), sum(present), rel_tol=1e-9, abs_tol=1e-6)

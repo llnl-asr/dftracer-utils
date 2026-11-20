@@ -19,8 +19,11 @@
 #include <duql/eval_json.h>
 #include <memory/fresh_process.h>
 #include <simdjson.h>
+#include <span_list.h>
 #include <task_result.h>
 
+#include <initializer_list>
+#include <limits>
 #include <memory>
 
 using namespace dftracer::utils;
@@ -50,18 +53,44 @@ dstd::Vector<const TLookup*> lookups(const Pipeline& p) {
     return out;
 }
 
-// `text`'s scan filter with every lookup bound to runs().
-Query bound(const dstd::String& text) {
+// The runs table with a float key: NaN, -0.0 and 1.5 under three tags.
+dstd::SharedPtr<const dataframe::DataFrame> float_runs() {
+    auto f = dstd::make_shared<dataframe::DataFrame>();
+    const double ids[] = {std::numeric_limits<double>::quiet_NaN(), -0.0, 1.5};
+    f->names = dstd::make_shared_strings({"run", "app"});
+    f->columns.push_back(dataframe::Series::flat_f64(ids, 3));
+    f->columns.push_back(dataframe::Series::strings(
+        dstd::Vector<dstd::String>{"nan", "zero", "frac"}));
+    return f;
+}
+
+// A one-column table {run} of the floats `ids`, the shape an `in` sub-query
+// gives.
+dstd::SharedPtr<const dataframe::DataFrame> float_ids(
+    std::initializer_list<double> ids) {
+    auto f = dstd::make_shared<dataframe::DataFrame>();
+    const dstd::Vector<double> v(ids);
+    f->names = dstd::make_shared_strings({"run"});
+    f->columns.push_back(dataframe::Series::flat_f64(
+        v.data(), static_cast<std::int64_t>(v.size())));
+    return f;
+}
+
+// `text`'s scan filter with every lookup bound to `table`.
+Query bound(dstd::StringView text,
+            const dstd::SharedPtr<const dataframe::DataFrame>& table) {
     auto p = compile_program(text, {}, nullptr);
     REQUIRE_MESSAGE(p.has_value(), (p ? dstd::String() : p.error().format()));
     REQUIRE(p->main.filter);
     for (const TLookup* l : lookups(p->main))
         l->slot->table = dftu_utils_test::ok(
-            dftracer::utils::dataframe::query::make_lookup_table(*l, runs()));
+            dftracer::utils::dataframe::query::make_lookup_table(*l, table));
     return duql::detail::QueryAccess::from_node(clone(*p->main.filter));
 }
 
-bool on_json(const Query& q, const dstd::String& json) {
+Query bound(dstd::StringView text) { return bound(text, runs()); }
+
+bool on_json(const Query& q, dstd::StringView json) {
     simdjson::dom::parser parser;
     simdjson::dom::element doc;
     REQUIRE(parser.parse(json.data(), json.size()).get(doc) ==
@@ -92,6 +121,81 @@ TEST_CASE("lookups evaluate on JSON and flattened records") {
     const Query same =
         bound(dstd::fmt<"{}where (run -> runs.app) ?? \"x\" == \"amg\"">(lets));
     CHECK(on_json(same, R"({"run":2})"));
+}
+
+TEST_CASE("a lookup keys floats as a group does: one NaN, -0.0 is 0.0") {
+    const dstd::String lets = "let runs = where run == run; ";
+    const Query by_tag = bound(
+        dstd::fmt<"{}where run -> runs.app == \"nan\"">(lets), float_runs());
+    const Query zero = bound(
+        dstd::fmt<"{}where run -> runs.app == \"zero\"">(lets), float_runs());
+    const auto on_double = [](const Query& q, double v) {
+        ValueMap m;
+        m["run"] = Cell{v};
+        return q.evaluate(m);
+    };
+    CHECK(on_double(by_tag, std::numeric_limits<double>::quiet_NaN()));
+    CHECK(on_double(by_tag, -std::numeric_limits<double>::quiet_NaN()));
+    CHECK(on_double(by_tag, std::numeric_limits<double>::signaling_NaN()));
+    CHECK_FALSE(on_double(by_tag, 1.5));
+    CHECK(on_double(zero, 0.0));
+    CHECK(on_double(zero, -0.0));
+    CHECK_FALSE(on_double(zero, std::numeric_limits<double>::quiet_NaN()));
+}
+
+TEST_CASE("a semi-join keys a NaN subject as a group does") {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const dstd::String lets = "let runs = where run == run; ";
+    const auto on_double = [](const Query& q, double v) {
+        ValueMap m;
+        m["run"] = Cell{v};
+        m["name"] = Cell{dstd::String("a")};
+        return q.evaluate(m);
+    };
+    const Query in =
+        bound(dstd::fmt<"{}where name == \"a\" and run in (from runs | select "
+                        "run)">(lets),
+              float_ids({nan, -0.0, 1.5}));
+    CHECK(on_double(in, nan));
+    CHECK(on_double(in, -nan));
+    CHECK(on_double(in, -0.0));
+    CHECK_FALSE(on_double(in, 2.5));
+
+    const Query without_nan =
+        bound(dstd::fmt<"{}where name == \"a\" and run in (from runs | select "
+                        "run)">(lets),
+              float_ids({1.5}));
+    CHECK_FALSE(on_double(without_nan, nan));
+}
+
+TEST_CASE(
+    "a range semi-join keys a NaN subject, and a NaN bound matches no row") {
+    auto side = dstd::make_shared<dataframe::DataFrame>();
+    const double run[] = {std::numeric_limits<double>::quiet_NaN(), 1.5};
+    const std::int64_t ts[] = {10, 20};
+    side->names = dstd::make_shared_strings({"run", "__correlated_range"});
+    side->columns.push_back(dataframe::Series::flat_f64(run, 2));
+    side->columns.push_back(dataframe::Series::flat_i64(ts, 2));
+    const Query in =
+        bound("where run in (from data | where ts < ^.ts | select run)", side);
+    const Query not_in = bound(
+        "where run not in (from data | where ts < ^.ts | select run)", side);
+    const auto row = [](const Query& q, double run_value, double ts_value) {
+        ValueMap m;
+        m["run"] = Cell{run_value};
+        m["ts"] = Cell{ts_value};
+        return q.evaluate(m);
+    };
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    CHECK(row(in, nan, 15));
+    CHECK_FALSE(row(not_in, nan, 15));
+    CHECK_FALSE(row(in, 1.5, 15));
+    CHECK(row(not_in, 1.5, 15));
+    CHECK_FALSE(row(in, nan, 5));
+    CHECK(row(not_in, nan, 5));
+    CHECK(row(in, 1.5, 25));
+    CHECK_FALSE(row(in, nan, nan));
+    CHECK(row(not_in, nan, nan));
 }
 
 TEST_CASE("an arrow's conflicting values fail in a value position") {
@@ -202,7 +306,7 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     side->columns.push_back(dataframe::Series::flat_i64(pid, 6));
     side->columns.push_back(dataframe::Series::flat_i64(ts, 6, ts_valid));
 
-    auto lookup_of = [&](const dstd::String& text) {
+    auto lookup_of = [&](dstd::StringView text) {
         auto p = compile_program(text, {}, nullptr);
         REQUIRE_MESSAGE(p.has_value(),
                         (p ? dstd::String() : p.error().format()));
@@ -232,6 +336,13 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     CHECK_FALSE(on_json(q, R"({"pid":2,"ts":10,"dur":7})"));
     CHECK(on_json(q, R"({"pid":2,"ts":16,"dur":7})"));
 
+    // A NaN bound is not a range value: no row lies below it.
+    ValueMap nan_bound;
+    nan_bound["pid"] = Cell{std::int64_t{1}};
+    nan_bound["ts"] = Cell{std::numeric_limits<double>::quiet_NaN()};
+    nan_bound["dur"] = Cell{std::int64_t{9}};
+    CHECK_FALSE(q.evaluate(nan_bound));
+
     const std::int64_t opid[] = {1, 1, 1, 2, 3, 1};
     const std::int64_t lo[] = {10, 11, 0, 0, 0, 0};
     const std::int64_t hi[] = {20, 30, 5, 100, 100, 100};
@@ -240,7 +351,7 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     const dataframe::Series a = dataframe::Series::flat_i64(lo, 6);
     const dataframe::Series b = dataframe::Series::flat_i64(hi, 6, hi_valid);
     const dstd::Vector<const dataframe::Series*> keys = {&k, &a, &b};
-    auto band = [&](const dstd::String& agg) {
+    auto band = [&](dstd::StringView agg) {
         const auto [bp, bl] = lookup_of(
             dstd::fmt<"derive v = (from data | where pid == ^.pid and ts "
                       "between ^.lo and ^.hi | agg { v = {} })">(agg));
@@ -275,13 +386,20 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
     const dataframe::Series k2 = dataframe::Series::flat_i64(opid, 2);
     const dataframe::Series a2 = dataframe::Series::flat_i64(one_lo, 2);
     const dataframe::Series b2 = dataframe::Series::flat_i64(one_hi, 1);
-    CHECK(ints(dftu_utils_test::ok(
-              dftracer::utils::dataframe::query::lookup_column(
-                  *sl, {&k2, &a2, &b2}, 1))) == V{"5"});
+    CHECK(
+        ints(dftu_utils_test::ok(
+            dftracer::utils::dataframe::query::lookup_column(
+                *sl,
+                dftu_utils_test::span_of<
+                    const dftracer::utils::dataframe::Series*>({&k2, &a2, &b2}),
+                1))) == V{"5"});
     const dataframe::Series b3 = dataframe::Series::flat_i64(one_hi + 1, 1);
     const dataframe::Series a3 = dataframe::Series::flat_i64(one_lo + 1, 1);
     const auto conflict = dftracer::utils::dataframe::query::lookup_column(
-        *sl, {&k2, &a3, &b3}, 1);
+        *sl,
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&k2, &a3, &b3}),
+        1);
     REQUIRE(!conflict.has_value());
     const dstd::String error(conflict.error().message());
     CHECK(error.find("rows in the range") != dstd::String::npos);

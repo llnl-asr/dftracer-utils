@@ -6,6 +6,7 @@
 #include <dftracer/utils/comm/backend/bulk.h>
 #include <dftracer/utils/comm/backend/collectives.h>
 #include <dftracer/utils/comm/backend/messaging.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
@@ -65,8 +66,8 @@ BackendKind resolve_kind(BackendKind kind);
 /// path variable is the only one searched when it is set; otherwise the
 /// directory of comm itself comes first and the loader path second. A failure
 /// names every path tried with its loader error. @p symbol is the entry symbol.
-dstd::Result<Providers> load_backend(const StartOptions& options,
-                                     const char* symbol = MPI_ENTRY_SYMBOL);
+dstd::Result<Providers> load_backend(
+    const StartOptions& options, dstd::CStringView symbol = MPI_ENTRY_SYMBOL);
 
 }  // namespace backend
 

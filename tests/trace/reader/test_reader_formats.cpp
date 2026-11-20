@@ -282,7 +282,7 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat) {
     REQUIRE(indexer != nullptr);
     dftu_utils_test::build_indexer(*indexer);
 
-    uint64_t total_lines = indexer->line_count();
+    std::uint64_t total_lines = indexer->line_count();
     CHECK(total_lines > 0);
 
     auto reader = dftu_utils_test::ok(ReaderFactory::create(indexer));

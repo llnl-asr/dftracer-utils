@@ -13,13 +13,10 @@ namespace dftracer::utils::trace::index::build {
 /// the build already cleared the aggregation tier once and still failed.
 /// Nothing is deleted here; the caller may still use the directory.
 inline dstd::String corrupt_index_message(const dstd::Set<dstd::String>& roots,
-                                          const dstd::String& cause,
+                                          dstd::StringView cause,
                                           bool tier_cleared) {
     dstd::String dirs;
-    for (const auto& root : roots) {
-        if (!dirs.empty()) dirs += ", ";
-        dirs += root;
-    }
+    dstd::fmt_append_join<", ">(dirs, roots);
     return dstd::fmt<
         "the index at {} is corrupt{} ({}); delete that directory and build "
         "the index again">(

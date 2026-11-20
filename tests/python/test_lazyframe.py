@@ -12,10 +12,16 @@ import pytest
 
 pa = pytest.importorskip("pyarrow")
 
-from dftracer.utils import DataFrame, LazyFrame, col, lazy  # noqa: E402
+from dftracer.utils import (  # noqa: E402
+    DataFrame,
+    DFTUtilsNotFoundError,
+    LazyFrame,
+    col,
+    lazy,
+)
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
 
-_HAS_ARROW = hasattr(_ext, "_LazyFrame")
+_HAS_ARROW = hasattr(_ext, "LazyFrame")
 pytestmark = pytest.mark.skipif(not _HAS_ARROW, reason="extension built without Arrow support")
 
 
@@ -101,7 +107,8 @@ def test_memory_budget_is_chainable():
 def test_take_filter_mask_reverse_sort_by_multi_match_eager():
     df = _df({"a": [3, 1, 2, 1], "b": [10, 20, 30, 40]})
 
-    assert _dict(df.lazy().take([3, 0, 0]).collect()) == _dict(df.take([3, 0, 0]))
+    assert _dict(df.lazy().take([3, 0, 0]).collect()) == _dict(df.gather([3, 0, 0]))
+    assert df.take([3, 0, 0]).index.to_list() == [3, 0, 0]
     assert _dict(df.lazy().take([3, 0, 0]).collect()) == {"a": [1, 3, 3], "b": [40, 10, 10]}
 
     mask = df["a"] > 1
@@ -151,8 +158,8 @@ def test_select_named_expr_with_columns_and_nulls_first_sort():
     with pytest.raises(TypeError, match="alias"):
         df.lazy().select(col("v") * 2)
 
-    assert _dict(df.lazy().sort("k").collect())["k"] == [1, 2, 3, None]
-    assert _dict(df.lazy().sort("k", nulls_last=False).collect())["k"] == [None, 1, 2, 3]
+    assert _dict(df.lazy().sort("k").collect())["k"] == [None, 1, 2, 3]
+    assert _dict(df.lazy().sort("k", nulls_last=True).collect())["k"] == [1, 2, 3, None]
     assert _dict(df.lazy().sort("k", descending=True, nulls_last=False).collect())["k"] == [
         None,
         3,
@@ -193,7 +200,7 @@ def test_head_by_keeps_first_n_rows_per_key_in_input_order():
     assert _dict(df.lazy().head_by("k", 2).collect())["v"] == [0, 1, 2, 3, 5, 6, 7]
     assert _dict(df.lazy().head_by(["k", "j"], 1).collect())["v"] == [0, 1, 2, 3, 5, 7]
     assert _dict(df.lazy().head_by("k", 0).collect()).get("v", []) == []
-    with pytest.raises(ValueError, match="no column named nope"):
+    with pytest.raises(DFTUtilsNotFoundError, match="no column named nope"):
         df.lazy().head_by("nope", 1)
 
     big = _df({"k": [i % 7 for i in range(20000)], "v": list(range(20000))})
@@ -201,5 +208,5 @@ def test_head_by_keeps_first_n_rows_per_key_in_input_order():
     assert want["v"] == list(range(21))
     for threads in (1, 2, 8):
         with Runtime(threads=threads) as rt:
-            lf = LazyFrame(big.lazy()._native, rt)
+            lf = LazyFrame(big.lazy(), rt)
             assert _dict(lf.head_by("k", 3).collect(1000)) == want

@@ -270,9 +270,9 @@ struct PersonCodec {
         return person;
     }
 
-    static dstd::Unexpected<dstd::Error> bad(const char* why) {
+    static dstd::Unexpected<dstd::Error> bad(dstd::StringView why) {
         return dstd::Unexpected(dstd::Error::from_format<"bad person: {}">(
-            dstd::Condition::InvalidArgument, dstd::StringView(why)));
+            dstd::Condition::InvalidArgument, why));
     }
 };
 
@@ -1610,7 +1610,7 @@ TEST_SUITE("CommCollectivesMore") {
     }
 
     TEST_CASE("a provider gives each member only the pieces addressed to it") {
-        auto pack = [](const dstd::Vector<std::string>& pieces) {
+        auto pack = [](dstd::Span<const std::string> pieces) {
             auto block = std::make_shared<dstd::Vector<std::byte>>();
             for (const std::string& piece : pieces) {
                 const std::uint64_t size = piece.size();

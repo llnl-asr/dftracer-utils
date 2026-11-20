@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -38,7 +39,7 @@ namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
     static void reopen_read_only(DataFileWriter& writer,
-                                 const dstd::String& path) {
+                                 dstd::StringView path) {
         auto file = dstd::File::open(dstd::PathView(path), {});
         if (file) writer.fd_ = std::move(*file);
     }
@@ -81,7 +82,7 @@ constexpr bool SANITIZED = false;
 constexpr bool SANITIZED = false;
 #endif
 
-dstd::ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(dstd::StringView bytes) {
     return {bytes.data(), bytes.size()};
 }
 
@@ -103,20 +104,20 @@ std::int64_t read_i64(dstd::ByteView bytes) {
         dstd::read_u64_le(reinterpret_cast<const std::uint8_t*>(bytes.data())));
 }
 
-memory::PoolHandle child_pool(const dstd::String& name, std::size_t limit) {
+memory::PoolHandle child_pool(dstd::StringView name, std::size_t limit) {
     return memory::detail::current_pool().child(name, memory::PoolKind::Scratch,
                                                 memory::Limits{limit});
 }
 
 /// `head` padded with 'x' to exactly `length` bytes, so every value of a raw
 /// batch makes its segment the size the quotas are counted in.
-dstd::String padded(const dstd::String& head, std::size_t length) {
-    dstd::String out = head;
+dstd::String padded(dstd::StringView head, std::size_t length) {
+    dstd::String out(head);
     out.resize(length, 'x');
     return out;
 }
 
-NamespaceSpec put_spec(const dstd::String& name, std::uint32_t version = 0) {
+NamespaceSpec put_spec(dstd::StringView name, std::uint32_t version = 0) {
     NamespaceSpec spec;
     spec.name = dstd::String(name);
     spec.format_version = version;
@@ -124,7 +125,7 @@ NamespaceSpec put_spec(const dstd::String& name, std::uint32_t version = 0) {
     return spec;
 }
 
-NamespaceSpec fold_spec(const dstd::String& name, FoldKind kind) {
+NamespaceSpec fold_spec(dstd::StringView name, FoldKind kind) {
     NamespaceSpec spec;
     spec.name = dstd::String(name);
     spec.format_version = 0;
@@ -132,7 +133,7 @@ NamespaceSpec fold_spec(const dstd::String& name, FoldKind kind) {
     return spec;
 }
 
-ScopeKey file_scope(const dstd::String& path) {
+ScopeKey file_scope(dstd::StringView path) {
     return ScopeKey::file(dstd::String(path));
 }
 
@@ -231,7 +232,7 @@ dstd::String raw_key(int thread, int round, std::size_t k) {
     return dstd::fmt<"t{}-b{}-k{}">(thread, round, k);
 }
 
-dstd::String raw_value(const dstd::String& tag, int thread, int round,
+dstd::String raw_value(dstd::StringView tag, int thread, int round,
                        std::size_t k) {
     return dstd::fmt<"{}-{}-{}-{}">(tag, thread, round, k);
 }
@@ -263,7 +264,7 @@ dstd::Vector<Row> collect(store::engine::ScanCursor& cursor) {
 using RowsByScope =
     dstd::Map<dstd::Pair<dstd::String, dstd::String>, dstd::String>;
 
-RowsByScope index_rows(const dstd::Vector<Row>& rows) {
+RowsByScope index_rows(dstd::Span<const Row> rows) {
     RowsByScope out;
     for (const Row& row : rows) out[{row.scope, row.key}] = row.value;
     return out;
@@ -275,7 +276,7 @@ struct CopyRow {
     std::uint64_t generation = 0;
 };
 
-dstd::Vector<CopyRow> read_copies(const dstd::String& path) {
+dstd::Vector<CopyRow> read_copies(dstd::StringView path) {
     auto reader = engine::DataFileReader::open(dstd::String(path));
     REQUIRE(reader.has_value());
     dstd::Map<std::uint32_t, dstd::String> scope_paths;
@@ -291,8 +292,8 @@ dstd::Vector<CopyRow> read_copies(const dstd::String& path) {
     return out;
 }
 
-std::uint32_t copy_id_of(const dstd::Vector<CopyRow>& copies,
-                         const dstd::String& scope) {
+std::uint32_t copy_id_of(dstd::Span<const CopyRow> copies,
+                         dstd::StringView scope) {
     for (const CopyRow& copy : copies) {
         if (copy.scope == scope) return copy.id;
     }
@@ -516,7 +517,7 @@ TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
     // open with room for the small third batch.
     constexpr std::size_t BUSY_KEYS = 6;
     constexpr std::size_t BUSY_VALUE_BYTES = 8000;
-    const auto one = [&](const ScopeKey& scope, const dstd::String& tag) {
+    const auto one = [&](const ScopeKey& scope, dstd::StringView tag) {
         return raw_batch(
             *writer, space, scope, BUSY_KEYS, BUSY_VALUE_BYTES,
             [&tag](std::size_t k) { return dstd::fmt<"{}-k{}">(tag, k); },
@@ -835,7 +836,7 @@ TEST_CASE("back pressure: a latched extent error ends space() and commit") {
     const engine::NamespaceId space = *created;
     const ScopeKey scope = file_scope(scope_path(0));
 
-    const auto one = [&](const dstd::String& tag) {
+    const auto one = [&](dstd::StringView tag) {
         return raw_batch(
             *writer, space, scope, RAW_KEYS, RAW_VALUE_BYTES,
             [&tag](std::size_t k) { return dstd::fmt<"{}-k{}">(tag, k); },

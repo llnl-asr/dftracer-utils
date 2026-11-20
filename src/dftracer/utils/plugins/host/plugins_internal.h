@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/c_api.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -29,9 +30,14 @@ namespace detail {
 /// plugin wants every event, or a query failed to parse. Identical strings are
 /// deduplicated so the union never repeats a term.
 dstd::Optional<duql::Query> plugin_union_prune_query(
-    const dstd::Vector<const char*>& plan_queries);
+    dstd::Span<const char* const> plan_queries);
 
 }  // namespace detail
+
+/// Promotes the library that holds the dataframe C ABI to the global symbol
+/// scope, once. A library built against the ABI and opened with RTLD_LOCAL
+/// (a plugin, a jit udf or op) then resolves its dftu_* symbols on Linux.
+void expose_dataframe_abi();
 
 /// Test seam: build a set from already-built plugins, skipping dlopen and the
 /// ABI gate. The caller keeps ownership of each struct (no destroy, no dlclose

@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: MIT
-"""Human-readable byte/duration parsing (dftracer.utils._units)."""
+"""Human-readable byte/duration parsing (dftracer.utils.enums)."""
 
 import pytest
 
-from dftracer.utils._units import (
+from dftracer.utils.enums import (
+    _parse_bytes,
+    _parse_duration_seconds,
     coerce_bytes,
     coerce_duration,
-    parse_bytes,
-    parse_duration_seconds,
 )
 
 
@@ -30,12 +30,12 @@ from dftracer.utils._units import (
     ],
 )
 def test_parse_bytes(text, expected):
-    assert parse_bytes(text) == expected
+    assert _parse_bytes(text) == expected
 
 
 @pytest.mark.parametrize("text", ["", "abc", "12xb", "5zz", "-4KB"])
 def test_parse_bytes_invalid(text):
-    assert parse_bytes(text) is None
+    assert _parse_bytes(text) is None
 
 
 @pytest.mark.parametrize(
@@ -53,12 +53,12 @@ def test_parse_bytes_invalid(text):
     ],
 )
 def test_parse_duration_seconds(text, expected):
-    assert parse_duration_seconds(text) == pytest.approx(expected)
+    assert _parse_duration_seconds(text) == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("text", ["", "abc", "10q", "-5s"])
 def test_parse_duration_invalid(text):
-    assert parse_duration_seconds(text) is None
+    assert _parse_duration_seconds(text) is None
 
 
 def test_coerce_bytes_number_and_string():

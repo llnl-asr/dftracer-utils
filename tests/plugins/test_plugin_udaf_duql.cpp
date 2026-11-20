@@ -8,8 +8,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/udaf_registry.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -38,7 +40,7 @@ namespace {
 constexpr int KEYS = 4;
 
 dstd::String event(int i) {
-    return R"({"ph":"X","name":"op)" + dstd::to_string(i % KEYS) +
+    return R"({"ph":1,"name":"op)" + dstd::to_string(i % KEYS) +
            R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" +
            dstd::to_string(1000 + 100 * i) + R"(,"dur":)" +
            dstd::to_string(10 + i) + R"(,"args":{}})";
@@ -79,7 +81,7 @@ dstd::Result<dataframe::DataFrame> collect(const View& v) {
 }
 
 dstd::Vector<dstd::String> cells(const dataframe::DataFrame& f,
-                                 dstd::StringView name) {
+                                 dstd::CStringView name) {
     std::size_t c = 0;
     while (c < f.names.size() && f.names[c] != name) ++c;
     REQUIRE(c < f.names.size());
@@ -107,13 +109,13 @@ dstd::Vector<dstd::String> cells(const dataframe::DataFrame& f,
     return out;
 }
 
-dstd::String joined(const dstd::Vector<dstd::String>& list) {
+dstd::String joined(dstd::Span<const dstd::String> list) {
     dstd::String out;
     for (const auto& s : list) out += s + " ";
     return out;
 }
 
-dataframe::DataFrame run(const View& v, const dstd::String& query) {
+dataframe::DataFrame run(const View& v, dstd::StringView query) {
     const View q = v.duql(query);
     auto got = collect(q);
     INFO(query);
@@ -124,7 +126,7 @@ dataframe::DataFrame run(const View& v, const dstd::String& query) {
 }
 
 // The failure message of the query, from building the view or running it.
-dstd::String failure(const View& v, const dstd::String& query) {
+dstd::String failure(const View& v, dstd::StringView query) {
     const View q = v.duql(query);
     if (const auto kept = q.status(); !kept.has_value())
         return kept.error().c_str();
@@ -133,22 +135,23 @@ dstd::String failure(const View& v, const dstd::String& query) {
     return {};
 }
 
-bool has(const dstd::String& text, dstd::StringView word) {
+bool has(dstd::StringView text, dstd::StringView word) {
     return text.find(word) != dstd::String::npos;
 }
 
-dstd::Optional<plugins::host::Plugins> load(const char* path) {
-    auto built = plugins::host::Plugins::builder().add(path).build();
+dstd::Optional<plugins::host::Plugins> load(dstd::StringView path) {
+    auto built =
+        plugins::host::Plugins::builder().add(dstd::String(path)).build();
     INFO((built.has_value() ? dstd::String{}
                             : dstd::String(built.error().message())));
     REQUIRE(built.has_value());
     return std::move(*built);
 }
 
-void* plugin_symbol(const char* symbol) {
+void* plugin_symbol(dstd::CStringView symbol) {
     void* h = dlopen(UDAF_PLUGIN_PATH, RTLD_NOW | RTLD_NOLOAD);
     REQUIRE(h != nullptr);
-    void* fn = dlsym(h, symbol);
+    void* fn = dlsym(h, symbol.c_str());
     dlclose(h);
     REQUIRE(fn != nullptr);
     return fn;
@@ -327,11 +330,11 @@ TEST_CASE(
     const View v = view_of(env, 1, 40);
     auto set = load(UDAF_PLUGIN_PATH);
 
-    const auto side = [](const char* fn) {
-        return dstd::String("let g = group name { u = ") + fn +
+    const auto side = [](dstd::CStringView fn) {
+        return dstd::String("let g = group name { u = ") + fn.c_str() +
                "(dur) }; lookup g on name | select name, u";
     };
-    auto plan = [&](const dstd::String& q) {
+    auto plan = [&](dstd::StringView q) {
         auto text = v.explain_duql(q);
         REQUIRE(text.has_value());
         return *text;

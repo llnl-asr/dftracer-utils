@@ -13,7 +13,7 @@ namespace {
 
 dstd::Vector<dstd::String> g_ran;
 
-void record(const char* what) { g_ran.emplace_back(what); }
+void record(dstd::StringView what) { g_ran.emplace_back(what); }
 
 }  // namespace
 

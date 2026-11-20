@@ -18,6 +18,7 @@
 #include <dftracer/utils/domains/server/viz_api.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -141,7 +142,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
     const TraceFields fields(index.record_schema());
     auto on_batch = [&accs, &fields](
                         std::size_t w,
-                        const dstd::Vector<dstd::StringView>& events) {
+                        dstd::Span<const dstd::StringView> events) {
         thread_local dftracer::utils::json::RecordParser parser;
         thread_local dstd::String buf;
         Acc& acc = accs[w];

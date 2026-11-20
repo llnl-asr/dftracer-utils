@@ -35,6 +35,11 @@ namespace detail {
 
 Series struct_column(const DataFrame& frame) { return as_struct(frame, false); }
 
+void frame_schema(const DataFrame& frame, ArrowSchema* schema) {
+    column_schema(struct_column(frame), schema);
+    set_frame_metadata(frame, schema);
+}
+
 }  // namespace detail
 
 dstd::Result<Batch> to_arrow(const Series& col) {
@@ -57,6 +62,7 @@ dstd::Result<Batch> to_arrow(const DataFrame& frame) {
     ArrowSchema schema;
     ArrowArray array;
     detail::to_arrow(st, &schema, &array);
+    detail::set_frame_metadata(frame, &schema);
     return Batch::adopt(&schema, &array);
 }
 

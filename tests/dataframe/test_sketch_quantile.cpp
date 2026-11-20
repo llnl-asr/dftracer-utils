@@ -37,7 +37,7 @@ namespace {
 
 const dstd::Vector<double> QUANTILES{0.0, 0.01, 0.5, 0.99, 1.0};
 
-DDSketch sketch_of(const dstd::Vector<double>& values, double accuracy = 0.01) {
+DDSketch sketch_of(dstd::Vector<double> values, double accuracy = 0.01) {
     DDSketch s(accuracy);
     for (double v : values) s.add(v);
     return s;
@@ -57,7 +57,7 @@ struct Cell {
     dstd::Optional<dstd::String> text;
 };
 
-DataFrame frame_of(const dstd::Vector<Cell>& cells) {
+DataFrame frame_of(dstd::Vector<Cell> cells) {
     dstd::Vector<std::int64_t> keys;
     dstd::Vector<dstd::StringView> views;
     dstd::Vector<std::uint8_t> valid((cells.size() + 7) / 8, 0);
@@ -166,8 +166,7 @@ struct Fixture {
         });
     }
 
-    static DDSketch concat(const dstd::Vector<double>& a,
-                           const dstd::Vector<double>& b) {
+    static DDSketch concat(dstd::Vector<double> a, dstd::Vector<double> b) {
         dstd::Vector<double> all = a;
         all.insert(all.end(), b.begin(), b.end());
         return sketch_of(all);

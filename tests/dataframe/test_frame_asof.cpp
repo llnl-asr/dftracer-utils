@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -34,7 +35,7 @@ const I NI = dstd::nullopt;
 const S NS = dstd::nullopt;
 
 template <class T>
-dstd::Vector<std::uint8_t> validity(const dstd::Vector<dstd::Optional<T>>& v) {
+dstd::Vector<std::uint8_t> validity(dstd::Vector<dstd::Optional<T>> v) {
     dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (v[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
@@ -42,7 +43,7 @@ dstd::Vector<std::uint8_t> validity(const dstd::Vector<dstd::Optional<T>>& v) {
 }
 
 template <class T>
-dstd::Vector<T> values_of(const dstd::Vector<I>& v) {
+dstd::Vector<T> values_of(dstd::Vector<I> v) {
     dstd::Vector<T> out(v.size(), T{});
     for (std::size_t i = 0; i < v.size(); ++i)
         if (v[i]) out[i] = static_cast<T>(*v[i]);
@@ -50,7 +51,7 @@ dstd::Vector<T> values_of(const dstd::Vector<I>& v) {
 }
 
 // Float64 stores v * 0.5 so a double column holds fractional times.
-Series typed(TypeId type, const dstd::Vector<I>& v) {
+Series typed(TypeId type, dstd::Vector<I> v) {
     const auto n = static_cast<std::int64_t>(v.size());
     const dstd::Vector<std::uint8_t> bits = validity(v);
     switch (type) {
@@ -79,18 +80,18 @@ double tval(TypeId type, std::int64_t v) {
                                    : static_cast<double>(v);
 }
 
-Series i64s(const dstd::Vector<I>& v) { return typed(TypeId::Int64, v); }
+Series i64s(dstd::Vector<I> v) { return typed(TypeId::Int64, v); }
 
-Series u64s(const dstd::Vector<std::uint64_t>& v) {
+Series u64s(dstd::Vector<std::uint64_t> v) {
     return Series::flat(TypeId::Uint64, v.data(),
                         static_cast<std::int64_t>(v.size()));
 }
 
-Series f64s(const dstd::Vector<double>& v) {
+Series f64s(dstd::Vector<double> v) {
     return Series::flat_f64(v.data(), static_cast<std::int64_t>(v.size()));
 }
 
-Series strs(const dstd::Vector<S>& v) {
+Series strs(dstd::Vector<S> v) {
     dstd::Vector<dstd::StringView> views;
     views.reserve(v.size());
     for (const S& s : v)
@@ -108,7 +109,7 @@ DataFrame frame(dstd::Vector<dstd::String> names, Cols&&... cols) {
     return out;
 }
 
-dstd::Vector<I> i64_col(const DataFrame& d, const dstd::String& name) {
+dstd::Vector<I> i64_col(const DataFrame& d, dstd::StringView name) {
     Series c = d.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
@@ -123,7 +124,7 @@ dstd::Vector<I> i64_col(const DataFrame& d, const dstd::String& name) {
     return out;
 }
 
-dstd::Vector<S> str_col(const DataFrame& d, const dstd::String& name) {
+dstd::Vector<S> str_col(const DataFrame& d, dstd::StringView name) {
     Series c = d.column(name);
     REQUIRE(c.valid());
     c = c.materialize();
@@ -137,8 +138,7 @@ dstd::Vector<S> str_col(const DataFrame& d, const dstd::String& name) {
     return out;
 }
 
-dstd::Vector<dstd::String> str_list(const DataFrame& d,
-                                    const dstd::String& name,
+dstd::Vector<dstd::String> str_list(const DataFrame& d, dstd::StringView name,
                                     std::int64_t row) {
     Series c = d.column(name);
     REQUIRE(c.valid());
@@ -153,11 +153,9 @@ dstd::Vector<dstd::String> str_list(const DataFrame& d,
     return out;
 }
 
-DataFrame ts_frame(const dstd::Vector<I>& ts) {
-    return frame({"ts"}, i64s(ts));
-}
+DataFrame ts_frame(dstd::Vector<I> ts) { return frame({"ts"}, i64s(ts)); }
 
-DataFrame ts_vals(const dstd::Vector<I>& ts, const dstd::Vector<S>& vals) {
+DataFrame ts_vals(dstd::Vector<I> ts, dstd::Vector<S> vals) {
     return frame({"ts", "val"}, i64s(ts), strs(vals));
 }
 
@@ -166,10 +164,9 @@ DataFrame asof_g(const DataFrame& l, const DataFrame& r, AsofDirection dir,
     return dftu_utils_test::ok(dataframe::asof(l, r, "ts", {}, dir, tol));
 }
 
-DataFrame points(const dstd::Vector<I>& p) { return frame({"point"}, i64s(p)); }
+DataFrame points(dstd::Vector<I> p) { return frame({"point"}, i64s(p)); }
 
-DataFrame spans(const dstd::Vector<I>& lo, const dstd::Vector<I>& hi,
-                const dstd::Vector<S>& vals) {
+DataFrame spans(dstd::Vector<I> lo, dstd::Vector<I> hi, dstd::Vector<S> vals) {
     return frame({"lo", "hi", "val"}, i64s(lo), i64s(hi), strs(vals));
 }
 
@@ -250,7 +247,8 @@ TEST_CASE("asof - by-key partitioning") {
     const DataFrame r = frame({"pid", "ts", "val"}, i64s({1, 1, 2}),
                               i64s({5, 8, 3}), strs({"a1", "a2", "b1"}));
     const DataFrame out = dftu_utils_test::ok(dataframe::asof(
-        l, r, "ts", {"pid"}, AsofDirection::Backward, dstd::nullopt));
+        l, r, "ts", dftu_utils_test::span_of<dstd::String>({"pid"}),
+        AsofDirection::Backward, dstd::nullopt));
     CHECK(dstd::to_strings(out.names) ==
           dstd::Vector<dstd::String>{"pid", "ts", "val"});
     CHECK(i64_col(out, "pid") == dstd::Vector<I>{1, 2});
@@ -262,7 +260,8 @@ TEST_CASE("asof - a null by key matches a null by key") {
     const DataFrame r = frame({"k", "ts", "val"}, i64s({1, NI}), i64s({5, 7}),
                               strs({"a", "b"}));
     const DataFrame out = dftu_utils_test::ok(dataframe::asof(
-        l, r, "ts", {"k"}, AsofDirection::Backward, dstd::nullopt));
+        l, r, "ts", dftu_utils_test::span_of<dstd::String>({"k"}),
+        AsofDirection::Backward, dstd::nullopt));
     CHECK(i64_col(out, "k") == dstd::Vector<I>{1, NI});
     CHECK(str_col(out, "val") == dstd::Vector<S>{"a", "b"});
 }
@@ -383,8 +382,10 @@ TEST_CASE("asof - determinism across input order") {
 }
 
 TEST_CASE("asof - list<utf8> value passthrough") {
-    const DataFrame r = frame({"ts", "tags"}, i64s({5, 15}),
-                              Series::list({0, 2, 3}, strs({"p", "q", "r"})));
+    const DataFrame r =
+        frame({"ts", "tags"}, i64s({5, 15}),
+              Series::list(dftu_utils_test::span_of<std::int32_t>({0, 2, 3}),
+                           strs({"p", "q", "r"})));
     const DataFrame out =
         asof_g(ts_frame({10, 20}), r, AsofDirection::Backward);
     CHECK(dstd::to_strings(out.names) ==
@@ -409,8 +410,9 @@ TEST_CASE("asof - errors") {
                         dstd::nullopt),
         dftracer::utils::common::ErrorCode::NotFound);
     dftu_utils_test::expect_error(
-        dataframe::asof(l, r, "ts", {"nope"}, AsofDirection::Backward,
-                        dstd::nullopt),
+        dataframe::asof(l, r, "ts",
+                        dftu_utils_test::span_of<dstd::String>({"nope"}),
+                        AsofDirection::Backward, dstd::nullopt),
         dftracer::utils::common::ErrorCode::NotFound);
     dftu_utils_test::expect_error(
         dataframe::asof(frame({"ts"}, f64s({1.0})), r, "ts", {},
@@ -425,7 +427,8 @@ TEST_CASE("asof - errors") {
         dataframe::asof(
             frame({"k", "ts"}, i64s({1}), i64s({1})),
             frame({"k", "ts", "val"}, strs({"1"}), i64s({1}), strs({"a"})),
-            "ts", {"k"}, AsofDirection::Backward, dstd::nullopt),
+            "ts", dftu_utils_test::span_of<dstd::String>({"k"}),
+            AsofDirection::Backward, dstd::nullopt),
         dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
@@ -466,8 +469,9 @@ TEST_CASE("interval - by-key partitioning") {
     const DataFrame l = frame({"pid", "point"}, i64s({1, 2}), i64s({5, 5}));
     const DataFrame r = frame({"pid", "lo", "hi", "val"}, i64s({1, 2}),
                               i64s({0, 0}), i64s({10, 10}), strs({"p1", "p2"}));
-    const DataFrame out = dftu_utils_test::ok(
-        dataframe::interval(l, r, "point", "lo", "hi", {"pid"}, false));
+    const DataFrame out = dftu_utils_test::ok(dataframe::interval(
+        l, r, "point", "lo", "hi",
+        dftu_utils_test::span_of<dstd::String>({"pid"}), false));
     CHECK(dstd::to_strings(out.names) ==
           dstd::Vector<dstd::String>{"pid", "point", "val"});
     CHECK(i64_col(out, "pid") == dstd::Vector<I>{1, 2});
@@ -478,8 +482,9 @@ TEST_CASE("interval - a null by key matches a null by key") {
     const DataFrame l = frame({"k", "point"}, i64s({NI, 1}), i64s({5, 5}));
     const DataFrame r = frame({"k", "lo", "hi", "val"}, i64s({NI}), i64s({0}),
                               i64s({10}), strs({"n"}));
-    const DataFrame out = dftu_utils_test::ok(
-        dataframe::interval(l, r, "point", "lo", "hi", {"k"}, true));
+    const DataFrame out = dftu_utils_test::ok(dataframe::interval(
+        l, r, "point", "lo", "hi",
+        dftu_utils_test::span_of<dstd::String>({"k"}), true));
     CHECK(i64_col(out, "k") == dstd::Vector<I>{1, NI});
     CHECK(str_col(out, "val") == dstd::Vector<S>{NS, "n"});
 }
@@ -495,8 +500,10 @@ TEST_CASE("interval - determinism across input order") {
 }
 
 TEST_CASE("interval - list<utf8> value passthrough") {
-    const DataFrame r = frame({"lo", "hi", "tags"}, i64s({0}), i64s({10}),
-                              Series::list({0, 2}, strs({"p", "q"})));
+    const DataFrame r =
+        frame({"lo", "hi", "tags"}, i64s({0}), i64s({10}),
+              Series::list(dftu_utils_test::span_of<std::int32_t>({0, 2}),
+                           strs({"p", "q"})));
     const DataFrame out = interval_g(points({5}), r, false);
     REQUIRE(out.num_rows() == 1);
     CHECK(str_list(out, "tags", 0) == dstd::Vector<dstd::String>{"p", "q"});
@@ -554,7 +561,8 @@ TEST_CASE("interval - errors") {
         dataframe::interval(
             frame({"k", "point"}, i64s({1}), i64s({5})),
             frame({"k", "lo", "hi"}, strs({"1"}), i64s({0}), i64s({10})),
-            "point", "lo", "hi", {"k"}, false),
+            "point", "lo", "hi", dftu_utils_test::span_of<dstd::String>({"k"}),
+            false),
         dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
@@ -605,7 +613,7 @@ dstd::Vector<dstd::String> by_names(int by_mode) {
     return out;
 }
 
-DataFrame keyed(const Rows& rows, const dstd::String& id, int by_mode) {
+DataFrame keyed(const Rows& rows, dstd::StringView id, int by_mode) {
     dstd::Vector<I> ids;
     for (std::size_t i = 0; i < rows.size(); ++i)
         ids.emplace_back(static_cast<std::int64_t>(i));

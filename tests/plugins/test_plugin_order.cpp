@@ -6,6 +6,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -139,14 +140,14 @@ dftu_plugin make_consumer() {
 }
 
 dstd::String make_trace(dftu_utils_test::TestEnvironment& env,
-                        const dstd::String& tag, int n) {
-    dstd::String dir = env.dir() + "/" + tag;
+                        dstd::CStringView tag, int n) {
+    dstd::String dir = env.dir() + "/" + tag.c_str();
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;
     for (int i = 0; i < n; ++i)
         dstd::fmt_append<
-            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
             "\"tid\":1,\"ts\":{},\"dur\":{}{}\n">(ofs, (1000 + i * 100),
                                                   (10 + i), R"(,"args":{}})");
     dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();

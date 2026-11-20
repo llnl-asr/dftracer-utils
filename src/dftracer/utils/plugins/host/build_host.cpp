@@ -18,7 +18,7 @@ namespace {
 
 BuildHost& self_of(void* h) { return *static_cast<BuildHost*>(h); }
 
-dftu_status denied(::dftu_ctx* ctx, BuildHost& host, const char* what) {
+dftu_status denied(::dftu_ctx* ctx, BuildHost& host, dstd::StringView what) {
     host.deny(what);
     return host_fail(ctx, DFTU_E_UNSUPPORTED,
                      "not available at load: the factory host offers "
@@ -374,9 +374,11 @@ const ::dftu_svc_ports g_build_ports = {
 dftu_status build_register_provider(::dftu_ctx* ctx, void* h, const char* name,
                                     const ::dftu_source_vt* vt, void* self) {
     BuildHost& bh = self_of(h);
+    const dstd::StringView view =
+        name ? dstd::StringView(name) : dstd::StringView();
     const dftu_status status = detail::register_plugin_provider(
-        ctx, bh.declared_name(), name, vt, self, bh.library(), bh.memory());
-    if (status >= 0) bh.registered_providers().emplace_back(name);
+        ctx, bh.declared_name(), view, vt, self, bh.library(), bh.memory());
+    if (status >= 0) bh.registered_providers().emplace_back(view);
     return status;
 }
 
@@ -386,18 +388,22 @@ const ::dftu_svc_providers g_build_providers = {sizeof(::dftu_svc_providers),
 dftu_status build_register_format(::dftu_ctx* ctx, void* h, const char* name,
                                   const ::dftu_file_format_vt* vt, void* self) {
     BuildHost& bh = self_of(h);
+    const dstd::StringView view =
+        name ? dstd::StringView(name) : dstd::StringView();
     const dftu_status status = detail::register_plugin_file_format(
-        ctx, bh.declared_name(), name, vt, self, bh.library(), bh.memory());
-    if (status >= 0) bh.registered_file_formats().emplace_back(name);
+        ctx, bh.declared_name(), view, vt, self, bh.library(), bh.memory());
+    if (status >= 0) bh.registered_file_formats().emplace_back(view);
     return status;
 }
 
 dftu_status build_register_sink(::dftu_ctx* ctx, void* h, const char* name,
                                 const ::dftu_sink_vt* vt, void* self) {
     BuildHost& bh = self_of(h);
+    const dstd::StringView view =
+        name ? dstd::StringView(name) : dstd::StringView();
     const dftu_status status = detail::register_plugin_sink(
-        ctx, bh.declared_name(), name, vt, self, bh.library());
-    if (status >= 0) bh.registered_sinks().emplace_back(name);
+        ctx, bh.declared_name(), view, vt, self, bh.library());
+    if (status >= 0) bh.registered_sinks().emplace_back(view);
     return status;
 }
 
@@ -408,9 +414,11 @@ const ::dftu_svc_file_formats g_build_file_formats = {
 dftu_status build_register_node(::dftu_ctx* ctx, void* h, const char* name,
                                 const ::dftu_node_vt* vt, void* self) {
     BuildHost& bh = self_of(h);
+    const dstd::StringView view =
+        name ? dstd::StringView(name) : dstd::StringView();
     const dftu_status status = detail::register_plugin_node(
-        ctx, name, vt, self, bh.library(), bh.memory());
-    if (status >= 0) bh.registered_nodes().emplace_back(name);
+        ctx, view, vt, self, bh.library(), bh.memory());
+    if (status >= 0) bh.registered_nodes().emplace_back(view);
     return status;
 }
 
@@ -420,14 +428,18 @@ const ::dftu_svc_nodes g_build_nodes = {sizeof(::dftu_svc_nodes),
 dftu_status build_register_index(::dftu_ctx* ctx, void* h, const char* name,
                                  const ::dftu_index_extension* vt, void* self) {
     BuildHost& bh = self_of(h);
+    const dstd::StringView view =
+        name ? dstd::StringView(name) : dstd::StringView();
     const dftu_status status = detail::register_plugin_index_extension(
-        ctx, name, vt, self, bh.library());
-    if (status >= 0) bh.registered_index_extensions().emplace_back(name);
+        ctx, view, vt, self, bh.library());
+    if (status >= 0) bh.registered_index_extensions().emplace_back(view);
     return status;
 }
 
-const ::dftu_svc_index g_build_index = {sizeof(::dftu_svc_index),
-                                        build_register_index};
+const ::dftu_svc_index g_build_index = {
+    sizeof(::dftu_svc_index), build_register_index,
+    detail::index_hash_version(), detail::index_hash_value,
+    detail::index_hash_series};
 
 dftu_status build_task_job(::dftu_ctx* ctx, void* h, const ::dftu_job_desc*,
                            ::dftu_job**) {
@@ -562,9 +574,9 @@ BuildHost::BuildHost(dstd::String plugin_name,
     host_.log = build_log;
 }
 
-void BuildHost::deny(const char* what) {
+void BuildHost::deny(dstd::StringView what) {
     if (!denied_.empty()) return;
-    denied_ = what ? what : "(null)";
+    denied_ = dstd::String(what);
     DFTRACER_UTILS_LOG_ERROR(
         "[plugin:{}] '{}' is not available at load; the factory host offers "
         "registration only",

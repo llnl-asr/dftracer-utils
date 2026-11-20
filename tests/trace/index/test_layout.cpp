@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/index/index.h>
@@ -46,9 +47,8 @@ void check_separate_ranges(std::initializer_list<std::uint8_t> kinds) {
 }
 
 dftracer::utils::dstd::Optional<dftu_utils_test::IndexRecord> find_record(
-    const dftracer::utils::dstd::Vector<dftu_utils_test::IndexRecord>& records,
-    const dftracer::utils::dstd::String& name,
-    const dftracer::utils::dstd::String& key) {
+    dstd::Span<const dftu_utils_test::IndexRecord> records,
+    dstd::StringView name, dstd::StringView key) {
     for (const auto& record : records)
         if (record.name == name && record.key == key) return record;
     return dftracer::utils::dstd::nullopt;

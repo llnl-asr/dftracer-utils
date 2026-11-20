@@ -133,7 +133,7 @@ class TestDirectoryIndexerWithDask:
             indexer = dftu_utils.Indexer(env.temp_dir)
 
             # Check status before build
-            before = indexer.resolve()
+            before = indexer.status()
             assert before.total_files == 3
             assert len(before.needs_work) == 3
             assert len(before.ready) == 0
@@ -142,24 +142,24 @@ class TestDirectoryIndexerWithDask:
             indexer.build()
 
             # Check status after build
-            after = indexer.resolve()
+            after = indexer.status()
             assert after.total_files == 3
             assert len(after.ready) == 3
             assert len(after.needs_work) == 0
 
     def test_directory_indexer_ensure_indexed_idempotent(self):
-        """Test that ensure_indexed is idempotent - calling multiple times is safe."""
+        """Test that ensure is idempotent - calling multiple times is safe."""
         with Environment(lines=50) as env:
             env.create_test_gzip_file()
 
             indexer = dftu_utils.Indexer(env.temp_dir)
 
             # First call builds the index
-            status1 = indexer.ensure_indexed()
+            status1 = indexer.ensure()
             assert len(status1.ready) == 1
 
             # Second call should find everything already indexed
-            status2 = indexer.ensure_indexed()
+            status2 = indexer.ensure()
             assert len(status2.ready) == 1
             assert len(status2.needs_work) == 0
 
@@ -170,7 +170,7 @@ class TestDistributedIndex:
 
     def _query(self, files, index_dir):
         table = (
-            dftu_utils.TraceViewer(files, index_path=index_dir)
+            dftu_utils.TraceViewer(files, index_dir=index_dir)
             .group_by("cat")
             .agg("count", "sum:dur")
             .collect()
@@ -184,7 +184,7 @@ class TestDistributedIndex:
         with Environment(lines=100) as env:
             files = [env.create_test_gzip_file(f"g{k}/t{k}.pfw.gz") for k in range(4)]
             index_path = determine_index_path(files[0], env.temp_dir)
-            result = distributed_index(files=files, index_path=index_path)
+            result = distributed_index(files=files, index_dir=index_path)
 
             assert result["total_files"] == 4
             assert os.path.isdir(os.path.join(index_path, "store"))
@@ -193,7 +193,7 @@ class TestDistributedIndex:
 
             local = determine_index_path(files[0], os.path.join(env.temp_dir, "local"))
             with dftu_utils.Indexer(files=files, index_dir=os.path.dirname(local)) as ix:
-                ix.ensure_indexed()
+                ix.ensure()
             assert self._query(files, index_path) == self._query(files, os.path.dirname(local))
 
     def test_merges_worker_shards_into_the_index_root(self):
@@ -209,7 +209,7 @@ class TestDistributedIndex:
             cluster = LocalCluster(processes=True, n_workers=2, threads_per_worker=1)
             client = Client(cluster)
             try:
-                result = distributed_index(files=files, index_path=index_path, client=client)
+                result = distributed_index(files=files, index_dir=index_path, client=client)
             finally:
                 client.close()
                 cluster.close()
@@ -223,10 +223,10 @@ class TestDistributedIndex:
 
             local = determine_index_path(files[0], os.path.join(env.temp_dir, "local"))
             with dftu_utils.Indexer(files=files, index_dir=os.path.dirname(local)) as ix:
-                ix.ensure_indexed()
+                ix.ensure()
 
             with dftu_utils.Indexer(files=files, index_dir=env.temp_dir) as ix:
-                status = ix.resolve()
+                status = ix.status()
             assert sorted(status.ready) == sorted(files)
             assert status.needs_work == []
             assert Index(index_path).find_stale_files(files)["stale"] is False
@@ -245,7 +245,7 @@ class TestDistributedWriteTrace:
         with Environment(lines=200) as env:
             files = [env.create_test_gzip_file(f"f{k}/t{k}.pfw.gz") for k in range(3)]
             with dftu_utils.Indexer(files=files, index_dir=env.temp_dir) as ix:
-                ix.ensure_indexed()
+                ix.ensure()
 
             cluster = LocalCluster(processes=False, n_workers=2, threads_per_worker=2)
             client = Client(cluster)
@@ -258,9 +258,9 @@ class TestDistributedWriteTrace:
                 # Each shard is a re-indexable .pfw.gz trace.
                 reidx = os.path.join(env.temp_dir, "reidx")
                 with dftu_utils.Indexer(files=res["files"], index_dir=reidx) as ix2:
-                    ix2.ensure_indexed()
+                    ix2.ensure()
                 total = sum(
-                    dftu_utils.TraceViewer(f, index_path=reidx).statistics()["duration_count"]
+                    dftu_utils.TraceViewer(f, index_dir=reidx).statistics()["duration_count"]
                     for f in res["files"]
                 )
                 assert total > 0
@@ -276,7 +276,7 @@ class TestDaskTraceViewer:
     def _cluster_files(self, env):
         files = [env.create_test_gzip_file(f"f{k}/t{k}.pfw.gz") for k in range(4)]
         with dftu_utils.Indexer(files=files, index_dir=env.temp_dir) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
         return files
 
     def test_collect_matches_single_node(self):
@@ -298,7 +298,7 @@ class TestDaskTraceViewer:
                     .collect()
                 ).sort_by("cat")
                 whole = pa.table(
-                    TraceViewer(files, index_path=env.temp_dir)
+                    TraceViewer(files, index_dir=env.temp_dir)
                     .group_by("cat")
                     .agg("count", "mean:dur", "std:dur")
                     .collect()
@@ -323,7 +323,7 @@ class TestDaskTraceViewer:
                 assert full.height > 1
                 # Builders after limit still shape the scan; the limit trims the
                 # merged result, not each shard.
-                one = base.limit(1).resolution("1ms").group_by("cat").agg("count", "busy:dur")
+                one = base.head(1).resolution("1ms").group_by("cat").agg("count", "busy:dur")
                 assert one.collect().height == 1
             finally:
                 client.close()
@@ -343,14 +343,14 @@ class TestDaskTraceViewer:
         for pid in (1, 2):
             p = str(tmp_path / f"p{pid}.pfw.gz")
             rows = [
-                {"ph": "X", "name": n, "cat": "c", "pid": pid, "tid": 1, "ts": t, "dur": d}
+                {"ph": 1, "name": n, "cat": "c", "pid": pid, "tid": 1, "ts": t, "dur": d}
                 for n, t, d in [("A", 0, 100), ("B", 10, 30), ("C", 15, 10)]
             ]
             with gzip.open(p, "wt") as f:
                 f.write("\n".join(json.dumps(r) for r in rows) + "\n")
             files.append(p)
         with dftu_utils.Indexer(files=files, index_dir=str(tmp_path)) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
 
         cluster = LocalCluster(processes=False, n_workers=2, threads_per_worker=2)
         client = Client(cluster)
@@ -362,7 +362,7 @@ class TestDaskTraceViewer:
                 .to_pydict()
             )
             whole = (
-                TraceViewer(files, index_path=str(tmp_path))
+                TraceViewer(files, index_dir=str(tmp_path))
                 .flamegraph()
                 .collect()
                 .to_arrow()
@@ -392,7 +392,7 @@ class TestDaskTraceViewer:
 
             def full_count():
                 tv = (
-                    TraceViewer(files, index_path=env.temp_dir)
+                    TraceViewer(files, index_dir=env.temp_dir)
                     .filter('cat == "STDIO"')
                     .views_root(mv_root)
                 )
@@ -432,7 +432,7 @@ class TestDaskTraceViewer:
             files = self._cluster_files(env)
 
             def query():
-                return TraceViewer(files, index_path=env.temp_dir).filter('cat == "STDIO"')
+                return TraceViewer(files, index_dir=env.temp_dir).filter('cat == "STDIO"')
 
             def rows():
                 return sum(pa.record_batch(c).num_rows for c in query().stream(batch_size=128))
@@ -490,12 +490,12 @@ class TestDaskTraceViewer:
             with gzip.open(p, "wt") as f:
                 for i in range(250):
                     f.write(
-                        '{"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,'
+                        '{"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,'
                         '"ts":%d,"dur":%d,"args":{}}\n' % (1000 + k * 1000 + i, 10 + i)
                     )
             files.append(p)
         with dftu_utils.Indexer(files=files, index_dir=str(tmp_path)) as ix:
-            ix.ensure_indexed()
+            ix.ensure()
 
         cluster = LocalCluster(processes=False, n_workers=2, threads_per_worker=2)
         client = Client(cluster)
@@ -560,6 +560,80 @@ class TestDaskTraceViewer:
             assert isinstance(base.agg("count"), DaskAggregatedTraceViewer)
             # An aggregated viewer stays aggregated through further ops.
             assert isinstance(base.group_by("cat").time_range(0, 1), DaskAggregatedTraceViewer)
+
+
+def _index_records_row_count(records):
+    tables = (records.regular, records.aggregated, records.counters)
+    return sum(t.num_rows for t in tables)
+
+
+@pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
+class TestIndexRecordFutures:
+    """DaskTraceViewer.index_record_futures: one ungathered future per worker."""
+
+    @staticmethod
+    def _rows(table):
+        return sorted((r["name"], r["pid"], r["count"]) for r in table.to_pylist())
+
+    def test_futures_cover_the_local_index_records_read(self):
+        import time
+
+        import pyarrow as pa
+        from dask.distributed import Client, LocalCluster
+
+        from dftracer.utils.dask import DaskTraceViewer, ProgressAggregator
+
+        with Environment(lines=300) as env:
+            files = [env.create_test_gzip_file(f"f{k}/t{k}.pfw.gz") for k in range(3)]
+            with dftu_utils.Indexer(
+                files=files,
+                index_dir=env.temp_dir,
+                aggregation_config=dftu_utils.AggregationConfig(time_interval_ms=1000),
+            ) as ix:
+                ix.ensure()
+            local = pa.table(
+                dftu_utils.TraceViewer(files, index_dir=env.temp_dir)
+                .group_by("name", "pid")
+                .agg("count")
+                .collect_index_records()
+                .regular
+            )
+            cluster = LocalCluster(processes=False, n_workers=2, threads_per_worker=2)
+            client = Client(cluster)
+            try:
+                dv = (
+                    DaskTraceViewer(files, env.temp_dir, client=client)
+                    .group_by("name", "pid")
+                    .agg("count")
+                )
+                futures = dv.index_record_futures()
+                assert len(futures) == 2
+                parts = client.gather(futures)
+                regular = pa.concat_tables(
+                    [p.regular for p in parts],
+                    promote_options="permissive",
+                )
+                assert self._rows(regular) == self._rows(local)
+                assert self._rows(dv.collect_index_records().regular) == self._rows(local)
+
+                seen = []
+                with ProgressAggregator(
+                    client, lambda done, total, phase: seen.append((phase, done, total))
+                ):
+                    counts = client.gather(
+                        dv.index_record_futures(
+                            map_fn=_index_records_row_count, progress="index records read"
+                        )
+                    )
+                    deadline = time.monotonic() + 10
+                    while not seen and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                assert sum(counts) == sum(_index_records_row_count(p) for p in parts)
+                assert seen and {phase for phase, _, _ in seen} == {"index records read"}
+                assert seen[-1][1] <= seen[-1][2]
+            finally:
+                client.close()
+                cluster.close()
 
 
 if __name__ == "__main__":

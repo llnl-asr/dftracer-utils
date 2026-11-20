@@ -35,9 +35,9 @@ first.
       :link: extending-the-engine
       :link-type: doc
 
-      **Advanced.** Write your own analytic that rides the one fused scan. First
-      write it as a Python JIT plugin, then as the C++ / C ABI equivalent, and run it over a
-      trace.
+      **Advanced.** Write your own analytic that rides the one fused scan, as a
+      Python JIT plugin: plain state, a batch hook, a config, a finalize task, a
+      channel to a second plugin and a UDF for duql.
 
    .. grid-item-card:: 4. Find a regression
       :link: find-a-regression

@@ -80,8 +80,8 @@ dstd::Vector<comm::backend::FaultEvent> run_script(
     return events;
 }
 
-bool same_events(const dstd::Vector<comm::backend::FaultEvent>& a,
-                 const dstd::Vector<comm::backend::FaultEvent>& b) {
+bool same_events(dstd::Span<const comm::backend::FaultEvent> a,
+                 dstd::Span<const comm::backend::FaultEvent> b) {
     if (a.size() != b.size()) return false;
     for (std::size_t at = 0; at < a.size(); ++at) {
         if (a[at].key.source != b[at].key.source ||
@@ -93,7 +93,7 @@ bool same_events(const dstd::Vector<comm::backend::FaultEvent>& a,
 }
 
 dstd::Vector<Sent> releases_of(
-    const dstd::Vector<comm::backend::FaultEvent>& events) {
+    dstd::Span<const comm::backend::FaultEvent> events) {
     dstd::Vector<Sent> out;
     for (const comm::backend::FaultEvent& event : events)
         if (event.action == comm::backend::FaultAction::Release)
@@ -101,7 +101,7 @@ dstd::Vector<Sent> releases_of(
     return out;
 }
 
-bool same_releases(const dstd::Vector<Sent>& a, const dstd::Vector<Sent>& b) {
+bool same_releases(dstd::Span<const Sent> a, dstd::Span<const Sent> b) {
     if (a.size() != b.size()) return false;
     for (std::size_t at = 0; at < a.size(); ++at)
         if (a[at].source != b[at].source || a[at].index != b[at].index)

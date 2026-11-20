@@ -18,12 +18,11 @@ class LineProcessor {
 
     /**
      * Process a single line of data.
-     * @param data Pointer to line data (not null-terminated)
-     * @param length Length of the line data in bytes
+     * @param line The line bytes (not null-terminated). The caller keeps
+     *        them alive until the returned task completes.
      * @return true to continue processing, false to stop early
      */
-    virtual coro::CoroTask<bool> process(const char* data,
-                                         std::size_t length) = 0;
+    virtual coro::CoroTask<bool> process(dstd::StringView line) = 0;
 
     /**
      * Called before processing begins.

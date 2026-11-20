@@ -27,8 +27,8 @@ dstd::String cell_text(const dataframe::Series& s, std::int64_t r) {
 
 const dstd::String GroupResolver::EMPTY;
 
-GroupResolver::GroupResolver(const dstd::Vector<RowSetFile>& files,
-                             const dstd::Vector<Column>& columns) {
+GroupResolver::GroupResolver(dstd::Span<const RowSetFile> files,
+                             dstd::Span<const Column> columns) {
     for (const auto& c : columns) {
         if (column(c.name)) continue;
         dstd::StringViewMap<dstd::String> values;

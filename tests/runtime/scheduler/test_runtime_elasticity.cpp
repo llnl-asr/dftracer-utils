@@ -7,6 +7,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -27,15 +28,12 @@ constexpr std::size_t THREADS = 4;
 // into the next (the test preset sets it process-wide).
 class ElasticEnv {
    public:
-    explicit ElasticEnv(const char* value) {
+    explicit ElasticEnv(dstd::CStringView value) {
         if (const char* prev = std::getenv("DFTRACER_UTILS_ELASTIC")) {
             had_ = true;
             prev_ = prev;
         }
-        if (value)
-            setenv("DFTRACER_UTILS_ELASTIC", value, 1);
-        else
-            unsetenv("DFTRACER_UTILS_ELASTIC");
+        setenv("DFTRACER_UTILS_ELASTIC", value.c_str(), 1);
     }
     ~ElasticEnv() {
         if (had_)
@@ -77,7 +75,7 @@ bool settles_at(std::size_t want) {
 
 // In a fork child, which makes its own runtime: the live workers of the first
 // configure under `env`, as the exit status.
-std::size_t first_runtime_workers(const char* env) {
+std::size_t first_runtime_workers(dstd::CStringView env) {
     const pid_t child = ::fork();
     REQUIRE(child >= 0);
     if (child == 0) {

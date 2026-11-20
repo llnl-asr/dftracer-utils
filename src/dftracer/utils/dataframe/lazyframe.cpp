@@ -21,6 +21,7 @@
 #include <dftracer/utils/dataframe/internal/file_format_registry.h>
 #include <dftracer/utils/dataframe/internal/fingerprint.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dataframe/internal/frame_index.h>
 #include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/internal/join_names.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
@@ -29,6 +30,7 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>  // find_node
 #include <dftracer/utils/dataframe/internal/rest_column.h>
+#include <dftracer/utils/dataframe/internal/run_counters.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>   // dftu_schema
 #include <dftracer/utils/dataframe/internal/spill.h>  // external-merge spill
 #include <dftracer/utils/dataframe/join.h>            // HashJoin (join cursor)
@@ -40,6 +42,7 @@
 #include <dftracer/utils/dataframe/types.h>     // byte_width, buffer_bytes
 #include <dftracer/utils/dataframe/udaf_registry.h>
 #include <dftracer/utils/dstd/algorithm.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -59,8 +62,10 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
+#include <atomic>
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
@@ -220,8 +225,8 @@ coro::CoroTask<dstd::Result<DataFrame>> drain_stream(
 // once. An input with no morsel is typed from `fields`, the plan's schema at
 // this point, matched by name.
 coro::CoroTask<dstd::Result<DataFrame>> drain_cursor(
-    Cursor& c, dstd::Vector<dstd::String> sch,
-    const dstd::Vector<Field>& fields, std::int64_t max_rows, const char* who,
+    Cursor& c, dstd::Vector<dstd::String> sch, dstd::Vector<Field> fields,
+    std::int64_t max_rows, dstd::String who,
     std::uint64_t budget = memory::NO_SPILL_BUDGET) {
     PartHolder holder(budget);
     const dstd::Vector<dstd::SharedString> shared_sch =
@@ -286,8 +291,7 @@ dstd::Result<void> unpack_rest(DataFrame& f, NameCache& cache) {
 // own schema (streaming, self-describing), else the cursor's data-dependent
 // out_names(), else the static plan schema.
 dstd::Result<DataFrame> frame_from_morsel(
-    Morsel&& m, NameCache& cache,
-    const dstd::Vector<dstd::String>& static_names,
+    Morsel&& m, NameCache& cache, dstd::Span<const dstd::String> static_names,
     const dstd::Optional<dstd::Vector<dstd::String>>& out_names) {
     DataFrame out;
     out.columns = std::move(m.columns);
@@ -1130,10 +1134,10 @@ class NullCountCursor : public Cursor {
 // Wrap a morsel's columns in a DataFrame with real `names`, apply `fn`, return
 // the result materialized FLAT.
 template <class Fn>
-MorselResult frame_op(Morsel&& m, const dstd::Vector<dstd::SharedString>& names,
+MorselResult frame_op(Morsel&& m, dstd::Span<const dstd::SharedString> names,
                       Fn&& fn) {
     DataFrame tmp;
-    tmp.names = names;
+    tmp.names.assign(names.begin(), names.end());
     for (Series& c : m.columns) tmp.columns.push_back(std::move(c));
     auto r = fn(std::move(tmp));
     if (!r) return r.error();
@@ -1394,7 +1398,8 @@ class TopkCursor : public Cursor {
                 if (has) {
                     DataFrame cur =
                         frame_of(std::move(first.columns), sch_names_);
-                    auto joined = concat({&best, &cur});
+                    const DataFrame* const pair[] = {&best, &cur};
+                    auto joined = concat(pair);
                     if (!joined) co_return joined.error();
                     first = morsel_of(std::move(*joined));
                     best = DataFrame{};
@@ -1420,7 +1425,8 @@ class TopkCursor : public Cursor {
                 best = std::move(*top);
                 has = true;
             } else {
-                auto joined = concat({&best, &cur});
+                const DataFrame* const pair[] = {&best, &cur};
+                auto joined = concat(pair);
                 if (!joined) co_return joined.error();
                 auto top = joined->topk(name_, k_, largest_);
                 if (!top) co_return top.error();
@@ -1499,7 +1505,8 @@ class SampleCursor : public Cursor {
             if (best.num_rows() == 0) {
                 combined = std::move(mf);
             } else {
-                auto joined = concat({&best, &mf}, ConcatHow::Vertical);
+                const DataFrame* const pair[] = {&best, &mf};
+                auto joined = concat(pair, ConcatHow::Vertical);
                 if (!joined) co_return joined.error();
                 combined = std::move(*joined);
             }
@@ -1601,8 +1608,9 @@ class DescribeCursor : public Cursor {
         }
         DataFrame out;
         out.names.push_back(dstd::SharedString{"statistic"});
-        out.columns.push_back(Series::strings(
-            {"count", "null_count", "mean", "std", "min", "max"}));
+        const dstd::String stat_names[] = {"count", "null_count", "mean",
+                                           "std",   "min",        "max"};
+        out.columns.push_back(Series::strings(stat_names));
         for (std::size_t j = 0; j < num_idx.size(); ++j) {
             const FieldStat& fs = acc[j];
             const double vals[6] = {
@@ -1649,10 +1657,10 @@ class NodeCursor final : public Cursor {
     // Opens the node over `in`, or says why it did not.
     static dstd::Result<dstd::UniquePtr<Cursor>> make(
         const NodeOp& node, dstd::UniquePtr<Cursor> in,
-        const dstd::Vector<dstd::String>& in_schema, Schema declared_out,
-        std::uint64_t budget) {
-        auto opened =
-            node.impl->open(std::move(in), in_schema, node.args, budget);
+        dstd::Span<const dstd::String> in_schema, Schema declared_out,
+        std::uint64_t budget, dstd::SharedPtr<RunCounters> counters) {
+        auto opened = node.impl->open(std::move(in), in_schema, node.args,
+                                      budget, std::move(counters));
         if (!opened) return opened.error();
         return dstd::UniquePtr<Cursor>(dstd::make_unique<NodeCursor>(
             node.name, std::move(declared_out), std::move(*opened)));
@@ -1912,7 +1920,7 @@ class IsDupCursor : public Cursor {
                 return {};
             },
             [&] { return !spilled_; },
-            [&](const dstd::Vector<Morsel>& batch) {
+            [&](dstd::Span<const Morsel> batch) {
                 if (!has_cap(budget_)) return false;
                 if (batch.size() == 1) batch_bytes = 0;
                 batch_bytes += spill::columns_bytes(batch.back().columns);
@@ -2094,7 +2102,7 @@ class ToDummiesCursor : public Cursor {
         if (!chunks.empty()) {
             auto joined = concat_columns(column_ptrs(chunks));
             if (!joined) co_return joined.error();
-            uniq = joined->unique().materialize();
+            uniq = joined->drop_nulls().unique().materialize();
         }
         const std::int64_t d = uniq.length();
         dstd::Vector<Series> one;
@@ -2902,16 +2910,16 @@ class FrameOpCursor : public Cursor {
                 shared = cache_.schema(names);
             }
             DataFrame in = frame_of(std::move(m->columns), std::move(shared));
-            auto running =
-                run_frame_op(op_.get(), *args_, std::move(in), name_, names);
+            auto running = run_frame_op(op_.get(), *args_, std::move(in), name_,
+                                        std::move(names));
             DataFrame out = co_await std::move(running).or_fail();
             out_names_ = dstd::to_strings(out.names);
             co_return MorselResult(morsel_of(std::move(out)));
         }
         if (!done_) {
             done_ = true;
-            auto draining = drain_cursor(*in_, sch_, in_fields_, max_rows,
-                                         name_.c_str(), hold_);
+            auto draining =
+                drain_cursor(*in_, sch_, in_fields_, max_rows, name_, hold_);
             DataFrame primary = co_await std::move(draining).or_fail();
             // A plan whose columns are only known once it runs has no static
             // schema; its cursor names them.
@@ -2922,7 +2930,7 @@ class FrameOpCursor : public Cursor {
             in_.reset();
             primary.names = dstd::make_shared_strings(names);
             auto running = run_frame_op(op_.get(), *args_, std::move(primary),
-                                        name_, names);
+                                        name_, std::move(names));
             DataFrame out = co_await std::move(running).or_fail();
             out_names_ = dstd::to_strings(out.names);
             chunks_.set(morsel_of(std::move(out)));
@@ -3031,6 +3039,7 @@ struct GroupByOp {
 struct SortByOp {
     dstd::String name;
     bool descending;
+    bool nulls_last = true;
 };
 struct UniqueOp {
     dstd::Vector<dstd::String> subset;
@@ -3071,6 +3080,7 @@ struct FilterMaskOp {
 struct SortByMultiOp {
     dstd::Vector<dstd::String> by;
     dstd::Vector<bool> descending;
+    dstd::Vector<bool> nulls_last;
 };
 struct JoinOp {
     LazyFrame other;
@@ -3139,7 +3149,18 @@ class LazyOp {
 
 namespace detail {
 
+// The row index a plan declared with with_index: `names` apply after the first
+// `op_count` ops.
+struct IndexDecl {
+    dstd::Vector<dstd::String> names;
+    std::size_t op_count = 0;
+};
+
 struct PlanAccess {
+    static const dstd::SharedPtr<const IndexDecl>& index_decl(
+        const LazyFrame& lf) {
+        return lf.index_;
+    }
     static const Source& source(const LazyFrame& lf) { return *lf.source_; }
     static const dstd::SharedPtr<const Source>& source_ptr(
         const LazyFrame& lf) {
@@ -3152,10 +3173,21 @@ struct PlanAccess {
     static std::uint64_t memory_budget(const LazyFrame& lf) {
         return lf.memory_budget_;
     }
+    static const dstd::SharedPtr<RunCounters>& run_counters(
+        const LazyFrame& lf) {
+        return lf.run_counters_;
+    }
+    static LazyFrame with_run(LazyFrame lf,
+                              dstd::SharedPtr<RunCounters> counters) {
+        lf.run_counters_ = std::move(counters);
+        return lf;
+    }
     static LazyFrame make(dstd::SharedPtr<const Source> source,
                           dstd::Vector<dstd::SharedPtr<const LazyOp>> ops,
-                          std::uint64_t memory_budget) {
-        return LazyFrame(std::move(source), std::move(ops), memory_budget);
+                          std::uint64_t memory_budget,
+                          dstd::SharedPtr<const IndexDecl> index = nullptr) {
+        return LazyFrame(std::move(source), std::move(ops), memory_budget,
+                         nullptr, std::move(index));
     }
     static LazyFrame failed(const LazyFrame& lf, dstd::Error error) {
         return lf.failed(std::move(error));
@@ -3192,7 +3224,7 @@ dstd::Result<Schema> call_node_output_schema(const NodeOp& node,
 // through LazyFrame::output_schema() instead, which always calls it with the
 // typed Schema.
 dstd::Result<Schema> call_node_output_schema(
-    const NodeOp& node, const dstd::Vector<dstd::String>& names) {
+    const NodeOp& node, dstd::Span<const dstd::String> names) {
     Schema in;
     in.fields.reserve(names.size());
     for (const dstd::String& n : names)
@@ -3236,8 +3268,7 @@ const char* join_how_name(JoinHow how) {
 }
 
 dstd::HashMap<dstd::String, dstd::String> rename_map(
-    const dstd::Vector<dstd::String>& from,
-    const dstd::Vector<dstd::String>& to) {
+    dstd::Span<const dstd::String> from, dstd::Span<const dstd::String> to) {
     dstd::HashMap<dstd::String, dstd::String> map;
     for (std::size_t i = 0; i < from.size(); ++i) map.emplace(from[i], to[i]);
     return map;
@@ -3270,10 +3301,10 @@ dstd::Vector<dstd::String> renamed_names_or_same(
     return renamed ? std::move(*renamed) : std::move(in);
 }
 
-dstd::Vector<dstd::String> dropped_names(
-    dstd::Vector<dstd::String> in, const dstd::Vector<dstd::String>& drop) {
+dstd::Vector<dstd::String> dropped_names(dstd::Vector<dstd::String> in,
+                                         dstd::Span<const dstd::String> drop) {
     in.erase(std::remove_if(in.begin(), in.end(),
-                            [&](const dstd::String& n) {
+                            [&](dstd::StringView n) {
                                 return std::find(drop.begin(), drop.end(), n) !=
                                        drop.end();
                             }),
@@ -3354,8 +3385,9 @@ dstd::Vector<dstd::String> out_schema(const LazyOp& op,
             [&](const FilterMaskOp&) { return in; },
             [&](const SortByMultiOp&) { return in; },
             [&](const JoinOp& o) {
-                auto joined = join_out_names(in, o.other.schema(), o.left_on,
-                                             o.right_on, o.how, o.suffix);
+                auto joined = join_out_names<dstd::String>(
+                    in, o.other.schema(), o.left_on, o.right_on, o.how,
+                    o.suffix);
                 return joined ? std::move(*joined) : in;
             },
             [&](const ConcatOp&) { return in; },
@@ -3372,13 +3404,198 @@ dstd::Vector<dstd::String> out_schema(const LazyOp& op,
         op.node);
 }
 
-const Field* find_field(const Schema& s, const dstd::String& name) {
+using IndexList = dstd::Vector<dstd::String>;
+
+IndexList index_without(IndexList index, dstd::Span<const dstd::String> gone) {
+    index.erase(std::remove_if(index.begin(), index.end(),
+                               [&](dstd::StringView n) {
+                                   return std::find(gone.begin(), gone.end(),
+                                                    n) != gone.end();
+                               }),
+                index.end());
+    return index;
+}
+
+IndexList index_present(IndexList index,
+                        dstd::Span<const dstd::String> columns) {
+    if (columns.empty()) return index;
+    index.erase(std::remove_if(index.begin(), index.end(),
+                               [&](dstd::StringView n) {
+                                   return std::find(columns.begin(),
+                                                    columns.end(),
+                                                    n) == columns.end();
+                               }),
+                index.end());
+    return index;
+}
+
+IndexList plan_index(const LazyFrame& lf);
+
+// The index after `op` runs on a plan whose index is `index` and whose columns
+// are `in`: the rules of frame_op_index_rules.def, as the eager ops apply
+// them. `out` is the output columns (empty when only the run knows them).
+IndexList index_through(const LazyOp& op, IndexList index,
+                        dstd::Span<const dstd::String> in,
+                        dstd::Span<const dstd::String> out) {
+    const auto keys_only = [](dstd::Span<const dstd::String> keys) {
+        return IndexList(keys.begin(), keys.end());
+    };
+    return std::visit(
+        Overloaded{
+            [&](const FilterOp&) { return index; },
+            [&](const SliceOp&) { return index; },
+            [&](const TailOp&) { return index; },
+            [&](const DropNullsOp&) { return index; },
+            [&](const FillNullOp&) { return index; },
+            [&](const WithColumnOp&) { return index; },
+            [&](const ExplodeOp&) { return index; },
+            [&](const TopkOp&) { return index; },
+            [&](const SortByOp&) { return index; },
+            [&](const SortByMultiOp&) { return index; },
+            [&](const UniqueOp&) { return index; },
+            [&](const SampleOp&) { return index; },
+            [&](const HeadByOp&) { return index; },
+            [&](const ReverseOp&) { return index; },
+            [&](const TakeOp&) { return index; },
+            [&](const FilterMaskOp&) { return index; },
+            [&](const TapOp&) { return index; },
+            [&](const SelectOp& o) { return index_present(index, o.names); },
+            [&](const DropOp& o) { return index_without(index, o.names); },
+            [&](const ToDummiesOp& o) {
+                return index_without(
+                    index, dstd::Span<const dstd::String>(&o.column, 1));
+            },
+            [&](const UnnestOp& o) {
+                return index_without(
+                    index, dstd::Span<const dstd::String>(&o.column, 1));
+            },
+            [&](const RenameOp& o) {
+                IndexList renamed;
+                for (const dstd::String& n : index) {
+                    const auto at = std::find(in.begin(), in.end(), n);
+                    if (at != in.end() && static_cast<std::size_t>(
+                                              at - in.begin()) < o.names.size())
+                        renamed.push_back(
+                            o.names[static_cast<std::size_t>(at - in.begin())]);
+                }
+                return renamed;
+            },
+            [&](const RenameColumnsOp& o) {
+                for (dstd::String& n : index)
+                    for (std::size_t i = 0; i < o.from.size(); ++i)
+                        if (o.from[i] == n) {
+                            n = o.to[i];
+                            break;
+                        }
+                return index;
+            },
+            [&](const WithRowIndexOp&) { return IndexList{}; },
+            [&](const NullCountOp&) { return IndexList{}; },
+            [&](const IsDupOp&) { return IndexList{}; },
+            [&](const DescribeOp&) { return IndexList{}; },
+            [&](const UnpivotOp&) { return IndexList{}; },
+            [&](const GroupByOp& o) { return keys_only(o.keys); },
+            [&](const GroupByDynamicOp& o) {
+                return keys_only(
+                    dstd::Span<const dstd::String>(&o.time_col, 1));
+            },
+            [&](const PivotOp& o) {
+                return keys_only(dstd::Span<const dstd::String>(&o.index, 1));
+            },
+            [&](const JoinOp& o) {
+                const IndexList right = plan_index(o.other);
+                return index_join_keeps<dstd::String, dstd::String>(
+                           index, right, o.left_on, o.right_on)
+                           ? keys_only(o.left_on)
+                           : IndexList{};
+            },
+            [&](const ConcatOp& o) {
+                const IndexList other = plan_index(o.other);
+                return index_same<dstd::String, dstd::String>(index, other)
+                           ? index
+                           : IndexList{};
+            },
+            [&](const FrameOp& o) {
+                const dstd::Optional<IndexRule> rule = index_rule_of(o.name);
+                return rule && *rule == IndexRule::Keep
+                           ? index_present(index, o.out_names)
+                           : IndexList{};
+            },
+            [&](const NodeOp&) { return index_present(index, out); }},
+        op.node);
+}
+
+// The index the result of `lf` carries: its source frame's index run through
+// each op. An unindexed plan costs one check.
+IndexList plan_index(const LazyFrame& lf) {
+    using detail::PlanAccess;
+    IndexList index;
+    const Source& source = PlanAccess::source(lf);
+    const dstd::SharedPtr<const detail::IndexDecl>& decl =
+        PlanAccess::index_decl(lf);
+    const dstd::Span<const dstd::SharedString> from_source =
+        source.index_names();
+    if (from_source.empty() && !decl) return index;
+    for (const dstd::SharedString& n : from_source)
+        index.emplace_back(dstd::StringView(n));
+    dstd::Vector<dstd::String> names;
+    for (const Field& f : source.schema().fields) names.push_back(f.name);
+    const auto& ops = PlanAccess::ops(lf);
+    if (decl && decl->op_count == 0) index = decl->names;
+    for (std::size_t i = 0; i < ops.size(); ++i) {
+        dstd::Vector<dstd::String> next = out_schema(*ops[i], names);
+        index = index_through(*ops[i], std::move(index), names, next);
+        names = std::move(next);
+        if (decl && decl->op_count == i + 1) index = decl->names;
+        if (index.empty() && (!decl || decl->op_count <= i + 1)) break;
+    }
+    return index;
+}
+
+// `lf` without the columns of its index, except those named in `keep`: the
+// operand of an op whose rule drops the index, so no label column outlives it.
+// A plan with no such column is returned as it is.
+LazyFrame without_index_columns(const LazyFrame& lf,
+                                dstd::Span<const dstd::String> keep) {
+    const IndexList index = plan_index(lf);
+    if (index.empty()) return lf;
+    const dstd::Vector<dstd::String> all = lf.schema();
+    dstd::Vector<dstd::String> names;
+    for (const dstd::String& n : all) {
+        bool is_label = false;
+        for (const dstd::String& i : index)
+            if (i == n) is_label = true;
+        for (const dstd::String& k : keep)
+            if (k == n) is_label = false;
+        if (!is_label) names.push_back(n);
+    }
+    if (names.size() == all.size()) return lf;
+    return lf.select(std::move(names));
+}
+
+// `lf` without the hidden default label columns of its index, and no index.
+LazyFrame without_hidden_index_columns(const LazyFrame& lf) {
+    const IndexList index = plan_index(lf);
+    if (index.empty()) return lf;
+    dstd::Vector<dstd::String> names;
+    for (const dstd::String& n : lf.schema()) {
+        bool is_hidden = false;
+        for (const dstd::String& i : index)
+            if (i == n && is_hidden_index_name(n)) is_hidden = true;
+        if (!is_hidden) names.push_back(n);
+    }
+    auto bare = lf.select(std::move(names)).with_index({});
+    if (!bare) return detail::PlanAccess::failed(lf, bare.error());
+    return std::move(*bare);
+}
+
+const Field* find_field(const Schema& s, dstd::StringView name) {
     for (const Field& f : s.fields)
         if (f.name == name) return &f;
     return nullptr;
 }
 
-TypeId field_type_or_unknown(const Schema& s, const dstd::String& name) {
+TypeId field_type_or_unknown(const Schema& s, dstd::StringView name) {
     const Field* f = find_field(s, name);
     return f ? f->type.id : TypeId::Unknown;
 }
@@ -3387,12 +3604,13 @@ TypeId field_type_or_unknown(const Schema& s, const dstd::String& name) {
 // value column type feeds agg_output_type (shared with agg_finalize's own
 // dispatch, so this can never disagree with collect()).
 dstd::Vector<Field> group_agg_fields(const Schema& in,
-                                     const dstd::Vector<GroupAgg>& aggs) {
+                                     dstd::Span<const GroupAgg> aggs) {
     dstd::Vector<Field> out;
     out.reserve(aggs.size());
     for (const GroupAgg& a : aggs) {
-        TypeId vt = a.column.empty() ? TypeId::Unknown
-                                     : field_type_or_unknown(in, a.column);
+        const Field* vf = a.column.empty() ? nullptr : find_field(in, a.column);
+        const DataType vtype = vf ? vf->type : scalar(TypeId::Unknown);
+        const TypeId vt = vtype.id;
         if (a.op == Agg::Udaf) {
             dstd::Vector<DataType> types;
             if (!a.column.empty()) types.push_back(scalar(vt));
@@ -3405,7 +3623,7 @@ dstd::Vector<Field> group_agg_fields(const Schema& in,
                       true});
             continue;
         }
-        DataType t = agg_output_type(to_agg_op(a.op), vt, a.param);
+        DataType t = agg_output_type(to_agg_op(a.op), vtype, a.param);
         if (a.op == Agg::SetUnion && a.param != 0.0 &&
             (vt == TypeId::List || vt == TypeId::LargeList))
             t = list_of(set_union_element_type(
@@ -3420,7 +3638,7 @@ dstd::Vector<Field> group_agg_fields(const Schema& in,
 // if every value_var is numeric, the common type is Int64 unless any is a
 // float, else the plan is invalid and collect() will fail (report Unknown).
 DataType unpivot_value_type(const Schema& in,
-                            const dstd::Vector<dstd::String>& value_vars) {
+                            dstd::Span<const dstd::String> value_vars) {
     if (value_vars.empty()) return scalar(TypeId::Unknown);
     const Field* first = find_field(in, value_vars.front());
     if (!first) return scalar(TypeId::Unknown);
@@ -3722,7 +3940,7 @@ dstd::String describe_op(const LazyOp& op) {
 // plan that carries the rest column always has an answer.
 enum class RestRule : std::uint8_t { Moves, Keys, Omits };
 
-RestRule rest_rule(const LazyOp& op, const dstd::Vector<dstd::String>& in) {
+RestRule rest_rule(const LazyOp& op, dstd::Span<const dstd::String> in) {
     return std::visit(
         Overloaded{[](const FilterOp&) { return RestRule::Moves; },
                    [](const SelectOp& o) {
@@ -3811,8 +4029,8 @@ const LazyFrame* rest_partner(const LazyOp& op) {
 // The names after `op` over `in`, which ends in the rest column: the op's
 // own output, then the rest column unless the op outputs one column per row
 // (is_duplicated) or names its output only when it runs.
-dstd::Vector<dstd::String> rest_out_schema(
-    const LazyOp& op, const dstd::Vector<dstd::String>& in) {
+dstd::Vector<dstd::String> rest_out_schema(const LazyOp& op,
+                                           dstd::Span<const dstd::String> in) {
     dstd::Vector<dstd::String> out =
         out_schema(op, dstd::Vector<dstd::String>(in.begin(), in.end() - 1));
     if (!out.empty() && !std::holds_alternative<IsDupOp>(op.node))
@@ -3820,8 +4038,11 @@ dstd::Vector<dstd::String> rest_out_schema(
     return out;
 }
 
-template <class Name>
-int col_index(const dstd::Vector<Name>& sch, dstd::StringView name) {
+int col_index(dstd::Span<const dstd::String> sch, dstd::StringView name) {
+    return column_index_of(sch, name);
+}
+
+int col_index(dstd::Span<const dstd::SharedString> sch, dstd::StringView name) {
     return column_index_of(sch, name);
 }
 
@@ -3830,15 +4051,15 @@ int col_index(const dstd::Vector<Name>& sch, dstd::StringView name) {
 // on column indices because WithColumn appends or replaces in place; filters do
 // not cross other ops (Select/Rename reindex, Slice/Tail change row counts).
 dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_predicates(
-    const dstd::Vector<dstd::String>& source_names,
-    const dstd::Vector<dstd::SharedPtr<const LazyOp>>& ops) {
+    dstd::Span<const dstd::String> source_names,
+    dstd::Span<const dstd::SharedPtr<const LazyOp>> ops) {
     struct Node {
         dstd::SharedPtr<const LazyOp> op;
         int write_idx;  // WithColumn output column index; -1 otherwise
     };
     dstd::Vector<Node> nodes;
     nodes.reserve(ops.size());
-    dstd::Vector<dstd::String> sch = source_names;
+    dstd::Vector<dstd::String> sch(source_names.begin(), source_names.end());
     for (const auto& op : ops) {
         int w = -1;
         if (const auto* wc = std::get_if<WithColumnOp>(&op->node)) {
@@ -3898,8 +4119,12 @@ dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_predicates(
 // is an optimization, so bailing is always correct. Biggest payoff is a scan
 // source that then reads only the kept columns.
 dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_projections(
-    const dstd::Vector<dstd::String>& source_names,
-    const dstd::Vector<dstd::SharedPtr<const LazyOp>>& ops) {
+    dstd::Span<const dstd::String> source_names,
+    dstd::Span<const dstd::SharedPtr<const LazyOp>> ops) {
+    const auto unchanged = [&] {
+        return dstd::Vector<dstd::SharedPtr<const LazyOp>>(ops.begin(),
+                                                           ops.end());
+    };
     // The first op that names what it reads: a select, or a group-by (its
     // keys and the aggregates' columns; a dyn aggregate reads every arg
     // column, so it keeps the whole row). Whatever follows it reads its
@@ -3911,11 +4136,12 @@ dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_projections(
             last = i;
             break;
         }
-    if (last == ops.size()) return ops;
+    if (last == ops.size()) return unchanged();
     const auto* sel = std::get_if<SelectOp>(&ops[last]->node);
     const auto* gb = std::get_if<GroupByOp>(&ops[last]->node);
-    if (sel && last == 0) return ops;  // a leading select is the projection
-    if (gb && !gb->dyn.empty()) return ops;
+    if (sel && last == 0)
+        return unchanged();  // a leading select is the projection
+    if (gb && !gb->dyn.empty()) return unchanged();
     for (std::size_t i = 0; i < last; ++i) {
         const auto& n = ops[i]->node;
         if (!(std::holds_alternative<FilterOp>(n) ||
@@ -3928,7 +4154,7 @@ dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_projections(
               std::holds_alternative<TakeOp>(n) ||
               std::holds_alternative<FilterMaskOp>(n) ||
               std::holds_alternative<SortByMultiOp>(n)))
-            return ops;  // changes the schema or reads whole rows: bail
+            return unchanged();  // changes the schema or reads whole rows: bail
     }
 
     const int nsrc = static_cast<int>(source_names.size());
@@ -3946,7 +4172,7 @@ dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_projections(
     }
     for (const dstd::String& nm : wanted) {
         int c = col_index(source_names, nm);
-        if (c < 0) return ops;
+        if (c < 0) return unchanged();
         need[static_cast<std::size_t>(c)] = 1;
     }
     // These ops preserve the source schema by position, so predicate indices
@@ -3980,7 +4206,8 @@ dstd::Vector<dstd::SharedPtr<const LazyOp>> pushdown_projections(
                 static_cast<std::int32_t>(live.size());
             live.push_back(source_names[static_cast<std::size_t>(c)]);
         }
-    if (static_cast<int>(live.size()) == nsrc) return ops;  // nothing to prune
+    if (static_cast<int>(live.size()) == nsrc)
+        return unchanged();  // nothing to prune
 
     dstd::Vector<dstd::SharedPtr<const LazyOp>> out;
     out.reserve(ops.size() + 1);
@@ -4011,10 +4238,10 @@ PlanParts optimize_parts(dstd::SharedPtr<const Source> source,
 // `g` as an AggregateSpec: each named column is the expression `by` gives it
 // (`names[i]` is `by[i]`), positional against the offering source.
 dstd::Optional<AggregateSpec> aggregate_spec(
-    const GroupByOp& g, const dstd::Vector<dstd::String>& names,
-    const dstd::Vector<Expr>& by) {
+    const GroupByOp& g, dstd::Span<const dstd::String> names,
+    dstd::Span<const Expr> by) {
     if (!g.dyn.empty()) return dstd::nullopt;
-    auto expr_of = [&](const dstd::String& name) -> dstd::Optional<Expr> {
+    auto expr_of = [&](dstd::StringView name) -> dstd::Optional<Expr> {
         const int c = col_index(names, name);
         if (c < 0) return dstd::nullopt;
         return by[static_cast<std::size_t>(c)];
@@ -4032,6 +4259,7 @@ dstd::Optional<AggregateSpec> aggregate_spec(
         AggregateExpr e;
         e.op = a.op;
         e.param = a.param;
+        e.interp = a.interp;
         e.out = a.out;
         if (a.op != Agg::Count) {
             dstd::Optional<Expr> in = expr_of(a.column);
@@ -4052,10 +4280,10 @@ dstd::Optional<AggregateSpec> aggregate_spec(
 // group-by, offered as one aggregation whose keys and inputs are their
 // expressions over the source columns. The number of ops it covers, or 0.
 std::size_t offer_merged_aggregation(
-    const Source& source, const dstd::Vector<dstd::String>& source_names,
-    const dstd::Vector<dstd::SharedPtr<const LazyOp>>& ops, std::size_t at,
+    const Source& source, dstd::Span<const dstd::String> source_names,
+    dstd::Span<const dstd::SharedPtr<const LazyOp>> ops, std::size_t at,
     dstd::Optional<SourceApplication>& app) {
-    dstd::Vector<dstd::String> names = source_names;
+    dstd::Vector<dstd::String> names(source_names.begin(), source_names.end());
     dstd::Vector<Expr> by;
     by.reserve(names.size());
     for (std::size_t i = 0; i < names.size(); ++i)
@@ -4084,9 +4312,10 @@ std::size_t offer_merged_aggregation(
 
 // Offer `op` to the matching planning hook. `schema_changing` reports whether
 // an accepted answer replaces the source schema.
-dstd::Optional<SourceApplication> offer_op(
-    const Source& source, const dstd::Vector<dstd::String>& names,
-    const LazyOp& op, bool& schema_changing) {
+dstd::Optional<SourceApplication> offer_op(const Source& source,
+                                           dstd::Span<const dstd::String> names,
+                                           const LazyOp& op,
+                                           bool& schema_changing) {
     schema_changing = false;
     if (const auto* f = std::get_if<FilterOp>(&op.node))
         return source.apply_filter(f->pred);
@@ -4113,10 +4342,15 @@ dstd::Optional<SourceApplication> offer_op(
     }
     if (const auto* u = std::get_if<UniqueOp>(&op.node))
         return source.apply_distinct(u->subset);
-    if (const auto* o = std::get_if<SortByOp>(&op.node))
+    if (const auto* o = std::get_if<SortByOp>(&op.node)) {
+        if (!o->nulls_last) return dstd::nullopt;
         return source.apply_sort({{o->name}, {o->descending}});
-    if (const auto* o = std::get_if<SortByMultiOp>(&op.node))
+    }
+    if (const auto* o = std::get_if<SortByMultiOp>(&op.node)) {
+        for (bool last : o->nulls_last)
+            if (!last) return dstd::nullopt;
         return source.apply_sort({o->by, o->descending});
+    }
     if (const auto* o = std::get_if<TopkOp>(&op.node))
         return source.apply_topn({{o->name}, {o->largest}}, o->k);
     if (const auto* o = std::get_if<SliceOp>(&op.node)) {
@@ -4148,10 +4382,10 @@ dstd::Optional<SourceApplication> offer_op(
 // Inexact one keeps it above the derived source, after which only filters
 // (which commute with it) are still offered. The first refused op ends the
 // walk.
-PlanParts absorb_into_source(const dstd::Vector<dstd::String>& source_names,
+PlanParts absorb_into_source(dstd::Span<const dstd::String> source_names,
                              PlanParts plan) {
     dstd::SharedPtr<const Source> source = std::move(plan.source);
-    dstd::Vector<dstd::String> names = source_names;
+    dstd::Vector<dstd::String> names(source_names.begin(), source_names.end());
     dstd::Vector<dstd::SharedPtr<const LazyOp>> kept;
     kept.reserve(plan.ops.size());
     bool offering = true;
@@ -4209,7 +4443,7 @@ PlanParts absorb_into_source(const dstd::Vector<dstd::String>& source_names,
 }
 
 PlanParts run_plan_rule(detail::PlanRule rule,
-                        const dstd::Vector<dstd::String>& source_names,
+                        dstd::Span<const dstd::String> source_names,
                         PlanParts plan) {
     switch (rule) {
         case detail::PlanRule::PredicatePushdown:
@@ -4239,8 +4473,7 @@ PlanParts optimize_parts(dstd::SharedPtr<const Source> source,
 // frame. nullopt for any other shape, or a with_column that replaces a column
 // or reads another with_column; the caller then runs op-by-op.
 dstd::Result<dstd::Optional<DataFrame>> try_fuse_map(
-    const DataFrame& src,
-    const dstd::Vector<dstd::SharedPtr<const LazyOp>>& ops) {
+    const DataFrame& src, dstd::Span<const dstd::SharedPtr<const LazyOp>> ops) {
     dstd::Vector<const FilterOp*> filters;
     dstd::Vector<const WithColumnOp*> withs;
     const SelectOp* sel = nullptr;
@@ -4380,8 +4613,12 @@ dstd::Result<dstd::Optional<DataFrame>> try_fuse_map(
 // `own_rest`: the rest column of `sch` comes from the input, not from a
 // partner plan of `op`.
 CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
-                         const dstd::Vector<dstd::String>& sch,
-                         std::uint64_t budget, bool own_rest) {
+                         dstd::Span<const dstd::String> sch,
+                         std::uint64_t budget, bool own_rest,
+                         const dstd::SharedPtr<RunCounters>& counters) {
+    const auto own_sch = [&] {
+        return dstd::Vector<dstd::String>(sch.begin(), sch.end());
+    };
     return std::visit(
         Overloaded{
             [&](const FilterOp& o) -> CursorResult {
@@ -4454,29 +4691,30 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                 return dstd::make_unique<NullCountCursor>(std::move(in));
             },
             [&](const ExplodeOp& o) -> CursorResult {
-                return dstd::make_unique<ExplodeCursor>(std::move(in), sch,
-                                                        o.column, budget);
+                return dstd::make_unique<ExplodeCursor>(
+                    std::move(in), own_sch(), o.column, budget);
             },
             [&](const UnpivotOp& o) -> CursorResult {
                 return dstd::make_unique<UnpivotCursor>(
-                    std::move(in), sch, o.id_vars, o.value_vars, budget);
+                    std::move(in), own_sch(), o.id_vars, o.value_vars, budget);
             },
             [&](const TopkOp& o) -> CursorResult {
-                return dstd::make_unique<TopkCursor>(std::move(in), sch, o.name,
-                                                     o.k, o.largest, budget);
+                return dstd::make_unique<TopkCursor>(
+                    std::move(in), own_sch(), o.name, o.k, o.largest, budget);
             },
             [&](const GroupByOp& o) -> CursorResult {
-                return make_group_by(std::move(in), sch, o.keys, o.aggs, budget,
-                                     o.dyn, o.dyn_prefix);
+                return make_group_by(std::move(in), own_sch(), o.keys, o.aggs,
+                                     budget, o.dyn, o.dyn_prefix);
             },
             [&](const SortByOp& o) -> CursorResult {
-                return make_sort_merge(
-                    std::move(in), sch, dstd::Vector<dstd::String>{o.name},
-                    dstd::Vector<bool>{o.descending}, budget);
+                return make_sort_merge(std::move(in), own_sch(),
+                                       dstd::Vector<dstd::String>{o.name},
+                                       dstd::Vector<bool>{o.descending}, budget,
+                                       dstd::Vector<bool>{o.nulls_last});
             },
             [&](const SortByMultiOp& o) -> CursorResult {
-                return make_sort_merge(std::move(in), sch, o.by, o.descending,
-                                       budget);
+                return make_sort_merge(std::move(in), own_sch(), o.by,
+                                       o.descending, budget, o.nulls_last);
             },
             [&](const ReverseOp&) -> CursorResult {
                 dstd::Vector<dstd::String> numbered{"row_index"};
@@ -4507,20 +4745,25 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                 if (budget != memory::NO_SPILL_BUDGET && budget > 0 &&
                     detail::PlanAccess::memory_budget(other) == 0)
                     other = other.memory_budget(budget);
+                other =
+                    detail::PlanAccess::with_run(std::move(other), counters);
                 return dstd::make_unique<JoinCursor>(
-                    std::move(in), sch, o.left_fields, std::move(other),
+                    std::move(in), own_sch(), o.left_fields, std::move(other),
                     o.left_on, o.right_on, o.how, o.suffix, budget,
                     o.nulls_equal, own_rest);
             },
             [&](const ConcatOp& o) -> CursorResult {
-                return dstd::make_unique<ConcatCursor>(std::move(in), o.other,
-                                                       has_rest(sch));
+                return dstd::make_unique<ConcatCursor>(
+                    std::move(in),
+                    detail::PlanAccess::with_run(o.other, counters),
+                    has_rest(sch));
             },
             [&](const TapOp& o) -> CursorResult {
-                return dstd::make_unique<TapCursor>(std::move(in), sch, o.tap);
+                return dstd::make_unique<TapCursor>(std::move(in), own_sch(),
+                                                    o.tap);
             },
             [&](const UnnestOp& o) -> CursorResult {
-                return dstd::make_unique<UnnestCursor>(std::move(in), sch,
+                return dstd::make_unique<UnnestCursor>(std::move(in), own_sch(),
                                                        o.column, o.keep_empty);
             },
             [&](const FrameOp& o) -> CursorResult {
@@ -4538,7 +4781,7 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                     LazyFrame other = o.args->frames().front();
                     if (detail::PlanAccess::memory_budget(other) == 0)
                         other = other.memory_budget(budget);
-                    return make_compare_agg(std::move(in), sch,
+                    return make_compare_agg(std::move(in), own_sch(),
                                             std::move(other), o.args->i64_at(2),
                                             budget);
                 }
@@ -4566,7 +4809,7 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                     o.name == COLUMN_OP &&
                     column_op_elementwise(o.args->strings_at(2).front());
                 return dstd::make_unique<FrameOpCursor>(
-                    std::move(in), sch, o.in_fields, o.name, o.op, o.args,
+                    std::move(in), own_sch(), o.in_fields, o.name, o.op, o.args,
                     budget, elementwise);
             },
             [&](const UniqueOp& o) -> CursorResult {
@@ -4576,12 +4819,12 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                     if (!at) return at.error();
                     key_idx.push_back(*at);
                 }
-                return make_unique_rows(std::move(in), sch, std::move(key_idx),
-                                        budget);
+                return make_unique_rows(std::move(in), own_sch(),
+                                        std::move(key_idx), budget);
             },
             [&](const SampleOp& o) -> CursorResult {
-                return dstd::make_unique<SampleCursor>(std::move(in), sch, o.n,
-                                                       o.seed);
+                return dstd::make_unique<SampleCursor>(std::move(in), own_sch(),
+                                                       o.n, o.seed);
             },
             [&](const HeadByOp& o) -> CursorResult {
                 dstd::Vector<std::int64_t> key_idx;
@@ -4599,26 +4842,27 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                                                       o.unique);
             },
             [&](const GroupByDynamicOp& o) -> CursorResult {
-                return make_group_by_dynamic(std::move(in), sch, o.time_col,
-                                             o.every, o.period, o.aggs,
-                                             o.origin, o.origin_min, budget);
+                return make_group_by_dynamic(
+                    std::move(in), own_sch(), o.time_col, o.every, o.period,
+                    o.aggs, o.origin, o.origin_min, budget);
             },
             [&](const PivotOp& o) -> CursorResult {
-                return make_pivot(std::move(in), budget, sch, o.index, o.on,
-                                  o.values, o.agg);
+                return make_pivot(std::move(in), budget, own_sch(), o.index,
+                                  o.on, o.values, o.agg);
             },
             [&](const ToDummiesOp& o) -> CursorResult {
                 return dstd::make_unique<ToDummiesCursor>(std::move(in), budget,
-                                                          sch, o.column);
+                                                          own_sch(), o.column);
             },
             [&](const DescribeOp&) -> CursorResult {
-                return dstd::make_unique<DescribeCursor>(std::move(in), sch);
+                return dstd::make_unique<DescribeCursor>(std::move(in),
+                                                         own_sch());
             },
             [&](const NodeOp& o) -> CursorResult {
                 auto declared = call_node_output_schema(o, sch);
                 if (!declared) return declared.error();
                 return NodeCursor::make(o, std::move(in), sch,
-                                        std::move(*declared), budget);
+                                        std::move(*declared), budget, counters);
             }},
         op.node);
 }
@@ -4627,6 +4871,10 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
 
 InMemorySource::InMemorySource(DataFrame frame)
     : frame_(dstd::make_shared<const DataFrame>(std::move(frame))) {}
+
+dstd::Span<const dstd::SharedString> InMemorySource::index_names() const {
+    return frame_->index_names();
+}
 
 Schema InMemorySource::schema() const {
     Schema s;
@@ -4712,10 +4960,13 @@ coro::CoroTask<dstd::Result<DataFrame>> LazyFrame::run_ops_in_memory(
                     return df.fill_null(o.value);
                 },
                 [&](const SortByOp& o) {
-                    return df.sort_by(o.name, o.descending);
+                    return df.sort_by(o.name, o.descending, o.nulls_last);
                 },
                 [&](const SortByMultiOp& o) {
-                    return df.sort_by_multi(o.by, o.descending);
+                    dstd::Vector<std::uint8_t> desc, last;
+                    for (bool d : o.descending) desc.push_back(d ? 1 : 0);
+                    for (bool l : o.nulls_last) last.push_back(l ? 1 : 0);
+                    return df.sort_by_multi(o.by, desc, last);
                 },
                 [&](const ReverseOp&) -> dstd::Result<DataFrame> {
                     return df.reverse();
@@ -4802,12 +5053,28 @@ class FailedSource final : public Source {
 
 }  // namespace
 
-LazyFrame LazyFrame::scan_file(dstd::StringView path) {
-    auto opened = open_file_with_format(path);
-    if (!opened)
-        return LazyFrame(dstd::make_shared<FailedSource>(opened.error()), {})
-            .failed(opened.error());
-    return LazyFrame(std::move(*opened), {});
+LazyFrame LazyFrame::scan_file(dstd::StringView path,
+                               dstd::StringView index_dir,
+                               dstd::StringView format) {
+    const auto failed_plan = [](dstd::Error error) {
+        return LazyFrame(dstd::make_shared<FailedSource>(error), {})
+            .failed(error);
+    };
+    auto reader = claim_reader(path, format);
+    if (!reader) return failed_plan(reader.error());
+    if (!reader->is_builtin()) {
+        auto opened = reader->plugin->open(path, index_dir);
+        if (!opened) return failed_plan(opened.error());
+        return LazyFrame(dstd::SharedPtr<const Source>(std::move(*opened)), {});
+    }
+    const TraceOpen open = trace_open();
+    if (!open)
+        return failed_plan(
+            common::make_error<
+                "the built-in reader is not available: the trace library did "
+                "not register it">(common::ErrorCode::NotFound)
+                .error());
+    return open(path, index_dir);
 }
 
 LazyFrame LazyFrame::select(dstd::Vector<dstd::String> names) const {
@@ -4908,14 +5175,14 @@ LazyFrame LazyFrame::reverse() const {
 }
 
 LazyFrame LazyFrame::with_row_index(dstd::String name) const {
-    auto ops = ops_;
+    auto ops = without_index_columns(*this, {}).ops_;
     ops.push_back(
         dstd::make_shared<LazyOp>(LazyOp{WithRowIndexOp{std::move(name)}}));
     return with_ops(std::move(ops));
 }
 
 LazyFrame LazyFrame::null_count() const {
-    auto ops = ops_;
+    auto ops = without_index_columns(*this, {}).ops_;
     ops.push_back(dstd::make_shared<LazyOp>(LazyOp{NullCountOp{}}));
     return with_ops(std::move(ops));
 }
@@ -4961,7 +5228,7 @@ LazyFrame LazyFrame::group_by(dstd::Vector<dstd::String> keys,
 }
 
 dstd::Result<dstd::Vector<GroupAgg>> LazyFrame::reduce_specs(
-    Agg agg, const dstd::Vector<dstd::String>& keys) const {
+    Agg agg, dstd::Span<const dstd::String> keys) const {
     const Schema in = output_schema();
     dstd::Vector<dstd::String> names;
     dstd::Vector<TypeId> types;
@@ -5025,7 +5292,8 @@ LazyFrame desugar_expr_group_by(const LazyFrame& self, dstd::Vector<Expr> keys,
     LazyFrame lf = self;
     dstd::Vector<dstd::String> sch = lf.schema();
     int tmp = 0;
-    auto resolve_val = [&](const Expr& e, const char* prefix) -> dstd::String {
+    auto resolve_val = [&](const Expr& e,
+                           dstd::StringView prefix) -> dstd::String {
         const std::int32_t idx = expr_col_index(e);
         if (idx >= 0 && static_cast<std::size_t>(idx) < sch.size())
             return sch[static_cast<std::size_t>(idx)];
@@ -5057,6 +5325,7 @@ LazyFrame desugar_expr_group_by(const LazyFrame& self, dstd::Vector<Expr> keys,
         g.op = from_agg_op(a.op);
         g.out = a.out;
         g.param = a.param;
+        g.interp = a.interp;
         if (a.op == AggOp::Udaf) {
             g.fn = a.fn;
             if (a.value.valid()) g.column = resolve_val(a.value, "v");
@@ -5083,24 +5352,27 @@ LazyFrame LazyFrame::group_by(dstd::Vector<Expr> keys,
                                  /*single_key=*/false);
 }
 
-LazyFrame LazyFrame::sort_by(dstd::String name, bool descending) const {
+LazyFrame LazyFrame::sort_by(dstd::String name, bool descending,
+                             bool nulls_last) const {
     auto ops = ops_;
     ops.push_back(dstd::make_shared<LazyOp>(
-        LazyOp{SortByOp{std::move(name), descending}}));
+        LazyOp{SortByOp{std::move(name), descending, nulls_last}}));
     return with_ops(std::move(ops));
 }
 
 LazyFrame LazyFrame::sort_by_multi(dstd::Vector<dstd::String> by,
-                                   bool descending) const {
+                                   bool descending, bool nulls_last) const {
     dstd::Vector<bool> flags(by.size(), descending);
-    return sort_by_multi(std::move(by), std::move(flags));
+    return sort_by_multi(std::move(by), std::move(flags),
+                         dstd::Vector<bool>{nulls_last});
 }
 
 LazyFrame LazyFrame::sort_by_multi(dstd::Vector<dstd::String> by,
-                                   dstd::Vector<bool> descending) const {
+                                   dstd::Vector<bool> descending,
+                                   dstd::Vector<bool> nulls_last) const {
     auto ops = ops_;
-    ops.push_back(dstd::make_shared<LazyOp>(
-        LazyOp{SortByMultiOp{std::move(by), std::move(descending)}}));
+    ops.push_back(dstd::make_shared<LazyOp>(LazyOp{SortByMultiOp{
+        std::move(by), std::move(descending), std::move(nulls_last)}}));
     return with_ops(std::move(ops));
 }
 
@@ -5196,11 +5468,26 @@ LazyFrame LazyFrame::join(LazyFrame other, dstd::Vector<dstd::String> left_on,
             invalid_argument<"join: left_on and right_on differ in length">()
                 .error());
     {
+        const IndexList left_index = plan_index(*this);
+        const IndexList right_index = plan_index(other);
+        if ((!left_index.empty() || !right_index.empty()) &&
+            !index_join_keeps<dstd::String, dstd::String>(
+                left_index, right_index, left_on, right_on)) {
+            const LazyFrame bare_left = without_index_columns(*this, left_on);
+            const LazyFrame bare_right = without_index_columns(other, right_on);
+            if (bare_left.schema().size() != schema().size() ||
+                bare_right.schema().size() != other.schema().size())
+                return bare_left.join(bare_right, std::move(left_on),
+                                      std::move(right_on), how,
+                                      std::move(suffix), nulls_equal);
+        }
+    }
+    {
         const dstd::Vector<dstd::String> left_names = schema();
         const dstd::Vector<dstd::String> right_names = other.schema();
         if (!left_names.empty() && !right_names.empty())
-            if (auto names = join_out_names(left_names, right_names, left_on,
-                                            right_on, how, suffix);
+            if (auto names = join_out_names<dstd::String>(
+                    left_names, right_names, left_on, right_on, how, suffix);
                 !names)
                 return failed(names.error());
     }
@@ -5279,8 +5566,8 @@ constexpr dstd::StringView NATIVE_TWINS[] = {
     "unnest",      "unique_by",     "reduce"};
 
 // The lazy op that does the work of frame op `name`, or null.
-const dftu_op_desc* native_twin(const dstd::String& name,
-                                const dftu_op_desc& op, std::size_t others) {
+const dftu_op_desc* native_twin(dstd::StringView name, const dftu_op_desc& op,
+                                std::size_t others) {
     constexpr dstd::StringView PREFIX = "dftu.frame.";
     if (name.compare(0, PREFIX.size(), PREFIX) != 0) return nullptr;
     const dstd::StringView base = dstd::StringView(name).substr(PREFIX.size());
@@ -5333,12 +5620,18 @@ LazyFrame LazyFrame::frame_op(dstd::String name, OpArgs args,
     if (name == "dftu.frame.sort_by_multi_per_col" && others.empty()) {
         const auto& names = args.raw().args[1].list;
         const auto& flags = args.raw().args[2].i32list;
-        if (names.n > 0 && names.n == flags.n) {
+        const auto& last = args.raw().args[3].i32list;
+        if (names.n > 0 && names.n == flags.n &&
+            (last.n == 1 || last.n == names.n)) {
             dstd::Vector<dstd::String> by(names.items, names.items + names.n);
             dstd::Vector<bool> descending;
             for (std::int32_t i = 0; i < flags.n; ++i)
                 descending.push_back(flags.items[i] != 0);
-            return sort_by_multi(std::move(by), std::move(descending));
+            dstd::Vector<bool> nulls_last;
+            for (std::int32_t i = 0; i < last.n; ++i)
+                nulls_last.push_back(last.items[i] != 0);
+            return sort_by_multi(std::move(by), std::move(descending),
+                                 std::move(nulls_last));
         }
     }
     if (const dftu_op_desc* lazy = native_twin(name, *op, others.size())) {
@@ -5390,7 +5683,7 @@ static TypeId native_out_type(GroupwiseOp kind, TypeId in, NumClass cls) {
 }
 
 dstd::Optional<LazyFrame> native_group_transform(
-    const LazyFrame& plan, const dstd::Vector<dstd::String>& keys,
+    const LazyFrame& plan, dstd::Span<const dstd::String> keys,
     GroupwiseOp kind, std::int64_t n, const Schema& typed) {
     switch (kind) {
         case GroupwiseOp::CumSum:
@@ -5433,7 +5726,7 @@ dstd::Optional<LazyFrame> native_group_transform(
     dstd::Vector<const char*> key_ptrs;
     for (const dstd::String& k : keys) key_ptrs.push_back(k.c_str());
     OpArgs args;
-    args.strlist(1, key_ptrs.data(), static_cast<std::int32_t>(key_ptrs.size()))
+    args.strlist(1, key_ptrs)
         .i32(2, static_cast<std::int32_t>(kind))
         .i64(3, n)
         .i32(4, 0)
@@ -5447,19 +5740,23 @@ dstd::Optional<LazyFrame> native_group_transform(
     return detail::PlanAccess::with_error_of(
         detail::PlanAccess::make(detail::PlanAccess::source_ptr(plan),
                                  std::move(ops),
-                                 detail::PlanAccess::memory_budget(plan)),
+                                 detail::PlanAccess::memory_budget(plan),
+                                 detail::PlanAccess::index_decl(plan)),
         plan);
 }
 
 LazyFrame LazyFrame::compare_agg(LazyFrame variant, std::int64_t n_key) const {
     if (auto variant_status = variant.status(); !variant_status)
         return failed(variant_status.error());
+    if (!plan_index(*this).empty() || !plan_index(variant).empty())
+        return without_hidden_index_columns(*this).compare_agg(
+            without_hidden_index_columns(variant), n_key);
     if (n_key < 1)
         return failed(invalid_argument<"compare_agg: n_key < 1">().error());
     const dstd::Vector<Field> lhs = output_schema().fields;
     const dstd::Vector<Field> rhs = variant.output_schema().fields;
     const auto nk = static_cast<std::size_t>(n_key);
-    auto typed = [](const dstd::Vector<Field>& fs) {
+    auto typed = [](dstd::Span<const Field> fs) {
         return !fs.empty() &&
                std::none_of(fs.begin(), fs.end(), [](const Field& f) {
                    return f.type.id == TypeId::Unknown;
@@ -5474,7 +5771,10 @@ LazyFrame LazyFrame::compare_agg(LazyFrame variant, std::int64_t n_key) const {
     }
     auto composed = compose_compare_agg(*this, variant, lhs, rhs, nk);
     if (!composed) return failed(composed.error());
-    return std::move(*composed);
+    // The rule of compare_agg drops the index, as the eager op does.
+    auto bare = composed->with_index({});
+    if (!bare) return failed(bare.error());
+    return std::move(*bare);
 }
 
 LazyFrame LazyFrame::asof(LazyFrame other, dstd::String on,
@@ -5503,6 +5803,18 @@ LazyFrame LazyFrame::interval(LazyFrame other, dstd::String point,
 LazyFrame LazyFrame::concat(LazyFrame other) const {
     if (auto other_status = other.status(); !other_status)
         return failed(other_status.error());
+    if (!index_same<dstd::String, dstd::String>(plan_index(*this),
+                                                plan_index(other))) {
+        // The index is dropped, so a label column the other side lacks goes
+        // with it.
+        const dstd::Vector<dstd::String> left_names = schema();
+        const dstd::Vector<dstd::String> right_names = other.schema();
+        const LazyFrame bare_left = without_index_columns(*this, right_names);
+        const LazyFrame bare_right = without_index_columns(other, left_names);
+        if (bare_left.schema().size() != left_names.size() ||
+            bare_right.schema().size() != right_names.size())
+            return bare_left.concat(bare_right);
+    }
     const dstd::Vector<Field> lhs = output_schema().fields;
     const dstd::Vector<Field> rhs = other.output_schema().fields;
     if (lhs.size() != rhs.size())
@@ -5548,7 +5860,7 @@ LazyFrame LazyFrame::to_dummies(dstd::String column) const {
 }
 
 LazyFrame LazyFrame::describe() const {
-    auto ops = ops_;
+    auto ops = without_index_columns(*this, {}).ops_;
     ops.push_back(dstd::make_shared<LazyOp>(LazyOp{DescribeOp{}}));
     return with_ops(std::move(ops));
 }
@@ -5569,21 +5881,122 @@ dstd::Vector<dstd::String> LazyFrame::schema() const {
     return names;
 }
 
-dstd::String LazyFrame::explain() const {
-    const PlanParts plan = optimize_parts(source_, ops_);
+namespace {
+
+// The scan request lowering hands `source` for `ops`, and which ops its filters
+// came from. A leading Select is a pure source projection: pushdown_projections
+// emits one with the filter col-refs already remapped into it, and a user's own
+// leading select is one too. Push it into the scan so the source harvests only
+// those columns; the source returns them in this exact order, so the
+// now-identity Select and the remapped filters stay positionally aligned.
+struct PlannedScan {
+    ScanRequest req;
+    // Ops before the filters that are folded into the scan.
+    std::size_t first = 0;
+    // The index in `ops` of each of req.filters.
+    dstd::Vector<std::size_t> cand_pos;
+};
+
+PlannedScan plan_scan_request(
+    dstd::Span<const dstd::SharedPtr<const LazyOp>> ops, std::uint64_t budget) {
+    PlannedScan plan;
+    ScanRequest& req = plan.req;
+    if (!ops.empty())
+        if (const auto* s = std::get_if<SelectOp>(&ops.front()->node);
+            s && rest_rule(*ops.front(), {}) == RestRule::Omits) {
+            req.projection = s->names;
+            plan.first = 1;
+        }
+
+    // Candidate filters: the contiguous run right after the optional
+    // projection. Their col-refs are positional against the scan's column set
+    // (projection when present, else the source schema), which is exactly what
+    // scan() resolves them against.
+    req.memory_budget = budget;
+    for (std::size_t i = plan.first; i < ops.size(); ++i) {
+        const auto* f = std::get_if<FilterOp>(&ops[i]->node);
+        if (!f) break;
+        req.filters.push_back(f->pred);
+        plan.cand_pos.push_back(i);
+    }
+
+    // A slice reachable from the scan through row-preserving ops bounds how
+    // many rows the source need produce. Only when NOTHING removes rows on the
+    // way: the source applies the request as a whole, and whether it honored a
+    // filter is only known from the ScanResult it has not returned yet, so a
+    // limit sent alongside an unapplied filter would truncate the source before
+    // the engine ever filters. req.filters being empty is what rules that out.
+    // The Slice op still runs below - limit is a hint, and a source may return
+    // more rows than asked (or ignore it entirely).
+    if (req.filters.empty()) {
+        for (std::size_t i = plan.first; i < ops.size(); ++i) {
+            const auto& n = ops[i]->node;
+            if (const auto* s = std::get_if<SliceOp>(&n)) {
+                // offset + len is how many rows must be produced to satisfy
+                // the window. Signed overflow is UB, so leave the limit unset
+                // when the sum would not fit; unset just means the source
+                // produces everything, which is what a window that large
+                // wanted anyway.
+                if (s->offset >= 0 && s->len >= 0 &&
+                    s->offset <=
+                        std::numeric_limits<std::int64_t>::max() - s->len)
+                    req.limit = s->offset + s->len;
+                break;
+            }
+            // Row-count- and order-preserving ops keep a source prefix a valid
+            // prefix of this op's output; anything else (filter, sort, group,
+            // explode, unique, sample, take, reverse) does not.
+            if (!std::holds_alternative<SelectOp>(n) &&
+                !std::holds_alternative<WithColumnOp>(n) &&
+                !std::holds_alternative<RenameOp>(n) &&
+                !std::holds_alternative<FillNullOp>(n) &&
+                !std::holds_alternative<WithRowIndexOp>(n))
+                break;
+        }
+    }
+    return plan;
+}
+
+// `explain()` of the plan `plan`: the scan, what the source says about it, and
+// each op with what a plugin node says about it.
+dstd::String plan_text(const PlanParts& plan, std::uint64_t memory_budget) {
     dstd::String s = dstd::fmt<"scan [{}]">(join_names(plan.source->names()));
-    for (const auto& op : plan.ops) s += dstd::fmt<"\n{}">(describe_op(*op));
+    const PlannedScan scan = plan_scan_request(
+        plan.ops, memory::resolve_spill_budget(memory_budget));
+    const SourceExplain said = plan.source->explain(scan.req);
+    if (const dstd::String line = explain_line(said.label, said.lines);
+        !line.empty())
+        s += dstd::fmt<"\n{}">(line);
+    for (const auto& op : plan.ops) {
+        s += dstd::fmt<"\n{}">(describe_op(*op));
+        if (const auto* node = std::get_if<NodeOp>(&op->node);
+            node && node->impl) {
+            const dstd::Vector<ExplainLine> lines =
+                node->impl->explain(node->args);
+            if (const dstd::String line =
+                    explain_line(dstd::fmt<"node '{}'">(node->name), lines);
+                !line.empty())
+                s += dstd::fmt<"\n{}">(line);
+        }
+    }
     return s;
 }
 
+}  // namespace
+
+dstd::String LazyFrame::explain() const {
+    return plan_text(optimize_parts(source_, ops_), memory_budget_);
+}
+
 LazyFrame LazyFrame::memory_budget(std::uint64_t bytes) const {
-    return LazyFrame(source_, ops_, bytes, error_);
+    return LazyFrame(source_, ops_, bytes, error_, index_);
 }
 
 LazyFrame LazyFrame::auto_spill() const {
     // Same policy as the default (0) and as View: ~1/3 of available
     // memory.
-    return LazyFrame(source_, ops_, memory::resolve_spill_budget(0), error_);
+    return LazyFrame(source_, ops_, memory::resolve_spill_budget(0), error_,
+                     index_);
 }
 
 dstd::Result<void> LazyFrame::status() const {
@@ -5591,15 +6004,43 @@ dstd::Result<void> LazyFrame::status() const {
     return {};
 }
 
+dstd::Vector<dstd::String> LazyFrame::index_names() const {
+    return plan_index(*this);
+}
+
+dstd::Result<LazyFrame> LazyFrame::with_index(
+    dstd::Vector<dstd::String> names) const {
+    const Schema schema = output_schema();
+    const bool complete = !has_undeclared_columns();
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        const Field* field = find_field(schema, names[i]);
+        if (!field && complete)
+            return not_found<"with_index: no column named {}">(names[i]);
+        for (std::size_t j = 0; j < i; ++j)
+            if (names[j] == names[i])
+                return invalid_argument<"with_index: column {} repeats">(
+                    names[i]);
+        if (field && (field->type.id == TypeId::List ||
+                      field->type.id == TypeId::Struct))
+            return invalid_argument<
+                "with_index: column {} has type {}, which has no hash and "
+                "equality">(names[i], type_name(field->type.id));
+    }
+    auto decl = dstd::make_shared<const detail::IndexDecl>(
+        detail::IndexDecl{std::move(names), ops_.size()});
+    return LazyFrame(source_, ops_, memory_budget_, error_, std::move(decl));
+}
+
 LazyFrame LazyFrame::failed(dstd::Error error) const {
     if (error_) return *this;
     return LazyFrame(source_, ops_, memory_budget_,
-                     dstd::make_shared<const dstd::Error>(std::move(error)));
+                     dstd::make_shared<const dstd::Error>(std::move(error)),
+                     index_);
 }
 
 LazyFrame LazyFrame::with_error_of(const LazyFrame& other) const {
     if (error_ || !other.error_) return *this;
-    return LazyFrame(source_, ops_, memory_budget_, other.error_);
+    return LazyFrame(source_, ops_, memory_budget_, other.error_, index_);
 }
 
 LazyFrame LazyFrame::op(dstd::String name, OpArgs args) const {
@@ -5616,8 +6057,7 @@ LazyFrame LazyFrame::op(dstd::String name, OpArgs args) const {
 }
 
 dstd::Result<DataFrame> morsel_to_frame(
-    Morsel&& m, NameCache& cache,
-    const dstd::Vector<dstd::String>& static_names,
+    Morsel&& m, NameCache& cache, dstd::Span<const dstd::String> static_names,
     const dstd::Optional<dstd::Vector<dstd::String>>& out_names) {
     return frame_from_morsel(std::move(m), cache, static_names, out_names);
 }
@@ -5688,79 +6128,100 @@ class GuardCursor final : public Cursor {
     dstd::UniquePtr<Cursor> in_;
 };
 
+// What an EXPLAIN ANALYZE run measured at one stage of the chain.
+struct StageStats {
+    dstd::String label;
+    std::atomic<std::uint64_t> rows{0};
+    std::atomic<std::uint64_t> ns{0};
+};
+
+// What an EXPLAIN ANALYZE run measured: each stage of the chain, from the scan
+// up, and the votes the source gave the filters it was offered.
+struct AnalyzeRun {
+    dstd::SharedPtr<RunCounters> counters = dstd::make_shared<RunCounters>();
+    dstd::Vector<dstd::UniquePtr<StageStats>> stages;
+    dstd::Vector<Pushed> votes;
+
+    StageStats* add_stage(dstd::String label) {
+        stages.push_back(dstd::make_unique<StageStats>());
+        stages.back()->label = std::move(label);
+        return stages.back().get();
+    }
+};
+
+// Counts the rows a stage hands on and the time spent in its next(), inputs
+// included. Only an EXPLAIN ANALYZE chain has it.
+class StatsCursor final : public Cursor {
+   public:
+    StatsCursor(dstd::UniquePtr<Cursor> in, StageStats* stats)
+        : in_(std::move(in)), stats_(stats) {}
+
+    coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
+        const std::uint64_t start = dstd::steady_now_ns();
+        auto task = in_->next(max_rows);
+        MorselResult out = co_await std::move(task);
+        note(start, out);
+        co_return std::move(out);
+    }
+
+    bool try_next(std::int64_t max_rows, MorselResult& out) override {
+        const std::uint64_t start = dstd::steady_now_ns();
+        if (!in_->try_next(max_rows, out)) return false;
+        note(start, out);
+        return true;
+    }
+
+    dstd::Optional<dstd::Vector<dstd::String>> out_names() const override {
+        return in_->out_names();
+    }
+
+    coro::CoroTask<bool> narrow(const Expr& predicate) override {
+        auto task = in_->narrow(predicate);
+        co_return co_await std::move(task);
+    }
+
+    std::uint64_t resident_bytes() const override {
+        return in_->resident_bytes();
+    }
+
+    coro::CoroTask<std::uint64_t> reclaim(std::uint64_t want) override {
+        auto task = in_->reclaim(want);
+        co_return co_await std::move(task);
+    }
+
+   private:
+    void note(std::uint64_t start, const MorselResult& out) {
+        stats_->ns.fetch_add(dstd::steady_now_ns() - start,
+                             std::memory_order_relaxed);
+        if (out && *out)
+            stats_->rows.fetch_add(static_cast<std::uint64_t>((*out)->rows),
+                                   std::memory_order_relaxed);
+    }
+
+    dstd::UniquePtr<Cursor> in_;
+    StageStats* stats_;
+};
+
 // Lower `ops` onto `source`: push a leading projection and the contiguous run
 // of filters after it into the scan, then stack every op the source did not
 // apply exactly. This is the plan's lowering (b); the driver below runs it.
 dstd::Result<CursorChain> lower_cursor_chain(
     dstd::SharedPtr<const Source> source_ptr,
-    const dstd::Vector<dstd::SharedPtr<const LazyOp>>& ops,
-    std::uint64_t budget) {
+    dstd::Span<const dstd::SharedPtr<const LazyOp>> ops, std::uint64_t budget,
+    const dstd::SharedPtr<RunCounters>& counters,
+    AnalyzeRun* analyze = nullptr) {
     const Source& source = *source_ptr;
     const dstd::Vector<dstd::String> names = source.names();
 
-    // A leading Select is a pure source projection: pushdown_projections emits
-    // one with the filter col-refs already remapped into it, and a user's own
-    // leading select is one too. Push it into the scan so the source harvests
-    // only those columns; the source returns them in this exact order, so the
-    // now-identity Select and the remapped filters stay positionally aligned.
-    dstd::Vector<dstd::String> projection;
-    std::size_t first = 0;
-    if (!ops.empty())
-        if (const auto* s = std::get_if<SelectOp>(&ops.front()->node);
-            s && rest_rule(*ops.front(), {}) == RestRule::Omits) {
-            projection = s->names;
-            first = 1;
-        }
+    PlannedScan planned = plan_scan_request(ops, budget);
+    ScanRequest& req = planned.req;
+    req.counters = counters;
+    const dstd::Vector<dstd::String> projection = req.projection;
+    const dstd::Vector<std::size_t>& cand_pos = planned.cand_pos;
 
-    // Candidate filters: the contiguous run right after the optional
-    // projection. Their col-refs are positional against the scan's column set
-    // (projection when present, else the source schema), which is exactly what
-    // scan() resolves them against.
-    ScanRequest req;
-    req.projection = projection;
-    req.memory_budget = budget;
-    dstd::Vector<std::size_t> cand_pos;
-    for (std::size_t i = first; i < ops.size(); ++i) {
-        const auto* f = std::get_if<FilterOp>(&ops[i]->node);
-        if (!f) break;
-        req.filters.push_back(f->pred);
-        cand_pos.push_back(i);
-    }
-
-    // A slice reachable from the scan through row-preserving ops bounds how
-    // many rows the source need produce. Only when NOTHING removes rows on the
-    // way: the source applies the request as a whole, and whether it honored a
-    // filter is only known from the ScanResult it has not returned yet, so a
-    // limit sent alongside an unapplied filter would truncate the source before
-    // the engine ever filters. req.filters being empty is what rules that out.
-    // The Slice op still runs below - limit is a hint, and a source may return
-    // more rows than asked (or ignore it entirely).
-    if (req.filters.empty()) {
-        for (std::size_t i = first; i < ops.size(); ++i) {
-            const auto& n = ops[i]->node;
-            if (const auto* s = std::get_if<SliceOp>(&n)) {
-                // offset + len is how many rows must be produced to satisfy
-                // the window. Signed overflow is UB, so leave the limit unset
-                // when the sum would not fit; unset just means the source
-                // produces everything, which is what a window that large
-                // wanted anyway.
-                if (s->offset >= 0 && s->len >= 0 &&
-                    s->offset <=
-                        std::numeric_limits<std::int64_t>::max() - s->len)
-                    req.limit = s->offset + s->len;
-                break;
-            }
-            // Row-count- and order-preserving ops keep a source prefix a valid
-            // prefix of this op's output; anything else (filter, sort, group,
-            // explode, unique, sample, take, reverse) does not.
-            if (!std::holds_alternative<SelectOp>(n) &&
-                !std::holds_alternative<WithColumnOp>(n) &&
-                !std::holds_alternative<RenameOp>(n) &&
-                !std::holds_alternative<FillNullOp>(n) &&
-                !std::holds_alternative<WithRowIndexOp>(n))
-                break;
-        }
-    }
+    auto planned_scan = source.plan(req);
+    if (!planned_scan) return planned_scan.error();
+    req.plan = std::move(*planned_scan);
 
     auto scanned = source.scan(req);
     if (!scanned) return scanned.error();
@@ -5775,6 +6236,11 @@ dstd::Result<CursorChain> lower_cursor_chain(
     CursorChain chain;
     chain.source = std::move(source_ptr);
     chain.cursor = dstd::make_unique<GuardCursor>(std::move(r.cursor));
+    if (analyze) {
+        analyze->votes = r.filters;
+        chain.cursor = dstd::make_unique<StatsCursor>(
+            std::move(chain.cursor), analyze->add_stage("scan"));
+    }
     chain.schema = projection.empty() ? names : projection;
     if (!chain.schema.empty() &&
         std::find(drop.begin(), drop.end(), false) != drop.end()) {
@@ -5814,9 +6280,13 @@ dstd::Result<CursorChain> lower_cursor_chain(
             chain.schema.pop_back();
         }
         auto made = make_cursor(*ops[i], std::move(chain.cursor), chain.schema,
-                                budget, own_rest);
+                                budget, own_rest, counters);
         if (!made) return made.error();
         chain.cursor = std::move(*made);
+        if (analyze)
+            chain.cursor = dstd::make_unique<StatsCursor>(
+                std::move(chain.cursor),
+                analyze->add_stage(describe_op(*ops[i])));
         chain.schema = has_rest(chain.schema)
                            ? rest_out_schema(*ops[i], chain.schema)
                            : out_schema(*ops[i], std::move(chain.schema));
@@ -5852,7 +6322,8 @@ coro::AsyncGenerator<dstd::Result<DataFrame>> drive_cursor_chain(
 namespace {
 
 coro::AsyncGenerator<dstd::Result<DataFrame>> stream_plan(
-    PlanParts plan, std::uint64_t memory_budget, std::int64_t batch_size) {
+    PlanParts plan, std::uint64_t memory_budget, std::int64_t batch_size,
+    const dstd::SharedPtr<RunCounters>& counters) {
     // 0 resolves to auto (~1/3 RAM), same policy as View.
     const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
     const std::int64_t eff_rows =
@@ -5865,7 +6336,8 @@ coro::AsyncGenerator<dstd::Result<DataFrame>> stream_plan(
     memory::PoolHandle pool = memory::detail::Manager::get().root().child(
         "query", memory::PoolKind::Results);
     memory::detail::Scope scope{pool ? *pool : memory::detail::current_pool()};
-    auto lowered = lower_cursor_chain(std::move(plan.source), plan.ops, budget);
+    auto lowered =
+        lower_cursor_chain(std::move(plan.source), plan.ops, budget, counters);
     if (!lowered) return failed_stream(lowered.error());
     CursorChain chain = std::move(*lowered);
     chain.pool = std::move(pool);
@@ -5878,11 +6350,94 @@ coro::AsyncGenerator<dstd::Result<DataFrame>> stream_plan(
 
 }  // namespace
 
+namespace {
+
+// Pulls `chain` to its end and drops the rows, so each stage's counts and
+// times are the ones of a real run. The cursors are gone when it returns, and
+// with them every cursor of the plugins, so the counters are complete.
+coro::CoroTask<dstd::Result<void>> drain_analyzed(CursorChain chain,
+                                                  std::int64_t rows) {
+    dstd::Optional<dstd::Error> failed;
+    for (;;) {
+        auto task = chain.cursor->next(rows);
+        auto m = co_await std::move(task);
+        if (!m) {
+            failed = m.error();
+            break;
+        }
+        if (!*m) break;
+    }
+    chain.cursor.reset();
+    if (failed) co_return *failed;
+    co_return dstd::Result<void>{};
+}
+
+// The chain of `plan`, measuring into `run`, under the pool of the run.
+dstd::Result<CursorChain> open_analyzed(PlanParts plan,
+                                        std::uint64_t memory_budget,
+                                        AnalyzeRun& run) {
+    const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
+    memory::PoolHandle pool = memory::detail::Manager::get().root().child(
+        "query", memory::PoolKind::Results);
+    memory::detail::Scope scope{pool ? *pool : memory::detail::current_pool()};
+    auto lowered = lower_cursor_chain(std::move(plan.source), plan.ops, budget,
+                                      run.counters, &run);
+    if (!lowered) return lowered.error();
+    CursorChain chain = std::move(*lowered);
+    chain.pool = std::move(pool);
+    return chain;
+}
+
+dstd::String format_millis(std::uint64_t ns) {
+    return dstd::fmt<"{}.{}">(ns / 1000000, (ns / 100000) % 10);
+}
+
+}  // namespace
+
+coro::CoroTask<dstd::Result<dstd::String>> LazyFrame::explain_analyze(
+    std::int64_t batch_size) const {
+    if (error_) co_return *error_;
+    PlanParts plan = optimize_parts(source_, ops_);
+    dstd::String text = plan_text(plan, memory_budget_);
+    AnalyzeRun run;
+    auto chain = open_analyzed(std::move(plan), memory_budget_, run);
+    if (!chain) co_return chain.error();
+    auto draining = drain_analyzed(
+        std::move(*chain), batch_size > 0 ? batch_size : DEFAULT_BATCH_SIZE);
+    auto ran = co_await std::move(draining);
+    if (!ran) co_return ran.error();
+
+    const char* const vote_name[] = {"no", "inexact", "exact"};
+    text += "\nanalyze:";
+    for (std::size_t i = 0; i < run.votes.size(); ++i)
+        text += dstd::fmt<"\n  pushed filter {}: {}">(
+            i, vote_name[static_cast<std::size_t>(run.votes[i])]);
+    std::uint64_t rows_in = 0;
+    for (std::size_t i = 0; i < run.stages.size(); ++i) {
+        const StageStats& st = *run.stages[i];
+        const std::uint64_t rows_out = st.rows.load(std::memory_order_relaxed);
+        text +=
+            i == 0
+                ? dstd::fmt<"\n  {}: rows out {}, time (incl. inputs) {} ms">(
+                      st.label, rows_out,
+                      format_millis(st.ns.load(std::memory_order_relaxed)))
+                : dstd::fmt<
+                      "\n  {}: rows in {}, rows out {}, time (incl. inputs) {} "
+                      "ms">(
+                      st.label, rows_in, rows_out,
+                      format_millis(st.ns.load(std::memory_order_relaxed)));
+        rows_in = rows_out;
+    }
+    for (const CounterTotal& c : run.counters->totals())
+        text += dstd::fmt<"\n  counter {}.{}: {}">(c.owner, c.name, c.value);
+    co_return text;
+}
+
 coro::AsyncGenerator<dstd::Result<DataFrame>> LazyFrame::stream(
     std::int64_t batch_size) const {
     if (error_) return failed_stream(*error_);
     return stream_plan(optimize_parts(source_, ops_), memory_budget_,
-                       batch_size);
+                       batch_size, run_counters_);
 }
 
 namespace {
@@ -5892,7 +6447,8 @@ dstd::Result<CursorChain> open_chain(const LazyFrame& lf) {
                                     detail::PlanAccess::ops(lf));
     return lower_cursor_chain(
         std::move(plan.source), plan.ops,
-        memory::resolve_spill_budget(detail::PlanAccess::memory_budget(lf)));
+        memory::resolve_spill_budget(detail::PlanAccess::memory_budget(lf)),
+        detail::PlanAccess::run_counters(lf));
 }
 
 CursorResult without_rest_column(CursorChain chain) {
@@ -5955,7 +6511,8 @@ bool may_expand(const LazyOp& op) {
 }
 
 coro::CoroTask<dstd::Result<DataFrame>> collect_plan(
-    PlanParts plan, std::uint64_t memory_budget, std::int64_t batch_size) {
+    PlanParts plan, std::uint64_t memory_budget, std::int64_t batch_size,
+    dstd::SharedPtr<RunCounters> counters) {
     // A resident source runs whole-column, matching eager, unless an op can
     // make more than it reads or the frame is past half the automatic budget
     // (a sort or a group-by holds about its input again). An explicit
@@ -5973,7 +6530,8 @@ coro::CoroTask<dstd::Result<DataFrame>> collect_plan(
     }
     const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
     auto draining = drain_stream(
-        stream_plan(std::move(plan), memory_budget, batch_size), budget);
+        stream_plan(std::move(plan), memory_budget, batch_size, counters),
+        budget);
     co_return co_await std::move(draining);
 }
 
@@ -6188,11 +6746,11 @@ coro::CoroTask<dstd::Result<void>> batch_leaves(
         if (!s) return true;
         const dstd::Vector<dstd::String> all = m->parts.source->names();
         return std::all_of(
-            s->names.begin(), s->names.end(), [&](const dstd::String& n) {
+            s->names.begin(), s->names.end(), [&](dstd::StringView n) {
                 return std::find(all.begin(), all.end(), n) != all.end();
             });
     };
-    auto sources_of = [](const dstd::Vector<PlannedTree*>& members) {
+    auto sources_of = [](dstd::Span<PlannedTree* const> members) {
         dstd::Vector<dstd::SharedPtr<const Source>> out;
         out.reserve(members.size());
         for (PlannedTree* m : members) out.push_back(m->parts.source);
@@ -6276,6 +6834,7 @@ namespace {
 coro::CoroTask<dstd::Result<DataFrame>> collect_owned(LazyFrame plan,
                                                       std::uint64_t budget,
                                                       std::int64_t batch_size) {
+    const IndexList index = plan_index(plan);
     PlannedTree tree = plan_tree(plan);
     if (!tree.children.empty()) {
         dstd::Vector<PlannedTree*> leaves;
@@ -6285,8 +6844,11 @@ coro::CoroTask<dstd::Result<DataFrame>> collect_owned(LazyFrame plan,
         if (!batched) co_return batched.error();
     }
     auto collecting =
-        collect_plan(finish_tree(std::move(tree)), budget, batch_size);
-    co_return co_await std::move(collecting);
+        collect_plan(finish_tree(std::move(tree)), budget, batch_size,
+                     detail::PlanAccess::run_counters(plan));
+    auto collected = co_await std::move(collecting);
+    if (collected) apply_index_names(index, *collected);
+    co_return collected;
 }
 
 // A task that ends with `error`, for a terminal on a plan that failed to
@@ -6331,7 +6893,12 @@ coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_all(
         if (auto status = lf.status(); !status) co_return status.error();
     dstd::Vector<PlannedTree> trees;
     trees.reserve(plans.size());
-    for (const LazyFrame& lf : plans) trees.push_back(plan_tree(lf));
+    dstd::Vector<IndexList> indexes;
+    indexes.reserve(plans.size());
+    for (const LazyFrame& lf : plans) {
+        indexes.push_back(plan_index(lf));
+        trees.push_back(plan_tree(lf));
+    }
     dstd::Vector<PlannedTree*> leaves;
     dstd::Vector<PlannedTree*> roots;
     for (PlannedTree& t : trees) {
@@ -6349,27 +6916,29 @@ coro::CoroTask<dstd::Result<dstd::Vector<DataFrame>>> collect_all(
     for (PlannedTree& t : trees) {
         const std::uint64_t budget =
             common::share_spill_budget(t.memory_budget, trees.size());
-        runs.push_back(collect_plan(finish_tree(std::move(t)), budget, 0));
+        runs.push_back(
+            collect_plan(finish_tree(std::move(t)), budget, 0, nullptr));
     }
     auto results = co_await coro::when_all(std::move(runs));
     dstd::Vector<DataFrame> frames;
     frames.reserve(results.size());
-    for (auto& r : results) {
-        if (!r) co_return r.error();
-        frames.push_back(std::move(*r));
+    for (std::size_t i = 0; i < results.size(); ++i) {
+        if (!results[i]) co_return results[i].error();
+        apply_index_names(indexes[i], *results[i]);
+        frames.push_back(std::move(*results[i]));
     }
     co_return frames;
 }
 
-LoweredGroupAggs lower_group_aggs(const dstd::Vector<GroupAgg>& aggs) {
+LoweredGroupAggs lower_group_aggs(dstd::Span<const GroupAgg> aggs) {
     LoweredGroupAggs out;
     dstd::HashMap<dstd::String, std::int32_t> dedup;
-    auto resolve = [&](const dstd::String& name) -> std::int32_t {
+    auto resolve = [&](dstd::StringView name) -> std::int32_t {
         auto it = dedup.find(name);
         if (it != dedup.end()) return it->second;
         const std::int32_t idx =
             static_cast<std::int32_t>(out.value_names.size());
-        out.value_names.push_back(name);
+        out.value_names.emplace_back(name);
         dedup.emplace(name, idx);
         return idx;
     };
@@ -6381,9 +6950,8 @@ LoweredGroupAggs lower_group_aggs(const dstd::Vector<GroupAgg>& aggs) {
 
 dstd::Result<void> agg_accumulate_chunk(
     AggState& state, const DataFrame& frame,
-    const dstd::Vector<dstd::String>& keys,
-    const dstd::Vector<dstd::String>& value_names,
-    const dstd::String& dyn_prefix) {
+    dstd::Span<const dstd::String> keys,
+    dstd::Span<const dstd::String> value_names, dstd::StringView dyn_prefix) {
     dstd::Vector<const Series*> kcols;
     kcols.reserve(keys.size());
     for (const dstd::String& k : keys) {
@@ -6435,12 +7003,7 @@ coro::CoroTask<dstd::Result<AggStatePtr>> LazyFrame::collect_group_state(
 }
 
 LazyFrame DataFrame::lazy() const {
-    DataFrame shared;
-    shared.names = names;
-    shared.columns.reserve(columns.size());
-    for (const Series& c : columns) shared.columns.push_back(c.share());
-    return LazyFrame::scan(
-        dstd::make_shared<InMemorySource>(std::move(shared)));
+    return LazyFrame::scan(dstd::make_shared<InMemorySource>(share()));
 }
 
 LazyFrame lazy(DataFrame frame) {
@@ -6485,14 +7048,14 @@ LazyFrame optimize_plan(const LazyFrame& lf) {
 
 namespace {
 
-void fingerprint_group_aggs(Fingerprint& fp,
-                            const dstd::Vector<GroupAgg>& aggs) {
+void fingerprint_group_aggs(Fingerprint& fp, dstd::Span<const GroupAgg> aggs) {
     fp.pod(static_cast<std::uint64_t>(aggs.size()));
     for (const GroupAgg& a : aggs) {
         fp.pod(a.op);
         fp.str(a.column);
         fp.str(a.out);
         fp.pod(a.param);
+        fp.pod(a.interp);
         fp.str(a.by);
         fp.str(a.fn);
         fp.strs(a.args);
@@ -6548,6 +7111,7 @@ void fingerprint_op(Fingerprint& fp, const LazyOp& op) {
             [&](const SortByOp& o) {
                 fp.str(o.name);
                 fp.pod(o.descending);
+                fp.pod(o.nulls_last);
             },
             [&](const UniqueOp& o) { fp.strs(o.subset); },
             [&](const SampleOp& o) {
@@ -6590,6 +7154,8 @@ void fingerprint_op(Fingerprint& fp, const LazyOp& op) {
                 fp.strs(o.by);
                 fp.pod(static_cast<std::uint64_t>(o.descending.size()));
                 for (bool d : o.descending) fp.pod(d);
+                fp.pod(static_cast<std::uint64_t>(o.nulls_last.size()));
+                for (bool d : o.nulls_last) fp.pod(d);
             },
             [&](const JoinOp& o) {
                 fp.pod(plan_fingerprint(o.other));
@@ -6673,7 +7239,8 @@ LazyFrame tap(const LazyFrame& lf, dstd::SharedPtr<const Tap> tap) {
     ops.push_back(dstd::make_shared<LazyOp>(LazyOp{TapOp{std::move(tap)}}));
     return PlanAccess::with_error_of(
         PlanAccess::make(PlanAccess::source_ptr(lf), std::move(ops),
-                         PlanAccess::memory_budget(lf)),
+                         PlanAccess::memory_budget(lf),
+                         PlanAccess::index_decl(lf)),
         lf);
 }
 
@@ -6684,7 +7251,8 @@ LazyFrame fail_plan(const LazyFrame& lf, dstd::Error error) {
 LazyFrame rebase(const LazyFrame& lf, dstd::SharedPtr<const Source> source) {
     return PlanAccess::with_error_of(
         PlanAccess::make(std::move(source), PlanAccess::ops(lf),
-                         PlanAccess::memory_budget(lf)),
+                         PlanAccess::memory_budget(lf),
+                         PlanAccess::index_decl(lf)),
         lf);
 }
 

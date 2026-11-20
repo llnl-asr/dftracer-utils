@@ -456,7 +456,7 @@ struct QueryFrame {
     QueryFrame(QueryFrame&& o) noexcept : df(o.df) { o.df = nullptr; }
 };
 
-dftu_series* string_column(const dstd::Vector<dstd::String>& vals) {
+dftu_series* string_column(dstd::Vector<dstd::String> vals) {
     dstd::Vector<std::int32_t> offsets(vals.size() + 1, 0);
     dstd::String data;
     for (std::size_t i = 0; i < vals.size(); ++i) {
@@ -468,8 +468,8 @@ dftu_series* string_column(const dstd::Vector<dstd::String>& vals) {
                                   nullptr);
 }
 
-QueryFrame cat_name_frame(const dstd::Vector<dstd::String>& cats,
-                          const dstd::Vector<dstd::String>& names) {
+QueryFrame cat_name_frame(dstd::Vector<dstd::String> cats,
+                          dstd::Vector<dstd::String> names) {
     const char* col_names[2] = {"cat", "name"};
     dftu_series* cols[2] = {string_column(cats), string_column(names)};
     QueryFrame f;
@@ -477,8 +477,8 @@ QueryFrame cat_name_frame(const dstd::Vector<dstd::String>& cats,
     return f;
 }
 
-dftu_duql* compile_query(const dftu_svc_duql* qx, void* h,
-                         const dstd::String& src, dftu_status* status = nullptr,
+dftu_duql* compile_query(const dftu_svc_duql* qx, void* h, dstd::StringView src,
+                         dftu_status* status = nullptr,
                          dstd::String* message = nullptr) {
     test_plugin_common::Ctx c;
     dftu_duql* q = nullptr;

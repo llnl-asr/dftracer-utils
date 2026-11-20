@@ -41,7 +41,7 @@ dstd::String fmt_rt(dstd::StringView f, const A&... a) {
     return out;
 }
 
-dstd::String gunzip_all(const dstd::String& path) {
+dstd::String gunzip_all(dstd::CStringView path) {
     gzFile g = gzopen(path.c_str(), "rb");
     REQUIRE(g != nullptr);
     dstd::String out;
@@ -130,8 +130,8 @@ TEST_CASE("line_format - values and escapes") {
           "a\"b\n");
     CHECK(fmt_rt<line_format::JsonEscape>("{}", "q\"") == "q\\\"\n");
     CHECK(fmt_rt("{}", "q\"") == "q\"\n");
-    CHECK(fmt_ct<"{}{}{}">(dstd::String("s"), "lit", (const char*)"p") ==
-          "slitp\n");
+    CHECK(fmt_ct<"{}{}{}">(dstd::String("s"), "lit",
+                           static_cast<const char*>("p")) == "slitp\n");
     CHECK(fmt_ct<"{}">(line_format::raw("a\"b")) == "a\"b\n");
     CHECK(fmt_ct<"{}">(std::numeric_limits<std::int64_t>::min()) ==
           "-9223372036854775808\n");
@@ -201,7 +201,8 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
         auto r = co_await w->append_json(*lf, 1, 2);
         bad_count = !r.has_value() &&
                     r.error().is_code(common::ErrorCode::InvalidArgument);
-        auto r2 = co_await w->append_json<"{}">((const char*)nullptr);
+        auto r2 =
+            co_await w->append_json<"{}">(static_cast<const char*>(nullptr));
         char* null_mut = nullptr;
         auto r3 = co_await w->append_fmt<"{}">(null_mut);
         null_mut_arg = !r3.has_value() &&
@@ -228,11 +229,11 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
     CHECK(null_arg);
     CHECK(null_mut_arg);
     CHECK(gunzip_all(p1) == want);
-    auto lines = [](const dstd::String& t) {
+    auto lines = [](dstd::StringView t) {
         dstd::MultiSet<dstd::String> out;
         for (std::size_t b = 0; b < t.size();) {
             const auto e = t.find('\n', b);
-            out.insert(t.substr(b, e - b + 1));
+            out.insert(dstd::String(t.substr(b, e - b + 1)));
             b = e + 1;
         }
         return out;

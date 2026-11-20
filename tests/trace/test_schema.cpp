@@ -14,8 +14,8 @@ using namespace dftracer::utils::trace;
 namespace {
 
 // Parse one NDJSON line into a DFTracerEvent via the DOM path.
-DFTracerEvent parse_line(simdjson::dom::parser& p, const dstd::String& line) {
-    dstd::String pad = line;
+DFTracerEvent parse_line(simdjson::dom::parser& p, dstd::StringView line) {
+    dstd::String pad(line);
     pad.resize(line.size() + simdjson::SIMDJSON_PADDING);
     auto doc = p.parse(pad.data(), line.size(), false);
     DFTracerEvent ev;

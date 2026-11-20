@@ -6,8 +6,10 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -23,6 +25,10 @@
 #include <fstream>
 #include <functional>
 #include <type_traits>
+
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+#include <valgrind/memcheck.h>
+#endif
 
 extern "C" {
 #endif
@@ -146,13 +152,25 @@ inline int valgrind_threads(int n) {
 #endif
 }
 
+/// Ends a forked child with `code`. A child keeps only the thread that forked,
+/// so under Valgrind its exit leak check reports what the parent's pool
+/// threads held (thread locals, thread arguments) and turns the exit code into
+/// 1. Reports of the child's own code, up to this call, stay on; only the
+/// exit leak check is turned off.
+[[noreturn]] inline void exit_forked_child(int code) {
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    VALGRIND_CLO_CHANGE("--leak-check=no");
+#endif
+    ::_exit(code);
+}
+
 /// Removes `path` when this process exits normally, so a test that never
 /// cleans up leaves nothing in the temp directory. A forked child that calls
 /// exit() leaves its parent's paths alone.
 void remember_test_path(const dftracer::utils::dstd::Path& path);
 
 inline dftracer::utils::dstd::Path make_unique_test_path(
-    const dftracer::utils::dstd::String& name) {
+    dftracer::utils::dstd::StringView name) {
     static std::atomic<unsigned long long> counter{0};
     // The pid is what keeps concurrently running test processes apart. None
     // of the other components do: steady_clock reads the same on processes
@@ -174,7 +192,8 @@ inline dftracer::utils::dstd::Path make_unique_test_path(
                            dftracer::utils::dstd::to_string(
                                counter.fetch_add(1, std::memory_order_relaxed));
     dftracer::utils::dstd::Path path =
-        dftracer::utils::dstd::fs::temp_directory() / (name + "_" + unique_id);
+        dftracer::utils::dstd::fs::temp_directory() /
+        (dftracer::utils::dstd::String(name) + "_" + unique_id);
     remember_test_path(path);
     return path;
 }
@@ -183,18 +202,18 @@ inline dftracer::utils::dstd::Path make_unique_test_path(
 /// must be gzip, so fixtures that used to be written as plain .pfw go
 /// through this.
 dftracer::utils::dstd::String write_gz_trace(
-    const dftracer::utils::dstd::String& path,
-    const dftracer::utils::dstd::String& content);
+    dftracer::utils::dstd::CStringView path,
+    dftracer::utils::dstd::StringView content);
 
 /// Like write_gz_trace, but in stored (uncompressed) deflate blocks written
 /// here, so the file has the same bytes whichever zlib the process loads. For
 /// tests that compare an index with recorded digests.
 dftracer::utils::dstd::String write_stored_gz_trace(
-    const dftracer::utils::dstd::String& path,
-    const dftracer::utils::dstd::String& content);
+    dftracer::utils::dstd::StringView path,
+    dftracer::utils::dstd::StringView content);
 
-bool compress_file_to_gzip(const dftracer::utils::dstd::String& input_file,
-                           const dftracer::utils::dstd::String& output_file);
+bool compress_file_to_gzip(dftracer::utils::dstd::StringView input_file,
+                           dftracer::utils::dstd::CStringView output_file);
 
 /// Like compress_file_to_gzip but emits a multi-member gzip: the input is
 /// split into `member_bytes`-sized uncompressed chunks, each written as an
@@ -202,14 +221,14 @@ bool compress_file_to_gzip(const dftracer::utils::dstd::String& input_file,
 /// by member, so multi-member output keeps a read from re-inflating the whole
 /// file to reach a mid-file offset.
 bool compress_file_to_gzip_multimember(
-    const dftracer::utils::dstd::String& input_file,
-    const dftracer::utils::dstd::String& output_file, std::size_t member_bytes);
+    dftracer::utils::dstd::StringView input_file,
+    dftracer::utils::dstd::StringView output_file, std::size_t member_bytes);
 
 /// Build the index for a single gzip trace via the batch pipeline, blocking.
 /// Returns true if indexed or already up to date. Empty `index_dir` writes
 /// next to the trace; a 0 checkpoint size means the default.
-bool build_index(const dftracer::utils::dstd::String& gz,
-                 const dftracer::utils::dstd::String& index_dir = "",
+bool build_index(dftracer::utils::dstd::StringView gz,
+                 dftracer::utils::dstd::StringView index_dir = "",
                  std::size_t checkpoint_size = 0);
 
 class TestEnvironment {
@@ -227,7 +246,7 @@ class TestEnvironment {
     create_test_file();  // Format-aware file creation
     dftracer::utils::dstd::String create_test_gzip_file();
     dftracer::utils::dstd::String get_index_path(
-        const dftracer::utils::dstd::String& gz_file);
+        dftracer::utils::dstd::CStringView gz_file);
     Format format() const { return format_; }
 
     // DFTracer-specific test file creation
@@ -256,8 +275,8 @@ class TestEnvironment {
 // argv is built before the fork. A test process that links a threaded runtime
 // cannot use this at all: use posix_spawn there.
 inline int run_process(
-    const dftracer::utils::dstd::String& binary,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& args) {
+    dftracer::utils::dstd::CStringView binary,
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> args) {
     // A fixed array, so the forked child (which exits with _exit and never
     // unwinds) holds no heap block of its own for a leak checker to count.
     constexpr std::size_t MAX_ARGS = 64;
@@ -281,12 +300,14 @@ inline int run_process(
 // Locate a built binary by name: prefer $env_name (set by CMake), else search
 // the common build-output locations relative to the test's working directory.
 inline dftracer::utils::dstd::String find_binary_by_name(
-    const char* env_name, const dftracer::utils::dstd::String& name) {
-    const char* env_path = std::getenv(env_name);
+    dftracer::utils::dstd::CStringView env_name,
+    dftracer::utils::dstd::StringView name) {
+    const char* env_path = std::getenv(env_name.c_str());
     if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
     for (const dftracer::utils::dstd::String prefix :
          {"./", "../", "../../", "../bin/", "../../bin/"}) {
-        const dftracer::utils::dstd::String path = prefix + name;
+        dftracer::utils::dstd::String path = prefix;
+        path += name;
         if (::access(path.c_str(), X_OK) == 0) return path;
     }
     return "";
@@ -295,7 +316,7 @@ inline dftracer::utils::dstd::String find_binary_by_name(
 /// Point LD_LIBRARY_PATH at the build tree's lib dirs so a binary exec'd from
 /// a test finds the shared libraries it was linked against. `binary` is the
 /// path the build root is derived from.
-void set_test_library_path(const dftracer::utils::dstd::String& binary);
+void set_test_library_path(dftracer::utils::dstd::StringView binary);
 
 /// Run `binary` with `args`, capturing what it writes to stdout (and to stderr
 /// too when `capture_stderr`). Returns the captured text; writes the exit code
@@ -303,14 +324,14 @@ void set_test_library_path(const dftracer::utils::dstd::String& binary);
 /// normally. The output is read to EOF before the wait, so a child that writes
 /// more than a pipe buffer does not deadlock.
 dftracer::utils::dstd::String run_process_capture(
-    const dftracer::utils::dstd::String& binary,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& args,
+    dftracer::utils::dstd::CStringView binary,
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> args,
     bool capture_stderr = false, int* exit_code = nullptr);
 
 /// The first non-empty line of a gzip file, with any trailing CR/LF removed,
 /// or "" if the file cannot be read.
 dftracer::utils::dstd::String gz_first_line(
-    const dftracer::utils::dstd::String& gz_path);
+    dftracer::utils::dstd::CStringView gz_path);
 
 /// Prints the error and aborts when a setup call failed. For code that runs
 /// outside a doctest assertion, such as a constructor of a shared fixture.
@@ -467,7 +488,7 @@ class LineStream {
 /// tree, so a test case that returns early or throws still cleans up.
 class ScopedTestDir {
    public:
-    explicit ScopedTestDir(const dftracer::utils::dstd::String& tag)
+    explicit ScopedTestDir(dftracer::utils::dstd::StringView tag)
         : path_(make_unique_test_path(tag)) {
         dftu_utils_test::require_ok(
             dftracer::utils::dstd::fs::create_directories(path_.view()),
@@ -490,9 +511,8 @@ class ScopedTestDir {
     }
 
     /// Write `content` at `relative_path`, creating any parent directories.
-    void create_file(
-        const dftracer::utils::dstd::String& relative_path,
-        const dftracer::utils::dstd::String& content = "test") const {
+    void create_file(dftracer::utils::dstd::StringView relative_path,
+                     dftracer::utils::dstd::StringView content = "test") const {
         const dftracer::utils::dstd::Path p = path_ / relative_path;
         dftu_utils_test::require_ok(
             dftracer::utils::dstd::fs::create_directories(p.view().parent()),
@@ -501,7 +521,7 @@ class ScopedTestDir {
         ofs << content;
     }
 
-    void create_dir(const dftracer::utils::dstd::String& relative_path) const {
+    void create_dir(dftracer::utils::dstd::StringView relative_path) const {
         dftu_utils_test::require_ok(
             dftracer::utils::dstd::fs::create_directories(
                 (path_ / relative_path).view()),

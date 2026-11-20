@@ -4,6 +4,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -41,20 +42,21 @@ namespace {
 constexpr dstd::StringView SENTINEL = "agg_extension.sentinel";
 
 // `n` POSIX reads of 100 us each, one per millisecond from `start_us`.
-dstd::String write_trace(const dstd::String& dir, const dstd::String& name,
-                         int n, std::uint64_t start_us, bool system = false) {
-    const dstd::String pfw = dir + "/" + name + ".pfw";
+dstd::String write_trace(dstd::CStringView dir, dstd::StringView name, int n,
+                         std::uint64_t start_us, bool system = false) {
+    const dstd::String pfw =
+        dstd::String(dir) + "/" + dstd::String(name) + ".pfw";
     {
         dstd::String out;
         for (int i = 0; i < n; ++i)
             dstd::fmt_append<
-                "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+                "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
                 "\"tid\":1,\"ts\":{}{}\n">(
                 out, start_us + static_cast<std::uint64_t>(i) * 1000,
                 R"(,"dur":100,"args":{}})");
         for (int i = 0; system && i < n; ++i)
             dstd::fmt_append<
-                "{\"ph\":\"C\",\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
+                "{\"ph\":2,\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":1,"
                 "\"tid\":1,\"ts\":{},\"args\":{\"hhash\":\"h1\",\"util\":{}}}"
                 "\n">(out, start_us + static_cast<std::uint64_t>(i) * 1000, i);
         dstd::fs::write_file(dstd::PathView(pfw), out).discard();
@@ -73,16 +75,16 @@ IndexerOptions with_aggregation(std::uint64_t interval_us) {
     return o;
 }
 
-dstd::String index_of(const dstd::String& trace) {
+dstd::String index_of(dstd::CStringView trace) {
     return dstd::String(trace::internal::determine_index_path(trace, ""));
 }
 
-dataframe::DataFrame counters_of(const dstd::Vector<dstd::String>& traces) {
+dataframe::DataFrame counters_of(dstd::Vector<dstd::String> traces) {
     dstd::Vector<trace::views::ViewFile> files;
     for (const auto& t : traces)
         files.push_back({dstd::String(t), dstd::String(index_of(t))});
     return dftu_utils_test::ok(trace::views::View::from_files(std::move(files))
-                                   .collect_typed()
+                                   .collect_index_records()
                                    .get())
         .counters;
 }
@@ -111,7 +113,7 @@ bool same_counters(const dataframe::DataFrame& a,
 
 // A bloom granule no build writes: it survives only while the file's bloom
 // data is not rewritten, so the rewrite keeps everything the file holds.
-void plant_sentinel(const dstd::String& trace) {
+void plant_sentinel(dstd::CStringView trace) {
     const auto opened = dftu_utils_test::open_test_index(index_of(trace));
     const auto snapshot = dftu_utils_test::index_take(opened.snapshot());
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
@@ -144,7 +146,7 @@ void plant_sentinel(const dstd::String& trace) {
     dftu_utils_test::commit_test_build(build);
 }
 
-bool has_sentinel(const dstd::String& trace) {
+bool has_sentinel(dstd::CStringView trace) {
     const auto snapshot = dftu_utils_test::index_snapshot(index_of(trace));
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     return !dftu_utils_test::index_take(
@@ -155,7 +157,7 @@ bool has_sentinel(const dstd::String& trace) {
 }
 
 dstd::Optional<trace::index::ExtensionEntry> agg_entry(
-    const Indexer& ix, const dstd::String& trace) {
+    const Indexer& ix, dstd::CStringView trace) {
     const auto manifest = dftu_utils_test::ok(ix.manifest());
     for (const auto& f : manifest)
         if (dstd::StringView(f.path) == dstd::StringView(trace))
@@ -164,7 +166,7 @@ dstd::Optional<trace::index::ExtensionEntry> agg_entry(
     return dstd::nullopt;
 }
 
-double count_reads(const dstd::Vector<dstd::String>& traces) {
+double count_reads(dstd::Vector<dstd::String> traces) {
     dstd::Vector<trace::views::ViewFile> files;
     for (const auto& t : traces)
         files.push_back({dstd::String(t), dstd::String(index_of(t))});
@@ -395,5 +397,65 @@ TEST_SUITE("AggExtension") {
         const auto entry = agg_entry(ix, b);
         CHECK_FALSE((entry && entry->current));
         CHECK(count_reads({a, b}) == 50);
+    }
+
+    TEST_CASE("a percentiles tier serves a request without percentiles") {
+        dftu_utils_test::TestEnvironment env(10);
+        const auto a = write_trace(env.dir(), "a", 30, 1000, true);
+        const auto b = write_trace(env.dir(), "b", 20, 500'000, true);
+        const dstd::Vector<dstd::String> both = {
+            dstd::String(dstd::StringView(a)),
+            dstd::String(dstd::StringView(b))};
+        auto with_pct = with_aggregation(1'000'000);
+        with_pct.aggregation.compute_percentiles = true;
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(Indexer::open(both, with_pct)).build());
+        plant_sentinel(a);
+
+        auto ix = dftu_utils_test::ok(
+            Indexer::open(both, with_aggregation(1'000'000)));
+        const auto status = dftu_utils_test::ok(ix.status());
+        CHECK_FALSE(status.aggregation_needs_rebuild);
+        CHECK(status.needs_work.empty());
+        for (const auto& t : {a, b}) {
+            REQUIRE(agg_entry(ix, t));
+            CHECK(agg_entry(ix, t)->current);
+        }
+
+        // A changed file is rebuilt with the stored settings, so the root
+        // keeps its percentiles for every file.
+        write_trace(env.dir(), "b", 45, 500'000, true);
+        REQUIRE(dstd::fs::set_mtime_ns(
+                    b, dstd::fs::mtime_ns(b).value() + 10'000'000'000ULL)
+                    .has_value());
+        dftu_utils_test::ok(ix.build());
+        CHECK(has_sentinel(a));
+        CHECK(count_reads({a, b}) == 75);
+        const auto snapshot =
+            dftu_utils_test::ok(trace::index::plan::open_snapshot(index_of(a)));
+        const auto stored = dftu_utils_test::ok(
+            trace::index::schemas::dft::agg::tier::read_config(snapshot));
+        REQUIRE(stored);
+        CHECK(stored->compute_percentiles);
+        CHECK(stored->params_hash == with_pct.aggregation.params_hash());
+
+        auto again = dftu_utils_test::ok(Indexer::open(both, with_pct));
+        CHECK(dftu_utils_test::ok(again.status()).needs_work.empty());
+        CHECK(agg_entry(again, b)->current);
+    }
+
+    TEST_CASE("a tier without percentiles is rebuilt for a request with them") {
+        dftu_utils_test::TestEnvironment env(10);
+        const auto gz = write_trace(env.dir(), "a", 50, 1000);
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(gz))},
+                              with_aggregation(1'000'000)))
+                .build());
+        auto with_pct = with_aggregation(1'000'000);
+        with_pct.aggregation.compute_percentiles = true;
+        auto ix = dftu_utils_test::ok(
+            Indexer::open({dstd::String(dstd::StringView(gz))}, with_pct));
+        CHECK(dftu_utils_test::ok(ix.status()).aggregation_needs_rebuild);
     }
 }

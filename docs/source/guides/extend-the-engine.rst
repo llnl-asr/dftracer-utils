@@ -38,6 +38,12 @@ Add your own analysis that rides the fused scan, from C, C++ or Python.
 
       Scaffold a project, then prove it with golden tests.
 
+   .. grid-item-card:: Write a UDF in Python
+      :link: plugins/python-udfs
+      :link-type: doc
+
+      Register a Python function as a scalar UDF, compiled or per batch.
+
    .. grid-item-card:: Write a sink plugin
       :link: plugins/write-a-sink
       :link-type: doc
@@ -59,4 +65,5 @@ Add your own analysis that rides the fused scan, from C, C++ or Python.
    plugins/inter-plugin-comms
    plugins/write-a-sink
    plugins/write-and-test-a-plugin
+   plugins/python-udfs
    core/c-abi

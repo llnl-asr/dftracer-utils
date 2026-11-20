@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -21,27 +22,28 @@ using namespace dftracer::utils;
 
 namespace {
 
-dstd::String write_small_trace(const dstd::String& dir, int n) {
+dstd::String write_small_trace(dstd::CStringView dir, int n) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < 40; ++i) {
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":"
-            "1,\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
+            "1,\"ph\":1,\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
             "f{}\"}}\n">(out, i, 1000 + i * 10, n);
     }
     out += "]\n";
     return dftu_utils_test::write_gz_trace(
-        dir + "/t" + dstd::String(dstd::to_string(n)) + ".pfw.gz", out);
+        dstd::String(dir) + "/t" + dstd::String(dstd::to_string(n)) + ".pfw.gz",
+        out);
 }
 
-dstd::String write_long_line_trace(const dstd::String& dir, std::size_t bytes) {
+dstd::String write_long_line_trace(dstd::CStringView dir, std::size_t bytes) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < 40; ++i) {
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":"
-            "1,\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
+            "1,\"ph\":1,\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
             "long\"">(out, i, 1000 + i * 10);
         if (i == 20)
             dstd::fmt_append<",\"note\":\"{}{}">(out, dstd::String(bytes, 'x'),
@@ -49,7 +51,8 @@ dstd::String write_long_line_trace(const dstd::String& dir, std::size_t bytes) {
         out += "}}\n";
     }
     out += "]\n";
-    return dftu_utils_test::write_gz_trace(dir + "/long.pfw.gz", out);
+    return dftu_utils_test::write_gz_trace(dstd::String(dir) + "/long.pfw.gz",
+                                           out);
 }
 
 }  // namespace

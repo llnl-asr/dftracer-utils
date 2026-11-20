@@ -20,6 +20,11 @@ inline constexpr const char* SPILL_DIR_ENV = "DFTRACER_UTILS_SPILL_DIR";
 /// compression.
 inline constexpr const char* SPILL_COMPRESS_ENV =
     "DFTRACER_UTILS_SPILL_COMPRESS";
+/// Directories, separated as in PATH (':', and ';' on Windows), searched for
+/// time zone files after the list the host set and before TZDIR and the system
+/// directories. A zone name is a path below one of them, such as
+/// "America/New_York".
+inline constexpr const char* TZDIR_ENV = "DFTRACER_UTILS_TZDIR";
 
 namespace dataframe {
 /// The rows of one batch of a DataFrame Arrow stream, and of a scan handed no
@@ -28,6 +33,11 @@ inline constexpr std::int64_t BATCH_SIZE = 65536;
 }  // namespace dataframe
 
 namespace plugins {
+/// The plugins every tool, the Python extension and the server load once, at
+/// the first call that reads a trace: shared-library paths separated by ':'.
+/// An empty item is skipped, a path that does not load is an error that names
+/// it, and a path named twice loads once.
+inline constexpr const char* PLUGINS_ENV = "DFTRACER_UTILS_PLUGINS";
 /// "0", "false", "off" or "no" checks nothing; any other value makes the host
 /// validate every frame and column a plugin hands back, and fail the run
 /// naming the plugin, the callback and the broken rule.
@@ -110,6 +120,10 @@ inline constexpr std::uint64_t MPI_CHUNK_BYTES = std::uint64_t{1} << 30;
 /// How long a stopping MPI context waits for native requests that no peer
 /// matched before it ends the job.
 inline constexpr std::uint64_t MPI_NATIVE_DRAIN_MS = 1000;
+/// Test builds only: milliseconds a thread that made a communicator waits
+/// after it handed the result on, before it lets go of what it holds.
+inline constexpr const char* MPI_TEST_CREATE_LINGER_MS_ENV =
+    "DFTRACER_UTILS_COMM_MPI_TEST_CREATE_LINGER_MS";
 /// How long a deadline waits for the members to say whether they reached the
 /// call that timed out.
 inline constexpr std::uint64_t MPI_ARRIVAL_PROBE_MS = 200;

@@ -3,16 +3,21 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/build/aggregation_run.h>
+#include <dftracer/utils/trace/index/index.h>
 #include <dftracer/utils/trace/index/indexer.h>
+#include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/reader/trace_reader.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -23,6 +28,7 @@
 #include <sys/resource.h>
 #include <task_result.h>
 #include <testing_utilities.h>
+#include <trace/views/test_view_common.h>
 #include <unistd.h>
 #include <zlib.h>
 
@@ -66,6 +72,48 @@ void touch_later(dstd::PathView path) {
     REQUIRE(dstd::fs::set_mtime_ns(
                 path, dstd::fs::mtime_ns(path).value() + TEN_SECONDS_NS)
                 .has_value());
+}
+
+// `count` complete events called `name`, then one metadata line, so the trace
+// is never empty.
+void write_named_trace(dstd::CStringView gz, dstd::StringView name,
+                       int count = 20) {
+    const dstd::String plain = dstd::String(gz) + ".plain";
+    {
+        dftu_utils_test::FileOut out(plain);
+        out << R"({"ph":4,"name":"process_name","pid":1,"tid":1,"args":{"name":"p"}})"
+            << "\n";
+        for (int i = 0; i < count; ++i)
+            out << R"({"ph":1,"name":")" << name
+                << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << 1000 + i * 100
+                << R"(,"dur":50,"args":{}})" << "\n";
+    }
+    REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, dstd::String(gz)));
+    dstd::fs::remove(dstd::PathView(plain)).discard();
+}
+
+dstd::Map<dstd::String, double> event_counts_of(
+    dstd::Vector<dstd::String> traces, dstd::CStringView index_dir) {
+    dstd::Vector<trace::views::ViewFile> files;
+    for (const auto& t : traces)
+        files.push_back(trace::views::ViewFile{
+            t, trace::internal::determine_index_path(t, index_dir)});
+    auto df =
+        dftu_utils_test::ok(trace::views::View::from_files(std::move(files))
+                                .group_by({trace::views::GroupKey::name()})
+                                .agg({{trace::views::AggOp::Count, "", "n"}})
+                                .collect()
+                                .get());
+    dstd::Map<dstd::String, double> out;
+    for (std::int64_t r = 0; r < df.num_rows(); ++r)
+        out[dstd::String(test_view_common::bstr(df, r, "name"))] =
+            test_view_common::bnum(df, r, "n");
+    return out;
+}
+
+dstd::Map<dstd::String, double> event_counts(dstd::CStringView trace,
+                                             dstd::CStringView index_dir) {
+    return event_counts_of({dstd::String(trace)}, index_dir);
 }
 
 }  // namespace
@@ -278,6 +326,85 @@ TEST_SUITE("Indexer") {
         rt.shutdown();
     }
 
+    TEST_CASE("a forced build keeps the aggregation of another folder") {
+        Runtime rt(4);
+        dftu_utils_test::TestEnvironment env(10);
+        const dstd::Path root(env.dir());
+        const dstd::Path dir_a = root / "folder_a";
+        const dstd::Path dir_b = root / "folder_b";
+        REQUIRE(dstd::fs::create_directories(dir_a).has_value());
+        REQUIRE(dstd::fs::create_directories(dir_b).has_value());
+        const dstd::String a((dir_a / "a.pfw.gz").str());
+        const dstd::String b((dir_b / "b.pfw.gz").str());
+        write_named_trace(a, "old_a");
+        write_named_trace(b, "name_b");
+
+        IndexerOptions options = with_runtime(rt);
+        options.index_dir = dstd::String((root / "shared_index").str());
+        auto ix_a = dftu_utils_test::ok(Indexer::open({a}, options));
+        auto ix_b = dftu_utils_test::ok(Indexer::open({b}, options));
+        dftu_utils_test::ok(ix_a.build());
+        dftu_utils_test::ok(ix_b.build());
+        CHECK(dftu_utils_test::ok(ix_b.status()).needs_work.empty());
+        const auto before_b = event_counts(b, options.index_dir);
+        REQUIRE(before_b.size() == 1);
+
+        write_named_trace(a, "new_a", 0);
+        auto forced = dftu_utils_test::ok(ix_a.rebuild());
+        CHECK(forced.indexed == 1);
+        CHECK(forced.needs_work.empty());
+        CHECK(dftu_utils_test::ok(ix_b.status()).needs_work.empty());
+        CHECK(dftu_utils_test::ok(ix_b.build()).indexed == 0);
+        CHECK(event_counts(b, options.index_dir) == before_b);
+
+        // A's old rows are gone, and the shared index agrees with a fresh one.
+        const auto both = event_counts_of({a, b}, options.index_dir);
+        CHECK(both.size() == 1);
+        CHECK(both.find("old_a") == both.end());
+        CHECK(both.find("name_b") != both.end());
+        CHECK(both == event_counts_of(
+                          {a, b}, dstd::String((root / "fresh_index").str())));
+        rt.shutdown();
+    }
+
+    TEST_CASE("clearing the aggregation of some files leaves the others") {
+        Runtime rt(4);
+        dftu_utils_test::TestEnvironment env(10);
+        const dstd::Path root(env.dir());
+        const dstd::String a((root / "a.pfw.gz").str());
+        const dstd::String b((root / "b.pfw.gz").str());
+        write_named_trace(a, "name_a");
+        write_named_trace(b, "name_b");
+        IndexerOptions options = with_runtime(rt);
+        options.index_dir = dstd::String((root / "shared_index").str());
+        auto ix = dftu_utils_test::ok(Indexer::open({a, b}, options));
+        dftu_utils_test::ok(ix.build());
+
+        auto has_agg = [&](dstd::CStringView trace) {
+            const dstd::String shared =
+                trace::internal::determine_index_path(trace, options.index_dir);
+            auto opened = dftu_utils_test::ok(Index::open(shared));
+            auto snapshot = dftu_utils_test::ok(opened.snapshot());
+            const dstd::String logical = fileio::get_logical_path(trace);
+            for (const auto& file : dftu_utils_test::ok(snapshot.files()))
+                if (file.path() == logical)
+                    return trace::index::extension_state(
+                               snapshot, file,
+                               trace::index::store::IndexExtension::Agg)
+                        .has_value();
+            return false;
+        };
+        REQUIRE(has_agg(a));
+        REQUIRE(has_agg(b));
+        REQUIRE(trace::index::build::clear_aggregation_files(
+                    trace::internal::determine_index_path(a, options.index_dir),
+                    names_of({a}))
+                    .has_value());
+        CHECK_FALSE(has_agg(a));
+        CHECK(has_agg(b));
+        rt.shutdown();
+    }
+
     TEST_CASE("async and blocking forms agree") {
         Runtime rt(4);
         dftu_utils_test::TestEnvironment env_a(10);
@@ -371,7 +498,7 @@ struct ZlibPrefix {
     dstd::Vector<std::size_t> member_starts;
 };
 
-ZlibPrefix zlib_prefix(const dstd::String& path) {
+ZlibPrefix zlib_prefix(dstd::CStringView path) {
     const dstd::String data_raw =
         dstd::fs::read_file(dstd::PathView(path)).value_or(dstd::String());
     dstd::Vector<unsigned char> data(data_raw.begin(), data_raw.end());
@@ -408,7 +535,7 @@ ZlibPrefix zlib_prefix(const dstd::String& path) {
     return r;
 }
 
-dstd::String write_prefix(const dstd::String& src, const dstd::String& dst,
+dstd::String write_prefix(dstd::StringView src, dstd::StringView dst,
                           double frac) {
     dstd::String bytes =
         dstd::fs::read_file(dstd::PathView(src)).value_or(dstd::String());
@@ -417,7 +544,7 @@ dstd::String write_prefix(const dstd::String& src, const dstd::String& dst,
                              0, static_cast<std::size_t>(
                                     static_cast<double>(bytes.size()) * frac))))
         .discard();
-    return dst;
+    return dstd::String(dst);
 }
 
 struct Indexed {
@@ -427,7 +554,7 @@ struct Indexed {
     std::uint64_t members_end = 0;
 };
 
-Indexed indexed(const dstd::String& trace) {
+Indexed indexed(dstd::CStringView trace) {
     const auto snapshot = dftu_utils_test::index_snapshot(index_of(trace));
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     Indexed r;
@@ -445,7 +572,7 @@ Indexed indexed(const dstd::String& trace) {
 }
 
 dstd::String multimember_trace(dftu_utils_test::TestEnvironment& env,
-                               int events, const dstd::String& name) {
+                               int events, dstd::StringView name) {
     const auto plain = env.create_dft_test_file(events);
     const dstd::String gz((dstd::Path(env.dir()) / name).str());
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
@@ -611,7 +738,7 @@ TEST_SUITE("Truncated") {
         const auto ref = zlib_prefix(cut);
         REQUIRE(ref.events > 0);
 
-        const auto count_lines = [](const dstd::String& path)
+        const auto count_lines = [](dstd::CStringView path)
             -> dftracer::utils::coro::CoroTask<std::size_t> {
             dftracer::utils::trace::reader::TraceReader reader(
                 {.file_path = dstd::String(path)});

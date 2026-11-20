@@ -28,7 +28,7 @@ namespace detail {
 
 dstd::Result<dstd::Path> choose_spill_dir(
     dstd::StringView env, const dstd::Path& local_root,
-    const dstd::Vector<dstd::Path>& fallbacks) {
+    dstd::Span<const dstd::Path> fallbacks) {
     if (!env.empty()) {
         dstd::StringView reason;
         const dstd::Path env_path{env};
@@ -225,7 +225,8 @@ void sweep_stale(dstd::PathView root, dstd::StringView prefix) {
         const char* first = name.data() + prefix.size() + 1 + tag.size();
         const char* last = name.data() + name.size();
         long pid = 0;
-        const auto [stop, perr] = dstd::from_chars(first, last, pid);
+        const auto [stop, perr] = dstd::from_chars(
+            {first, static_cast<std::size_t>(last - first)}, pid);
         if (perr != std::errc{} || stop == last || *stop != '_' || pid <= 0)
             continue;
         if (::kill(static_cast<pid_t>(pid), 0) == 0 || errno != ESRCH) continue;

@@ -6,9 +6,11 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/int128.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -21,6 +23,7 @@
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <refused_lines.h>
+#include <span_list.h>
 #include <sys/wait.h>
 #include <task_result.h>
 #include <testing_utilities.h>
@@ -72,8 +75,7 @@ dstd::String find_view_binary() {
                                                 "dftracer_view");
 }
 
-int run_view(const dstd::String& binary,
-             const dstd::Vector<dstd::String>& args) {
+int run_view(dstd::CStringView binary, dstd::Vector<dstd::String> args) {
     dstd::Vector<const char*> argv;
     argv.push_back(binary.c_str());
     for (const auto& arg : args) argv.push_back(arg.c_str());
@@ -97,9 +99,8 @@ int run_view(const dstd::String& binary,
 
 // Run `binary`, capturing its stdout into `out`. The capture file is opened in
 // the parent; the child only calls async-signal-safe dup2/close/execv.
-int run_view_capture(const dstd::String& binary,
-                     const dstd::Vector<dstd::String>& args,
-                     const dstd::String& capture_path, dstd::String& out) {
+int run_view_capture(dstd::CStringView binary, dstd::Vector<dstd::String> args,
+                     dstd::StringView capture_path, dstd::String& out) {
     dstd::Vector<const char*> argv;
     argv.push_back(binary.c_str());
     for (const auto& arg : args) argv.push_back(arg.c_str());
@@ -125,7 +126,7 @@ int run_view_capture(const dstd::String& binary,
     return -1;
 }
 
-std::size_t count_lines(const dstd::String& s) {
+std::size_t count_lines(dstd::StringView s) {
     return static_cast<std::size_t>(std::count(s.begin(), s.end(), '\n'));
 }
 
@@ -135,7 +136,7 @@ std::size_t count_lines(const dstd::String& s) {
 // narrow-int, Float16, temporal, decimal, or Large*/FixedSizeBinary types.
 // ----------------------------------------------------------------------------
 
-dataframe::Series make_bool_series(const dstd::Vector<bool>& bits) {
+dataframe::Series make_bool_series(dstd::Vector<bool> bits) {
     dstd::Vector<std::uint8_t> packed((bits.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < bits.size(); ++i)
         if (bits[i]) packed[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
@@ -145,7 +146,7 @@ dataframe::Series make_bool_series(const dstd::Vector<bool>& bits) {
 
 // A String/Binary FLAT column; dftu_series_new_string supports both dtypes.
 dataframe::Series make_bytes_series(dataframe::TypeId type,
-                                    const dstd::Vector<dstd::String>& values) {
+                                    dstd::Vector<dstd::String> values) {
     dstd::Vector<std::int32_t> offsets(values.size() + 1, 0);
     dstd::String data;
     for (std::size_t i = 0; i < values.size(); ++i) {
@@ -157,7 +158,7 @@ dataframe::Series make_bytes_series(dataframe::TypeId type,
         static_cast<std::int64_t>(values.size()), nullptr)};
 }
 
-dataframe::Series make_float16_series(const dstd::Vector<float>& values) {
+dataframe::Series make_float16_series(dstd::Vector<float> values) {
     dstd::Vector<std::uint16_t> halves(values.size());
     for (std::size_t i = 0; i < values.size(); ++i)
         halves[i] = dataframe::float_to_half(values[i]);
@@ -168,8 +169,7 @@ dataframe::Series make_float16_series(const dstd::Vector<float>& values) {
 // Decimal128: exact little-endian two's-complement payload, decimal_scale 0
 // (the only scale a FLAT-constructed decimal column carries; nonzero scale
 // only reaches the engine via Arrow import, unreachable from this CLI).
-dataframe::Series make_decimal128_series(
-    const dstd::Vector<dstd::int128_t>& values) {
+dataframe::Series make_decimal128_series(dstd::Vector<dstd::int128_t> values) {
     dstd::Vector<std::uint8_t> bytes(values.size() * 16);
     for (std::size_t i = 0; i < values.size(); ++i)
         std::memcpy(bytes.data() + i * 16, &values[i], 16);
@@ -178,8 +178,7 @@ dataframe::Series make_decimal128_series(
 }
 
 // Decimal256: `values` sign-extended from 128 to 256 bits.
-dataframe::Series make_decimal256_series(
-    const dstd::Vector<dstd::int128_t>& values) {
+dataframe::Series make_decimal256_series(dstd::Vector<dstd::int128_t> values) {
     dstd::Vector<std::uint8_t> bytes(values.size() * 32, 0);
     for (std::size_t i = 0; i < values.size(); ++i) {
         std::memcpy(bytes.data() + i * 32, &values[i], 16);
@@ -205,9 +204,9 @@ dstd::String cell(const dataframe::Series& c, std::int64_t i) {
 // Create a trace in its own subdir and build its index, with the aggregation
 // tier every build makes, over it; returns the shard's .dftindex path.
 dstd::String build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
-                                    const dstd::String& tag, int event_count,
-                                    const dstd::String& index_dir = "") {
-    dstd::String dir = env.dir() + "/" + tag;
+                                    dstd::CStringView tag, int event_count,
+                                    dstd::StringView index_dir = "") {
+    dstd::String dir = env.dir() + "/" + tag.c_str();
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     dstd::String src = env.create_dft_test_gzip_file(event_count);
     dstd::String gz = dir + "/t.pfw.gz";
@@ -226,7 +225,7 @@ dstd::String build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
 
 // Split into non-empty lines and sort, so two aggregations can be compared
 // regardless of row emission order.
-dstd::Vector<dstd::String> sorted_lines(const dstd::String& s) {
+dstd::Vector<dstd::String> sorted_lines(dstd::StringView s) {
     dstd::Vector<dstd::String> lines;
     dstd::String cur;
     for (char c : s) {
@@ -473,8 +472,9 @@ TEST_SUITE("DFTracerView") {
         dstd::String sb = build_aggregated_shard(
             env, "sb", 40,
             dstd::String(dftracer::utils::trace::index::shard_root(root, 1)));
+        const dstd::String shard_dirs[] = {sa, sb};
         dftu_utils_test::ok(dftracer::utils::trace::views::write_shard_set(
-            dstd::String(root), {dstd::String(sa), dstd::String(sb)}));
+            dstd::String(root), shard_dirs));
 
         // A flat directory with the same two traces for the baseline query.
         dstd::String both = env.dir() + "/both";
@@ -526,7 +526,7 @@ TEST_SUITE("DFTracerView") {
         dstd::String pfw = dir + "/t.pfw";
         {
             dftu_utils_test::FileOut out(pfw);
-            out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{"fhash":"abc","bytes":4096}})"
+            out << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{"fhash":"abc","bytes":4096}})"
                 << "\n";
         }
         dstd::String gz = pfw + ".gz";
@@ -563,7 +563,7 @@ TEST_SUITE("DFTracerView") {
             dftu_utils_test::FileOut out(pfw);
             for (int k = 0; k < dftu_utils_test::REFUSED_KINDS; ++k)
                 out << dftu_utils_test::refused_line(
-                           k, R"("ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                           k, R"("ph":1,"name":"read","cat":"POSIX","pid":1,)"
                               R"("tid":1,"ts":1000,"dur":10)")
                     << "\n";
         }
@@ -600,7 +600,7 @@ TEST_SUITE("DFTracerView") {
         {
             dftu_utils_test::FileOut out(pfw);
             dstd::String line =
-                R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
+                R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,)"
                 R"("ts":1000,"dur":10,"args":{"ret":4096,"deep":)";
             line.append(100000, '[');
             line.append(100000, ']');
@@ -672,9 +672,10 @@ TEST_SUITE("DFTracerView") {
         const dstd::String gz = create_pfw_gz(env, 50, 0);
         REQUIRE(!gz.empty());
         const dstd::String cap = env.dir() + "/cap.txt";
-        auto rows = [&](const dstd::String& q) {
+        auto rows = [&](dstd::StringView q) {
             dstd::String out;
-            CHECK(run_view_capture(binary, {gz, "-q", q}, cap, out) == 0);
+            CHECK(run_view_capture(binary, {gz, "-q", dstd::String(q)}, cap,
+                                   out) == 0);
             std::size_t n = 0;
             for (std::size_t at = out.find("\"cat\":");
                  at != dstd::String::npos; at = out.find("\"cat\":", at + 1))
@@ -711,12 +712,12 @@ TEST_SUITE("DFTracerView") {
         const dstd::String pfw = env.dir() + "/files.pfw";
         {
             dftu_utils_test::FileOut o(pfw);
-            o << R"({"ph":"M","name":"FH","pid":1,"tid":1,"args":{"name":"/scratch/a","value":"f1"}})"
+            o << R"({"ph":4,"name":"FH","pid":1,"tid":1,"args":{"name":"/scratch/a","value":"f1"}})"
               << "\n"
-              << R"({"ph":"M","name":"FH","pid":1,"tid":1,"args":{"name":"/data/b","value":"f2"}})"
+              << R"({"ph":4,"name":"FH","pid":1,"tid":1,"args":{"name":"/data/b","value":"f2"}})"
               << "\n";
             for (int i = 0; i < 4; ++i)
-                o << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                o << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                   << 10 * (i + 1) << R"(,"dur":1,"args":{"fhash":"f)"
                   << 1 + i % 2 << "\"}}\n";
         }
@@ -729,12 +730,12 @@ TEST_SUITE("DFTracerView") {
                   {gz, "-q", R"(fhash -> files.path like "/scratch/%")"}, cap,
                   out) == 0);
         std::size_t events = 0;
-        for (std::size_t at = out.find(R"("ph":"X")"); at != dstd::String::npos;
-             at = out.find(R"("ph":"X")", at + 1))
+        for (std::size_t at = out.find(R"("ph":1)"); at != dstd::String::npos;
+             at = out.find(R"("ph":1)", at + 1))
             ++events;
         CHECK(events == 2);
         CHECK(out.find(R"("fhash":"f2")") == dstd::String::npos);
-        CHECK(out.find(R"("ph":"M")") == dstd::String::npos);
+        CHECK(out.find(R"("ph":4)") == dstd::String::npos);
     }
 
     TEST_CASE("--query prints the table of a group with --param") {
@@ -782,7 +783,7 @@ TEST_SUITE("DFTracerView") {
         {
             dftu_utils_test::FileOut o(pfw);
             for (int i = 0; i < 3; ++i)
-                o << R"({"ph":"X","name":"op","cat":"io","pid":1,"tid":1,)"
+                o << R"({"ph":1,"name":"op","cat":"io","pid":1,"tid":1,)"
                   << R"("ts":)" << 10 * (i + 1) << R"(,"dur":1,"args":)"
                   << (i == 1 ? R"({"hosts":[]})" : R"({"hosts":["a","b"]})")
                   << "}\n";
@@ -794,7 +795,8 @@ TEST_SUITE("DFTracerView") {
             "window cat sort ts { g = ts - lag(ts) } | expand hosts"
             " | select ts, g, hosts";
         dstd::String out;
-        CHECK(run_view_capture(binary, {gz, "-q", q}, cap, out) == 0);
+        CHECK(run_view_capture(binary, {gz, "-q", dstd::String(q)}, cap, out) ==
+              0);
         CHECK(out.find(R"({"ts":10,"g":null,"hosts":"a"})") !=
               dstd::String::npos);
         CHECK(out.find(R"({"ts":30,"g":10,"hosts":"b"})") !=
@@ -901,9 +903,9 @@ TEST_SUITE("DFTracerView") {
         CHECK(sorted_lines(baseline) == sorted_lines(requery));
     }
 
-    // The build made the aggregation tier too, so the typed families exist;
-    // the --collect-typed terminal must still run cleanly.
-    TEST_CASE("collect-typed runs") {
+    // The build made the aggregation tier too, so the index record families
+    // exist; the --index-records terminal must still run cleanly.
+    TEST_CASE("index-records runs") {
         auto binary = find_view_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_view binary not found, skipping.");
@@ -914,7 +916,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(!create_pfw_gz(env, 50, 0).empty());
 
         CHECK(run_view(binary, {"--group-by", "cat", "--agg", "count",
-                                "--collect-typed", env.dir()}) == 0);
+                                "--index-records", env.dir()}) == 0);
     }
 
     // --materialize is meaningless without an aggregation and must be rejected.
@@ -1075,7 +1077,8 @@ TEST_SUITE("DFTracerView JSON cell printer") {
     }
 
     TEST_CASE("FixedSizeBinary reads its declared width") {
-        auto fsb = dataframe::test_types::make_fixed_size_binary({"ab\"c"}, 4);
+        auto fsb = dataframe::test_types::make_fixed_size_binary(
+            dftu_utils_test::span_of<dstd::String>({"ab\"c"}), 4);
         CHECK(cell(fsb, 0) == "\"ab\\\"c\"");
     }
 
@@ -1150,9 +1153,12 @@ TEST_SUITE("DFTracerView JSON cell printer") {
         dstd::Vector<dataframe::Series> fields;
         fields.push_back(dataframe::Series::flat_i64(
             dstd::Vector<std::int64_t>{1, 2, 3}.data(), 3));
-        fields.push_back(dataframe::Series::strings({"a", "b", "c"}));
+        fields.push_back(dataframe::Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"a", "b", "c"})));
         auto rec = dataframe::Series::structs({"n", "s"}, std::move(fields));
-        auto list = dataframe::Series::list({0, 2, 2, 3}, std::move(rec));
+        auto list = dataframe::Series::list(
+            dftu_utils_test::span_of<std::int32_t>({0, 2, 2, 3}),
+            std::move(rec));
         CHECK(cell(list, 0) == R"([{"n":1,"s":"a"},{"n":2,"s":"b"}])");
         CHECK(cell(list, 1) == "[]");
         CHECK(cell(list, 2) == R"([{"n":3,"s":"c"}])");
@@ -1177,9 +1183,8 @@ TEST_SUITE("DFTracerView JSON cell printer") {
 namespace {
 
 // Run `binary`, capturing its stderr into `err`.
-int run_view_stderr(const dstd::String& binary,
-                    const dstd::Vector<dstd::String>& args,
-                    const dstd::String& capture_path, dstd::String& err) {
+int run_view_stderr(dstd::CStringView binary, dstd::Vector<dstd::String> args,
+                    dstd::StringView capture_path, dstd::String& err) {
     dstd::Vector<const char*> argv;
     argv.push_back(binary.c_str());
     for (const auto& arg : args) argv.push_back(arg.c_str());

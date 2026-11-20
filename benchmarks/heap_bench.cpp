@@ -57,10 +57,12 @@
 
 #include <bench_counters.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -380,7 +382,8 @@ struct ChildResult {
 };
 
 dftracer::utils::dstd::Optional<ChildResult> run_child(
-    const char *self, const dftracer::utils::dstd::String &name, bool heap) {
+    dftracer::utils::dstd::CStringView self,
+    dftracer::utils::dstd::CStringView name, bool heap) {
     int fds[2];
     if (::pipe(fds) != 0) return dftracer::utils::dstd::nullopt;
     pid_t pid = ::fork();
@@ -388,7 +391,7 @@ dftracer::utils::dstd::Optional<ChildResult> run_child(
         ::close(fds[0]);
         ::dup2(fds[1], STDOUT_FILENO);
         ::close(fds[1]);
-        ::execl(self, self, "--case", name.c_str(), "--alloc",
+        ::execl(self.c_str(), self.c_str(), "--case", name.c_str(), "--alloc",
                 heap ? "heap" : "system", static_cast<char *>(nullptr));
         ::_exit(127);
     }
@@ -431,9 +434,9 @@ constexpr double CHECK_INSTR_PCT = 2.0;
 constexpr double CHECK_ALLOC_SLACK = 0.001;
 constexpr double CHECK_HEAP_PCT = 5.0;
 
-bool write_record(const char *path,
-                  const dftracer::utils::dstd::Vector<Recorded> &rows) {
-    std::FILE *f = std::fopen(path, "w");
+bool write_record(dftracer::utils::dstd::CStringView path,
+                  dftracer::utils::dstd::Span<const Recorded> rows) {
+    std::FILE *f = std::fopen(path.c_str(), "w");
     if (f == nullptr) return false;
     std::fprintf(f, "{\n");
     for (std::size_t i = 0; i < rows.size(); ++i) {
@@ -448,9 +451,9 @@ bool write_record(const char *path,
     return std::fclose(f) == 0;
 }
 
-bool read_record(const char *path,
+bool read_record(dftracer::utils::dstd::CStringView path,
                  dftracer::utils::dstd::Vector<Recorded> &rows) {
-    std::FILE *f = std::fopen(path, "r");
+    std::FILE *f = std::fopen(path.c_str(), "r");
     if (f == nullptr) return false;
     char line[512];
     while (std::fgets(line, sizeof(line), f) != nullptr) {
@@ -474,11 +477,11 @@ double pct_change(double now, double base) {
     return base > 0.0 ? (now / base - 1.0) * 100.0 : 0.0;
 }
 
-int check_record(const char *path,
-                 const dftracer::utils::dstd::Vector<Recorded> &now) {
+int check_record(dftracer::utils::dstd::CStringView path,
+                 dftracer::utils::dstd::Span<const Recorded> now) {
     dftracer::utils::dstd::Vector<Recorded> base;
     if (!read_record(path, base)) {
-        std::fprintf(stderr, "cannot read record: %s\n", path);
+        std::fprintf(stderr, "cannot read record: %s\n", path.c_str());
         return 1;
     }
     int worse = 0;
@@ -508,7 +511,9 @@ int check_record(const char *path,
     return worse == 0 ? 0 : 1;
 }
 
-int drive(const char *self, int rounds, const char *record, const char *check) {
+int drive(dftracer::utils::dstd::CStringView self, int rounds,
+          dftracer::utils::dstd::CStringView record,
+          dftracer::utils::dstd::CStringView check) {
     dftracer::utils::dstd::Vector<Case> cases = make_cases();
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::Vector<double>> ns[2];
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::Vector<double>> rss[2];
@@ -567,11 +572,11 @@ int drive(const char *self, int rounds, const char *record, const char *check) {
                         mid > 0.0 ? (*high - *low) / mid * 100.0 : 0.0});
     }
     int status = 0;
-    if (record != nullptr && !write_record(record, rows)) {
-        std::fprintf(stderr, "cannot write record: %s\n", record);
+    if (!record.empty() && !write_record(record, rows)) {
+        std::fprintf(stderr, "cannot write record: %s\n", record.c_str());
         status = 1;
     }
-    if (check != nullptr && check_record(check, rows) != 0) status = 1;
+    if (!check.empty() && check_record(check, rows) != 0) status = 1;
     return status;
 }
 
@@ -594,8 +599,8 @@ int smoke() {
     return failures == 0 ? 0 : 1;
 }
 
-int run_one(const dftracer::utils::dstd::String &name,
-            const dftracer::utils::dstd::String &alloc) {
+int run_one(dftracer::utils::dstd::CStringView name,
+            dftracer::utils::dstd::StringView alloc) {
     bool heap = alloc == "heap";
     for (const Case &c : make_cases()) {
         if (c.name != name) continue;
@@ -628,8 +633,8 @@ int main(int argc, char **argv) {
         return run_one(argv[2], argv[4]);
     }
     int rounds = DEFAULT_ROUNDS;
-    const char *record = nullptr;
-    const char *check = nullptr;
+    dftracer::utils::dstd::CStringView record;
+    dftracer::utils::dstd::CStringView check;
     for (int i = 1; i < argc; ++i) {
         dftracer::utils::dstd::StringView arg = argv[i];
         bool has_value = i + 1 < argc;

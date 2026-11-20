@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/explain_mode.h>
 
 #include <cstdint>
 #include <variant>
@@ -420,6 +421,8 @@ struct SourceDecl {
 using Decl = dstd::Variant<Let, Def, SourceDecl>;
 
 struct Program {
+    /// `explain` or `explain analyze` before the declarations.
+    ExplainMode explain = ExplainMode::None;
     dstd::Vector<Decl> decls;
     /// Absent when the text holds only declarations.
     PipelinePtr pipeline;

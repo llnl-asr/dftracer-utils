@@ -150,9 +150,9 @@ class ColumnScanCursor : public Cursor {
 class SeriesColumnCursor : public Cursor {
    public:
     SeriesColumnCursor(dstd::UniquePtr<Cursor> in,
-                       const dstd::Vector<dstd::String>& sch, dstd::String name,
+                       dstd::Span<const dstd::String> sch, dstd::String name,
                        Series column)
-        : in_(std::move(in)), out_names_(sch) {
+        : in_(std::move(in)), out_names_(sch.begin(), sch.end()) {
         const int at = column_index_of(sch, name);
         if (at < 0) {
             at_ = sch.size();
@@ -195,8 +195,8 @@ class SeriesColumnCursor : public Cursor {
     std::int64_t offset_ = 0;
 };
 
-bool static_schema(const dstd::Vector<dstd::String>& sch,
-                   const dstd::Vector<Field>& in_fields) {
+bool static_schema(dstd::Span<const dstd::String> sch,
+                   dstd::Span<const Field> in_fields) {
     return !sch.empty() && !has_rest(sch) && in_fields.size() == sch.size();
 }
 
@@ -209,8 +209,8 @@ std::uint64_t column_scan_morsels() {
 namespace lazy_internal {
 
 CursorResult make_column_scan(dstd::UniquePtr<Cursor>& in,
-                              const dstd::Vector<dstd::String>& sch,
-                              const dstd::Vector<Field>& in_fields,
+                              dstd::Span<const dstd::String> sch,
+                              dstd::Span<const Field> in_fields,
                               const OwnedFrameOpArgs& args) {
     if (!static_schema(sch, in_fields) || !args.frames().empty())
         return no_cursor();
@@ -241,13 +241,13 @@ CursorResult make_column_scan(dstd::UniquePtr<Cursor>& in,
     auto op = find_op(series_op.c_str());
     if (!op) return no_cursor();
     return dstd::make_unique<ColumnScanCursor>(
-        std::move(in), in_fields, static_cast<std::size_t>(at), std::move(*op),
-        scan->carry, keep, shift);
+        std::move(in), dstd::Vector<Field>(in_fields.begin(), in_fields.end()),
+        static_cast<std::size_t>(at), std::move(*op), scan->carry, keep, shift);
 }
 
 CursorResult make_series_column(dstd::UniquePtr<Cursor>& in,
-                                const dstd::Vector<dstd::String>& sch,
-                                const dstd::Vector<Field>& in_fields,
+                                dstd::Span<const dstd::String> sch,
+                                dstd::Span<const Field> in_fields,
                                 const OwnedFrameOpArgs& args) {
     if (!static_schema(sch, in_fields) || !args.frames().empty() ||
         !args.series_at(2).valid())

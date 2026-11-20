@@ -33,7 +33,7 @@ def _records():
         mix_all = rng.choice([1, 2.0, "3", "x", 1.5, 2, None])
         out.append(
             {
-                "ph": "X",
+                "ph": 1,
                 "name": NAMES[rng.randrange(4)],
                 "cat": "POSIX",
                 "pid": 1,
@@ -71,7 +71,7 @@ def trace(tmp_path_factory):
         files.append(path)
     idx = str(d / "index")
     with dftu.Indexer(files=files, index_dir=idx, checkpoint_size="4KB") as ix:
-        ix.ensure_indexed()
+        ix.ensure()
     return files, idx
 
 
@@ -82,7 +82,7 @@ def _viewer(trace, rt):
 
 def _rows(df):
     cols = list(df.column_names)
-    return list(zip(*[df[c].to_pylist() for c in cols]))
+    return list(zip(*[df[c].to_list() for c in cols]))
 
 
 def _counters():

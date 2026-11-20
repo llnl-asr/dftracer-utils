@@ -33,7 +33,7 @@ namespace dftracer::utils::trace::views {
 namespace {
 
 dstd::Result<dstd::Vector<dstd::String>> trace_files_under(
-    const dstd::String& dir) {
+    dstd::StringView dir) {
     runtime::fs::FindOptions options;
     options.patterns =
         runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
@@ -54,7 +54,7 @@ dstd::Result<dstd::Vector<dstd::String>> trace_files_under(
 }
 
 dstd::Result<dstd::Vector<dstd::String>> files_of(
-    const dstd::Vector<dstd::String>& paths) {
+    dstd::Span<const dstd::String> paths) {
     dstd::HashSet<dstd::String> seen;
     dstd::Vector<dstd::String> out;
     for (const dstd::String& p : paths) {
@@ -74,8 +74,7 @@ dstd::Result<dstd::Vector<dstd::String>> files_of(
 /// from, so a later refresh cannot show it rows past the pin.
 View pinned_view(
     dstd::Vector<ViewFile> files,
-    const dstd::Vector<dstd::SharedPtr<const trace::index::Snapshot>>&
-        snapshots) {
+    dstd::Span<const dstd::SharedPtr<const trace::index::Snapshot>> snapshots) {
     auto plan = dstd::make_shared<detail::ViewPlan>(
         *detail::scan::from_files(std::move(files)));
     for (std::size_t i = 0; i < plan->files.size(); ++i) {
@@ -90,8 +89,8 @@ View pinned_view(
 
 }  // namespace
 
-LiveView::LiveView(dstd::Vector<dstd::String> paths, dstd::String index_path)
-    : paths_(std::move(paths)), index_path_(std::move(index_path)) {}
+LiveView::LiveView(dstd::Vector<dstd::String> paths, dstd::String index_dir)
+    : paths_(std::move(paths)), index_dir_(std::move(index_dir)) {}
 
 dstd::Result<View> LiveView::snapshot() {
     auto fresh_files = refresh();
@@ -153,7 +152,7 @@ dstd::Result<dstd::Vector<LiveView::PinnedFile>> LiveView::refresh() {
 
     trace::index::build::ResolveAndBuildInput in;
     for (const auto& f : files) in.files.emplace_back(f);
-    in.index_dir = index_path_;
+    in.index_dir = index_dir_;
     in.require_checkpoints = true;
     in.whole_members = true;
     trace::index::build::ResolverResult built;
@@ -189,7 +188,7 @@ dstd::Result<dstd::Vector<LiveView::PinnedFile>> LiveView::refresh() {
         LiveFileStatus st;
         st.path = path;
         const dstd::String root =
-            internal::determine_index_path(path, index_path_);
+            internal::determine_index_path(path, index_dir_);
         std::uint64_t uc_end = 0;
         std::size_t members = 0;
         std::uint64_t hash = 0;

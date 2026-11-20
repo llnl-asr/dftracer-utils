@@ -16,7 +16,7 @@ def _events(seed, n):
     rng = random.Random(seed)
     return [
         {
-            "ph": "X",
+            "ph": 1,
             "name": rng.choice(["read", "write", "open", "close"]),
             "cat": "POSIX",
             "pid": rng.randint(1, 4),
@@ -56,7 +56,7 @@ def test_above_the_mean_of_its_own_name(tmp_path, seed):
     assert 0 < len(want) < len(events)
 
 
-@pytest.mark.parametrize("outer", ["", 'ph == "X" and ', 'cat == "POSIX" and ', "pid >= 1 and "])
+@pytest.mark.parametrize("outer", ["", "ph == 1 and ", 'cat == "POSIX" and ', "pid >= 1 and "])
 def test_first_touch_with_an_outer_filter(tmp_path, outer):
     events = _events(1, 400)
     mean = {}

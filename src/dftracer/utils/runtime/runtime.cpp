@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/cpu_limits.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
@@ -32,7 +33,8 @@ namespace dftracer::utils {
 namespace {
 // Resolve the worker-thread count. DFTRACER_UTILS_THREADS overrides everything
 // (a debugging lever: force a fixed count, e.g. 1 for a single-threaded async
-// loop). Otherwise 0 means hardware_concurrency.
+// loop). Otherwise 0 means hardware_concurrency, kept to what the thread room
+// of the cgroup holds with an equal I/O pool.
 std::size_t resolve_threads(std::size_t requested) {
     if (auto env = common::Env::get<dstd::StringView>("DFTRACER_UTILS_THREADS");
         env.has_value()) {
@@ -40,13 +42,16 @@ std::size_t resolve_threads(std::size_t requested) {
             return static_cast<std::size_t>(*n);
         }
     }
-    return requested == 0 ? common::hardware_concurrency() : requested;
+    if (requested != 0) return requested;
+    return common::default_worker_threads(common::hardware_concurrency(),
+                                          common::thread_room());
 }
 
 // Resolve the I/O-pool size. DFTRACER_UTILS_IO_THREADS overrides everything (a
 // lever to bound the epoll/kqueue thread pool independently of the compute
 // pool, e.g. so the coordinator does not open a full-machine-sized pool).
-// Otherwise 0 means one I/O thread per worker.
+// Otherwise 0 means one I/O thread per worker, kept to what the thread room
+// holds beside the workers.
 std::size_t resolve_io_threads(std::size_t requested, std::size_t workers) {
     if (auto env =
             common::Env::get<dstd::StringView>("DFTRACER_UTILS_IO_THREADS");
@@ -55,7 +60,8 @@ std::size_t resolve_io_threads(std::size_t requested, std::size_t workers) {
             return static_cast<std::size_t>(*n);
         }
     }
-    return requested == 0 ? workers : requested;
+    if (requested != 0) return requested;
+    return common::default_io_threads(workers, common::thread_room());
 }
 
 // A Runtime constructor has no way to report failure, so a runtime that cannot

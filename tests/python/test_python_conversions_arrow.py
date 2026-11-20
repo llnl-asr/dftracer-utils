@@ -38,7 +38,7 @@ def _series(layout, chunked):
 
 def _layouts():
     return [
-        pytest.param(layout, chunked, id="%s-%s" % (layout, "chunked" if chunked else "one"))
+        pytest.param(layout, chunked, id="{}-{}".format(layout, "chunked" if chunked else "one"))
         for layout in ("flat", "view", "dictionary")
         for chunked in (False, True)
     ]
@@ -64,16 +64,16 @@ def _frame(layout, chunked):
 def _needs_capsule(native, name):
     if not hasattr(native, name):
         pytest.skip(
-            "extension built without Arrow: %s is absent, to_polars is the native path" % name
+            f"extension built without Arrow: {name} is absent, to_polars is the native path"
         )
 
 
 @pytest.mark.parametrize("layout,chunked", _layouts())
 def test_series_to_polars_matches_native(layout, chunked):
     s = _series(layout, chunked)
-    _needs_capsule(s._native, "__arrow_c_array__")
+    _needs_capsule(s, "__arrow_c_array__")
     got = s.to_polars()
-    want = _polars_native(s._native, pl)
+    want = _polars_native(s, pl)
     assert got.dtype == want.dtype
     assert got.to_list() == want.to_list() == VALUES
 
@@ -81,9 +81,9 @@ def test_series_to_polars_matches_native(layout, chunked):
 @pytest.mark.parametrize("layout,chunked", _layouts())
 def test_dataframe_to_polars_matches_native(layout, chunked):
     df = _frame(layout, chunked)
-    _needs_capsule(df._native, "__arrow_c_stream__")
+    _needs_capsule(df, "__arrow_c_stream__")
     got = df.to_polars()
-    want = pl.DataFrame({name: _polars_native(df[name]._native, pl) for name in df.columns})
+    want = pl.DataFrame({name: _polars_native(df[name], pl) for name in df.columns})
     assert got.schema == want.schema
     assert got.equals(want)
 
@@ -104,16 +104,23 @@ def test_float16_and_decimal_stay_native():
     assert mixed.to_polars().columns == ["a", "d"]
 
 
-def _pandas_native_strings(s):
-    return pd.Series(_native_numpy(s._native))
+def _pandas_documented(native):
+    """The column as ``to_pandas`` documents it, from the NumPy values: a
+    dictionary string column is ``category`` and an integer or bool column that
+    holds nulls is pandas' own nullable dtype."""
+    values = pd.Series(_native_numpy(native))
+    if native.encoding == 2:
+        return values.astype("category")
+    if native.null_count and pa.types.is_integer(pa.array(native).type):
+        return values.astype("Int64")
+    return values
 
 
 def _arrow_pandas_strings():
     string = pd.Series(np.array(["x"], dtype=object)).dtype
     if not (isinstance(string, pd.StringDtype) and string.storage == "pyarrow"):
         pytest.skip(
-            "pandas keeps strings in Python objects here (dtype %s); the Arrow branch is not taken"
-            % string
+            f"pandas keeps strings in Python objects here (dtype {string}); the Arrow branch is not taken"
         )
 
 
@@ -121,9 +128,9 @@ def _arrow_pandas_strings():
 def test_series_to_pandas_strings_match_native(layout, chunked):
     _arrow_pandas_strings()
     s = _series(layout, chunked)
-    _needs_capsule(s._native, "__arrow_c_array__")
+    _needs_capsule(s, "__arrow_c_array__")
     got = s.to_pandas()
-    want = _pandas_native_strings(s)
+    want = _pandas_documented(s)
     assert got.dtype == want.dtype
     assert got.equals(want)
     assert got.isna().tolist() == [v is None for v in VALUES]
@@ -134,9 +141,9 @@ def test_series_to_pandas_strings_match_native(layout, chunked):
 def test_dataframe_to_pandas_matches_native(layout, chunked):
     _arrow_pandas_strings()
     df = _frame(layout, chunked)
-    _needs_capsule(df["s"]._native, "__arrow_c_array__")
+    _needs_capsule(df["s"], "__arrow_c_array__")
     got = df.to_pandas()
-    want = pd.DataFrame({name: _native_numpy(df[name]._native) for name in df.columns})
+    want = pd.DataFrame({name: _pandas_documented(df[name]) for name in df.columns})
     assert (got.dtypes == want.dtypes).all()
     assert got.equals(want)
 
@@ -210,6 +217,6 @@ def test_collected_view_frame_to_pandas_strings():
     s = Series(arr)
     assert s.encoding == 2
     got = s.to_pandas()
-    assert got.dtype == _pandas_native_strings(s).dtype
+    assert got.dtype == _pandas_documented(s).dtype
     assert got.isna().tolist() == [v is None for v in values]
     assert [v for v in got if isinstance(v, str)] == [v for v in values if v is not None]

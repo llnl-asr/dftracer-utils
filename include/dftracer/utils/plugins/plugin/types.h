@@ -44,6 +44,23 @@ inline dstd::Result<void> ok() noexcept { return {}; }
 
 namespace detail {
 
+/// The ctx of the SDK callback this thread is inside, or null.
+inline thread_local dftu_ctx* t_current_ctx = nullptr;
+
+/// Makes `ctx` the one @ref counter adds through while it lives.
+class CtxScope {
+   public:
+    explicit CtxScope(dftu_ctx* ctx) noexcept : previous_(t_current_ctx) {
+        t_current_ctx = ctx;
+    }
+    ~CtxScope() { t_current_ctx = previous_; }
+    CtxScope(const CtxScope&) = delete;
+    CtxScope& operator=(const CtxScope&) = delete;
+
+   private:
+    dftu_ctx* previous_;
+};
+
 /// The result of a host service call that returned `status`.
 inline dstd::Result<void> reported(dftu_status status) noexcept {
     if (status < 0) return dataframe::error_of(status);
@@ -56,6 +73,7 @@ inline dstd::Result<void> reported(dftu_status status) noexcept {
 /// terminates.
 template <class Fn>
 dftu_status to_status(dftu_ctx* ctx, Fn&& fn) noexcept {
+    const CtxScope scope(ctx);
     using R = std::invoke_result_t<Fn>;
     if constexpr (std::is_void_v<R>) {
         fn();
@@ -71,6 +89,33 @@ dftu_status to_status(dftu_ctx* ctx, Fn&& fn) noexcept {
 }
 
 }  // namespace detail
+
+/// Adds `delta` to the run counter `name` of the plugin. Call it from inside a
+/// callback (a scan, a cursor's next, an explain): the host sums the counters
+/// of one EXPLAIN ANALYZE run and prints them, and outside such a run the call
+/// does nothing and costs a load. Once per morsel or chunk, not per row. A call
+/// from a task that outlives its callback does nothing.
+inline void counter(dstd::StringView name, std::int64_t delta) noexcept {
+    dftu_counter_n(detail::t_current_ctx, name.data(),
+                   static_cast<std::uint32_t>(name.size()), delta);
+}
+
+/// The lines an explain hook adds, one key and one value each, which the host
+/// prints in the order they were added. A hook states what the plugin would do
+/// with a request (the filters it accepts, the chunks it reads), and the
+/// counters carry the numbers of a run.
+class ExplainOut {
+   public:
+    explicit ExplainOut(const dftu_explain_out* out) noexcept : out_(out) {}
+
+    void add(dstd::StringView key, dstd::StringView value) const noexcept {
+        out_->add(out_->self, key.data(), key.size(), value.data(),
+                  value.size());
+    }
+
+   private:
+    const dftu_explain_out* out_;
+};
 
 // Re-export the query builder so a plugin writes `F("dur") > 1000` with only
 // this header and no duql:: qualifier.

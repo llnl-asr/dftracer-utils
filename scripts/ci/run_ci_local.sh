@@ -13,7 +13,7 @@
 #
 # Options:
 #   --engine E           podman|docker|auto (default: auto)
-#   --image REF          base image (default: ubuntu:22.04)
+#   --image REF          base image (default: ubuntu:24.04)
 #   --storage-root DIR   podman graphroot; must be LOCAL, not NFS/Lustre
 #                        (default: node-local /tmp)
 #   --storage-driver D   podman storage driver (e.g. vfs) if overlay fails
@@ -42,8 +42,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 ENGINE="auto"
-BASE_IMAGE="ubuntu:22.04"
-CI_IMAGE="dftracer-utils-ci:cmake-pip"
+BASE_IMAGE="ubuntu:24.04"
+CI_IMAGE=""
 REBUILD=0
 KEEP=0
 SHELL_MODE=0
@@ -92,6 +92,8 @@ done
 # (MemTotal_GB/3) melts a fat cluster node into per-test timeouts. Default to 2,
 # matching CI's small runner; override with --jobs.
 [ -z "${JOBS}" ] && JOBS=2
+
+CI_IMAGE="dftracer-utils-ci:${BASE_IMAGE//[:\/]/-}"
 
 # --- In-container: run the selected jobs (the CI make targets) ---
 if [ "${IN_CONTAINER}" -eq 1 ]; then
@@ -192,9 +194,9 @@ elif [ -n "${STORAGE_DRIVER}" ]; then
 fi
 engine() { "${ENGINE}" ${engine_opts[@]+"${engine_opts[@]}"} "$@"; }
 
-# apt set = union of every job's deps in ci.yml; uv provides uvx for lint. The
-# apt cmake of 22.04 is 3.22 and cannot read the version 6 presets, so pip
-# installs a newer one into /usr/local/bin.
+# apt set = union of every job's deps in ci.yml; uv provides uvx for lint. pip
+# installs cmake into /usr/local/bin, because an older apt cmake cannot read
+# the version 6 presets.
 ensure_image() {
   if [ "${REBUILD}" -eq 0 ] && \
      engine image inspect "${CI_IMAGE}" >/dev/null 2>&1; then

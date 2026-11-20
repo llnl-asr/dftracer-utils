@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -44,6 +45,11 @@ bool append_double_key(dstd::String& out, double v) {
     out += DOUBLE_TAG;
     dstd::append_f64_be(out, v);
     return true;
+}
+
+void append_nan_key(dstd::String& out) {
+    out += DOUBLE_TAG;
+    dstd::append_f64_be(out, std::numeric_limits<double>::quiet_NaN());
 }
 
 void append_string_key(dstd::String& out, dstd::StringView v) {
@@ -221,7 +227,7 @@ dstd::Pair<std::int64_t, std::int64_t> kind_range(const duql::RangeIndex& ix,
     return {r.first - begin, r.second - begin};
 }
 
-void range_fail(const TLookup& l, const dstd::String& why) {
+void range_fail(const TLookup& l, dstd::StringView why) {
     l.slot->failure.set(lookup_error(dstd::fmt<"View::duql {}">(why)));
 }
 
@@ -250,7 +256,7 @@ int compare_ordered(const duql::Ordered& a, const duql::Ordered& b) {
 }
 
 void build_range_tree(RangeIndex& ix, RangeRead read,
-                      const dstd::Vector<duql::RangeIndex::Node>& leaves) {
+                      dstd::Span<const duql::RangeIndex::Node> leaves) {
     ix.tree.assign(2 * leaves.size(), {});
     for (const auto& [key, span] : ix.keys) {
         const auto [b, e] = span;

@@ -22,7 +22,7 @@ to extensions, each with a manifest entry per file:
   chosen with ``IndexerOptions::extensions``
 - ``dft.stats`` - chunk and file statistics, built with the pruning
   extensions
-- ``dft.metadata`` - per chunk, the number of metadata (``ph="M"``) records
+- ``dft.metadata`` - per chunk, the number of metadata (``ph=4``) records
   and of context records (thread and process names, ``PR``, ``CM``), built
   with the pruning extensions
 - ``core.rowset`` - the rows of each row set of the file's record schema
@@ -69,8 +69,8 @@ Python API
 
 **Indexer:**
 
-``Indexer`` takes ``directory`` (scanned for trace files) or an explicit
-``files`` list; at least one must be given. ``ensure_indexed()`` resolves
+``Indexer`` takes ``files``: a file, a directory (scanned for trace files)
+or a list of paths, as ``TraceViewer`` does. ``ensure()`` finds
 which files need work and builds them (checkpoint + bloom tiers by default).
 ``extensions`` picks the pruning extensions and ``schema`` names the record
 schema. ``manifest()`` and ``explain(duql)`` inspect the index,
@@ -87,14 +87,14 @@ and ``rowset(name)`` returns a stored row set as a DataFrame.
 
    # Resolve, then build only if needed
    with Indexer(files=["trace.pfw.gz"], build_bloom=True) as indexer:
-       status = indexer.ensure_indexed()
+       status = indexer.ensure()
        print(status.ready, status.needs_work)
 
    # Every flat args key is indexed by default; name nested ones too
    from dftracer.utils import BloomConfig
 
    with Indexer(files=["trace.pfw.gz"], require_bloom=BloomConfig(fields=["io.off"])) as indexer:
-       indexer.ensure_indexed()
+       indexer.ensure()
 
    # Single-file checkpoint-level details (lines, max bytes, members)
    with Indexer(files=["trace.pfw.gz"]) as indexer:

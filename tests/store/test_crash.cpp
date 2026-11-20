@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -89,7 +90,7 @@ constexpr bool SANITIZED = false;
 constexpr bool SANITIZED = false;
 #endif
 
-dstd::ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(dstd::StringView bytes) {
     return {bytes.data(), bytes.size()};
 }
 
@@ -105,13 +106,13 @@ dstd::String i64_bytes(std::int64_t value) {
     return bytes;
 }
 
-dstd::String padded(const dstd::String& head, std::size_t length) {
-    dstd::String out = head;
+dstd::String padded(dstd::StringView head, std::size_t length) {
+    dstd::String out(head);
     out.resize(length, 'x');
     return out;
 }
 
-store::NamespaceSpec put_spec(const dstd::String& name, std::uint32_t version) {
+store::NamespaceSpec put_spec(dstd::StringView name, std::uint32_t version) {
     store::NamespaceSpec spec;
     spec.name = dstd::String(name);
     spec.format_version = version;
@@ -119,13 +120,13 @@ store::NamespaceSpec put_spec(const dstd::String& name, std::uint32_t version) {
     return spec;
 }
 
-store::NamespaceSpec durable_spec(const dstd::String& name) {
+store::NamespaceSpec durable_spec(dstd::StringView name) {
     store::NamespaceSpec spec = put_spec(name, 0);
     spec.durable = true;
     return spec;
 }
 
-store::NamespaceSpec fold_spec(const dstd::String& name, store::FoldKind kind) {
+store::NamespaceSpec fold_spec(dstd::StringView name, store::FoldKind kind) {
     store::NamespaceSpec spec;
     spec.name = dstd::String(name);
     spec.format_version = 0;
@@ -133,7 +134,7 @@ store::NamespaceSpec fold_spec(const dstd::String& name, store::FoldKind kind) {
     return spec;
 }
 
-store::ScopeKey file_scope(const dstd::String& path) {
+store::ScopeKey file_scope(dstd::StringView path) {
     return store::ScopeKey::file(dstd::String(path));
 }
 
@@ -142,12 +143,12 @@ Runtime& store_runtime() {
     return runtime;
 }
 
-void write_bytes(const dstd::String& path, const dstd::String& bytes) {
+void write_bytes(dstd::StringView path, dstd::StringView bytes) {
     dftu_utils_test::FileOut out(path);
     out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 }
 
-dstd::String read_bytes(const dstd::String& path) {
+dstd::String read_bytes(dstd::StringView path) {
     return dftu_utils_test::read_text(path);
 }
 
@@ -344,7 +345,7 @@ struct Dump {
         return out;
     }
 
-    static void put(dstd::String& out, const dstd::String& field) {
+    static void put(dstd::String& out, dstd::StringView field) {
         out += dstd::to_string(field.size());
         out += ':';
         out.append(field);
@@ -364,9 +365,8 @@ dstd::String scope_text(const store::ScopeKey& scope) {
     return out;
 }
 
-dstd::String group_text(const dstd::String& space,
-                        const store::ScopeKey& scope) {
-    dstd::String key = space;
+dstd::String group_text(dstd::StringView space, const store::ScopeKey& scope) {
+    dstd::String key(space);
     Dump::put(key, scope_text(scope));
     return key;
 }
@@ -385,7 +385,7 @@ struct Dumped {
 };
 
 Dumped dump_snapshot(const store::engine::Snapshot& snapshot,
-                     const dstd::Vector<store::NamespaceSpec>& specs) {
+                     dstd::Span<const store::NamespaceSpec> specs) {
     Dumped out;
     out.skipped = snapshot.skipped().size();
     for (const store::NamespaceSpec& spec : specs) {
@@ -444,7 +444,7 @@ std::uint64_t whole_size(const engine::io_fault::Event& event) {
 /// The bytes one event wrote: an extent's range of the finished file, because a
 /// extent is never rewritten, or the bytes the log copied.
 const std::uint8_t* event_bytes(const engine::io_fault::Event& event,
-                                const dstd::String& final_bytes) {
+                                dstd::StringView final_bytes) {
     if (event.kind == engine::io_fault::WriteKind::Extent) {
         return reinterpret_cast<const std::uint8_t*>(final_bytes.data()) +
                event.offset;
@@ -455,9 +455,9 @@ const std::uint8_t* event_bytes(const engine::io_fault::Event& event,
 /// One write of an image: `keep` bytes of it, at its offset. `keep` is the
 /// event's length except for a torn write and for a write that did not happen.
 dstd::String render_image(
-    const dstd::Vector<dstd::Pair<std::size_t, std::uint64_t>>& applied,
-    const dstd::Vector<engine::io_fault::Event>& log,
-    const dstd::String& final_bytes) {
+    dstd::Span<const dstd::Pair<std::size_t, std::uint64_t>> applied,
+    dstd::Span<const engine::io_fault::Event> log,
+    dstd::StringView final_bytes) {
     std::uint64_t end = 0;
     for (const auto& one : applied) {
         end = std::max(end, log[one.first].offset + one.second);
@@ -476,7 +476,7 @@ dstd::String render_image(
 
 /// The index one past the last sync below `k`: every write at or after it is
 /// unsynced, and every write below it was issued before that sync.
-std::size_t unsynced_from(const dstd::Vector<engine::io_fault::Event>& log,
+std::size_t unsynced_from(dstd::Span<const engine::io_fault::Event> log,
                           std::size_t k) {
     for (std::size_t i = k; i > 0; --i) {
         if (is_sync(log[i - 1])) return i;
@@ -506,14 +506,14 @@ std::uint64_t torn_prefix(const engine::io_fault::Event& event,
     return units == 0 ? 0 : TEAR_UNIT * (rng() % units);
 }
 
-std::size_t records_below(const dstd::Vector<std::size_t>& record_at,
+std::size_t records_below(dstd::Span<const std::size_t> record_at,
                           std::size_t limit) {
     return static_cast<std::size_t>(
         std::lower_bound(record_at.begin(), record_at.end(), limit) -
         record_at.begin());
 }
 
-std::size_t last_write_below(const dstd::Vector<engine::io_fault::Event>& log,
+std::size_t last_write_below(dstd::Span<const engine::io_fault::Event> log,
                              std::size_t k) {
     for (std::size_t i = k; i > 0; --i) {
         if (!is_sync(log[i - 1])) return i - 1;
@@ -521,7 +521,7 @@ std::size_t last_write_below(const dstd::Vector<engine::io_fault::Event>& log,
     return k;
 }
 
-dstd::String log_text(const dstd::Vector<engine::io_fault::Event>& log) {
+dstd::String log_text(dstd::Span<const engine::io_fault::Event> log) {
     static const char* const KINDS[] = {"header", "record",  "big",
                                         "footer", "trailer", "extent"};
     dstd::String out;
@@ -568,9 +568,9 @@ struct CrashModel {
     dstd::Set<std::uint32_t> durable_copies;
 };
 
-CrashModel build_model(const dstd::Vector<engine::io_fault::Event>& log,
-                       const dstd::Vector<std::size_t>& record_at,
-                       const dstd::String& final_bytes) {
+CrashModel build_model(dstd::Span<const engine::io_fault::Event> log,
+                       dstd::Span<const std::size_t> record_at,
+                       dstd::StringView final_bytes) {
     CrashModel model;
     dstd::Map<std::uint64_t, std::size_t> extent_event;
     dstd::Map<std::uint64_t, std::size_t> big_event;
@@ -672,10 +672,10 @@ struct LostOracle {
     std::size_t summary_records_lost = 0;
 };
 
-LostOracle lost_oracle(const CrashModel& model, const dstd::Vector<Dump>& refs,
-                       const dstd::Vector<char>& dropped,
-                       const dstd::Vector<std::size_t>& record_at,
-                       std::size_t lo, std::size_t hi) {
+LostOracle lost_oracle(const CrashModel& model, dstd::Span<const Dump> refs,
+                       dstd::Span<const char> dropped,
+                       dstd::Span<const std::size_t> record_at, std::size_t lo,
+                       std::size_t hi) {
     LostOracle oracle;
     dstd::Set<std::uint32_t> lost_copies;
     dstd::Map<dstd::String, dstd::Pair<std::uint32_t, std::uint64_t>> current;
@@ -890,7 +890,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     const dstd::String image_dir = dstd::fmt<"{}/images">(dir.str());
     REQUIRE(dstd::fs::create_directories(image_dir).has_value());
     const dstd::String image_path = dstd::fmt<"{}/{}">(image_dir, file_name);
-    const auto dump_of = [&](const dstd::String& bytes) {
+    const auto dump_of = [&](dstd::StringView bytes) {
         write_bytes(image_path, bytes);
         auto snapshot = store::engine::Snapshot::open(image_dir);
         REQUIRE(snapshot.has_value());
@@ -1005,8 +1005,8 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     // header, and SIZE_MAX when any m in the range will do. `expected` holds
     // the dump the image must equal for m from `lo` up.
     const auto verify = [&](std::size_t which, std::size_t kill, std::size_t lo,
-                            const dstd::Vector<dstd::String>& expected,
-                            const dstd::String& image,
+                            dstd::Span<const dstd::String> expected,
+                            dstd::StringView image,
                             std::size_t exact) -> std::size_t {
         const std::size_t hi = lo + expected.size() - 1;
         Dumped dumped = dump_of(image);

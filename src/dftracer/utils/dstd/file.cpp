@@ -19,7 +19,7 @@ constexpr std::uint64_t MAX_OFFSET =
     static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
 
 Expected<off_t, Error> to_offset(std::uint64_t offset, std::size_t len,
-                                 const char* what) {
+                                 StringView what) {
     if (offset > MAX_OFFSET || len > MAX_OFFSET - offset) {
         return Unexpected(Error(
             Condition::InvalidArgument,

@@ -168,7 +168,8 @@ struct LocalCtx {
     }
     static dftu_status check(dftu_ctx*) { return DFTU_OK; }
     static const dftu_ctx_vt* vt() {
-        static const dftu_ctx_vt VT = {sizeof(dftu_ctx_vt), set_error, check};
+        static const dftu_ctx_vt VT = {sizeof(dftu_ctx_vt), set_error, check,
+                                       nullptr};
         return &VT;
     }
 
@@ -250,8 +251,28 @@ struct NodeBox {
     TaskRunner runner;
 };
 
+/// A node that says what it does for `args`:
+///   dstd::Result<void> explain(const OpArgs&, const ExplainOut&) const;
+/// The host then sets dftu_node_vt::explain and prints its lines.
+template <class N>
+concept HasNodeExplain =
+    requires(const N& n, const OpArgs& args, const ExplainOut& out) {
+        { n.explain(args, out) } -> std::same_as<dstd::Result<void>>;
+    };
+
 template <class N>
 struct NodeVt {
+    static dftu_status explain(dftu_ctx* ctx, void* self,
+                               const dftu_op_arg* args,
+                               const dftu_explain_out* out) noexcept
+        requires HasNodeExplain<N>
+    {
+        return to_status(ctx, [&]() {
+            return static_cast<NodeBox<N>*>(self)->node->explain(
+                OpArgs(args), ExplainOut(out));
+        });
+    }
+
     static dftu_status output_schema(dftu_ctx* ctx, void* self,
                                      const dftu_schema* in,
                                      const dftu_op_arg* args,
@@ -295,8 +316,15 @@ struct NodeVt {
     static void destroy(void* self) { delete static_cast<NodeBox<N>*>(self); }
 
     static const dftu_node_vt* vt() {
-        static const dftu_node_vt VT = {sizeof(dftu_node_vt), output_schema,
-                                        open, destroy};
+        static const dftu_node_vt VT = [] {
+            dftu_node_vt t{};
+            t.struct_size = sizeof(dftu_node_vt);
+            t.output_schema = output_schema;
+            t.open = open;
+            t.destroy = destroy;
+            if constexpr (HasNodeExplain<N>) t.explain = explain;
+            return t;
+        }();
         return &VT;
     }
 };

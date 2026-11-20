@@ -32,9 +32,9 @@ ExprPtr expr_of(ExprNode node) {
     return dstd::make_unique<Expr>(Expr{std::move(node), Span{}});
 }
 
-ExprPtr field_of(const dstd::String& name) {
+ExprPtr field_of(dstd::StringView name) {
     Path p;
-    p.steps.push_back(PathStep{name, false, dstd::nullopt});
+    p.steps.push_back(PathStep{dstd::String(name), false, dstd::nullopt});
     return expr_of(std::move(p));
 }
 
@@ -91,7 +91,7 @@ struct Copy {
 };
 
 // The tree of canonical text, which always parses.
-Program parse_canonical(const dstd::String& text) {
+Program parse_canonical(dstd::StringView text) {
     auto tree = syntax::parse(text);
     if (!tree)
         dstd::fatal("canonical sub-query text does not parse",
@@ -106,9 +106,10 @@ Copy copy_of(const Pipeline& p) {
     return c;
 }
 
-dstd::Unexpected<Refusal> refuse(const dstd::String& text, Span span,
+dstd::Unexpected<Refusal> refuse(dstd::StringView text, Span span,
                                  dstd::String message) {
-    return dstd::Unexpected<Refusal>(Refusal{text, span, std::move(message)});
+    return dstd::Unexpected<Refusal>(
+        Refusal{dstd::String(text), span, std::move(message)});
 }
 
 void flatten(ExprPtr& e, dstd::Vector<ExprPtr*>& out) {
@@ -187,7 +188,7 @@ bool comparison(BinaryOp op) {
 // `out` and the terms it keeps.
 class Terms {
    public:
-    Terms(const dstd::String& text, Rewrite& out, dstd::String& range)
+    Terms(dstd::StringView text, Rewrite& out, dstd::String& range)
         : text_(text), out_(out), range_(range) {}
 
     dstd::Vector<ExprPtr> kept;
@@ -267,12 +268,12 @@ class Terms {
     }
 
    private:
-    const dstd::String& text_;
+    dstd::StringView text_;
     Rewrite& out_;
     dstd::String& range_;
 };
 
-dstd::Expected<Rewrite, Refusal> split(const dstd::String& text, Pipeline& p,
+dstd::Expected<Rewrite, Refusal> split(dstd::StringView text, Pipeline& p,
                                        bool keys_derived) {
     Rewrite out;
     dstd::String range;
@@ -301,7 +302,7 @@ dstd::Expected<Rewrite, Refusal> split(const dstd::String& text, Pipeline& p,
         auto note = [&](Expr& e, Path&) {
             if (refusal) return;
             refusal = Refusal{
-                text, e.span,
+                dstd::String(text), e.span,
                 dstd::fmt<"'{}' reads the enclosing row in a stage other than "
                           "'where'">(to_text(e))};
         };
@@ -369,7 +370,7 @@ dstd::Vector<Assign> inline_keys(Rewrite& r) {
 }
 
 dstd::Expected<void, Refusal> name_terminal(const Rewrite& r,
-                                            const dstd::String& text) {
+                                            dstd::StringView text) {
     if (r.stages.empty() ||
         !(std::holds_alternative<Select>(r.stages.back().node) ||
           std::holds_alternative<Group>(r.stages.back().node) ||
@@ -381,7 +382,7 @@ dstd::Expected<void, Refusal> name_terminal(const Rewrite& r,
 }
 
 // What a range sub-query's aggregate `e` gives for the rows in range.
-dstd::Expected<RangeRead, Refusal> range_read(const dstd::String& text,
+dstd::Expected<RangeRead, Refusal> range_read(dstd::StringView text,
                                               const Expr& e) {
     const auto* c = std::get_if<Call>(&e.node);
     const dstd::String name = c ? c->name : to_text(e);
@@ -424,7 +425,7 @@ dstd::Expected<dstd::Optional<Decorrelated>, Refusal> decorrelate(
         d.names.push_back(dstd::fmt<"{}{}">(CORRELATED_KEY_PREFIX, i));
 
     dstd::Vector<Assign> inner = inline_keys(r);
-    auto key = [&](const dstd::String& name) {
+    auto key = [&](dstd::StringView name) {
         for (auto& a : inner)
             if (a.name == name && a.value) return std::move(a.value);
         return field_of(name);

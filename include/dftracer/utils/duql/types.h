@@ -23,7 +23,7 @@ enum class MatchOp { Like, Ilike, Regex, Iregex, Icontains };
 
 /// A typed literal value in a query expression.
 using LiteralValue =
-    dstd::Variant<dstd::String, int64_t, uint64_t, double, bool>;
+    dstd::Variant<dstd::String, std::int64_t, std::uint64_t, double, bool>;
 
 /// A value bound to a parameter: a scalar, or a list that `x in $p` reads.
 using ParamValue = dstd::Variant<LiteralValue, dstd::Vector<LiteralValue>>;

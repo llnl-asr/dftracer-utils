@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/domains/analysis/statistics/stats_view.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
@@ -41,14 +42,14 @@ static domains::analysis::statistics::ViewStats run_stats(
 
 namespace {
 
-std::size_t col(const dataframe::DataFrame& b, const dstd::String& name) {
+std::size_t col(const dataframe::DataFrame& b, dstd::CStringView name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return i;
     dstd::fatal("no column", name.c_str());
 }
 
 // Sum an integer count column regardless of its stored width.
-std::int64_t sum_i64(const dataframe::DataFrame& b, const dstd::String& name) {
+std::int64_t sum_i64(const dataframe::DataFrame& b, dstd::CStringView name) {
     const dataframe::Series& c = b.columns[col(b, name)];
     std::int64_t s = 0;
     const std::int64_t* p = c.data<std::int64_t>();
@@ -327,11 +328,11 @@ TEST_SUITE("stats via View") {
         {
             dftu_utils_test::FileOut ofs(pfw);
             for (int i = 0; i < 10; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1000,)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1000,)"
                        R"("tid":5000,"ts":)"
                     << (1000 + i * 10) << R"(,"dur":10,"args":{}})" << "\n";
             for (int i = 0; i < 6; ++i)
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1001,)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1001,)"
                        R"("tid":5001,"ts":)"
                     << (2000 + i * 10) << R"(,"dur":10,"args":{}})" << "\n";
         }

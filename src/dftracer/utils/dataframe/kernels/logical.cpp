@@ -149,8 +149,8 @@ dftu_series* dftu_series_logical(const dftu_series* a, const dftu_series* b,
         return nullptr;
     if (a->type != TypeId::Bool || b->type != TypeId::Bool) return nullptr;
     if (a->length != b->length) return nullptr;
-    if (op < static_cast<int32_t>(LogicalOp::And) ||
-        op > static_cast<int32_t>(LogicalOp::Or))
+    if (op < static_cast<std::int32_t>(LogicalOp::And) ||
+        op > static_cast<std::int32_t>(LogicalOp::Or))
         return nullptr;
 
     auto* out = new dftu_series();
@@ -161,7 +161,8 @@ dftu_series* dftu_series_logical(const dftu_series* a, const dftu_series* b,
     out->data = new_buffer(bytes);
 
     if (a->validity.block() || b->validity.block()) {
-        kleene(a, b, op == static_cast<int32_t>(LogicalOp::And), out, bytes);
+        kleene(a, b, op == static_cast<std::int32_t>(LogicalOp::And), out,
+               bytes);
         return out;
     }
     const std::uint8_t* pa = a->data.data();

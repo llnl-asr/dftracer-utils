@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/memory/pressure.h>
 
+#include <charconv>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -28,9 +30,10 @@ struct Cgroup {
     char dir[PATH_BYTES];
 };
 
-bool readable(const char* dir, const char* file) noexcept {
+bool readable(std::string_view dir, std::string_view file) noexcept {
     char path[PATH_BYTES + 64];
-    std::snprintf(path, sizeof(path), "%s/%s", dir, file);
+    std::snprintf(path, sizeof(path), "%.*s/%.*s", static_cast<int>(dir.size()),
+                  dir.data(), static_cast<int>(file.size()), file.data());
     FILE* f = std::fopen(path, "r");
     if (f == nullptr) return false;
     std::fclose(f);
@@ -70,13 +73,17 @@ void read_cgroup_paths(char* v2, char* v1, std::size_t capacity) noexcept {
     std::fclose(f);
 }
 
-void join(Cgroup& cg, const char* base, const char* path,
-          const char* stat_file) noexcept {
-    std::snprintf(cg.base, sizeof(cg.base), "%s", base);
-    std::snprintf(cg.dir, sizeof(cg.dir), "%s%s", base,
-                  std::strcmp(path, "/") == 0 ? "" : path);
+void join(Cgroup& cg, std::string_view base, std::string_view path,
+          std::string_view stat_file) noexcept {
+    const std::string_view suffix = path == "/" ? std::string_view{} : path;
+    std::snprintf(cg.base, sizeof(cg.base), "%.*s",
+                  static_cast<int>(base.size()), base.data());
+    std::snprintf(cg.dir, sizeof(cg.dir), "%.*s%.*s",
+                  static_cast<int>(base.size()), base.data(),
+                  static_cast<int>(suffix.size()), suffix.data());
     if (!readable(cg.dir, stat_file)) {
-        std::snprintf(cg.dir, sizeof(cg.dir), "%s", base);
+        std::snprintf(cg.dir, sizeof(cg.dir), "%.*s",
+                      static_cast<int>(base.size()), base.data());
     }
 }
 
@@ -99,13 +106,16 @@ Cgroup find_cgroup() noexcept {
     return cg;
 }
 
-bool key_is(const char* line, const char* key) noexcept {
-    std::size_t n = std::strlen(key);
-    return std::strncmp(line, key, n) == 0 && line[n] == ' ';
+bool key_is(std::string_view line, std::string_view key) noexcept {
+    return line.size() > key.size() && line.substr(0, key.size()) == key &&
+           line[key.size()] == ' ';
 }
 
-std::uint64_t value_of(const char* line, const char* key) noexcept {
-    return std::strtoull(line + std::strlen(key) + 1, nullptr, 10);
+std::uint64_t value_of(std::string_view line, std::string_view key) noexcept {
+    const std::string_view number = line.substr(key.size() + 1);
+    std::uint64_t value = 0;
+    std::from_chars(number.data(), number.data() + number.size(), value);
+    return value;
 }
 
 std::size_t memory_from_stat(const Cgroup& cg) noexcept {
@@ -142,9 +152,11 @@ std::size_t memory_from_status() noexcept {
     return static_cast<std::size_t>(kib * 1024);
 }
 
-std::uint64_t read_number(const char* dir, const char* file) noexcept {
+std::uint64_t read_number(std::string_view dir,
+                          std::string_view file) noexcept {
     char path[PATH_BYTES + 64];
-    std::snprintf(path, sizeof(path), "%s/%s", dir, file);
+    std::snprintf(path, sizeof(path), "%.*s/%.*s", static_cast<int>(dir.size()),
+                  dir.data(), static_cast<int>(file.size()), file.data());
     FILE* f = std::fopen(path, "r");
     if (f == nullptr) return 0;
     char text[64] = {};

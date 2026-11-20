@@ -48,6 +48,21 @@ repeated in each tool's section.
   size their output gzip members to match. See :ref:`multi-member-gzip`.
 - ``-f, --force`` - Force index recreation
 
+**Reader** (``ReaderArgs``)
+
+- ``--format <name>`` - Force the reader of every input file by name instead of
+  the content probe: ``jsonl`` (the built-in trace reader) or a file format a
+  plugin registered. An unknown name is an error that lists the known ones.
+  Given by ``dftracer_index``, ``dftracer_view`` and ``dftracer_run``. A
+  ``dftracer_index`` run indexes a file that a plugin file format reads through
+  that format; the other two read trace files only, so a file a plugin format
+  claims, or a plugin name here, stops them with an error that points to
+  ``scan_file``.
+
+Plugins named by ``DFTRACER_UTILS_PLUGINS`` (see :doc:`environment`) are loaded
+before any tool parses its arguments, so their formats are known to
+``--format``.
+
 **duql** (``DuqlArgs``)
 
 - ``-q, --query <duql>`` - duql filter
@@ -425,7 +440,7 @@ dftracer_view
 - ``--preset <name>`` - Predefined view: io, compute, dlio
 - ``--recipe <path>`` - Custom view JSON file path
 - ``--save-recipe <path>`` - Save the constructed view to a JSON file
-- ``-q, --query <duql>`` - duql filter or pipeline (e.g., ``'cat == "POSIX" | derive ms = dur / 1000 | sort -ms | take 5'``). A pipeline with stages after the scan prints a table and does not combine with aggregation, counters, typed, materialize, call-tree, flamegraph or merge output, nor with ``--save-recipe``
+- ``-q, --query <duql>`` - duql filter or pipeline (e.g., ``'cat == "POSIX" | derive ms = dur / 1000 | sort -ms | take 5'``). A pipeline with stages after the scan prints a table and does not combine with aggregation, counters, index-records, materialize, call-tree, flamegraph or merge output, nor with ``--save-recipe``
 - ``--param <name=value>`` - Bind a ``--query`` parameter; the value is a duql literal such as ``5``, ``1.5``, ``'"read"'`` or ``true`` (repeatable)
 - ``--explain`` - Print the plan of ``--query`` and exit without scanning
 - ``--time-range <min,max>`` - Keep events starting in ``[min, max)``, in microseconds (e.g., 1000000,2000000)
@@ -457,9 +472,9 @@ dftracer_view
 - ``--occ-cell <us>`` - Occupancy cell size (busy quantum) for
   ``busy``/``concurrency``/``utilization``; finer resolves overlap on short
   events (default 0, the exact union)
-- ``--counters`` - Emit the aggregation as ``ph=C`` counter events
-- ``--phase <phase>`` - Select events by phase: ``events`` (ph=X),
-  ``counters`` (ph=C), ``aggregated`` (rollup records), ``metadata`` (ph=M),
+- ``--counters`` - Emit the aggregation as ``ph=2`` counter events
+- ``--phase <phase>`` - Select events by phase: ``events`` (ph=1),
+  ``counters`` (ph=2), ``aggregated`` (rollup records), ``metadata`` (ph=4),
   ``any`` (every record, metadata included)
 - ``--schema <id>`` - Read records as this registered record schema instead of the one recorded for each file
 - ``--select <cols>`` - Project the result to these columns, comma-separated
@@ -471,7 +486,7 @@ dftracer_view
   bytes (0 = auto: ~1/3 of available memory)
 - ``--no-spill`` - Keep aggregation fully in memory (disable the default spill)
 - ``--agg-numeric-args`` - Aggregate every numeric ``args.*`` field automatically
-- ``--collect-typed`` - Dump the aggregation index's regular/aggregated/counters families (one pass)
+- ``--index-records`` - Dump the aggregation index's regular/aggregated/counters families (one pass)
 - ``--materialize`` - Persist this aggregation as a rollup for instant reuse (needs ``--group-by``/``--agg``)
 
 **Merging:**
@@ -531,7 +546,7 @@ dftracer_index
 - ``--plugin <path>`` - Plugin shared library to load for the build. Its index extensions are built for every file (repeatable)
 
 This binary also accepts the shared :ref:`cli-shared-flags` (Pipeline,
-Indexing).
+Indexing, Reader).
 
 **Example:**
 

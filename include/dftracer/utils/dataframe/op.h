@@ -150,7 +150,7 @@ class OpDesc {
 };
 
 /// Looks up a registered op by name (built-in or user). Empty if none.
-dstd::Optional<OpDesc> find_op(const char* name) noexcept;
+dstd::Optional<OpDesc> find_op(dstd::StringView name) noexcept;
 
 /// Registers a user op like dftu_op_register, which copies the record and the
 /// name. `keep_alive`, if any, is held by the record, and so by every
@@ -256,10 +256,10 @@ class OpArgs {
     }
     /// Borrows `items`: it must outlive the dftu_op_run* call this is passed
     /// to.
-    OpArgs& strlist(std::uint32_t i, const char* const* items,
-                    std::int32_t n) noexcept {
-        arg_.args[i].list.items = items;
-        arg_.args[i].list.n = n;
+    OpArgs& strlist(std::uint32_t i,
+                    dstd::Span<const char* const> items) noexcept {
+        arg_.args[i].list.items = items.data();
+        arg_.args[i].list.n = static_cast<std::int32_t>(items.size());
         return *this;
     }
     /// Borrows `items`: it must outlive the dftu_op_run* call this is passed

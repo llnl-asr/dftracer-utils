@@ -12,10 +12,10 @@ CursorHost& cursor_of(void* h) { return *static_cast<CursorHost*>(h); }
 
 // The services that belong to one scan (task, fileio, agg, result, ports, duql,
 // trace) are not here: a cursor has no fold to keep their state in.
-const void* cursor_get_service(void*, const char* ext_id) {
-    if (!ext_id) return nullptr;
-    if (std::strcmp(ext_id, DFTU_SVC_MEMORY) == 0)
-        return detail::cursor_memory_ext_vtable();
+const void* cursor_get_service(void*, const char* ext_id_c) {
+    if (!ext_id_c) return nullptr;
+    const dstd::StringView ext_id{ext_id_c};
+    if (ext_id == DFTU_SVC_MEMORY) return detail::cursor_memory_ext_vtable();
     return detail::stateless_service(ext_id);
 }
 
@@ -29,7 +29,8 @@ dftu_str cursor_intern(void*, const char*, std::uint32_t) {
 }
 
 void cursor_log(void* h, std::uint8_t level, const char* s, std::uint32_t n) {
-    detail::log_plugin_line(cursor_of(h).memory().name(), level, s, n);
+    detail::log_plugin_line(cursor_of(h).memory().name(), level,
+                            s ? dstd::StringView(s, n) : dstd::StringView());
 }
 
 }  // namespace

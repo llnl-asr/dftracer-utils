@@ -13,8 +13,10 @@
 #include <dftracer/utils/comm/group.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <atomic>
@@ -30,12 +32,13 @@ namespace {
 
 using Task = coro::CoroTask<dstd::Result<void>>;
 
-bool names(const dstd::Error& error, const char* text) {
+bool names(const dstd::Error& error, dstd::StringView text) {
     return dftu_comm_test::has_text(error, text);
 }
 
-void say(std::uint32_t rank, bool good, const char* what) {
-    std::printf("PROBE rank=%u %s %s\n", rank, good ? "ok" : "bad", what);
+void say(std::uint32_t rank, bool good, dstd::CStringView what) {
+    std::printf("PROBE rank=%u %s %s\n", rank, good ? "ok" : "bad",
+                what.c_str());
     std::fflush(stdout);
 }
 

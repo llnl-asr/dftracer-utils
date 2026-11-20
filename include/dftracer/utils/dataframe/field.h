@@ -181,16 +181,16 @@ class FieldExpr {
     }
 
     /// Membership predicates (filter-only). The field is (not) one of `values`.
-    FieldExpr in(const dstd::Vector<std::int64_t>& values) const {
+    FieldExpr in(dstd::Span<const std::int64_t> values) const {
         return in_impl(values, /*negated=*/false);
     }
-    FieldExpr in(const dstd::Vector<dstd::String>& values) const {
+    FieldExpr in(dstd::Span<const dstd::String> values) const {
         return in_impl(values, /*negated=*/false);
     }
-    FieldExpr not_in(const dstd::Vector<std::int64_t>& values) const {
+    FieldExpr not_in(dstd::Span<const std::int64_t> values) const {
         return in_impl(values, /*negated=*/true);
     }
-    FieldExpr not_in(const dstd::Vector<dstd::String>& values) const {
+    FieldExpr not_in(dstd::Span<const dstd::String> values) const {
         return in_impl(values, /*negated=*/true);
     }
 
@@ -350,14 +350,14 @@ class FieldExpr {
     }
 
     template <typename V>
-    FieldExpr in_impl(const dstd::Vector<V>& values, bool negated) const {
+    FieldExpr in_impl(dstd::Span<const V> values, bool negated) const {
         return FieldExpr(
             detail::make_node(detail::FKind::In, [&](detail::FNode& n) {
                 n.name = field_name();
                 n.negated = negated;
                 if constexpr (std::is_same_v<V, dstd::String>) {
                     n.in_is_string = true;
-                    n.in_strs = values;
+                    n.in_strs.assign(values.begin(), values.end());
                 } else {
                     n.in_is_string = false;
                     n.in_ints.reserve(values.size());

@@ -4,6 +4,7 @@
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
@@ -17,6 +18,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/open_count.h>
 #include <dftracer/utils/trace/index/build/file_group.h>
 #include <dftracer/utils/trace/index/index.h>
 #include <dftracer/utils/trace/index/indexer.h>
@@ -26,8 +28,10 @@
 #include <dftracer/utils/trace/index/store/store_layout.h>
 #include <dftracer/utils/trace/index/tables.h>
 #include <doctest/doctest.h>
+#include <sys/wait.h>
 #include <task_result.h>
 #include <testing_utilities.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
@@ -66,10 +70,6 @@ dstd::String str(dstd::StringView view) {
     return dstd::String(view.data(), view.size());
 }
 
-dstd::String str(const dstd::String& value) {
-    return dstd::String(value.data(), value.size());
-}
-
 dstd::Expected<void, dstd::Error> run(
     coro::CoroTask<dstd::Expected<void, dstd::Error>> task) {
     return dftracer::utils::default_runtime().submit(std::move(task)).get();
@@ -95,17 +95,17 @@ void ok(dstd::Expected<void, dstd::Error> result) {
     REQUIRE(result.has_value());
 }
 
-dstd::String build_into(const dstd::String& dir,
-                        const dstd::Vector<dstd::String>& traces) {
-    const auto index_path = dir + "/.dftindex";
+dstd::String build_into(dstd::CStringView dir,
+                        dstd::Span<const dstd::String> traces) {
+    const auto index_path = dstd::String(dir) + "/.dftindex";
     for (const auto& trace : traces)
         REQUIRE(dftu_utils_test::build_index(
             dstd::String(trace), dstd::String(index_path), CHECKPOINT));
     return index_path;
 }
 
-void put_plugin_extension(const dstd::String& index_path,
-                          const dstd::Vector<dstd::String>& traces) {
+void put_plugin_extension(dstd::CStringView index_path,
+                          dstd::Span<const dstd::String> traces) {
     auto opened = Index::open(index_path);
     REQUIRE(opened.has_value());
     for (const auto& trace : traces) {
@@ -494,7 +494,7 @@ TEST_CASE("a second dictionary read finds an id below one it already read") {
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
 
-    const auto commit_entry = [&](const dstd::String& path, std::uint32_t id,
+    const auto commit_entry = [&](dstd::CStringView path, std::uint32_t id,
                                   dstd::StringView text) {
         auto build = take(opened->build(path, stat_of(1000, 4000, 9)));
         trace::index::put_agg_dictionary_entry(build, id, text);
@@ -762,7 +762,7 @@ TEST_CASE("a FileGroup publishes a repeated path in order and counts files") {
     const dstd::String dotted = "/traces/./rep.pfw.gz";
     const dstd::String other = "/traces/other.pfw.gz";
     const dstd::String bad = "/traces/bad.pfw.gz";
-    const auto key = [](const dstd::String& path) {
+    const auto key = [](dstd::CStringView path) {
         return fileio::get_logical_path(path);
     };
     const auto run_task = [](auto task) {
@@ -1118,16 +1118,16 @@ TEST_CASE("agg meta is replaced and deleted in one record at a time") {
     auto opened = Index::open(root);
     REQUIRE(opened.has_value());
 
-    dstd::String config;
-    for (const std::uint64_t word : {std::uint64_t{60}, std::uint64_t{7}}) {
-        for (int shift = 56; shift >= 0; shift -= 8)
-            config.push_back(static_cast<char>((word >> shift) & 0xFF));
-    }
-    config.push_back(0);
+    schemas::dft::agg::tier::Config config;
+    config.time_interval_us = 60;
+    config.params_hash = 7;
+    config.group_by_file = false;
+    config.compute_percentiles = true;
+    config.sketch_accuracy = 0.05;
+    config.percentiles = {0.5, 0.99};
 
     REQUIRE(run(trace::index::delete_agg_meta(*opened, "config")).has_value());
-    REQUIRE(
-        run(trace::index::put_agg_meta(*opened, "config", config)).has_value());
+    REQUIRE(schemas::dft::agg::tier::write_config(*opened, config).has_value());
 
     auto read =
         take(schemas::dft::agg::tier::read_config(take(opened->snapshot())));
@@ -1135,11 +1135,14 @@ TEST_CASE("agg meta is replaced and deleted in one record at a time") {
     CHECK(read->time_interval_us == 60);
     CHECK(read->params_hash == 7);
     CHECK_FALSE(read->group_by_file);
+    CHECK(read->compute_percentiles);
+    CHECK_FALSE(read->use_relative_time);
+    CHECK(read->sketch_accuracy == 0.05);
+    CHECK(read->percentiles == dstd::Vector<double>{0.5, 0.99});
 
-    config[15] = 9;
-    config[16] = 1;
-    REQUIRE(
-        run(trace::index::put_agg_meta(*opened, "config", config)).has_value());
+    config.params_hash = 9;
+    config.group_by_file = true;
+    REQUIRE(schemas::dft::agg::tier::write_config(*opened, config).has_value());
     read = take(schemas::dft::agg::tier::read_config(take(opened->snapshot())));
     REQUIRE(read.has_value());
     CHECK(read->params_hash == 9);
@@ -1595,14 +1598,13 @@ dstd::String write_bytes(const dstd::Path& path, dstd::StringView contents) {
     return dstd::String(path.str());
 }
 
-SourceStat stat_of_file(const dstd::String& path) {
+SourceStat stat_of_file(dstd::CStringView path) {
     dftracer::utils::common::InputFileStat st;
     REQUIRE(dftracer::utils::common::stat_input(path, st));
     return stat_of(static_cast<std::uint64_t>(st.mtime), st.size);
 }
 
-void register_traces(const Index& index,
-                     const dstd::Vector<dstd::String>& paths) {
+void register_traces(const Index& index, dstd::Vector<dstd::String> paths) {
     for (const auto& path : paths) {
         auto build = take(index.build(path, stat_of_file(path)));
         put_members(build, 1);
@@ -1865,4 +1867,102 @@ TEST_CASE("opening a view root keeps its store inside the view root") {
     CHECK(dstd::fs::exists(root + "/views/v1/store").value());
     CHECK_FALSE(dstd::fs::exists(root + "/store").value());
     trace::index::release_root(view);
+}
+
+TEST_CASE("an index deleted and built again at one path reads the new index") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    const dstd::Path root(env.dir());
+    REQUIRE(dstd::fs::create_directories(root).has_value());
+    const auto traces = create_traces(env, root);
+    const auto index_path = dstd::String(root.str()) + "/.dftindex";
+
+    auto build_and_count = [&](dstd::Span<const dstd::String> some) {
+        for (const auto& trace : some)
+            REQUIRE(dftu_utils_test::build_index(
+                dstd::String(trace), dstd::String(index_path), CHECKPOINT));
+        auto opened = take(Index::open(index_path));
+        return take(take(opened.snapshot()).files()).size();
+    };
+
+    CHECK(build_and_count(dstd::Span<const dstd::String>(traces)) == 3);
+    auto before = take(Index::open(index_path));
+    const std::uint64_t first = take(before.generation());
+    CHECK(first != 0);
+
+    for (int round = 0; round < 3; ++round) {
+        REQUIRE(dstd::fs::remove_all(dstd::PathView(index_path)).has_value());
+        const std::size_t kept = 1 + static_cast<std::size_t>(round % 2);
+        CHECK(build_and_count(
+                  dstd::Span<const dstd::String>(traces.data(), kept)) == kept);
+        CHECK(take(take(Index::open(index_path)).generation()) != first);
+    }
+}
+
+TEST_CASE("an index handle kept across a delete is not served again") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    const dstd::String root = env.dir() + "/.dftindex";
+    {
+        auto opened = take(Index::open(root));
+        auto build = take(opened.build("/traces/a.pfw.gz", stat_of(1, 10, 1)));
+        put_members(build, 2);
+        put_stats(build, 2);
+        REQUIRE(run(build.commit()).has_value());
+    }
+    REQUIRE(dstd::fs::remove_all(dstd::PathView(root)).has_value());
+    auto reopened = take(Index::open(root));
+    CHECK(take(take(reopened.snapshot()).files()).empty());
+    auto build = take(reopened.build("/traces/b.pfw.gz", stat_of(2, 20, 1)));
+    put_members(build, 2);
+    put_stats(build, 2);
+    REQUIRE(run(build.commit()).has_value());
+    const auto snapshot = take(reopened.snapshot());
+    CHECK(take(snapshot.files()).size() == 1);
+    CHECK(snapshot.file("/traces/b.pfw.gz").has_value());
+    CHECK_FALSE(snapshot.file("/traces/a.pfw.gz").has_value());
+}
+
+TEST_CASE("reopening an unchanged index keeps its generation and its store") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    const dstd::String root = env.dir() + "/.dftindex";
+    dstd::Optional<Index> first(take(Index::open(root)));
+    auto build = take(first->build("/traces/a.pfw.gz", stat_of(1, 10, 1)));
+    put_members(build, 2);
+    put_stats(build, 2);
+    REQUIRE(run(build.commit()).has_value());
+    const std::uint64_t generation = take(first->generation());
+    const std::uint64_t opens = dftracer::utils::store::internal::opens();
+
+    CHECK(take(take(Index::open(root)).generation()) == generation);
+    first.reset();
+    CHECK(take(take(Index::open(root)).generation()) == generation);
+    CHECK(dftracer::utils::store::internal::opens() == opens);
+}
+
+TEST_CASE("a child of a fork opens a retained root without waiting") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    const dstd::String root = env.dir() + "/.dftindex";
+    {
+        auto opened = take(Index::open(root));
+        auto build = take(opened.build("/traces/a.pfw.gz", stat_of(1, 10, 1)));
+        put_members(build, 2);
+        put_stats(build, 2);
+        REQUIRE(run(build.commit()).has_value());
+    }
+    const pid_t pid = ::fork();
+    REQUIRE(pid >= 0);
+    if (pid == 0) {
+        ::alarm(60);
+        auto again = Index::open(root);
+        if (!again) dftu_utils_test::exit_forked_child(1);
+        dftu_utils_test::exit_forked_child(again->snapshot().has_value() ? 0
+                                                                         : 2);
+    }
+    int status = 0;
+    REQUIRE(::waitpid(pid, &status, 0) == pid);
+    REQUIRE_MESSAGE(WIFEXITED(status), "the child died or hung: ", status);
+    CHECK(WEXITSTATUS(status) == 0);
 }

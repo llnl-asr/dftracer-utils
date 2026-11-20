@@ -3,7 +3,10 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/trace/index/build/aggregation_run.h>
 #include <dftracer/utils/trace/index/index.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
@@ -25,18 +28,23 @@ dstd::Result<AggRun> start_aggregation(
     auto target = trace::index::Index::open(
         trace::index::normalize_index_root(index_path));
     if (!target) return target.error();
-    auto intern = trace::index::schemas::dft::agg::intern_for_index(index_path);
+    auto generation = target->generation();
+    if (!generation) return generation.error();
+    auto intern = trace::index::schemas::dft::agg::intern_for_index(
+        index_path, *generation);
     auto snapshot = target->snapshot();
     if (!snapshot) return snapshot.error();
     auto dictionary = agg_dictionary(*snapshot, *intern);
     if (!dictionary) return dictionary.error();
+    auto serving = trace::index::schemas::dft::agg::tier::serving_config(
+        *snapshot, config);
+    if (!serving) return serving.error();
     auto written = trace::index::schemas::dft::agg::tier::write_config(
-        *target, {config.time_interval_us, config.params_hash(),
-                  config.group_by_file, config.extra_group_keys});
+        *target, trace::index::schemas::dft::agg::tier::make_config(*serving));
     if (!written) return written.error();
     auto cfg =
         dstd::make_shared<trace::index::schemas::dft::agg::AggregationConfig>(
-            config);
+            std::move(*serving));
     auto factory = [cfg,
                     intern](dftracer::utils::dstd::StringIntern& build_intern) {
         return dstd::make_unique<
@@ -55,12 +63,29 @@ dstd::Result<void> finish_aggregation(AggRun& run,
         batch.agg_outputs, *target);
 }
 
-dstd::Result<void> clear_aggregation(const dstd::String& index_path) {
+dstd::Result<void> clear_aggregation(dstd::StringView index_path) {
     DFTRACER_UTILS_LOG_INFO("Clearing the aggregation tier of {}", index_path);
     auto target = trace::index::Index::open(
         trace::index::normalize_index_root(index_path));
     if (!target) return target.error();
     return trace::index::schemas::dft::agg::tier::clear(*target);
+}
+
+dstd::Result<void> clear_aggregation_files(
+    dstd::StringView index_path, dstd::Span<const dstd::String> files) {
+    DFTRACER_UTILS_LOG_INFO("Clearing the aggregation rows of {} files in {}",
+                            files.size(), index_path);
+    auto target = trace::index::Index::open(
+        trace::index::normalize_index_root(index_path));
+    if (!target) return target.error();
+    dstd::Vector<dstd::String> logical;
+    logical.reserve(files.size());
+    for (const dstd::String& file : files)
+        logical.push_back(fileio::get_logical_path(file));
+    dstd::Vector<dstd::StringView> views(logical.begin(), logical.end());
+    return trace::index::schemas::dft::agg::tier::clear_files(
+        *target,
+        dstd::Span<const dstd::StringView>(views.data(), views.size()));
 }
 
 }  // namespace dftracer::utils::trace::index::build

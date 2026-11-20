@@ -188,8 +188,7 @@ std::size_t chunk_uncompressed_bytes(std::size_t chunk_bytes, double ratio,
     return static_cast<std::size_t>(std::max(aim, 1.0));
 }
 
-coro::CoroTask<dstd::Result<std::size_t>> hash_events(
-    const dstd::String& path) {
+coro::CoroTask<dstd::Result<std::size_t>> hash_events(dstd::String path) {
     // std::string (utilities step)
     std::size_t content_hash = 0;
     fileio::hash::HasherUtility hasher;
@@ -404,15 +403,15 @@ class GroupStage {
     std::size_t executor_threads_;
 };
 
-// `settings` and `output_dir` must outlive the stage.
+// `settings` must outlive the stage.
 class ExtractStage {
    public:
     using Input = FileGroups;
     using Output = ExtractChunksOutput;
     static constexpr const char* NAME = "ExtractChunks";
 
-    ExtractStage(const SplitSettings& settings, const dstd::String& output_dir)
-        : settings_(&settings), output_dir_(&output_dir) {}
+    ExtractStage(const SplitSettings& settings, dstd::String output_dir)
+        : settings_(&settings), output_dir_(std::move(output_dir)) {}
 
     coro::CoroTask<Output> run(Input groups) const {
         const auto& settings = *settings_;
@@ -439,7 +438,7 @@ class ExtractStage {
             inputs.push_back(
                 ExtractInput::from_files(static_cast<int>(i + 1),
                                          std::move(groups[i].files))
-                    .with_output_dir(*output_dir_)
+                    .with_output_dir(output_dir_)
                     .with_open_files(std::move(groups[i].open_files))
                     .with_app_name(settings.app_name)
                     .with_compression(settings.compress)
@@ -473,7 +472,7 @@ class ExtractStage {
 
    private:
     const SplitSettings* settings_;
-    const dstd::String* output_dir_;
+    dstd::String output_dir_;
 };
 
 struct VerifyInput {
@@ -619,13 +618,13 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     const std::size_t input_count = input_files.size();
     RechunkDir rechunk_dir;
     std::atomic<std::size_t> open_count{0};
-    const dstd::String output_dir_text(output_dir.str());
+    dstd::String output_dir_text(output_dir.str());
     ExtractChunksOutput split_results;
     dstd::Optional<trace::ChunkVerificationUtilityOutput> verification;
 
     const ProbeStage probe_stage(settings, rechunk_dir, open_count);
     const GroupStage group_stage(settings);
-    const ExtractStage extract_stage(settings, output_dir_text);
+    const ExtractStage extract_stage(settings, std::move(output_dir_text));
     const VerifyStage verify_stage(settings);
 
     DFTRACER_UTILS_LOG_INFO("{}", "Running...");

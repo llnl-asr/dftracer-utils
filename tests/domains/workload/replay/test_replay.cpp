@@ -19,7 +19,7 @@ namespace {
 /// same `<<` and close(), but the bytes land compressed.
 class GzTraceWriter {
    public:
-    explicit GzTraceWriter(const dstd::String& path) : path_(path) {}
+    explicit GzTraceWriter(dstd::StringView path) : path_(path) {}
     ~GzTraceWriter() { close(); }
 
     template <typename T>
@@ -63,16 +63,16 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
         // Write sample trace entries based on the DFTracer format
         file << "[\n";
         file
-            << R"({"id":1,"name":"opendir","cat":"POSIX","pid":12345,"tid":12345,"ts":1000000,"dur":1500,"ph":"X","args":{"fhash":"abc123","level":1}})"
+            << R"({"id":1,"name":"opendir","cat":"POSIX","pid":12345,"tid":12345,"ts":1000000,"dur":1500,"ph":1,"args":{"fhash":"abc123","level":1}})"
             << "\n";
         file
-            << R"({"id":2,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":1002000,"dur":2500,"ph":"X","args":{"fhash":"def456","size":1024,"level":1}})"
+            << R"({"id":2,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":1002000,"dur":2500,"ph":1,"args":{"fhash":"def456","size":1024,"level":1}})"
             << "\n";
         file
-            << R"({"id":3,"name":"write","cat":"POSIX","pid":12345,"tid":12345,"ts":1005000,"dur":3000,"ph":"X","args":{"fhash":"ghi789","size":2048,"level":1}})"
+            << R"({"id":3,"name":"write","cat":"POSIX","pid":12345,"tid":12345,"ts":1005000,"dur":3000,"ph":1,"args":{"fhash":"ghi789","size":2048,"level":1}})"
             << "\n";
         file
-            << R"({"id":4,"name":"fopen","cat":"STDIO","pid":12345,"tid":12345,"ts":1009000,"dur":500,"ph":"X","args":{"fhash":"jkl012","level":1}})"
+            << R"({"id":4,"name":"fopen","cat":"STDIO","pid":12345,"tid":12345,"ts":1009000,"dur":500,"ph":1,"args":{"fhash":"jkl012","level":1}})"
             << "\n";
         file << "]";
         file.close();
@@ -86,10 +86,10 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
             GzTraceWriter file(trace_file);
             file << "[\n";
             file
-                << R"({"id":1,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":1000000,"dur":1500,"ph":"X","args":{"fhash":"abc123","size":1024}})"
+                << R"({"id":1,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":1000000,"dur":1500,"ph":1,"args":{"fhash":"abc123","size":1024}})"
                 << "\n";
             file
-                << R"({"id":2,"name":"write","cat":"POSIX","pid":12345,"tid":12345,"ts":1002000,"dur":2500,"ph":"X","args":{"fhash":"def456","size":2048}})"
+                << R"({"id":2,"name":"write","cat":"POSIX","pid":12345,"tid":12345,"ts":1002000,"dur":2500,"ph":1,"args":{"fhash":"def456","size":2048}})"
                 << "\n";
             file << "]";
             file.close();
@@ -123,7 +123,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
             GzTraceWriter file(trace_file);
             file << "[\n";
             file
-                << R"({"id":1,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":1000000,"dur":1500,"ph":"X","args":{"fhash":"abc123","size":1024}})"
+                << R"({"id":1,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":1000000,"dur":1500,"ph":1,"args":{"fhash":"abc123","size":1024}})"
                 << "\n";
             file << "]";
             file.close();
@@ -151,13 +151,13 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
             GzTraceWriter file(trace_file);
             file << "[\n";
             file
-                << R"({"id":1,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":1000000,"dur":1500,"ph":"X","args":{}})"
+                << R"({"id":1,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":1000000,"dur":1500,"ph":1,"args":{}})"
                 << "\n";
             file
-                << R"({"id":2,"name":"fopen","cat":"STDIO","pid":12345,"tid":12345,"ts":1002000,"dur":500,"ph":"X","args":{}})"
+                << R"({"id":2,"name":"fopen","cat":"STDIO","pid":12345,"tid":12345,"ts":1002000,"dur":500,"ph":1,"args":{}})"
                 << "\n";
             file
-                << R"({"id":3,"name":"write","cat":"POSIX","pid":12345,"tid":12345,"ts":1003000,"dur":2000,"ph":"X","args":{}})"
+                << R"({"id":3,"name":"write","cat":"POSIX","pid":12345,"tid":12345,"ts":1003000,"dur":2000,"ph":1,"args":{}})"
                 << "\n";
             file << "]";
             file.close();
@@ -186,13 +186,13 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
             GzTraceWriter file(trace_file);
             file << "[\n";
             file
-                << R"({"id":1,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":1000000,"dur":1500,"ph":"X","args":{}})"
+                << R"({"id":1,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":1000000,"dur":1500,"ph":1,"args":{}})"
                 << "\n";
             file
-                << R"({"id":2,"name":"write","cat":"POSIX","pid":12345,"tid":12345,"ts":1002000,"dur":2500,"ph":"X","args":{}})"
+                << R"({"id":2,"name":"write","cat":"POSIX","pid":12345,"tid":12345,"ts":1002000,"dur":2500,"ph":1,"args":{}})"
                 << "\n";
             file
-                << R"({"id":3,"name":"open","cat":"POSIX","pid":12345,"tid":12345,"ts":1005000,"dur":500,"ph":"X","args":{}})"
+                << R"({"id":3,"name":"open","cat":"POSIX","pid":12345,"tid":12345,"ts":1005000,"dur":500,"ph":1,"args":{}})"
                 << "\n";
             file << "]";
             file.close();
@@ -225,7 +225,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
                     << R"({"id":)" << i
                     << R"(,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":)"
                     << (1000000 + i * 1000)
-                    << R"(,"dur":100,"ph":"X","args":{}})";
+                    << R"(,"dur":100,"ph":1,"args":{}})";
                 if (i < 9) file << ",";
                 file << "\n";
             }
@@ -257,7 +257,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
                     << R"({"id":)" << i
                     << R"(,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":)"
                     << (1000000 + i * 1000)
-                    << R"(,"dur":100,"ph":"X","args":{}})";
+                    << R"(,"dur":100,"ph":1,"args":{}})";
                 if (i < 99) file << ",";
                 file << "\n";
             }

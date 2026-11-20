@@ -14,7 +14,7 @@ from .common import Environment
 def _indexed(env):
     gz = env.create_test_gzip_file()
     with dftu_utils.Indexer(files=[gz]) as indexer:
-        indexer.ensure_indexed()
+        indexer.ensure()
     return gz
 
 
@@ -72,7 +72,7 @@ class TestViewJoin:
             gz = _indexed(env)
             left = TraceViewer(gz).group_by("cat").agg("count")
             right = TraceViewer(gz).group_by("pid").agg("count")
-            with pytest.raises(ValueError, match="no right column named cat"):
+            with pytest.raises(dftu_utils.DFTUtilsNotFoundError, match="no right column named cat"):
                 _ = left.join(right, on="cat", how="inner").columns
 
     def test_bad_how_and_bad_other_raise(self):

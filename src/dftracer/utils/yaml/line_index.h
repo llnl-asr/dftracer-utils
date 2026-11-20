@@ -109,7 +109,7 @@ constexpr std::uint8_t Flow = 3;
 /// The facts of one line, read from its text.
 struct LineParts {
     /// Set when classify_line fails: the reason, and the offset it is at.
-    const char* reason = nullptr;
+    dstd::StringView reason;
     std::uint32_t error_at = 0;
     LineKind kind = LineKind::Blank;
     std::uint8_t flags = 0;
@@ -138,8 +138,8 @@ struct LineParts {
 /// Reads the facts of the line that holds `[start, end)`, with the CR cut.
 /// False when the line is invalid or holds a feature that is not supported:
 /// then `parts.reason` says which.
-bool classify_line(const char* text, std::uint32_t start, std::uint32_t end,
-                   LineParts& parts);
+bool classify_line(dstd::StringView text, std::uint32_t start,
+                   std::uint32_t end, LineParts& parts);
 
 /// What the line index made of a text.
 enum class BuildResult : std::uint8_t {
@@ -157,8 +157,8 @@ struct LineProblem {
 
 /// The bytes of a UTF-8 byte order mark at the start of a text, else 0. The
 /// reader skips it, so it is no part of the first line.
-inline std::size_t bom_size(const char* text, std::size_t size) {
-    return size >= 3 && static_cast<unsigned char>(text[0]) == 0xEF &&
+inline std::size_t bom_size(dstd::StringView text) {
+    return text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF &&
                    static_cast<unsigned char>(text[1]) == 0xBB &&
                    static_cast<unsigned char>(text[2]) == 0xBF
                ? 3
@@ -249,15 +249,14 @@ struct LineIndex {
     /// The chunks that @ref build_parallel joined, or 1 for one pass.
     std::uint32_t chunk_count = 1;
 
-    /// Indexes `size` bytes at `text`. The index keeps the pointer, so the
-    /// text outlives it. When the text is invalid, the index is unusable.
-    BuildResult build(const char* text, std::size_t size);
+    /// Indexes `input`. The index keeps its pointer, so the text outlives it.
+    /// When the text is invalid, the index is unusable.
+    BuildResult build(dstd::StringView input);
 
     /// As @ref build, with chunks of about `piece_bytes` of the text indexed
     /// through `run_jobs` and joined. The index is the one that @ref build
     /// gives.
-    BuildResult build_parallel(const char* text, std::size_t size,
-                               RunJobs run_jobs,
+    BuildResult build_parallel(dstd::StringView input, RunJobs run_jobs,
                                std::size_t piece_bytes = std::size_t{1} << 20);
 
     /// Set by a build that gives Invalid.
@@ -292,7 +291,7 @@ bool fail_at(LineIndex& ix, std::uint32_t offset, dstd::String reason);
 void set_scalar_line_masks_for_test(bool scalar);
 
 /// The count of '\n' in the text.
-std::size_t count_newlines(const char* text, std::size_t size);
+std::size_t count_newlines(dstd::StringView text);
 
 /// The bit arrays of `block_count` 64-byte blocks, a bit for each byte.
 struct MaskArrays {
@@ -312,9 +311,9 @@ struct MaskArrays {
     std::uint64_t* special;
 };
 
-/// Fills `out`. `text[block_count * 64]` must be readable.
-void line_masks(const char* text, std::size_t block_count,
-                const MaskArrays& out);
+/// Fills `out` for the whole 64-byte blocks of `text`, whose size is a multiple
+/// of 64.
+void line_masks(dstd::StringView text, const MaskArrays& out);
 
 /// Makes every line go through the byte-by-byte classifier. Tests only.
 void set_slow_lines_for_test(bool slow);

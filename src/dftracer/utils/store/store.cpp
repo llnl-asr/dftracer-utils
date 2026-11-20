@@ -7,6 +7,7 @@
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
@@ -18,10 +19,12 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/directory_key.h>
 #include <dftracer/utils/store/fold.h>
 #include <dftracer/utils/store/open_count.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/store.h>
+#include <dftracer/utils/store/store_id.h>
 #include <dftracer/utils/store/writer.h>
 #include <pthread.h>
 
@@ -35,6 +38,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace dftracer::utils::store {
@@ -80,15 +84,13 @@ dstd::Error foreign_copy_error() {
                        "data file holds the current copy of the scope");
 }
 
-/// Absolute and without a trailing separator, so two spellings of one directory
-/// share one State.
+}  // namespace
+
 dstd::Path directory_key(dstd::StringView dir) {
     const auto absolute = dstd::fs::absolute(dstd::PathView(dir));
     if (!absolute) return dstd::Path(dir);
     return dstd::normalize(absolute->view());
 }
-
-}  // namespace
 
 bool operator==(const NamespaceSpec& a, const NamespaceSpec& b) {
     return a.name == b.name && a.format_version == b.format_version &&
@@ -152,8 +154,8 @@ ByteView Batch::keep(ByteView bytes) {
     if (bytes.empty()) return {};
     if (!arena_)
         arena_ = dstd::make_unique<dstd::StringArena>(FIRST_ARENA_BLOCK);
-    const dstd::StringView kept =
-        arena_->push(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    const dstd::StringView kept = arena_->push(
+        {reinterpret_cast<const char*>(bytes.data()), bytes.size()});
     return {reinterpret_cast<const std::byte*>(kept.data()), kept.size()};
 }
 
@@ -304,6 +306,11 @@ Cursor Snapshot::wrap(engine::ScanCursor&& scan) const {
 namespace {
 
 std::atomic<std::uint64_t> open_count{0};
+std::atomic<std::uint64_t> next_generation{1};
+
+#if DFTRACER_UTILS_TEST_PROBES
+std::atomic<void (*)()> g_open_probe{nullptr};
+#endif
 
 std::mutex& registry_mutex() {
     static dstd::NoDestructor<std::mutex> value;
@@ -339,6 +346,25 @@ struct Store::State {
     memory::PoolHandle pool;
     const std::uint64_t owner_fork = g_forks.load(std::memory_order_relaxed);
     dstd::Path dir;
+    const std::uint64_t generation =
+        next_generation.fetch_add(1, std::memory_order_relaxed);
+    /// The id of the store in `dir`, and the path of its marker file. A
+    /// directory deleted and created again keeps its name and can keep its
+    /// inode number, so only the marker, which has a new name, says that the
+    /// files are still these. 0 until a process with write access made the
+    /// marker, and then `dir_identity` decides. The path is written before the
+    /// id and never again.
+    std::atomic<std::uint64_t> marker_id{0};
+    dstd::String marker_path;
+    std::mutex marker_mutex;
+    /// Set when a reader found a store.id that no creator is writing. It stays
+    /// set, so the readers of this state do not read the file again; a writer
+    /// replaces the file.
+    std::atomic<bool> marker_invalid{false};
+    dstd::fs::FileStat dir_identity;
+    /// The directory, held open so its inode number stays taken after the
+    /// directory is deleted and `dir_identity` cannot match a new one.
+    dstd::File dir_hold;
     mutable std::mutex mutex;
     dstd::SharedPtr<Runtime> runtime;
     dstd::SharedPtr<engine::Writer> writer;
@@ -378,6 +404,11 @@ struct Store::State {
     }
 
     explicit State(dstd::Path directory);
+    bool is_current() const;
+    /// Takes the id and marker of the store, once. With `may_create` it makes
+    /// them when the directory has none, as a writer does. Without it a store
+    /// that has none stays on the directory's device and inode.
+    void adopt_marker(bool may_create);
     State(const State&) = delete;
     State& operator=(const State&) = delete;
     ~State();
@@ -431,6 +462,56 @@ Store::State::State(dstd::Path directory)
           "store", memory::PoolKind::Results)),
       dir(std::move(directory)) {}
 
+void Store::State::adopt_marker(bool may_create) {
+    // The id work does file I/O and can wait for another creator, so it runs
+    // under a mutex of its own, never under the registry's or the state's.
+    std::lock_guard<std::mutex> lock(marker_mutex);
+    if (marker_id.load(std::memory_order_relaxed) != 0) return;
+    if (!may_create && marker_invalid.load(std::memory_order_relaxed)) return;
+    detail::IdFile seen = detail::IdFile::Missing;
+    const std::uint64_t id = may_create ? detail::ensure_store_id(dir, &seen)
+                                        : detail::existing_store_id(dir, &seen);
+    if (id == 0) {
+        if (!may_create && seen == detail::IdFile::Invalid) {
+            marker_invalid.store(true, std::memory_order_relaxed);
+        }
+        return;
+    }
+    marker_path = dstd::String((dir / detail::marker_file_name(id)).str());
+    marker_id.store(id, std::memory_order_release);
+}
+
+bool Store::State::is_current() const {
+    // The mutexes may be held by a thread that does not exist here.
+    if (forked()) return false;
+    const std::uint64_t id = marker_id.load(std::memory_order_acquire);
+    if (id != 0) {
+        const auto mark = dstd::fs::stat(dstd::PathView(marker_path));
+        if (mark) return true;
+        // A failure that does not say the path is gone, such as ESTALE or a
+        // timeout, is no evidence that the store was replaced.
+        if (!detail::path_is_gone(mark.error())) return true;
+        // Only the marker is gone. The store is still this one while its id
+        // is, and the marker is made again.
+        const detail::StoreIdRead now = detail::read_store_id(dir);
+        switch (now.state) {
+            case detail::IdFile::Found:
+                if (now.id != id) return false;
+                detail::ensure_marker_file(dir, id);
+                return true;
+            case detail::IdFile::Missing:
+                return false;
+            case detail::IdFile::Unreadable:
+            case detail::IdFile::Invalid:
+                return true;
+        }
+        return true;
+    }
+    const auto now = dstd::fs::stat(dir.view());
+    if (!now) return !detail::path_is_gone(now.error());
+    return now->dev == dir_identity.dev && now->ino == dir_identity.ino;
+}
+
 Store::State::~State() {
     if (!pool) return;
     if (forked()) {
@@ -467,34 +548,70 @@ dstd::Expected<dstd::SharedPtr<Store::State>, dstd::Error>
 Store::State::get_or_open(dstd::StringView dir) {
     Store::register_shutdown_close();
     const dstd::Path key = directory_key(dir);
-    std::lock_guard<std::mutex> lock(registry_mutex());
-    auto& states = registry();
-    auto found = states.find(key.str());
-    if (found != states.end()) {
-        auto live = found->second.lock();
-        if (live && !live->forked()) return live;
+    // Declared before the lock, so the last owner of a stale state goes after
+    // the unlock: ~State takes the registry mutex.
+    dstd::SharedPtr<State> known;
+    dstd::SharedPtr<State> other;
+    dstd::SharedPtr<State> created;
+    bool is_new_dir = false;
+    {
+        std::lock_guard<std::mutex> lock(registry_mutex());
+        auto found = registry().find(key.str());
+        if (found != registry().end()) known = found->second.lock();
     }
-    const auto made = dstd::fs::create_directories(key.view());
-    if (!made.has_value()) {
-        return dstd::Unexpected<dstd::Error>(
-            dstd::Error::from_format<
-                "store: cannot create the directory {}: {}">(
-                dstd::Condition::Io, key.str(), made.error().message()));
+#if DFTRACER_UTILS_TEST_PROBES
+    if (auto* probe = g_open_probe.load()) probe();
+#endif
+    // The stat of the check runs outside the registry lock.
+    if (known && !known->forked() && known->is_current()) return known;
+    {
+        std::lock_guard<std::mutex> lock(registry_mutex());
+        auto& states = registry();
+        auto found = states.find(key.str());
+        if (found != states.end()) {
+            // Another thread may have replaced the stale state meanwhile.
+            other = found->second.lock();
+            if (other && other != known && !other->forked()) return other;
+        }
+        const auto existed = dstd::fs::exists(key.view());
+        is_new_dir = existed.has_value() && !*existed;
+        const auto made = dstd::fs::create_directories(key.view());
+        if (!made.has_value()) {
+            return dstd::Unexpected<dstd::Error>(
+                dstd::Error::from_format<
+                    "store: cannot create the directory {}: {}">(
+                    dstd::Condition::Io, key.str(), made.error().message()));
+        }
+        // A state outlives the call that opened it, so it is not charged to
+        // that call's pool.
+        memory::detail::Scope general(memory::detail::Manager::get().general());
+        created = dstd::make_shared<State>(key);
+        if (!created->pool) {
+            return dstd::Unexpected<dstd::Error>(dstd::Error(
+                dstd::Condition::Internal, "store: the pool table is full"));
+        }
+        if (const auto identity = dstd::fs::stat(key.view())) {
+            created->dir_identity = *identity;
+            if (auto held = dstd::File::open(key.view(), dstd::OpenOptions{}))
+                created->dir_hold = std::move(*held);
+        }
+        states.insert_or_assign(dstd::String(key.str()), created);
+        open_count.fetch_add(1, std::memory_order_relaxed);
     }
-    // A state outlives the call that opened it, so it is not charged to that
-    // call's pool.
-    memory::detail::Scope general(memory::detail::Manager::get().general());
-    auto created = dstd::make_shared<State>(key);
-    if (!created->pool) {
-        return dstd::Unexpected<dstd::Error>(dstd::Error(
-            dstd::Condition::Internal, "store: the pool table is full"));
-    }
-    states.insert_or_assign(dstd::String(key.str()), created);
-    open_count.fetch_add(1, std::memory_order_relaxed);
+    // A directory that exists without an id is an older store, which gets
+    // its id from the first writer, so a process that only reads writes
+    // nothing. The id work stays out of the registry lock.
+    created->adopt_marker(is_new_dir);
     return created;
 }
 
 dstd::Expected<void, dstd::Error> Store::State::ensure_dir_locked() {
+    if (!is_current()) {
+        return dstd::Unexpected<dstd::Error>(dstd::Error(
+            dstd::Condition::NotFound,
+            "store: the directory was deleted or replaced after this store "
+            "opened it, so the index was replaced"));
+    }
     const auto made = dstd::fs::create_directories(dir.view());
     if (!made.has_value()) {
         return dstd::Unexpected<dstd::Error>(
@@ -509,6 +626,11 @@ dstd::Expected<dstd::SharedPtr<engine::Writer>, dstd::Error>
 Store::State::writer_for_use() {
     if (forked()) return dstd::Unexpected<dstd::Error>(forked_handle_error());
     memory::detail::Scope in_pool(*pool);
+    // The id may take a wait for its creator, which the state's mutex must not
+    // see. A replaced store makes none.
+    if (marker_id.load(std::memory_order_relaxed) == 0 && is_current()) {
+        adopt_marker(true);
+    }
     std::lock_guard<std::mutex> lock(mutex);
     if (writer) return writer;
     auto made = ensure_dir_locked();
@@ -611,6 +733,12 @@ Store::State::snapshot() {
         }
     }
     memory::detail::Scope in_pool(*pool);
+    // Reading store.id needs no write access, so a reader of an older store
+    // takes the id once a writer made it. It runs outside the state's mutex.
+    if (marker_id.load(std::memory_order_relaxed) == 0 &&
+        !marker_invalid.load(std::memory_order_relaxed) && is_current()) {
+        adopt_marker(false);
+    }
     std::lock_guard<std::mutex> lock(mutex);
     refresh_if_changed_locked();
     auto opened = snapshot_locked();
@@ -743,6 +871,12 @@ std::uint64_t internal::opens() noexcept {
     return open_count.load(std::memory_order_relaxed);
 }
 
+#if DFTRACER_UTILS_TEST_PROBES
+void internal::set_open_probe(void (*probe)()) noexcept {
+    g_open_probe.store(probe);
+}
+#endif
+
 coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::State::pack_rewrite(
     dstd::SharedPtr<State> self, const engine::Snapshot& view,
     const engine::PackPlan& plan, PackReport& report) {
@@ -868,6 +1002,10 @@ dstd::Expected<Store, dstd::Error> Store::open(dstd::StringView dir) {
     if (!state) return dstd::Unexpected<dstd::Error>(state.error());
     return Store(std::move(*state));
 }
+
+bool Store::is_current() const { return state_->is_current(); }
+
+std::uint64_t Store::generation() const { return state_->generation; }
 
 dstd::Expected<Namespace, dstd::Error> Store::ns(const NamespaceSpec& spec) {
     if (spec.name.empty()) return invalid_error();

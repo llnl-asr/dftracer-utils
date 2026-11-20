@@ -118,8 +118,7 @@ dstd::Result<bool> roles_complete(const ViewPlan& plan) {
                     span.last_line_num - span.first_line_num + 1;
                 const auto z = zones.find(i);
                 if (z == zones.end() || z->second.observed != lines ||
-                    z->second.present != lines ||
-                    z->second.min.starts_with('-'))
+                    z->second.present != lines || z->second.min_is_negative())
                     return false;
             }
         }
@@ -127,7 +126,7 @@ dstd::Result<bool> roles_complete(const ViewPlan& plan) {
     return true;
 }
 
-bool answerable_field(const dstd::String& f) {
+bool answerable_field(dstd::StringView f) {
     return f == "dur" || f == "size" || f == "offset" || f == "ts" || f == "te";
 }
 
@@ -301,7 +300,7 @@ struct FilterSets {
 };
 
 bool add_leaf(const ViewPlan& plan, const duql::detail::FieldNode& field,
-              const dstd::Vector<const duql::LiteralValue*>& values,
+              dstd::Span<const duql::LiteralValue* const> values,
               FilterSets& sets) {
     if (field.any || values.empty()) return false;
     const dstd::String t = tier_field(plan, field.path);
@@ -344,7 +343,8 @@ bool extract_sets(const ViewPlan& plan, const duql::detail::QueryNode& n,
                        extract_sets(plan, *node.right, sets);
             } else if constexpr (std::is_same_v<T, duql::detail::CompareNode>) {
                 if (node.op != CompareOp::Eq) return false;
-                return add_leaf(plan, node.field, {&node.value.value}, sets);
+                const duql::LiteralValue* const value[] = {&node.value.value};
+                return add_leaf(plan, node.field, value, sets);
             } else if constexpr (std::is_same_v<T, duql::detail::InNode>) {
                 dstd::Vector<const LiteralValue*> values;
                 for (const auto& e : node.values.elements)
@@ -362,8 +362,8 @@ struct ValueCol {
     dstd::String field;
 };
 
-dstd::Vector<ValueCol> value_cols(
-    const ViewPlan& plan, const dstd::Vector<dstd::String>& value_names) {
+dstd::Vector<ValueCol> value_cols(const ViewPlan& plan,
+                                  dstd::Span<const dstd::String> value_names) {
     dstd::Vector<ValueCol> out;
     for (std::size_t vc = 0; vc < value_names.size(); ++vc) {
         dstd::String base = agg_value_base_field(value_names[vc]);
@@ -386,7 +386,7 @@ struct Prepared {
     bool by_path = false;
 };
 
-void log_declined(const dstd::String& why) {
+void log_declined(dstd::StringView why) {
     DFTRACER_UTILS_LOG_DEBUG(
         "View: the index partials cannot answer this query ({}); the traces "
         "are scanned",
@@ -395,17 +395,19 @@ void log_declined(const dstd::String& why) {
 
 using Preparation = dstd::Result<dstd::Optional<Prepared>>;
 
-Preparation declined(const dstd::String& why) {
-    log_declined(why);
-    return dstd::Optional<Prepared>();
-}
-
 enum class PrepSource { Partials, Trace };
 
 // An empty result when the partials cannot answer `plan`. With Trace a file
 // the index does not hold, a stale tier and an unreadable index leave the file
 // to be read whole instead of declining the plan.
-Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from) {
+// `why_out`, when given, gets the reason of a decline.
+Preparation prepare(const ViewPlan& plan, bool index_records, PrepSource from,
+                    dstd::String* why_out = nullptr) {
+    auto declined = [why_out](dstd::StringView why) -> Preparation {
+        log_declined(why);
+        if (why_out) *why_out = dstd::String(why);
+        return dstd::Optional<Prepared>();
+    };
     const bool trace = from == PrepSource::Trace;
     if (plan.files.empty()) return declined("no files");
     const auto past_pin = is_past_pin(plan);
@@ -416,7 +418,8 @@ Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from) {
     if (plan.all_records) return declined("every record is asked for");
     if (plan.auto_numeric_metrics || !plan.numeric_arg_aggs.empty())
         return declined("aggregates over numeric args");
-    if (plan.phase != Phase::Any && (typed || plan.phase != Phase::Events))
+    if (plan.phase != Phase::Any &&
+        (index_records || plan.phase != Phase::Events))
         return declined("a phase filter");
     const AggSchema& sch = ensure_schema(plan);
     if (plan.query && !query_answerable(plan))
@@ -429,7 +432,7 @@ Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from) {
     Prepared p;
     p.by_path = plan_by_path(plan);
     p.keys = std::move(*keys);
-    if (typed && plan.time_bucket_us > 0) {
+    if (index_records && plan.time_bucket_us > 0) {
         if (plan.bucket_origin_us != 0 || plan.bucket_origin_min ||
             plan.time_scale != 1.0)
             return declined("a shifted or scaled time bucket");
@@ -566,7 +569,7 @@ Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from) {
                 // one from an empty one, which the scan keeps apart, so a key
                 // the build did not keep declines on a trace too.
                 if (std::none_of(build_extra.begin(), build_extra.end(),
-                                 [&](const dstd::String& e) {
+                                 [&](dstd::StringView e) {
                                      return dstd::StringView(e) ==
                                             dstd::StringView(gk.arg);
                                  }))
@@ -599,7 +602,7 @@ Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from) {
     // The dftracer line parser does not read a path-decoded file.
     q.reread = !p.by_path;
     q.from_trace = trace;
-    if (typed) q.window_us = plan.time_bucket_us;
+    if (index_records) q.window_us = plan.time_bucket_us;
 
     if (plan.query) {
         FilterSets sets;
@@ -622,7 +625,7 @@ Preparation prepare(const ViewPlan& plan, bool typed, PrepSource from) {
 
 // A path record's int field is signed where dftracer's is unsigned.
 dataframe::FieldStat field_stat(
-    const dstd::String& field,
+    dstd::StringView field,
     const trace::index::schemas::dft::agg::AggPartial& p,
     dataframe::FieldStatDomain domain) {
     dataframe::FieldStat fs;
@@ -660,8 +663,8 @@ bool key_is_resolved(GroupKey::Kind kind) {
 class Seeder {
    public:
     Seeder(const ViewPlan& plan, AggInputSpec spec,
-           const dstd::Vector<GroupKey>& keys,
-           const dstd::Vector<dstd::String>& extra, bool quantiles,
+           dstd::Span<const GroupKey> keys,
+           dstd::Span<const dstd::String> extra, bool quantiles,
            const dstd::StringIntern& texts)
         : keys_(keys),
           extra_(extra),
@@ -691,7 +694,7 @@ class Seeder {
 
     // A file key of a row without a file hash is null, as a scan keys it.
     void keys_of(const AggKey& key, dstd::Vector<dstd::String>& out,
-                 dstd::Vector<bool>& nulls) const {
+                 dstd::Vector<std::uint8_t>& nulls) const {
         out.clear();
         nulls.clear();
         if (has_bucket_) {
@@ -712,9 +715,8 @@ class Seeder {
         }
     }
 
-    void seed(dataframe::AggState& state,
-              const dstd::Vector<dstd::String>& keys,
-              const dstd::Vector<bool>& nulls,
+    void seed(dataframe::AggState& state, dstd::Span<const dstd::String> keys,
+              dstd::Span<const std::uint8_t> nulls,
               const trace::index::schemas::dft::agg::AggPartial& p) {
         dstd::Vector<dataframe::AggSeedValue> values;
         values.reserve(cols_.size());
@@ -801,8 +803,8 @@ class Seeder {
         return {};
     }
 
-    const dstd::Vector<GroupKey>& keys_;
-    const dstd::Vector<dstd::String>& extra_;
+    dstd::Span<const GroupKey> keys_;
+    dstd::Span<const dstd::String> extra_;
     bool quantiles_;
     const dstd::StringIntern& texts_;
     bool has_bucket_;
@@ -826,15 +828,15 @@ void log_answer(const AggQueryStats& st) {
 }
 
 dataframe::AggStatePtr seed_rows_of(const ViewPlan& plan, AggInputSpec spec,
-                                    const dstd::Vector<GroupKey>& keys,
-                                    const dstd::Vector<dstd::String>& extra,
+                                    dstd::Span<const GroupKey> keys,
+                                    dstd::Span<const dstd::String> extra,
                                     bool quantiles,
                                     const dstd::StringIntern& texts,
                                     const AggQueryResult::Rows& rows) {
     Seeder seeder(plan, std::move(spec), keys, extra, quantiles, texts);
     auto state = seeder.new_state();
     dstd::Vector<dstd::String> texts_of_row;
-    dstd::Vector<bool> nulls;
+    dstd::Vector<std::uint8_t> nulls;
     const bool events_only = plan.phase == Phase::Events;
     for (const auto& [key, partial] : rows) {
         if (events_only && key.kind != AggKind::Event) continue;
@@ -855,7 +857,7 @@ dataframe::AggStatePtr seed_all(const ViewPlan& plan, AggInputSpec spec,
 }  // namespace
 
 dstd::Result<dstd::Optional<AggQuery>> trace_fold_query(const ViewPlan& plan) {
-    auto prep = prepare(plan, /*typed=*/false, PrepSource::Trace);
+    auto prep = prepare(plan, /*index_records=*/false, PrepSource::Trace);
     if (!prep) return prep.error();
     if (!*prep) return dstd::Optional<AggQuery>();
     (*prep)->query.cancelled = plan.cancelled;
@@ -876,7 +878,8 @@ dataframe::AggStatePtr seed_rows(const ViewPlan& plan, AggInputSpec spec,
 
 coro::CoroTask<dstd::Result<bool>> partials_collect(
     const ViewPlan& plan, dataframe::AggStatePtr& out) {
-    auto prepared = prepare(plan, /*typed=*/false, PrepSource::Partials);
+    auto prepared =
+        prepare(plan, /*index_records=*/false, PrepSource::Partials);
     if (!prepared) co_return prepared.error();
     if (!*prepared) co_return false;
     Prepared& prep = **prepared;
@@ -898,7 +901,7 @@ coro::CoroTask<dstd::Result<bool>> partials_collect(
 
 coro::CoroTask<dstd::Result<bool>> partials_scan_collect(
     const ViewPlan& plan, dataframe::AggStatePtr& out) {
-    auto prepared = prepare(plan, /*typed=*/false, PrepSource::Trace);
+    auto prepared = prepare(plan, /*index_records=*/false, PrepSource::Trace);
     if (!prepared) co_return prepared.error();
     if (!*prepared) co_return false;
     Prepared& prep = **prepared;
@@ -917,11 +920,12 @@ coro::CoroTask<dstd::Result<bool>> partials_scan_collect(
     co_return true;
 }
 
-coro::CoroTask<dstd::Result<bool>> partials_collect_typed(
+coro::CoroTask<dstd::Result<bool>> partials_collect_index_records(
     const ViewPlan& plan, dataframe::DataFrame& out_regular,
     dataframe::DataFrame& out_aggregated, int shard_begin, int shard_end,
-    const ProgressFn* progress) {
-    auto prepared = prepare(plan, /*typed=*/true, PrepSource::Partials);
+    const ProgressFn* progress, dstd::String* why) {
+    auto prepared =
+        prepare(plan, /*index_records=*/true, PrepSource::Partials, why);
     if (!prepared) co_return prepared.error();
     if (!*prepared) co_return false;
     Prepared& prep = **prepared;
@@ -941,6 +945,11 @@ coro::CoroTask<dstd::Result<bool>> partials_collect_typed(
         log_declined(
             "partials that only a re-read could answer, which the "
             "query may not do");
+        if (why) {
+            *why =
+                "partials that only a re-read could answer, which the query "
+                "may not do";
+        }
         co_return false;
     }
 
@@ -949,7 +958,7 @@ coro::CoroTask<dstd::Result<bool>> partials_collect_typed(
     auto events = seeder.new_state();
     auto profiles = seeder.new_state();
     dstd::Vector<dstd::String> keys;
-    dstd::Vector<bool> nulls;
+    dstd::Vector<std::uint8_t> nulls;
     dstd::String joined;
     for (const auto& [key, partial] : result.rows) {
         if (key.kind == AggKind::System) continue;

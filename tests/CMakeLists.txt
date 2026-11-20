@@ -376,10 +376,24 @@ add_test(NAME dstd_only
 add_test(NAME dstd_only_self
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/dstd_only_self_work -DSELF_TEST=ON -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_dstd_only.cmake)
+add_test(NAME param_ownership
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/param_ownership_work -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_param_ownership.cmake)
+add_test(NAME param_ownership_self
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/param_ownership_self_work -DSELF_TEST=ON -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_param_ownership.cmake)
 add_test(NAME no_raw_new
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
                  -DWORK_DIR=${CMAKE_BINARY_DIR}/no_raw_new -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_no_raw_new.cmake)
+add_test(NAME std_int_types
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+                 -DWORK_DIR=${CMAKE_BINARY_DIR}/std_int_types -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_std_int_types.cmake)
+add_test(NAME std_int_types_self
+         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+                 -DWORK_DIR=${CMAKE_BINARY_DIR}/std_int_types_self -DSELF_TEST=ON -P
+                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_std_int_types.cmake)
 add_test(NAME no_raw_new_self
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
                  -DWORK_DIR=${CMAKE_BINARY_DIR}/no_raw_new_self -DSELF_TEST=ON -P
@@ -507,6 +521,7 @@ set(TEST_CPP_SOURCES
     common/test_spill_dir.cpp
     common/test_str_format.cpp
     common/test_hw_concurrency.cpp
+    common/test_cpu_limits.cpp
     # Pipeline tests
 
     runtime/scheduler/test_dynamic_workers.cpp
@@ -585,6 +600,7 @@ set(TEST_CPP_SOURCES
     domains/server/test_viz_refused.cpp
     domains/server/test_viz_schema.cpp
     domains/server/test_viz_errors.cpp
+    domains/server/test_http_connection.cpp
     domains/workload/genesis/test_genesis.cpp
     domains/analysis/provenance/test_provenance_graph.cpp
     trace/index/test_index_api.cpp
@@ -605,6 +621,7 @@ set(TEST_CPP_SOURCES
     store/test_crash.cpp
     store/test_processes.cpp
     store/test_store_api.cpp
+    store/test_store_id.cpp
     store/test_store_fork.cpp
     store/test_store_pack.cpp
     store/test_adopt.cpp
@@ -614,10 +631,12 @@ set(TEST_CPP_SOURCES
     trace/index/test_prune_oracle.cpp
     trace/index/test_layout.cpp
     trace/index/test_kinds.cpp
+    trace/index/test_value_hash.cpp
     trace/index/test_member_pieces.cpp
     trace/index/test_index_pass_parallel.cpp
     trace/index/test_index_skip.cpp
     trace/index/test_catalog.cpp
+    trace/index/test_summaries.cpp
     trace/index/test_spill_publish.cpp
     trace/index/test_bloom_open_counts.cpp
     trace/index/test_build_parallelism.cpp
@@ -647,12 +666,14 @@ endif()
 if(DFTRACER_UTILS_TEST_PROBES)
   list(APPEND TEST_CPP_SOURCES
     trace/index/test_build_memory.cpp
+    trace/index/test_concurrent_build.cpp
     trace/index/test_design_a.cpp
     trace/index/test_parser_reuse.cpp
     trace/index/test_agg_partials_store.cpp
     trace/index/test_event_cost.cpp
     trace/index/test_parse_walks.cpp
     trace/index/test_serial_stages.cpp
+    runtime/scheduler/test_thread_start_failure.cpp
     )
 endif()
 
@@ -838,6 +859,7 @@ endif()
 set(TEST_C_SOURCES
     trace/index/test_indexer_abi.c
     store/test_c_api.c
+    plugins/test_index_abi.c
     )
 
 foreach (test_file ${TEST_C_SOURCES})
@@ -955,6 +977,7 @@ add_subdirectory(bench)
 
 set(TEST_BINARY_SOURCES
     binaries/test_dftracer_server.cpp
+    binaries/test_cli_global_plugins.cpp
     binaries/test_dftracer_event_count.cpp
     binaries/test_dftracer_validate.cpp
     binaries/test_dftracer_split.cpp
@@ -1037,6 +1060,18 @@ if(DFTRACER_UTILS_ENABLE_MPI AND DFTRACER_UTILS_BUILD_SHARED)
                                        "DFTU_TEST_NP=${np}")
     endforeach()
   endforeach()
+
+  if(DFTRACER_UTILS_TEST_PROBES)
+    # A thread that made a communicator and still holds the backend when the
+    # run ends must be joined before the memory exit check counts.
+    add_test(NAME comm/mpi/create_linger_np2
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS}
+                     $<TARGET_FILE:comm_mpi_test_mpi_collectives> "-tc=sixty splits*")
+    set_tests_properties(
+      comm/mpi/create_linger_np2
+      PROPERTIES TIMEOUT 300 ENVIRONMENT
+                 "DFTU_TEST_NP=2;DFTRACER_UTILS_COMM_MPI_TEST_CREATE_LINGER_MS=300;DFTRACER_UTILS_MEMORY_EXIT_CHECK=1")
+  endif()
 
   # A native collective that a peer never matches cannot be cancelled: the call
   # fails at once, and the context ends the job with MPI_Abort when it stops.
@@ -1173,6 +1208,9 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   elseif(bin_exec STREQUAL "binaries/test_dftracer_event_count")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_UTILS_EVENT_COUNT_PATH=$<TARGET_FILE:dftracer_event_count>;DFTRACER_UTILS_INDEX_PATH=$<TARGET_FILE:dftracer_index>")
+  elseif(bin_exec STREQUAL "binaries/test_cli_global_plugins")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_UTILS_INDEX_PATH=$<TARGET_FILE:dftracer_index>;DFTRACER_UTILS_STATS_PATH=$<TARGET_FILE:dftracer_stats>;DFTRACER_UTILS_PLUGIN_PATH=$<TARGET_FILE:dftracer_plugin>;DFTRACER_UTILS_CHUNKED_FORMAT_PLUGIN=$<TARGET_FILE:chunked_format_plugin>")
   elseif(bin_exec STREQUAL "binaries/test_dftracer_split")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_UTILS_SPLIT_PATH=$<TARGET_FILE:dftracer_split>")

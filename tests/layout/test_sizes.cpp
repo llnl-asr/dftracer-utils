@@ -37,8 +37,9 @@ constexpr bool within() {
 }
 
 // 3 BufferViews of 24 B replace 3 shared_ptrs of 16 B; the name is one more,
-// an 8 B dstd::SharedString.
-constexpr std::size_t SERIES_BUDGET = 152;
+// an 8 B dstd::SharedString, and the optional row labels are one more shared
+// pointer of 16 B: an unlabelled column pays that pointer, nothing else.
+constexpr std::size_t SERIES_BUDGET = 168;
 constexpr std::size_t DATA_TYPE_BUDGET = 40;
 // dstd::String is 24 bytes in libc++ and 32 in libstdc++, so a budget counts
 // its strings by sizeof and stays tight on both.
@@ -69,6 +70,9 @@ constexpr std::size_t TAPE_ENTRY_BUDGET = 12;
 // range or a tape index, a column and a tag.
 constexpr std::size_t LINE_ENTRY_BUDGET = 8;
 constexpr std::size_t YAML_VALUE_BUDGET = 24;
+// The two column vectors plus the row index names behind one pointer: an
+// unindexed frame pays 8 bytes for the index.
+constexpr std::size_t DATAFRAME_BUDGET = 2 * sizeof(dstd::Vector<void*>) + 8;
 
 static_assert(within<dftu_series, SERIES_BUDGET, 8>());
 static_assert(within<runtime::io::IoOp, IO_OP_BUDGET, 8>());
@@ -89,6 +93,7 @@ static_assert(within<dstd::fs::FileStat, FILE_STAT_BUDGET, 8>());
 static_assert(within<yaml::TapeEntry, TAPE_ENTRY_BUDGET, 8>());
 static_assert(within<yaml::LineEntry, LINE_ENTRY_BUDGET, 4>());
 static_assert(within<yaml::Value, YAML_VALUE_BUDGET, 8>());
+static_assert(within<dataframe::DataFrame, DATAFRAME_BUDGET, 8>());
 
 }  // namespace
 
@@ -110,4 +115,5 @@ TEST_CASE("the layout budgets hold") {
     CHECK(sizeof(yaml::TapeEntry) <= TAPE_ENTRY_BUDGET);
     CHECK(sizeof(yaml::LineEntry) <= LINE_ENTRY_BUDGET);
     CHECK(sizeof(yaml::Value) <= YAML_VALUE_BUDGET);
+    CHECK(sizeof(dataframe::DataFrame) <= DATAFRAME_BUDGET);
 }

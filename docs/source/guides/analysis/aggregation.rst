@@ -92,8 +92,7 @@ top-level and ``args.*`` alike (``F("args.level").mean()``).
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
-         from dftracer.utils.columnar import F
+         from dftracer.utils import F, TraceViewer
 
          df = (TraceViewer("trace.pfw.gz")
                .group_by("cat")
@@ -365,7 +364,7 @@ Time-bucketed counters
 
 Add ``time_bucket(interval_us)`` to bucket events by time as well as by group -
 one aggregated row per (group, bucket). See :doc:`../data/time-windows`. To emit
-the rollup as a re-indexable ``ph="C"`` counter trace instead of collecting it:
+the rollup as a re-indexable ``ph=2`` counter trace instead of collecting it:
 
 .. tab-set::
 

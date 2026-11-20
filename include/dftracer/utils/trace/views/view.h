@@ -20,6 +20,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/explain_mode.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/trace/time_metric.h>
@@ -44,8 +45,9 @@ using dftracer::utils::dataframe::field::FieldAggExpr;
 using dftracer::utils::dataframe::field::FieldExpr;
 using duql::Query;
 
-/// `ph="X"` events, `ph="C"` counters, `ph="A"` aggregated (folded events),
-/// `ph="M"` metadata, or all (@ref Phase::Any "Any").
+/// `ph=1` events, `ph=2` counters, `ph=3` aggregated (folded events),
+/// `ph=4` metadata, or all (@ref Phase::Any "Any"). The letters X, C, A and M
+/// are the legacy form of 1 to 4 and are still read.
 enum class Phase { Events, Counters, Aggregated, Metadata, Any };
 
 /// One column of a (possibly composite) group-by key. `Arg` groups on an
@@ -201,7 +203,17 @@ struct ViewFile {
     /// With a pin, the view also leaves out the bytes before this uncompressed
     /// offset, which must be the start of a line.
     std::uint64_t pinned_uc_begin = 0;
+    /// The reader of the file by name; empty picks it by content. A View reads
+    /// trace files only, so a name other than "jsonl", or a file a plugin file
+    /// format claims, makes the View fail.
+    dstd::String format = {};
 };
+
+/// Makes @ref dataframe::LazyFrame::scan_file open a file the built-in reader
+/// claims as the @ref View of that file. Idempotent; every entry point that
+/// reads traces calls it once, and a process that never reads a trace file
+/// through scan_file needs not.
+void register_trace_reader();
 
 struct ExportStats {
     std::uint64_t events_matched = 0;
@@ -255,15 +267,15 @@ struct TraceWriteOptions {
     bool compress = true;
     int level = 6;
     /// Build the member+bloom+stats index during the write (no re-inflate of
-    /// the output). `index_path` is the index DB directory; empty falls back to
+    /// the output). `index_dir` is the index DB directory; empty falls back to
     /// the indexer default location for `output_path`. When set, the write uses
     /// a single in-order member stream (scan/decompress stays parallel) so the
     /// index needs no post-hoc offset remap.
     bool build_index = false;
-    dstd::String index_path;
+    dstd::String index_dir;
     /// Roll to a new `part-<k>` file once a part reaches this many uncompressed
     /// bytes, so one large result splits into several indexed part files
-    /// sharing `index_path`. 0 = one file. Only honored on the indexed write
+    /// sharing `index_dir`. 0 = one file. Only honored on the indexed write
     /// path.
     std::size_t part_size = 0;
 };
@@ -281,10 +293,10 @@ class ExportSink {
 };
 
 /// The three record families of one aggregation index, read in a single pass:
-/// `regular` (ph="X" events), `aggregated` (aggregated records carrying
-/// arbitrary extra-key dims), and `counters` (ph="C" counters incl. system).
-/// Returned by collect_typed().
-struct TypedResult {
+/// `regular` (ph=1 events), `aggregated` (aggregated records carrying
+/// arbitrary extra-key dims), and `counters` (ph=2 counters incl. system).
+/// Returned by @ref View::collect_index_records.
+struct IndexRecords {
     dftracer::utils::dataframe::DataFrame regular;
     dftracer::utils::dataframe::DataFrame aggregated;
     dftracer::utils::dataframe::DataFrame counters;
@@ -573,9 +585,9 @@ class ViewSession {
     std::int64_t key_count_of(const void* out) const;
     bool add_containment_branch(
         const detail::ScanPlan& branch,
-        const dstd::Vector<dstd::String>& partition, const dstd::String& ts,
-        const dstd::String& dur, const dstd::String& name,
-        const dstd::Vector<dstd::String>& group,
+        dstd::Span<const dstd::String> partition, dstd::StringView ts,
+        dstd::StringView dur, dstd::StringView name,
+        dstd::Span<const dstd::String> group,
         dstd::SharedPtr<dftracer::utils::dataframe::DataFrame> out_ct,
         dstd::SharedPtr<dftracer::utils::dataframe::DataFrame> out_fg,
         dstd::SharedPtr<dstd::String> out_partial = nullptr);
@@ -613,7 +625,7 @@ struct SchemaLeaf {
 
 /// `leaves` as a JSON array of objects with path, type, count, field and
 /// declared_type (null when empty or unset).
-dstd::String schema_tree_json(const dstd::Vector<SchemaLeaf>& leaves);
+dstd::String schema_tree_json(dstd::Span<const SchemaLeaf> leaves);
 
 /// Collects several plans together: record them with collect(), then
 /// execute() once. Plans over the same trace base share one scan, as
@@ -691,7 +703,7 @@ class TraceSession {
         std::size_t count;
         Resolve resolve;
     };
-    void add(const dstd::Vector<dataframe::LazyFrame>& plans, Resolve resolve);
+    void add(dstd::Span<const dataframe::LazyFrame> plans, Resolve resolve);
 
     dstd::Vector<dataframe::LazyFrame> plans_;
     dstd::Vector<Pending> pending_;
@@ -722,14 +734,16 @@ class View : public dataframe::LazyOps<View> {
 
     static View from_file(dstd::String file_path, dstd::String index_path = "");
     static View from_files(dstd::Vector<ViewFile> files);
-    /// Scans `dir` recursively for trace files (.pfw, .jsonl and
-    /// .ndjson, plain or gzip), sorted by path; index, split and schemas
+    /// Scans `dir` recursively for gzip trace files (*.gz),
+    /// sorted by path; index, split and schemas
     /// directories are skipped. Each file's index resolves under
-    /// `index_path` (empty = beside the trace). The files with records must
+    /// `index_dir` (empty = beside the trace). The files with records must
     /// share one record_schema. A directory that cannot be listed is an Io
-    /// error, kept as @ref status.
+    /// error, kept as @ref status. `format` is @ref ViewFile::format of every
+    /// file.
     static coro::CoroTask<View> from_directory(dstd::String dir,
-                                               dstd::String index_path = "");
+                                               dstd::String index_dir = "",
+                                               dstd::String format = "");
 
     /// The error this view kept: that of a builder that refused, or of the
     /// files whose index could not be read; success when it holds none.
@@ -749,7 +763,9 @@ class View : public dataframe::LazyOps<View> {
     /// `where` stages filter the scan, a leading field-only `select` is the
     /// scan projection, and the later stages run on the scanned columns.
     /// A query that does not compile against this view's columns and record
-    /// schema is an InvalidArgument error, kept as @ref status.
+    /// schema is an InvalidArgument error, kept as @ref status. A query with
+    /// an `explain` prefix returns a one-column `plan` view of the plan, one
+    /// row per line.
     View duql(dstd::StringView text, const duql::Params& params = {}) const;
     /// Apply the builder pipeline `pipe` with its bound parameters. The input
     /// error of `pipe`, when it holds one, is an InvalidArgument error kept as
@@ -761,7 +777,9 @@ class View : public dataframe::LazyOps<View> {
     }
     View query(const duql::Pipe& pipe) const { return duql(pipe); }
     /// The plan duql() builds, one step per line; nothing is scanned. The
-    /// error is that of duql().
+    /// error is that of duql(). With an `explain analyze` prefix on `text` it
+    /// also runs the plan and adds what each stage measured (see
+    /// @ref dataframe::LazyFrame::explain_analyze).
     dstd::Result<dstd::String> explain_duql(
         dstd::StringView text, const duql::Params& params = {}) const;
     /// Same as explain_duql().
@@ -863,17 +881,17 @@ class View : public dataframe::LazyOps<View> {
         dstd::Vector<dstd::String> group = {}) const;
     dataframe::LazyResult<dstd::String> aggregate_partial() const;
     static dataframe::DataFrame merge_flamegraph_partials(
-        const dstd::Vector<dstd::StringView>& partials);
+        dstd::Span<const dstd::StringView> partials);
     /// An Aggregation error for a partial that is empty or from another
     /// aggregation, and the error of decoding it.
     dstd::Result<dataframe::DataFrame> merge_partials(
-        const dstd::Vector<dstd::StringView>& partials) const;
+        dstd::Span<const dstd::StringView> partials) const;
 
     /// The aggregation index's record families.
-    dataframe::LazyResult<TypedResult> typed(int shard_begin = 0,
-                                             int shard_end = 4096,
-                                             ProgressFn progress = {}) const;
-    coro::CoroTask<dstd::Result<TypedResult>> collect_typed(
+    dataframe::LazyResult<IndexRecords> index_records(
+        int shard_begin = 0, int shard_end = 4096,
+        ProgressFn progress = {}) const;
+    coro::CoroTask<dstd::Result<IndexRecords>> collect_index_records(
         int shard_begin = 0, int shard_end = 4096,
         ProgressFn progress = {}) const;
 
@@ -901,7 +919,7 @@ class View : public dataframe::LazyOps<View> {
         Lazy, std::uint64_t checkpoint_size = 0, std::uint64_t part_size = 0,
         ProgressFn progress = {}) const;
 
-    /// Writes this viewer's aggregation as ph="C" counter events
+    /// Writes this viewer's aggregation as ph=2 counter events
     /// (a re-indexable counter trace).
     coro::CoroTask<dstd::Result<ExportStats>> sink_counters(
         ExportSink& sink) const;
@@ -920,24 +938,24 @@ class View : public dataframe::LazyOps<View> {
     /// map_batches folds each batch into a per-slot partial and reduces them
     /// with `combine`; a default `P` must be the identity of combine.
     coro::CoroTask<dstd::Result<ExportStats>> for_each_batch(
-        dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
+        dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>
             on_batch,
         std::size_t slot_count, std::uint64_t limit = 0) const;
     template <class P>
     coro::CoroTask<dstd::Result<BatchResult<P>>> map_batches(
-        dstd::Function<void(P&, const dstd::Vector<dstd::StringView>&)> fold,
+        dstd::Function<void(P&, dstd::Span<const dstd::StringView>)> fold,
         dstd::Function<P(P&&, P&&)> combine, std::size_t slot_count,
         std::uint64_t limit = 0) const {
         if (slot_count == 0) slot_count = 1;
         dstd::Vector<P> partials(slot_count);
         // A named callback, not a temporary in the co_await: GCC 11-12 destroy
         // such temporaries twice.
-        dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
-            on_batch = [&partials, &fold](
-                           std::size_t slot,
-                           const dstd::Vector<dstd::StringView>& events) {
-                fold(partials[slot], events);
-            };
+        dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>
+            on_batch =
+                [&partials, &fold](std::size_t slot,
+                                   dstd::Span<const dstd::StringView> events) {
+                    fold(partials[slot], events);
+                };
         auto scanned =
             co_await for_each_batch(std::move(on_batch), slot_count, limit);
         if (!scanned) co_return scanned.error();
@@ -965,7 +983,7 @@ class View : public dataframe::LazyOps<View> {
     /// view's aggregation. An Aggregation error for a partial that is empty or
     /// from another aggregation, and the error of decoding it.
     dstd::Result<ExportStats> merge_counter_partials(
-        const dstd::Vector<dstd::StringView>& partials, ExportSink& sink) const;
+        dstd::Span<const dstd::StringView> partials, ExportSink& sink) const;
 
     /// A caller branch of the scan over this viewer's events, as a plan that
     /// yields no columns; `attach` runs once per collect of the plan. It
@@ -996,7 +1014,7 @@ class View : public dataframe::LazyOps<View> {
     /// The distributed rollup terminals, over this viewer's
     /// aggregation. The bytes behind `partials` must outlive the task.
     coro::CoroTask<dstd::Result<void>> materialize_partials(
-        const dstd::Vector<dstd::StringView>& partials) const;
+        dstd::Vector<dstd::StringView> partials) const;
     dstd::Result<dstd::Optional<dataframe::DataFrame>> reconstruct_if_cached()
         const;
 
@@ -1004,7 +1022,7 @@ class View : public dataframe::LazyOps<View> {
     /// the error of a view that is not a plain aggregation or events scan.
     dstd::Result<dstd::Vector<dstd::String>> mv_source() const;
     dstd::Result<dstd::String> materialize_dir() const;
-    dstd::Result<void> register_materialized(const dstd::String& dir) const;
+    dstd::Result<void> register_materialized(dstd::StringView dir) const;
 
     /// The plan: the trace scan as a source plus the ops above it.
     const dataframe::LazyFrame& lazy() const { return lf_; }
@@ -1028,13 +1046,13 @@ class View : public dataframe::LazyOps<View> {
     explicit View(detail::ScanPlan plan);
     View(detail::ScanPlan plan, dataframe::LazyFrame lf);
     View reshape(
-        const char* builder,
+        dstd::StringView builder,
         const dstd::Function<detail::ScanPlan(const detail::ScanPlan&)>& step)
         const;
     /// The scan plan with every op of this view absorbed into it, for the
     /// terminal `method`; an InvalidArgument error naming the first op that
     /// stays behind, or the error this view kept.
-    dstd::Result<detail::ScanPlan> absorbed(const char* method,
+    dstd::Result<detail::ScanPlan> absorbed(dstd::StringView method,
                                             Need need) const;
     /// This view with `error` kept, unless it holds one.
     View failed(dstd::Error error) const;
@@ -1045,7 +1063,8 @@ class View : public dataframe::LazyOps<View> {
         const View& v);
     friend detail::ScanPlan detail::scan_plan_of(const View& v);
     dstd::Result<dstd::Pair<View, dstd::Vector<dstd::String>>> duql_plan(
-        dstd::StringView text, const duql::Params& params) const;
+        dstd::StringView text, const duql::Params& params,
+        duql::ExplainMode* mode = nullptr) const;
 
     detail::ScanPlan plan_;
     dataframe::LazyFrame lf_;

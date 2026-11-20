@@ -53,8 +53,13 @@ inline dftracer::utils::dstd::String refused_member(int kind) {
 /// "args", such as `"name":"read","pid":3`; the line adds `"args"` with
 /// "ret":4096 and the member of @ref refused_member.
 inline dftracer::utils::dstd::String refused_line(
-    int kind, const dftracer::utils::dstd::String& head) {
-    return "{" + head + R"(,"args":{"ret":4096,)" + refused_member(kind) + "}}";
+    int kind, dftracer::utils::dstd::StringView head) {
+    dftracer::utils::dstd::String line = "{";
+    line += head;
+    line += R"(,"args":{"ret":4096,)";
+    line += refused_member(kind);
+    line += "}}";
+    return line;
 }
 
 }  // namespace dftu_utils_test

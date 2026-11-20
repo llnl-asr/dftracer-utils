@@ -12,16 +12,20 @@
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/internal/join_names.h>
 #include <dftracer/utils/dataframe/internal/provider_registry.h>
+#include <dftracer/utils/dataframe/internal/run_counters.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi_context.h>
 #include <dftracer/utils/plugins/host/cursor_host.h>
+#include <dftracer/utils/plugins/host/explain_abi.h>
 #include <dftracer/utils/plugins/host/frame_check.h>
+#include <dftracer/utils/plugins/host/plan_abi.h>
 #include <dftracer/utils/plugins/host/plugin_abi.h>
 #include <dftracer/utils/plugins/host/plugin_task.h>
 #include <dftracer/utils/plugins/host/provider_source.h>
@@ -98,14 +102,17 @@ class ProviderCursor final : public dataframe::Cursor {
         dstd::Vector<dstd::String> expected_projection,
         dstd::Vector<dataframe::TypeId> expected_types,
         dftracer::utils::dstd::SharedPtr<const dataframe::Source> source,
-        dstd::String label)
-        : source_(std::move(source)),
+        dstd::String label, dstd::String owner,
+        dstd::SharedPtr<dataframe::RunCounters> counters)
+        : counters_(std::move(counters)),
+          source_(std::move(source)),
           vt_(),
           self_(self),
           host_(std::move(host)),
           expected_projection_(std::move(expected_projection)),
           expected_types_(std::move(expected_types)),
-          label_(std::move(label)) {
+          label_(std::move(label)),
+          owner_(std::move(owner)) {
         common::copy_struct(&vt_, sizeof(vt_), vt, vt->struct_size,
                             plugin_struct_min_size(PluginStruct::CursorVt));
     }
@@ -161,7 +168,7 @@ class ProviderCursor final : public dataframe::Cursor {
         AbiHandle<::dftu_expr, ::dftu_expr_free> h(
             dataframe::expr_handle_wrap(predicate));
         const coro::CancelView cancel = co_await coro::this_coro::cancel_view;
-        plugins::AbiContext ctx(cancel);
+        plugins::AbiContext ctx(cancel, owner_, counters_.get());
         ::dftu_task* t = nullptr;
         const dftu_status status =
             vt_.narrow(ctx.get(), self_, h.get(), &applied, &t);
@@ -188,7 +195,7 @@ class ProviderCursor final : public dataframe::Cursor {
     bool call_next(coro::CancelView cancel, std::int64_t max_rows,
                    dataframe::MorselResult& out) {
         host_->poll_reclaim();
-        plugins::AbiContext ctx(cancel);
+        plugins::AbiContext ctx(cancel, owner_, counters_.get());
         // The member is the out slot: a pending task writes it after this
         // call returns, so it must outlive the task.
         ::dftu_task* pending = nullptr;
@@ -256,6 +263,8 @@ class ProviderCursor final : public dataframe::Cursor {
         return dataframe::MorselResult(std::move(m));
     }
 
+    // Last to go, so the run outlives the plugin cursor that adds to it.
+    dstd::SharedPtr<dataframe::RunCounters> counters_;
     // Released after the cursor itself: a derived source's destroy() runs
     // only once every cursor it opened is gone.
     dftracer::utils::dstd::SharedPtr<const dataframe::Source> source_;
@@ -269,6 +278,9 @@ class ProviderCursor final : public dataframe::Cursor {
        plugin and the callback: "provider 'a.b' next", "file format 'a.f'
        next". */
     dstd::String label_;
+    // The registered name of the source, which the cursor's run counters are
+    // added under.
+    dstd::String owner_;
     ::dftu_dataframe* pending_frame_ = nullptr;
     ::dftu_task* pending_task_ = nullptr;
 };
@@ -335,7 +347,7 @@ class ProviderSource final
 
     dftracer::utils::dstd::Optional<dataframe::SourceApplication>
     apply_projection(
-        const dstd::Vector<dataframe::NamedExpr>& exprs) const override {
+        dstd::Span<const dataframe::NamedExpr> exprs) const override {
         ExprLoans loans;
         dstd::Vector<::dftu_named_expr> cexprs;
         cexprs.reserve(exprs.size());
@@ -357,9 +369,14 @@ class ProviderSource final
             keys.push_back({k.name.c_str(), loans.lend(k.expr)});
         dstd::Vector<::dftu_apply_agg> aggs;
         aggs.reserve(spec.aggs.size());
-        for (const dataframe::AggregateExpr& a : spec.aggs)
+        for (const dataframe::AggregateExpr& a : spec.aggs) {
+            // dftu_apply_agg has no interpolation field.
+            if (a.op == dataframe::Agg::Quantile &&
+                a.interp != dataframe::Interpolation::Linear)
+                return dstd::nullopt;
             aggs.push_back({to_string(a.op), loans.lend(a.input),
                             loans.lend(a.by), a.param, a.out.c_str()});
+        }
         ::dftu_apply_request req{};
         req.kind = DFTU_APPLY_AGGREGATION;
         req.u.aggregation.keys = keys.data();
@@ -434,6 +451,53 @@ class ProviderSource final
         return std::move(*read);
     }
 
+    dataframe::SourceExplain explain(
+        const dataframe::ScanRequest& req) const override {
+        dataframe::SourceExplain said;
+        if (!handle_->vt.explain && !has_plan()) return said;
+        // First, so an explain hook sees what the plan hook has just done.
+        const auto planned = plan(req);
+        if (handle_->vt.explain) {
+            const dataframe::ScanRequest planned_req = with_plan(req, planned);
+            const AbiScanRequest creq(planned_req);
+            ExplainLines lines;
+            plugins::AbiContext ctx({}, handle_->name);
+            const dftu_status status = handle_->vt.explain(
+                ctx.get(), handle_->self, creq.get(), lines.out());
+            if (status < 0) {
+                DFTRACER_UTILS_LOG_WARN(
+                    "{}",
+                    plugin_error(ctx, status, "provider explain").format());
+                if (!has_plan()) return said;
+            } else {
+                said.lines = lines.take();
+            }
+        }
+        said.label = handle_->name.empty()
+                         ? dstd::String("provider")
+                         : dstd::fmt<"provider '{}'">(handle_->name);
+        for (dataframe::ExplainLine& l : plan_lines(planned))
+            said.lines.push_back(std::move(l));
+        return said;
+    }
+
+    dstd::Result<dstd::Optional<dataframe::ScanPlan>> plan(
+        const dataframe::ScanRequest& req) const override {
+        if (!has_plan()) return dstd::Optional<dataframe::ScanPlan>{};
+        auto read = read_schema();
+        if (!read) return read.error();
+        dstd::Vector<dstd::String> names;
+        names.reserve(read->fields.size());
+        for (const dataframe::Field& f : read->fields) names.push_back(f.name);
+        PlanHooks hooks;
+        hooks.self = handle_->self;
+        hooks.plan = handle_->vt.plan;
+        hooks.plan_duql = handle_->vt.plan_duql;
+        hooks.owner = handle_->name;
+        hooks.what = "provider plan";
+        return run_plan(hooks, req, names);
+    }
+
     dstd::Result<dataframe::ScanResult> scan(
         const dataframe::ScanRequest& req) const override {
         dataframe::ScanResult r;
@@ -461,6 +525,8 @@ class ProviderSource final
         creq.n_filters = static_cast<std::int32_t>(filters.size());
         creq.limit = req.limit;
         creq.memory_budget = req.memory_budget;
+        const AbiPlan planned(req.plan);
+        creq.plan = planned.get();
 
         // Pre-filled DFTU_PUSHED_NO: a provider that writes nothing, or writes
         // only some entries, degrades to "the engine re-applies", which is
@@ -469,7 +535,7 @@ class ProviderSource final
 
         void* cursor_self = nullptr;
         const ::dftu_cursor_vt* vt = nullptr;
-        plugins::AbiContext ctx;
+        plugins::AbiContext ctx({}, handle_->name, req.counters.get());
         auto host = dstd::make_unique<CursorHost>(handle_->memory, "provider",
                                                   req.memory_budget);
         const dftu_status status =
@@ -488,19 +554,28 @@ class ProviderSource final
                 "provider scan: the provider gave no valid cursor vtable">(
                 common::ErrorCode::Internal);
 
-        for (std::size_t i = 0; i < r.filters.size(); ++i)
-            r.filters[i] = to_pushed(out_pushed[i]);
+        // The plan's votes are the scan's: what the scan wrote is ignored.
+        if (req.plan)
+            r.filters = req.plan->votes;
+        else
+            for (std::size_t i = 0; i < r.filters.size(); ++i)
+                r.filters[i] = to_pushed(out_pushed[i]);
         auto read = read_schema();
         if (!read) return read.error();
         dstd::Vector<dataframe::TypeId> expected_types =
             declared_types(*read, req.projection);
         r.cursor = dstd::make_unique<ProviderCursor>(
             vt, cursor_self, std::move(host), req.projection,
-            std::move(expected_types), shared_from_this(), label());
+            std::move(expected_types), shared_from_this(), label(),
+            handle_->name, req.counters);
         return r;
     }
 
    private:
+    bool has_plan() const {
+        return handle_->vt.plan != nullptr || handle_->vt.plan_duql != nullptr;
+    }
+
     /* Who this source's cursor is, for a check-mode error naming the plugin
        and the callback that handed the frame back. */
     dstd::String label() const {
@@ -638,17 +713,19 @@ dstd::UniquePtr<dataframe::Cursor> make_plugin_cursor(
     const ::dftu_cursor_vt* vt, void* self, dstd::UniquePtr<CursorHost> host,
     dstd::Vector<dstd::String> expected_projection,
     dstd::Vector<dataframe::TypeId> expected_types,
-    dstd::SharedPtr<const dataframe::Source> source, dstd::String label) {
+    dstd::SharedPtr<const dataframe::Source> source, dstd::String label,
+    dstd::String owner, dstd::SharedPtr<dataframe::RunCounters> counters) {
     return dstd::make_unique<ProviderCursor>(
         vt, self, std::move(host), std::move(expected_projection),
-        std::move(expected_types), std::move(source), std::move(label));
+        std::move(expected_types), std::move(source), std::move(label),
+        std::move(owner), std::move(counters));
 }
 
 dataframe::Pushed plugin_pushed(std::int32_t value) { return to_pushed(value); }
 
 dstd::Vector<dataframe::TypeId> declared_types(
     const dataframe::Schema& declared,
-    const dstd::Vector<dstd::String>& projection) {
+    dstd::Span<const dstd::String> projection) {
     dstd::Vector<dataframe::TypeId> types;
     if (projection.empty()) {
         types.reserve(declared.fields.size());

@@ -34,26 +34,24 @@ class PyClass:
 
 # api page -> the class short-names it documents (from the .rst autodoc targets).
 PAGE_CLASSES = {
-    "columnar": ["Expr", "ColumnExpr", "Columnar", "Agg", "GroupBy"],
+    "columnar": ["Expr", "Agg", "GroupBy"],
     "dataframe": ["DataFrame"],
     "series": ["Series"],
     "trace_viewer": ["TraceViewer", "Session", "Handle", "Containment"],
     "duql": ["Field", "Expr"],
     "runtime": ["Runtime", "TaskHandle"],
     "indexer": ["Indexer", "AggregationConfig", "IndexStatus", "CheckpointIndexer"],
-    "dfanalyzer": ["DFAnalyzerAggregatedTraceViewer", "HLMConfig"],
 }
 
-# Which module file backs each page's classes.
+# Which module files back each page's classes.
 PAGE_MODULE = {
-    "columnar": "columnar",
-    "dataframe": "dataframe",
-    "series": "series",
-    "trace_viewer": "trace_viewer",
-    "duql": "duql",
-    "runtime": "runtime",
-    "indexer": "indexer",
-    "dfanalyzer": "dfanalyzer",
+    "columnar": ("expr", "_eval", "groupby"),
+    "dataframe": ("dataframe",),
+    "series": ("series",),
+    "trace_viewer": ("viewer",),
+    "duql": ("col", "pipe"),
+    "runtime": ("runtime",),
+    "indexer": ("index",),
 }
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -112,8 +110,10 @@ def sanitize(name: str) -> str:
 def build_diagram(
     page: str, registry: dict[str, PyClass], max_members: int = 2
 ) -> str | None:
-    module = PAGE_MODULE[page]
-    documented = [c for c in PAGE_CLASSES[page] if c in registry and registry[c].module == module]
+    modules = PAGE_MODULE[page]
+    documented = [
+        c for c in PAGE_CLASSES[page] if c in registry and registry[c].module in modules
+    ]
     if not documented:
         return None
     in_group = set(documented)
@@ -165,7 +165,7 @@ def main() -> None:
     args = parser.parse_args()
 
     registry: dict[str, PyClass] = {}
-    for py in sorted(args.pkg_dir.glob("*.py")):
+    for py in sorted([*args.pkg_dir.glob("*.py"), *args.pkg_dir.glob("*/*.py")]):
         module = py.stem
         try:
             for name, pc in parse_module(py, module).items():

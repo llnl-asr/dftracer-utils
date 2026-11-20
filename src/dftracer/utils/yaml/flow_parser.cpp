@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/yaml/flow_parser.h>
 #include <dftracer/utils/yaml/line_scalar.h>
 #include <dftracer/utils/yaml/scalar.h>
@@ -20,8 +21,8 @@ bool is_flow_indicator(char c) {
 
 }  // namespace
 
-bool FlowParser::fail(std::uint32_t offset, const char* reason) {
-    return detail::fail_at(ix_, offset, reason);
+bool FlowParser::fail(std::uint32_t offset, dstd::StringView reason) {
+    return detail::fail_at(ix_, offset, dstd::String(reason));
 }
 
 // Whether a `---` or `...` marker starts at `at`, which is a line start.
@@ -287,12 +288,12 @@ bool FlowParser::map_entry(std::size_t depth, KeySet::Level& level) {
     const dstd::StringView text = tape_text(ix_, ix_.tape[key.index]);
     const bool is_in_text = text.data() >= t_ && text.data() < t_ + size_;
     const bool is_new = keys_.add(
-        level, depth, key.index, text, is_in_text ? t_ + size_ : text.data(),
+        level, depth, key.index, text,
+        is_in_text ? static_cast<std::size_t>(t_ + size_ - text.data()) : 0,
         [&](std::uint32_t id, dstd::StringView other) {
             return tape_text(ix_, ix_.tape[id]) == other;
         });
-    if (!is_new)
-        return fail(key_at, dstd::fmt<"duplicate key '{}'">(text).c_str());
+    if (!is_new) return fail(key_at, dstd::fmt<"duplicate key '{}'">(text));
     bool crossed = false;
     if (!skip(crossed)) return false;
     if (pos_ < size_ && t_[pos_] == ':' &&
@@ -373,7 +374,7 @@ bool FlowParser::quoted(Node& out) {
         detail::ScalarText text;
         if (detail::decode_quoted(ix_, open + 1, i, is_double, problem, text) !=
             detail::Decoded::Ok)
-            return fail(problem.at, detail::escape_reason(problem).c_str());
+            return fail(problem.at, detail::escape_reason(problem));
         pos = text.off;
         size = text.len;
         flags |= tape_flag::ARENA;

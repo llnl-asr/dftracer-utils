@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/shared_string.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -34,7 +35,7 @@ coro::CoroTask<dstd::Result<DataFrame>> join_chunks(DataFrame f);
 
 /// Gather the rows of every column at `indices` into a new DataFrame (same
 /// names).
-DataFrame take(const DataFrame& b, const dstd::Vector<std::int64_t>& indices);
+DataFrame take(const DataFrame& b, dstd::Span<const std::int64_t> indices);
 /// The same by an Int64 index column (an argsort's output), read in place.
 DataFrame take(const DataFrame& b, const Series& indices);
 
@@ -52,28 +53,29 @@ DataFrame head(const DataFrame& b, std::int64_t n);
 /// Project the named columns, in the given order, sharing buffers zero-copy.
 /// A NotFound error if a name is absent.
 dstd::Result<DataFrame> select(const DataFrame& b,
-                               const dstd::Vector<dstd::String>& names);
+                               dstd::Span<const dstd::String> names);
 
 /// Rename columns positionally (`new_names` aligns to the existing columns),
 /// sharing buffers zero-copy. An InvalidArgument error on a count mismatch.
 dstd::Result<DataFrame> rename(const DataFrame& b,
-                               const dstd::Vector<dstd::String>& new_names);
+                               dstd::Span<const dstd::String> new_names);
 
 /// Add `col` under `name` (replacing an existing column of that name), sharing
 /// the other columns zero-copy. `col` must match the batch row count.
-DataFrame with_column(const DataFrame& b, const dstd::String& name,
+DataFrame with_column(const DataFrame& b, dstd::StringView name,
                       const Series& col);
 
-/// Order every column by the values of column `name` (stable; nulls last),
-/// ascending or `descending`. A NotFound error if `name` is absent, an
-/// InvalidArgument error if its type has no order (a nested type).
-dstd::Result<DataFrame> sort_by(const DataFrame& b, const dstd::String& name,
-                                bool descending);
+/// Order every column by the values of column `name` (stable; nulls last, or
+/// first when `nulls_last` is false), ascending or `descending`. A NotFound
+/// error if `name` is absent, an InvalidArgument error if its type has no
+/// order (a nested type).
+dstd::Result<DataFrame> sort_by(const DataFrame& b, dstd::StringView name,
+                                bool descending, bool nulls_last = true);
 
 /// The k rows with the largest (or smallest) values of column `name`, ordered
 /// best-first. A NotFound error if `name` is absent, an InvalidArgument error
 /// if its type has no order (a nested type).
-dstd::Result<DataFrame> topk(const DataFrame& b, const dstd::String& name,
+dstd::Result<DataFrame> topk(const DataFrame& b, dstd::StringView name,
                              std::int64_t k, bool largest);
 
 /// How concat aligns the parts' columns. Mirrors dftu_concat_how.
@@ -93,7 +95,7 @@ enum class ConcatHow : std::int32_t {
 /// yields an empty DataFrame. Column order follows first appearance across the
 /// parts. An InvalidArgument error on a schema mismatch or columns that cannot
 /// share a type.
-dstd::Result<DataFrame> concat(const dstd::Vector<const DataFrame*>& parts,
+dstd::Result<DataFrame> concat(dstd::Span<const DataFrame* const> parts,
                                ConcatHow how = ConcatHow::Vertical);
 
 /// `concat` split by output column, so the columns of one concat can be built
@@ -103,7 +105,7 @@ dstd::Result<DataFrame> concat(const dstd::Vector<const DataFrame*>& parts,
 class ConcatPlan {
    public:
     static dstd::Result<ConcatPlan> make(
-        const dstd::Vector<const DataFrame*>& parts, ConcatHow how);
+        dstd::Span<const DataFrame* const> parts, ConcatHow how);
 
     const dstd::Vector<dstd::SharedString>& names() const noexcept {
         return names_;
@@ -118,8 +120,8 @@ class ConcatPlan {
     dstd::Vector<Series> chunks(std::size_t c) const;
 
    private:
-    explicit ConcatPlan(const dstd::Vector<const DataFrame*>& parts)
-        : parts_(parts) {}
+    explicit ConcatPlan(dstd::Span<const DataFrame* const> parts)
+        : parts_(parts.begin(), parts.end()) {}
 
     dstd::Vector<const DataFrame*> parts_;
     bool diagonal_ = false;
@@ -132,7 +134,7 @@ class ConcatPlan {
 /// JSON part makes the result JSON, other parts converted by to_json_series.
 /// An InvalidArgument error when the parts do not share a type or the type
 /// cannot be concatenated.
-dstd::Result<Series> concat_columns(const dstd::Vector<const Series*>& parts);
+dstd::Result<Series> concat_columns(dstd::Span<const Series* const> parts);
 
 /// `s` as a JSON column: text quoted and escaped, numbers and bools as their
 /// JSON text; a null, NaN or infinity is null. A JSON column is shared as is.
@@ -143,27 +145,27 @@ Series to_json_series(const Series& s);
 /// compute each aggregate. Re-aggregation over a materialized batch (e.g.
 /// merging partial results); the scan-time path is the View. A NotFound error
 /// on an unknown column or op, the error of @ref group_agg otherwise.
-dstd::Result<DataFrame> group_by(const DataFrame& b, const dstd::String& key,
-                                 const dstd::Vector<GroupAgg>& aggs);
+dstd::Result<DataFrame> group_by(const DataFrame& b, dstd::StringView key,
+                                 dstd::Span<const GroupAgg> aggs);
 /// N-key form: a composite key over `keys` (hashed and compared
 /// column-by-column, each keeping its own type).
 dstd::Result<DataFrame> group_by(const DataFrame& b,
-                                 const dstd::Vector<dstd::String>& keys,
-                                 const dstd::Vector<GroupAgg>& aggs);
+                                 dstd::Span<const dstd::String> keys,
+                                 dstd::Span<const GroupAgg> aggs);
 
 /// Int32 column (length num_rows): the part in [0, n_parts) each row lands in
 /// under a stable hash of the `keys` columns (rows with equal keys share a
 /// part). A NotFound error on an unknown column; an InvalidArgument error if
 /// `keys` is empty or `n_parts < 1`.
 dstd::Result<Series> partition_id(const DataFrame& b,
-                                  const dstd::Vector<dstd::String>& keys,
+                                  dstd::Span<const dstd::String> keys,
                                   std::int64_t n_parts);
 
 /// Partition the rows into `n_parts` batches by partition_id. The shuffle
 /// primitive for distributed group_by/join: hash-partition, ship parts, then
 /// group_by/join each part locally. Errors as partition_id.
 dstd::Result<dstd::Vector<DataFrame>> hash_partition(
-    const DataFrame& b, const dstd::Vector<dstd::String>& keys,
+    const DataFrame& b, dstd::Span<const dstd::String> keys,
     std::int64_t n_parts);
 
 /// Hash join `left` with `right` on the key pairs `left_on[i]` = `right_on[i]`
@@ -177,9 +179,9 @@ dstd::Result<dstd::Vector<DataFrame>> hash_partition(
 /// absent key column, an InvalidArgument one on an empty or uneven key list, a
 /// key type mismatch, or an unknown `how`.
 dstd::Result<DataFrame> join(const DataFrame& left, const DataFrame& right,
-                             const dstd::Vector<dstd::String>& left_on,
-                             const dstd::Vector<dstd::String>& right_on,
-                             JoinHow how, const dstd::String& suffix,
+                             dstd::Span<const dstd::String> left_on,
+                             dstd::Span<const dstd::String> right_on,
+                             JoinHow how, dstd::StringView suffix,
                              bool nulls_equal = false);
 
 /// Compare two aggregation results that share their first `n_key` columns as
@@ -206,21 +208,26 @@ DataFrame fill_null(const DataFrame& b, dftu_scalar value);
 /// A NotFound error for a subset name the frame lacks, an InvalidArgument
 /// error for a column type with no per-row value to key on.
 dstd::Result<DataFrame> unique(const DataFrame& b,
-                               const dstd::Vector<dstd::String>& subset = {});
+                               dstd::Span<const dstd::String> subset = {});
 
 /// Stable lexicographic sort by several key columns, ascending or `descending`
-/// (nulls last in both directions). A NotFound error if a name is absent, an
-/// InvalidArgument error for a column type with no per-row order.
+/// (nulls last in both directions, or first when `nulls_last` is false). A
+/// NotFound error if a name is absent, an InvalidArgument error for a column
+/// type with no per-row order.
 dstd::Result<DataFrame> sort_by_multi(const DataFrame& b,
-                                      const dstd::Vector<dstd::String>& names,
-                                      bool descending);
+                                      dstd::Span<const dstd::String> names,
+                                      bool descending, bool nulls_last = true);
 
-/// Per-column direction form: `descending[i]` applies to `names[i]`. A single
-/// flag broadcasts to every key. A NotFound error if a name is absent; an
-/// InvalidArgument error if `descending` is neither size 1 nor `names.size()`.
-dstd::Result<DataFrame> sort_by_multi(const DataFrame& b,
-                                      const dstd::Vector<dstd::String>& names,
-                                      const dstd::Vector<bool>& descending);
+/// Per-column form: `descending[i]` and `nulls_last[i]` (0 or 1) apply to
+/// `names[i]`. A span of size 1 broadcasts to every key, and an empty span
+/// means every key ascending for `descending` and nulls last for `nulls_last`.
+/// A NotFound error if a name is absent; an InvalidArgument error if a span is
+/// not empty, of size 1 or `names.size()`, or for a column type with no
+/// per-row order.
+dstd::Result<DataFrame> sort_by_multi(
+    const DataFrame& b, dstd::Span<const dstd::String> names,
+    dstd::Span<const std::uint8_t> descending,
+    dstd::Span<const std::uint8_t> nulls_last = {});
 
 /// The last `n` rows (clamped), across every column.
 DataFrame tail(const DataFrame& b, std::int64_t n);
@@ -233,7 +240,7 @@ DataFrame reverse(const DataFrame& b);
 DataFrame sample(const DataFrame& b, std::int64_t n, std::uint64_t seed);
 
 /// Prepend an Int64 column [0, num_rows) named `name`.
-DataFrame with_row_index(const DataFrame& b, const dstd::String& name);
+DataFrame with_row_index(const DataFrame& b, dstd::StringView name);
 
 /// Per-column summary statistics: one row per statistic (count, null_count,
 /// mean, std, min, max) and one Float64 column per numeric input column, plus a
@@ -247,7 +254,7 @@ DataFrame null_count(const DataFrame& b);
 /// The whole frame as one group: `aggs` as group_by takes them (any op,
 /// including the two-column and parameterized ones), one output row.
 dstd::Result<DataFrame> reduce(const DataFrame& b,
-                               const dstd::Vector<GroupAgg>& aggs);
+                               dstd::Span<const GroupAgg> aggs);
 
 /// Whether `agg` is a one-column, parameter-free aggregate reduce(b, agg)
 /// can broadcast over every column (Sum, Min, Max, CountValid, Mean, Var,
@@ -256,20 +263,22 @@ bool reduce_broadcasts(Agg agg) noexcept;
 
 /// The specs that broadcast `agg` over a frame with these names and types:
 /// every non-key column for CountValid / First / Last, the numeric (or as yet
-/// unknown-typed) non-key columns for the rest, each under its own name. The
+/// unknown-typed) non-key columns for the rest plus the temporal columns the
+/// aggregate keeps in their own type (min and max of a Timestamp, Date, Time or
+/// Duration, the sum of a Duration, the mean of a Timestamp or a Duration),
+/// each under its own name. The
 /// one rule behind reduce(b, agg) (`keys` empty) and the grouped
 /// group_by(b, keys, reduce_specs(b, agg, keys)) (pandas
 /// `df.groupby(keys).sum()`). An InvalidArgument error for an `agg`
 /// reduce_broadcasts refuses.
 dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
-    const dstd::Vector<dstd::String>& names, const dstd::Vector<TypeId>& types,
-    Agg agg, const dstd::Vector<dstd::String>& keys = {});
+    dstd::Span<const dstd::String> names, dstd::Span<const TypeId> types,
+    Agg agg, dstd::Span<const dstd::String> keys = {});
 dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
-    const dstd::Vector<dstd::SharedString>& names,
-    const dstd::Vector<TypeId>& types, Agg agg,
-    const dstd::Vector<dstd::String>& keys = {});
+    dstd::Span<const dstd::SharedString> names, dstd::Span<const TypeId> types,
+    Agg agg, dstd::Span<const dstd::String> keys = {});
 dstd::Result<dstd::Vector<GroupAgg>> reduce_specs(
-    const DataFrame& b, Agg agg, const dstd::Vector<dstd::String>& keys = {});
+    const DataFrame& b, Agg agg, dstd::Span<const dstd::String> keys = {});
 
 /// One row reducing each eligible column with `agg` under its own name (the
 /// pandas `df.sum()` family): reduce(b, reduce_specs(b, agg)).
@@ -297,20 +306,20 @@ dstd::Result<DataFrame> value_counts(const Series& v);
 /// alias. A NotFound error on an unknown column; an InvalidArgument error on
 /// an empty `value_vars` or an unmixable set of value types.
 dstd::Result<DataFrame> unpivot(const DataFrame& b,
-                                const dstd::Vector<dstd::String>& id_vars,
-                                const dstd::Vector<dstd::String>& value_vars);
+                                dstd::Span<const dstd::String> id_vars,
+                                dstd::Span<const dstd::String> value_vars);
 
 /// Expand a List column: every element of each row's list becomes its own row,
 /// with the other columns repeated per element. An empty or null list yields
 /// one row whose exploded value is null (polars semantics). A NotFound error if
 /// `column` is absent; an InvalidArgument error if it is not a List column.
-dstd::Result<DataFrame> explode(const DataFrame& b, const dstd::String& column);
+dstd::Result<DataFrame> explode(const DataFrame& b, dstd::StringView column);
 
 /// UNNEST a List column: as explode, but an empty or null list drops the row
 /// unless `keep_empty` (then one null-exploded row), and a List<Struct>
 /// column is replaced by one column per struct field, named by the field.
 /// Errors as @ref explode.
-dstd::Result<DataFrame> unnest(const DataFrame& b, const dstd::String& column,
+dstd::Result<DataFrame> unnest(const DataFrame& b, dstd::StringView column,
                                bool keep_empty);
 
 /// One-hot encode `column`: replace it in place with one Int8 column per
@@ -318,8 +327,7 @@ dstd::Result<DataFrame> unnest(const DataFrame& b, const dstd::String& column,
 /// `<column>_<value>` and holding 1 where the row equals that value else 0. The
 /// other columns pass through unchanged. A NotFound error if `column` is
 /// absent; an InvalidArgument error for a type with no per-row value to key on.
-dstd::Result<DataFrame> to_dummies(const DataFrame& b,
-                                   const dstd::String& column);
+dstd::Result<DataFrame> to_dummies(const DataFrame& b, dstd::StringView column);
 
 /// Reshape long -> wide. Group rows by the value of `index_name`; the distinct
 /// values of `columns_name` become new value columns (named by their value via
@@ -331,11 +339,10 @@ dstd::Result<DataFrame> to_dummies(const DataFrame& b,
 /// "sum"/"min"/"max"/"mean" reduce numerically (mean yields Float64). A
 /// NotFound error on an unknown column or an unknown agg; an InvalidArgument
 /// error for an index or columns column type with no per-row value to key on.
-dstd::Result<DataFrame> pivot(const DataFrame& b,
-                              const dstd::String& index_name,
-                              const dstd::String& columns_name,
-                              const dstd::String& values_name,
-                              const dstd::String& agg);
+dstd::Result<DataFrame> pivot(const DataFrame& b, dstd::StringView index_name,
+                              dstd::StringView columns_name,
+                              dstd::StringView values_name,
+                              dstd::StringView agg);
 
 /// Tumbling/sliding time-window aggregation over an ASCENDING Int64 `time_col`.
 /// Windows start at the first time value floored to a multiple of `every` and
@@ -352,8 +359,8 @@ dstd::Result<DataFrame> pivot(const DataFrame& b,
 /// `origin_min` overrides `origin` with the minimum time value (buckets begin
 /// exactly at min ts), the frame-native analogue of time_bucket("min").
 dstd::Result<DataFrame> group_by_dynamic(
-    const DataFrame& b, const dstd::String& time_col, std::int64_t every,
-    std::int64_t period, const dstd::Vector<GroupAgg>& aggs,
+    const DataFrame& b, dstd::StringView time_col, std::int64_t every,
+    std::int64_t period, dstd::Span<const GroupAgg> aggs,
     std::int64_t origin = 0, bool origin_min = false);
 
 }  // namespace dftracer::utils::dataframe

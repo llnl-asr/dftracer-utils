@@ -332,6 +332,29 @@ TEST_CASE("fmt_append_join puts the separator between the items of a range") {
     CHECK(mixed == dstd::fmt<"{}{}">(0.5, 2.0));
 }
 
+TEST_CASE("fmt_append_join with a callback lets each item write itself") {
+    const auto quoted = [](dstd::String& o, dstd::StringView w) {
+        o += '"';
+        o += w;
+        o += '"';
+    };
+    dstd::String out("[");
+    const dstd::Vector<dstd::String> words{dstd::String("a"), dstd::String("b"),
+                                           dstd::String("c")};
+    dstd::fmt_append_join<",">(out, words, quoted);
+    out += ']';
+    CHECK(out == "[\"a\",\"b\",\"c\"]");
+
+    dstd::String one;
+    dstd::fmt_append_join<", ">(one, dstd::Vector<dstd::String>{words[0]},
+                                quoted);
+    CHECK(one == "\"a\"");
+
+    dstd::String none("kept");
+    dstd::fmt_append_join<", ">(none, dstd::Vector<dstd::String>{}, quoted);
+    CHECK(none == "kept");
+}
+
 TEST_CASE("fmt_join_to writes the joined text and reports a cut") {
     char buf[8];
     const dstd::FmtResult whole =

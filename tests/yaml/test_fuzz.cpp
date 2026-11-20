@@ -35,7 +35,7 @@ std::size_t seed_count() {
 }
 
 // The text of the records that a text of a generated tree has.
-void expected_records(const dstd::String& text, const Tree& tree,
+void expected_records(dstd::StringView text, const Tree& tree,
                       dstd::Vector<const Tree*>& out) {
     dstd::StringView rest = text;
     if (rest.substr(0, 3) == "\xEF\xBB\xBF") rest.remove_prefix(3);

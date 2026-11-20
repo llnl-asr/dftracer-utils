@@ -140,7 +140,7 @@ TEST_CASE("a discarded error result does not end the process" *
 
 namespace {
 
-bool printed(const fresh_process::Result& run, const char* text) {
+bool printed(const fresh_process::Result& run, dstd::StringView text) {
     const dstd::StringView output(run.output.data(), run.output.size());
     return output.find(text) != dstd::StringView::npos;
 }

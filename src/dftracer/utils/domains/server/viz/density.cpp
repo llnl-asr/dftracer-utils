@@ -23,6 +23,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -74,7 +75,7 @@ struct DensityBlock {
     double total;
     std::uint32_t depth;
     dstd::StringView group;  // group_by value; omitted from JSON when empty
-    bool counter = false;    // ph="C" block: carries a mean counter value
+    bool counter = false;    // ph=2 block: carries a mean counter value
     double value = 0;
 };
 
@@ -113,7 +114,7 @@ void tag_invoke(simdjson::serialize_tag, BuilderType& b,
 // Serialize collected density blocks (+ optional individual events) into the
 // /viz/density response body. Shared by the live-scan and summary paths.
 static dstd::String serialize_density_body(
-    const dstd::Vector<dstd::String>& big, const DensityMap& dens,
+    dstd::Span<const dstd::String> big, const DensityMap& dens,
     double original_begin, double original_end, double threshold, int limit,
     bool truncated, bool ts_normalized, std::uint64_t display_global_min,
     double max_dur, TraceIndex::TimeMetric metric,
@@ -391,7 +392,7 @@ static dstd::String serve_density_from_summary(
         for (auto& [k, a] : dens)
             if (span_lanes.count((k.pid << 20) ^ k.tid)) a.depth = 1;
 
-    // Re-bucket the summary's ph="C" series onto this window's density columns
+    // Re-bucket the summary's ph=2 series onto this window's density columns
     // and fold them into the same density map, so the unfiltered/summary path
     // renders counters as ordinary event blocks like the live path. The summary
     // carries each series' emitting pid/tid (0 = node-level).
@@ -663,8 +664,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         threshold > 0 ? static_cast<std::size_t>((end - begin) / threshold) + 1
                       : 0;
 
-    // Pass 1 (in-window): one scan over ph="X" and ph="C". ph="X" events fold
-    // into density blocks (small) or stay raw (big); ph="C" events aggregate
+    // Pass 1 (in-window): one scan over ph=1 and ph=2. ph=1 events fold
+    // into density blocks (small) or stay raw (big); ph=2 events aggregate
     // into per-(name.arg) counter blocks on the same column grid, so counters
     // land in the same density map and render as ordinary events. The two
     // phases split as fused partition branches so a single decode feeds both.
@@ -1022,7 +1023,8 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     assign_counter_depths(big, big_depth, dens);
     if (global_min > 0 || index.time_metric() != TraceIndex::TimeMetric::Us) {
         for (auto& e : big)
-            e = normalize_event_ts(e, global_min, index.time_metric());
+            e = normalize_event_ts(std::move(e), global_min,
+                                   index.time_metric());
     }
 
     dstd::String body = serialize_density_body(

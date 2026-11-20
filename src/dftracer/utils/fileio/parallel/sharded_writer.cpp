@@ -29,7 +29,7 @@ class ShardedWriter final : public ParallelWriter {
         for (std::size_t i = 0; i < worker_count; ++i) {
             shard_paths_[i] = dstd::fmt<"{}.shard_{}{}">(base_path_, i, ext);
             ssize_t fd = co_await ::dftracer::utils::runtime::io::open(
-                shard_paths_[i].c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                shard_paths_[i], O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (fd < 0) {
                 DFTRACER_UTILS_LOG_ERROR("Failed to open shard: {}",
                                          shard_paths_[i]);

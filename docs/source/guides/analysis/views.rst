@@ -75,9 +75,9 @@ and ``filter`` throws. Plugins instead use the predicate-only ``duql::F``
 links no dataframe engine. See :doc:`../core/duql` for the builder surface.
 
 Row-shaping builders: ``.phase(p)`` restricts to one ``Phase`` value -
-``Phase::Events`` (``ph="X"`` events), ``Phase::Counters`` (``ph="C"``
+``Phase::Events`` (``ph=1`` events), ``Phase::Counters`` (``ph=2``
 counters), ``Phase::Aggregated`` (rollup records), ``Phase::Metadata``
-(``ph="M"``), or ``Phase::Any``, which reads every record, metadata included
+(``ph=4``), or ``Phase::Any``, which reads every record, metadata included
 (a View without a phase reads the record schema's ``data``, which leaves the
 dftracer metadata records out); ``.time_range(begin,
 end)`` keeps the events that start in ``[begin, end)`` and
@@ -199,7 +199,7 @@ an ``ExportSink`` (a re-indexable dftracer trace if the sink is a file/gzip
 writer). ``sink_trace`` writes a new multi-member, re-indexable trace
 through the parallel writer - the engine behind ``dftracer_view --merge``.
 ``sink_counters`` runs the view's ``group_by`` +
-``agg`` and emits each result row as a ``ph="C"`` counter event, which with a
+``agg`` and emits each result row as a ``ph=2`` counter event, which with a
 ``time_bucket`` set produces the aggregator's counter-trace format:
 
 .. code-block:: cpp

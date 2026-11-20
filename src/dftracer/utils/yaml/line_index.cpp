@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/yaml/flow_parser.h>
 #include <dftracer/utils/yaml/key_set.h>
 #include <dftracer/utils/yaml/line_index.h>
@@ -29,7 +30,7 @@ constexpr std::uint32_t SHORT_WINDOW_BITS = 57;
 
 bool is_white(char c) { return c == ' ' || c == '\t'; }
 
-bool refuse(LineParts& pt, std::uint32_t at, const char* reason) {
+bool refuse(LineParts& pt, std::uint32_t at, dstd::StringView reason) {
     pt.reason = reason;
     pt.error_at = at;
     return false;
@@ -37,13 +38,13 @@ bool refuse(LineParts& pt, std::uint32_t at, const char* reason) {
 
 // A `:` at `k` that separates a key from its value: a blank or the end of the
 // line follows it.
-bool is_value_sep(const char* t, std::uint32_t k, std::uint32_t end) {
+bool is_value_sep(dstd::StringView t, std::uint32_t k, std::uint32_t end) {
     return t[k] == ':' && (k + 1 == end || is_white(t[k + 1]));
 }
 
 // A `-` at `k` that makes a sequence item: a blank or the end of the line
 // follows it.
-bool is_item_dash(const char* t, std::uint32_t k, std::uint32_t end) {
+bool is_item_dash(dstd::StringView t, std::uint32_t k, std::uint32_t end) {
     return t[k] == '-' && (k + 1 == end || is_white(t[k + 1]));
 }
 
@@ -51,8 +52,8 @@ bool is_item_dash(const char* t, std::uint32_t k, std::uint32_t end) {
 // no other start. A feature that is not supported, and a byte that YAML
 // reserves, are refused with a reason. `is_key` says that a key can start
 // here, so a `:` followed by a blank is a key with no text.
-bool check_lead(const char* t, std::uint32_t p, std::uint32_t end, bool is_key,
-                LineParts& pt) {
+bool check_lead(dstd::StringView t, std::uint32_t p, std::uint32_t end,
+                bool is_key, LineParts& pt) {
     switch (t[p]) {
         case '&':
             return refuse(pt, p, "anchors are not supported");
@@ -96,7 +97,8 @@ struct Quoted {
 };
 
 // The quoted scalar that opens at `p`, closed on the same line.
-bool scan_quoted(const char* t, std::uint32_t p, std::uint32_t end, Quoted& q) {
+bool scan_quoted(dstd::StringView t, std::uint32_t p, std::uint32_t end,
+                 Quoted& q) {
     const char quote = t[p];
     std::uint32_t i = p + 1;
     if (quote == '\'') {
@@ -134,7 +136,7 @@ bool scan_quoted(const char* t, std::uint32_t p, std::uint32_t end, Quoted& q) {
 }
 
 // What follows a scalar: nothing, or a comment set off by a blank.
-bool ends_in_comment_or_nothing(const char* t, std::uint32_t after,
+bool ends_in_comment_or_nothing(dstd::StringView t, std::uint32_t after,
                                 std::uint32_t end, bool& has_comment,
                                 std::uint32_t& stray) {
     std::uint32_t a = after;
@@ -147,8 +149,8 @@ bool ends_in_comment_or_nothing(const char* t, std::uint32_t after,
 
 // The quote that closes the scalar quoted with `quote` and goes on at `from`,
 // or NONE when the line does not close it.
-std::uint32_t find_close(const char* t, std::uint32_t from, std::uint32_t end,
-                         char quote) {
+std::uint32_t find_close(dstd::StringView t, std::uint32_t from,
+                         std::uint32_t end, char quote) {
     for (std::uint32_t i = from; i < end; ++i) {
         const char c = t[i];
         if (quote == '"') {
@@ -188,8 +190,8 @@ void open_flow(LineParts& pt, std::uint32_t at) {
 // The header of the block scalar whose `|` or `>` is at `p`: an indentation
 // indicator and a chomping indicator in either order, then nothing or a
 // comment set off by a blank (YAML 1.2.2, 8.1.1, https://yaml.org/spec/1.2.2/).
-bool classify_block_header(const char* t, std::uint32_t p, std::uint32_t end,
-                           LineParts& pt) {
+bool classify_block_header(dstd::StringView t, std::uint32_t p,
+                           std::uint32_t end, LineParts& pt) {
     std::uint32_t i = p + 1;
     bool has_digit = false;
     bool has_chomp = false;
@@ -242,7 +244,8 @@ struct PlainScan {
     std::uint32_t comment = NONE;
 };
 
-PlainScan scan_plain(const char* t, std::uint32_t from, std::uint32_t end) {
+PlainScan scan_plain(dstd::StringView t, std::uint32_t from,
+                     std::uint32_t end) {
     PlainScan scan;
     for (std::uint32_t k = from; k < end; ++k) {
         const char ch = t[k];
@@ -259,7 +262,7 @@ PlainScan scan_plain(const char* t, std::uint32_t from, std::uint32_t end) {
 }
 
 // The top-level node that follows `---` on the line, which starts at `k`.
-bool classify_root_doc(const char* t, std::uint32_t k, std::uint32_t end,
+bool classify_root_doc(dstd::StringView t, std::uint32_t k, std::uint32_t end,
                        LineParts& pt) {
     pt.kind = LineKind::RootDoc;
     pt.content = k;
@@ -306,8 +309,8 @@ bool classify_root_doc(const char* t, std::uint32_t k, std::uint32_t end,
 // The classifier of a line, which classify_line wraps. A TAB that follows the
 // spaces of the line is white space, and where it is a lead the offset is in
 // `pt.tab_lead`.
-bool classify_content(const char* t, std::uint32_t start, std::uint32_t end,
-                      LineParts& pt) {
+bool classify_content(dstd::StringView t, std::uint32_t start,
+                      std::uint32_t end, LineParts& pt) {
     pt = LineParts{};
     std::uint32_t i = start;
     while (i < end && t[i] == ' ') ++i;
@@ -451,7 +454,7 @@ bool classify_content(const char* t, std::uint32_t start, std::uint32_t end,
         }
         std::uint32_t ke = scan.sep;
         while (ke > p && is_white(t[ke - 1])) --ke;
-        if (is_null_key(dstd::StringView(t + p, ke - p)))
+        if (is_null_key(t.substr(p, ke - p)))
             return refuse(pt, p, "a null key is not supported");
         pt.key_s = p;
         pt.key_e = ke;
@@ -510,7 +513,7 @@ bool classify_content(const char* t, std::uint32_t start, std::uint32_t end,
 
 }  // namespace
 
-bool classify_line(const char* t, std::uint32_t start, std::uint32_t end,
+bool classify_line(dstd::StringView t, std::uint32_t start, std::uint32_t end,
                    LineParts& pt) {
     if (!classify_content(t, start, end, pt)) return false;
     // A TAB between the spaces of a line and its content is white space, so
@@ -527,8 +530,9 @@ namespace {
 // C1 controls other than NEL, and U+FFFE and U+FFFF). `pending` is the count of
 // continuation bytes that the last call left open, for a sequence that crosses
 // the end of a block. Returns the offset of the first fault, or NONE.
-std::uint32_t find_bad_utf8(const char* t, std::uint32_t from, std::uint32_t to,
-                            std::uint32_t size, std::uint32_t& pending) {
+std::uint32_t find_bad_utf8(dstd::StringView t, std::uint32_t from,
+                            std::uint32_t to, std::uint32_t size,
+                            std::uint32_t& pending) {
     std::uint32_t i = from;
     while (pending != 0 && i < to) {
         if ((static_cast<unsigned char>(t[i]) & 0xC0) != 0x80) return i;
@@ -635,7 +639,8 @@ inline std::uint32_t next_clear(const std::uint64_t* a, std::uint32_t limit,
 }
 
 // classify_plain for a line of SHORT_WINDOW_BITS bytes or more.
-DFTRACER_UTILS_NOINLINE bool classify_plain_long(const Batch& b, const char* t,
+DFTRACER_UTILS_NOINLINE bool classify_plain_long(const Batch& b,
+                                                 dstd::StringView t,
                                                  std::uint32_t start,
                                                  std::uint32_t end,
                                                  LineParts& pt) {
@@ -686,8 +691,7 @@ DFTRACER_UTILS_NOINLINE bool classify_plain_long(const Batch& b, const char* t,
     const std::uint32_t sep = b.base + rsep;
     std::uint32_t ke = sep;
     while (ke > p && t[ke - 1] == ' ') --ke;
-    if (ke - p <= 4 && is_null_key(dstd::StringView(t + p, ke - p)))
-        return false;
+    if (ke - p <= 4 && is_null_key(t.substr(p, ke - p))) return false;
     pt.key_s = p;
     pt.key_e = ke;
     pt.kind = seq ? LineKind::SeqMap : LineKind::MapEntry;
@@ -732,7 +736,7 @@ struct PlainLine {
 // line shorter than SHORT_WINDOW_BITS is one window of each array, so each
 // search is one bit operation.
 DFTRACER_UTILS_ALWAYS_INLINE inline bool classify_plain(const Batch& b,
-                                                        const char* t,
+                                                        dstd::StringView t,
                                                         std::uint32_t start,
                                                         std::uint32_t end,
                                                         PlainLine& pl) {
@@ -791,8 +795,7 @@ DFTRACER_UTILS_ALWAYS_INLINE inline bool classify_plain(const Batch& b,
     // t[p] is no ':', so the key holds a byte that is no space.
     const std::uint32_t ke =
         start + top_end(solid & ((std::uint64_t{1} << rsep) - 1));
-    if (ke - p <= 4 && is_null_key(dstd::StringView(t + p, ke - p)))
-        return false;
+    if (ke - p <= 4 && is_null_key(t.substr(p, ke - p))) return false;
     pl.key_s = p;
     pl.key_e = ke;
     pl.kind = seq ? LineKind::SeqMap : LineKind::MapEntry;
@@ -834,7 +837,7 @@ enum class Step : std::uint8_t {
 };
 
 // `---` or `...` at `i`, then a blank or the end of the line.
-bool is_marker(const char* t, std::uint32_t i, std::uint32_t end) {
+bool is_marker(dstd::StringView t, std::uint32_t i, std::uint32_t end) {
     return end - i >= 3 && (t[i] == '-' || t[i] == '.') && t[i + 1] == t[i] &&
            t[i + 2] == t[i] && (i + 3 == end || is_white(t[i + 3]));
 }
@@ -894,7 +897,11 @@ struct Fragment {
 class Builder {
    public:
     explicit Builder(LineIndex& ix, Fragment* frag = nullptr)
-        : ix_(ix), t_(ix.text), flow_(ix), frag_(frag) {}
+        : ix_(ix),
+          t_(ix.text),
+          text_(ix.text, ix.size),
+          flow_(ix),
+          frag_(frag) {}
 
     bool build(std::size_t size);
 
@@ -928,12 +935,8 @@ class Builder {
     bool fail_escape(const detail::EscapeProblem& problem);
     DFTRACER_UTILS_NOINLINE bool fail(std::uint32_t line, std::uint32_t offset,
                                       dstd::String reason);
-    DFTRACER_UTILS_NOINLINE bool fail(std::uint32_t line, std::uint32_t offset,
-                                      const char* reason);
     DFTRACER_UTILS_NOINLINE bool fail_at(std::uint32_t offset,
                                          dstd::String reason);
-    DFTRACER_UTILS_NOINLINE bool fail_at(std::uint32_t offset,
-                                         const char* reason);
     dstd::StringView key_view(std::uint32_t line, const LineParts& pt) const;
     void resolve_pending(bool child);
 
@@ -965,7 +968,8 @@ class Builder {
                                            const detail::ScalarText& text,
                                            std::uint32_t end_line);
     void complete_value();
-    bool note_bad(std::uint32_t line, std::uint32_t offset, const char* reason);
+    bool note_bad(std::uint32_t line, std::uint32_t offset,
+                  dstd::StringView reason);
     void set_cont(LineEntry& entry, std::uint8_t cr) {
         entry.indent = 0;
         entry.kind = LineKind::Cont;
@@ -974,6 +978,7 @@ class Builder {
 
     LineIndex& ix_;
     const char* t_;
+    const dstd::StringView text_;
     std::uint32_t line_count_ = 0;
     std::uint32_t line_ = 0;
     std::size_t depth_ = 0;
@@ -1011,7 +1016,7 @@ class Builder {
     std::uint32_t quote_at_ = 0;
     std::uint32_t bad_line_ = NONE;
     std::uint32_t bad_at_ = 0;
-    const char* bad_reason_ = nullptr;
+    dstd::StringView bad_reason_;
     /// A block scalar, and the first line of its text.
     detail::BlockSpec block_;
     std::uint32_t block_first_ = 0;
@@ -1044,7 +1049,7 @@ dstd::StringView Builder::key_view(std::uint32_t line,
 
 bool Builder::same_key(std::uint32_t line, dstd::StringView key) const {
     LineParts pt;
-    if (!classify_line(t_, ix_.entries[line].start, ix_.line_end(line), pt))
+    if (!classify_line(text_, ix_.entries[line].start, ix_.line_end(line), pt))
         return false;
     return key_view(line, pt) == key;
 }
@@ -1055,15 +1060,6 @@ bool Builder::fail(std::uint32_t line, std::uint32_t offset,
     ix_.problem.col = offset - ix_.entries[line].start + 1;
     ix_.problem.reason = std::move(reason);
     return false;
-}
-
-bool Builder::fail(std::uint32_t line, std::uint32_t offset,
-                   const char* reason) {
-    return fail(line, offset, dstd::String(reason));
-}
-
-bool Builder::fail_at(std::uint32_t offset, const char* reason) {
-    return fail_at(offset, dstd::String(reason));
 }
 
 bool Builder::fail_at(std::uint32_t offset, dstd::String reason) {
@@ -1104,7 +1100,7 @@ void Builder::complete_value() {
 }
 
 bool Builder::note_bad(std::uint32_t line, std::uint32_t offset,
-                       const char* reason) {
+                       dstd::StringView reason) {
     if (bad_line_ == NONE) {
         bad_line_ = line;
         bad_at_ = offset;
@@ -1117,11 +1113,12 @@ bool Builder::note_bad(std::uint32_t line, std::uint32_t offset,
 // before it.
 bool Builder::note_key(std::uint32_t line, dstd::StringView key) {
     const bool in_text = key.data() >= t_ && key.data() < t_ + ix_.size;
-    return keys_.add(level_keys_[depth_ - 1], depth_ - 1, line, key,
-                     in_text ? t_ + ix_.size : key.data(),
-                     [&](std::uint32_t other, dstd::StringView text) {
-                         return same_key(other, text);
-                     });
+    return keys_.add(
+        level_keys_[depth_ - 1], depth_ - 1, line, key,
+        in_text ? static_cast<std::size_t>(t_ + ix_.size - key.data()) : 0,
+        [&](std::uint32_t other, dstd::StringView text) {
+            return same_key(other, text);
+        });
 }
 
 bool Builder::push_level(std::uint32_t col, std::uint32_t j, bool is_seq) {
@@ -1287,7 +1284,7 @@ bool Builder::begin_flow(std::uint32_t owner, std::uint32_t j,
     std::uint32_t after = end;
     while (after < eol && is_white(t_[after])) ++after;
     if (after < eol && !(t_[after] == '#' && after > end)) {
-        if (is_value_sep(t_, after, eol)) {
+        if (is_value_sep(text_, after, eol)) {
             const bool is_key_position =
                 pt.kind == LineKind::Root || pt.kind == LineKind::RootDoc ||
                 pt.kind == LineKind::SeqItem || pt.kind == LineKind::NestItem;
@@ -1299,8 +1296,8 @@ bool Builder::begin_flow(std::uint32_t owner, std::uint32_t j,
         return fail_at(after, "unexpected text after a flow collection");
     }
     const std::uint32_t last =
-        j + static_cast<std::uint32_t>(
-                detail::count_newlines(t_ + pt.open_at, end - pt.open_at));
+        j + static_cast<std::uint32_t>(detail::count_newlines(
+                dstd::StringView(t_ + pt.open_at, end - pt.open_at)));
     LineEntry& entry = ix_.entries[owner];
     entry.flags = static_cast<std::uint8_t>(
         (entry.flags & ~line_flag::VAL_EMPTY) | line_flag::FLOW);
@@ -1458,9 +1455,9 @@ Step Builder::plain_line(std::uint32_t j, std::uint32_t start,
         return Step::Consumed;
     }
     if ((limit_ >= 0 && n <= static_cast<std::uint32_t>(limit_)) ||
-        (n == 0 && is_marker(t_, i, end)) || t_[c] == '#')
+        (n == 0 && is_marker(text_, i, end)) || t_[c] == '#')
         return finish_plain() ? Step::Pass : Step::Fail;
-    const PlainScan scan = scan_plain(t_, c, end);
+    const PlainScan scan = scan_plain(text_, c, end);
     if (scan.sep != NONE) {
         fail(j, scan.sep,
              "mapping values are not allowed in a multi-line plain scalar");
@@ -1487,18 +1484,19 @@ Step Builder::quoted_line(std::uint32_t j, std::uint32_t start,
     if (c == end) return Step::Consumed;
     if (limit_ >= 0 && n <= static_cast<std::uint32_t>(limit_)) {
         note_bad(j, c, "a quoted scalar is not indented enough");
-    } else if (n == 0 && is_marker(t_, i, end)) {
+    } else if (n == 0 && is_marker(text_, i, end)) {
         note_bad(j, i, "a document marker inside a quoted scalar");
     }
-    const std::uint32_t close = find_close(t_, c, end, t_[quote_at_]);
+    const std::uint32_t close = find_close(text_, c, end, t_[quote_at_]);
     if (close == NONE) return Step::Consumed;
     if (bad_line_ != NONE) {
-        fail(bad_line_, bad_at_, bad_reason_);
+        fail(bad_line_, bad_at_, dstd::String(bad_reason_));
         return Step::Fail;
     }
     bool has_comment = false;
     std::uint32_t stray = 0;
-    if (!ends_in_comment_or_nothing(t_, close + 1, end, has_comment, stray)) {
+    if (!ends_in_comment_or_nothing(text_, close + 1, end, has_comment,
+                                    stray)) {
         fail(j, stray, "unexpected text after a quoted scalar");
         return Step::Fail;
     }
@@ -1532,7 +1530,7 @@ Step Builder::block_line(std::uint32_t j, std::uint32_t start,
     while (i < end && t_[i] == ' ') ++i;
     const std::uint32_t spaces = i - start;
     if (i != end) {
-        if (spaces == 0 && is_marker(t_, i, end))
+        if (spaces == 0 && is_marker(text_, i, end))
             return finish_block(j) ? Step::Pass : Step::Fail;
         if (!block_.is_indent_known) {
             if (static_cast<std::int64_t>(spaces) <= limit_) {
@@ -1603,7 +1601,8 @@ Step Builder::continue_plain(std::uint32_t j, std::uint32_t start,
                              std::uint32_t end, std::uint8_t cr) {
     plain_pending_ = false;
     LineParts first;
-    classify_line(t_, ix_.entries[owner_].start, ix_.line_end(owner_), first);
+    classify_line(text_, ix_.entries[owner_].start, ix_.line_end(owner_),
+                  first);
     first_line_ = owner_;
     limit_ = static_cast<std::int32_t>(cont_limit_);
     is_strict_ = cont_strict_;
@@ -1756,7 +1755,7 @@ DFTRACER_UTILS_ALWAYS_INLINE inline bool Builder::process_line(
         cr = line_flag::CR;
     }
     PlainLine pl;
-    if (!classify_plain(*batch_, t_, start, end, pl)) [[unlikely]]
+    if (!classify_plain(*batch_, text_, start, end, pl)) [[unlikely]]
         return process_any_line(start, nl_pos);
     if (pl.kind == LineKind::Blank) {
         if (plain_pending_) [[unlikely]]
@@ -1848,7 +1847,7 @@ DFTRACER_UTILS_ALWAYS_INLINE inline bool Builder::plain_key_value(
     if (pl.kind != LineKind::SeqItem) {
         const dstd::StringView key(t_ + pl.key_s, pl.key_e - pl.key_s);
         if (!keys_.add(level_keys_[depth_ - 1], depth_ - 1, j, key,
-                       t_ + ix_.size,
+                       ix_.size - pl.key_s,
                        [&](std::uint32_t other, dstd::StringView text) {
                            return same_key(other, text);
                        })) [[unlikely]]
@@ -1902,7 +1901,7 @@ bool Builder::process_any_line(std::uint32_t start, std::uint32_t nl_pos) {
     LineParts pt;
     PlainLine pl;
     const bool plain = !has_tab && batch_ != nullptr && start >= batch_->base &&
-                       classify_plain(*batch_, t_, start, end, pl);
+                       classify_plain(*batch_, text_, start, end, pl);
     if (plain) {
         pt.indent = pl.indent;
         pt.content = pl.content;
@@ -1911,7 +1910,7 @@ bool Builder::process_any_line(std::uint32_t start, std::uint32_t nl_pos) {
         pt.kind = pl.kind;
         pt.flags = pl.flags;
     }
-    if (!plain && !classify_line(t_, start, end, pt)) {
+    if (!plain && !classify_line(text_, start, end, pt)) {
         if (plain_pending_ && pt.indent > cont_limit_) {
             const Step step = continue_plain(j, start, end, flags);
             if (step == Step::Consumed) return true;
@@ -1922,7 +1921,7 @@ bool Builder::process_any_line(std::uint32_t start, std::uint32_t nl_pos) {
             pt.indent <= INDENT_LIMIT && start + pt.indent != end)
             return fail(j, start + pt.indent,
                         "a complete value cannot go on in a deeper line");
-        return fail(j, pt.error_at, pt.reason);
+        return fail(j, pt.error_at, dstd::String(pt.reason));
     }
     entry.indent = static_cast<std::uint16_t>(pt.indent);
     entry.kind = pt.kind;
@@ -1975,8 +1974,9 @@ bool Builder::process_any_line(std::uint32_t start, std::uint32_t nl_pos) {
 bool Builder::build(std::size_t size) {
     const auto text_size = static_cast<std::uint32_t>(size);
     const bool ends_in_newline = t_[size - 1] == '\n';
-    line_count_ = static_cast<std::uint32_t>(detail::count_newlines(t_, size) +
-                                             (ends_in_newline ? 0 : 1));
+    line_count_ = static_cast<std::uint32_t>(
+        detail::count_newlines(dstd::StringView(t_, size)) +
+        (ends_in_newline ? 0 : 1));
     if (frag_ != nullptr && frag_->entries != nullptr) {
         if (frag_->line_count != line_count_)
             return fail_at(0, "the chunk does not end a line");
@@ -2015,7 +2015,7 @@ bool Builder::build(std::size_t size) {
             blocks = 1;
             is_tail = true;
         }
-        detail::line_masks(source, blocks, arrays);
+        detail::line_masks(dstd::StringView(source, blocks * 64), arrays);
         space[blocks] = sep[blocks] = special[blocks] = 0;
         std::uint64_t any_bad = 0;
         std::size_t total = 0;
@@ -2026,7 +2026,7 @@ bool Builder::build(std::size_t size) {
                 const auto to = static_cast<std::uint32_t>(
                     std::min<std::size_t>(base + 64, size));
                 const std::uint32_t at =
-                    find_bad_utf8(t_, base, to, text_size, utf8_pending_);
+                    find_bad_utf8(text_, base, to, text_size, utf8_pending_);
                 if (at != NONE)
                     return fail_at(at,
                                    "invalid UTF-8 or a character that YAML "
@@ -2141,9 +2141,9 @@ bool fail_at(LineIndex& ix, std::uint32_t offset, dstd::String reason) {
 
 namespace {
 
-BuildResult build_index(LineIndex& ix, const char* text_in, std::size_t size_in,
-                        Fragment* frag) {
-    ix.text = text_in;
+BuildResult build_index(LineIndex& ix, dstd::StringView text, Fragment* frag) {
+    const std::size_t size_in = text.size();
+    ix.text = text.data();
     ix.size = 0;
     ix.line_count = 0;
     ix.has_markers = false;
@@ -2175,8 +2175,8 @@ BuildResult build_index(LineIndex& ix, const char* text_in, std::size_t size_in,
 
 }  // namespace
 
-BuildResult LineIndex::build(const char* text_in, std::size_t size_in) {
-    return build_index(*this, text_in, size_in, nullptr);
+BuildResult LineIndex::build(dstd::StringView input) {
+    return build_index(*this, input, nullptr);
 }
 
 namespace {
@@ -2191,7 +2191,7 @@ constexpr std::size_t CUT_SEARCH_BYTES = std::size_t{64} << 10;
 // Whether the line `[s, e)` may start a chunk: a sequence item, or a plain key
 // and its `:`. The text before it may still make the line part of a scalar;
 // the merge then refuses the cut.
-bool is_cut_line(const char* t, std::size_t s, std::size_t e) {
+bool is_cut_line(dstd::StringView t, std::size_t s, std::size_t e) {
     std::size_t i = s;
     while (i < e && t[i] == ' ') ++i;
     if (i == e || i - s > INDENT_LIMIT) return false;
@@ -2210,8 +2210,9 @@ bool is_cut_line(const char* t, std::size_t s, std::size_t e) {
 }
 
 // The starts of the chunks after the first, in order.
-dstd::Vector<std::size_t> find_cuts(const char* t, std::size_t size,
-                                    std::size_t pieces) {
+dstd::Vector<std::size_t> find_cuts(dstd::StringView text, std::size_t pieces) {
+    const char* const t = text.data();
+    const std::size_t size = text.size();
     dstd::Vector<std::size_t> cuts;
     std::size_t previous = 0;
     for (std::size_t i = 1; i < pieces; ++i) {
@@ -2229,7 +2230,7 @@ dstd::Vector<std::size_t> find_cuts(const char* t, std::size_t size,
                                       : static_cast<std::size_t>(
                                             static_cast<const char*>(end) - t);
             if (e == size) break;
-            if (is_cut_line(t, s, e)) {
+            if (is_cut_line(text, s, e)) {
                 cuts.push_back(s);
                 previous = s;
                 break;
@@ -2261,7 +2262,8 @@ struct Piece {
 
 dstd::StringView key_text(const LineIndex& ix, std::uint32_t line) {
     LineParts pt;
-    classify_line(ix.text, ix.entries[line].start, ix.line_end(line), pt);
+    classify_line(dstd::StringView(ix.text, ix.size), ix.entries[line].start,
+                  ix.line_end(line), pt);
     if ((pt.flags & line_flag::KEY_ESC) != 0) {
         const auto it = std::lower_bound(
             ix.escapes.begin(), ix.escapes.end(), line * 2,
@@ -2473,7 +2475,7 @@ namespace {
 // Joins the indexes of the chunks into `ix`, whose lines they wrote in place.
 // Gives the first chunk that the merge refuses, or 0.
 std::size_t join_pieces(LineIndex& ix, dstd::Vector<Piece>& pieces,
-                        RunJobs run_jobs, const char* text, std::size_t size) {
+                        RunJobs run_jobs, dstd::StringView text) {
     std::uint32_t lines = 0;
     std::uint32_t escape_count = 0;
     std::uint32_t tape_size = 0;
@@ -2488,8 +2490,8 @@ std::size_t join_pieces(LineIndex& ix, dstd::Vector<Piece>& pieces,
         tape_size += static_cast<std::uint32_t>(piece.ix.tape.size());
         arena_size += static_cast<std::uint32_t>(piece.ix.arena.size());
     }
-    ix.text = text;
-    ix.size = static_cast<std::uint32_t>(size);
+    ix.text = text.data();
+    ix.size = static_cast<std::uint32_t>(text.size());
     ix.line_count = lines;
     ix.has_markers = false;
     ix.problem = LineProblem{};
@@ -2520,14 +2522,15 @@ std::size_t join_pieces(LineIndex& ix, dstd::Vector<Piece>& pieces,
 
 }  // namespace
 
-BuildResult LineIndex::build_parallel(const char* text_in, std::size_t size_in,
+BuildResult LineIndex::build_parallel(dstd::StringView text_in,
                                       RunJobs run_jobs,
                                       std::size_t piece_bytes) {
+    const std::size_t size_in = text_in.size();
     const std::size_t count =
         std::min(MAX_PIECES, size_in / std::max<std::size_t>(piece_bytes, 1));
-    if (count < 2 || size_in >= TEXT_SIZE_LIMIT) return build(text_in, size_in);
-    dstd::Vector<std::size_t> starts = find_cuts(text_in, size_in, count);
-    if (starts.empty()) return build(text_in, size_in);
+    if (count < 2 || size_in >= TEXT_SIZE_LIMIT) return build(text_in);
+    dstd::Vector<std::size_t> starts = find_cuts(text_in, count);
+    if (starts.empty()) return build(text_in);
     starts.insert(starts.begin(), 0);
     // The lines before each chunk, so that each writes its lines in place.
     dstd::Vector<std::uint32_t> line_at(starts.size() + 1, 0);
@@ -2535,8 +2538,8 @@ BuildResult LineIndex::build_parallel(const char* text_in, std::size_t size_in,
         for (std::size_t i = begin; i < end; ++i) {
             const std::size_t to =
                 i + 1 < starts.size() ? starts[i + 1] : size_in;
-            line_at[i + 1] = static_cast<std::uint32_t>(
-                detail::count_newlines(text_in + starts[i], to - starts[i]));
+            line_at[i + 1] = static_cast<std::uint32_t>(detail::count_newlines(
+                text_in.substr(starts[i], to - starts[i])));
         }
     });
     for (std::size_t i = 0; i < starts.size(); ++i)
@@ -2587,7 +2590,8 @@ BuildResult LineIndex::build_parallel(const char* text_in, std::size_t size_in,
             for (std::size_t t = begin; t < end; ++t) {
                 Piece& piece = pieces[todo[t]];
                 piece.is_ok =
-                    build_index(piece.ix, text_in + piece.begin, piece.size,
+                    build_index(piece.ix,
+                                text_in.substr(piece.begin, piece.size),
                                 &piece.frag) == BuildResult::Accepted &&
                     !piece.ix.has_markers;
             }
@@ -2600,7 +2604,7 @@ BuildResult LineIndex::build_parallel(const char* text_in, std::size_t size_in,
         }
         if (drop.empty()) {
             const std::size_t refused =
-                join_pieces(*this, pieces, run_jobs, text_in, size_in);
+                join_pieces(*this, pieces, run_jobs, text_in);
             if (refused == 0) {
                 entries.resize(total_lines + 1);
                 next.resize(total_lines + 1);
@@ -2629,7 +2633,7 @@ BuildResult LineIndex::build_parallel(const char* text_in, std::size_t size_in,
         line_at = std::move(next_line_at);
         shift_at = std::move(next_shift_at);
     }
-    return build(text_in, size_in);
+    return build(text_in);
 }
 
 }  // namespace dftracer::utils::yaml

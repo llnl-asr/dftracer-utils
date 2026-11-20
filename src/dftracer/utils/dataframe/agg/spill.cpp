@@ -47,7 +47,7 @@ class GroupSource {
 class RunSource : public GroupSource {
    public:
     static dstd::Result<dstd::UniquePtr<GroupSource>> open(
-        const dstd::String& path) {
+        dstd::CStringView path) {
         auto reader = spill::AggRunReader::open(path);
         if (!reader) return reader.error();
         return dstd::UniquePtr<GroupSource>(
@@ -159,7 +159,7 @@ void AggSpiller::adopt(AggSpiller& other) {
 }
 
 dstd::Result<DataFrame> AggSpiller::drain(
-    const AggState& live, const dstd::Vector<dstd::String>& key_names) const {
+    const AggState& live, dstd::Span<const dstd::String> key_names) const {
     if (impl_->runs.empty()) {
         DataFrame whole = agg_finalize(live, key_names);
         if (dstd::Result<void> checked = agg_check(live); !checked)

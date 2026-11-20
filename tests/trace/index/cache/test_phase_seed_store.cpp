@@ -3,10 +3,12 @@
 // keyed by a fingerprint of the input files, and kept in a store under the
 // index root. A stale or unknown source gives nothing, never an old value.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/index/cache/phase_seed_store.h>
@@ -40,7 +42,7 @@ dstd::Vector<TestEvent> sample_events() {
             {0, 0, true}, {9100, 900}, {3000, 20}};
 }
 
-InputStats reference_of(const dstd::Vector<TestEvent>& events) {
+InputStats reference_of(dstd::Span<const TestEvent> events) {
     InputStats ref;
     bool any_start = false;
     for (const TestEvent& e : events) {
@@ -55,27 +57,28 @@ InputStats reference_of(const dstd::Vector<TestEvent>& events) {
     return ref;
 }
 
-dstd::String trace_text(const dstd::Vector<TestEvent>& events) {
+dstd::String trace_text(dstd::Span<const TestEvent> events) {
     dstd::String lines;
     for (const TestEvent& e : events) {
         if (e.metadata) {
             lines +=
-                "{\"ph\":\"M\",\"name\":\"process_name\",\"cat\":\"dftracer\","
+                "{\"ph\":4,\"name\":\"process_name\",\"cat\":\"dftracer\","
                 "\"pid\":1,\"tid\":1,\"args\":{\"name\":\"app\"}}\n";
             continue;
         }
         dstd::fmt_append<
-            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
             "\"tid\":1,\"ts\":{},\"dur\":{}{}\n">(lines, e.ts, e.dur,
                                                   R"(,"args":{}})");
     }
     return lines;
 }
 
-dstd::String write_trace(const dstd::String& dir, const char* name,
-                         const dstd::Vector<TestEvent>& events) {
+dstd::String write_trace(dstd::CStringView dir, dstd::StringView name,
+                         dstd::Vector<TestEvent> events) {
     REQUIRE(dstd::fs::create_directories(dir).has_value());
-    const dstd::String pfw = dir + "/" + name + ".pfw";
+    const dstd::String pfw =
+        dstd::String(dir) + "/" + dstd::String(name) + ".pfw";
     const dstd::String lines = trace_text(events);
     dstd::fs::write_file(dstd::PathView(pfw), lines).discard();
     const dstd::String gz = pfw + ".gz";
@@ -84,14 +87,14 @@ dstd::String write_trace(const dstd::String& dir, const char* name,
     return gz;
 }
 
-void build_index(const dstd::String& gz) {
+void build_index(dstd::CStringView gz) {
     dftu_utils_test::ok(
         dftu_utils_test::ok(dftracer::utils::trace::index::Indexer::open(
                                 {dstd::String(dstd::StringView(gz))}))
             .build());
 }
 
-views::detail::ScanPlan plan_of(const dstd::String& gz) {
+views::detail::ScanPlan plan_of(dstd::CStringView gz) {
     return views::detail::scan::from_file(
         dstd::String(gz),
         dstd::String(trace::internal::determine_index_path(gz, "")));
@@ -304,13 +307,13 @@ TEST_SUITE("PhaseSeedStore") {
         dftu_utils_test::TestEnvironment env(0);
         const dstd::String a = write_trace(env.dir(), "a", sample_events());
         const dstd::String b = write_trace(env.dir(), "b", {{1, 2}});
-        auto key_of = [&](const dstd::String& first,
-                          const dstd::String& second) {
+        auto key_of = [&](dstd::CStringView first, dstd::CStringView second) {
             dstd::Vector<trace::views::ViewFile> files;
-            for (const auto& gz : {first, second}) {
+            for (const dstd::CStringView gz : {first, second}) {
                 files.push_back(trace::views::ViewFile{
-                    gz, dstd::String(
-                            trace::internal::determine_index_path(gz, ""))});
+                    dstd::String(gz),
+                    dstd::String(
+                        trace::internal::determine_index_path(gz, ""))});
             }
             return input_fingerprint(*views::detail::scan::from_files(files));
         };

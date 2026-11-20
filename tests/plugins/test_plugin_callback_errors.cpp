@@ -39,7 +39,7 @@ At g_at = At::OnBatch;
 
 bool is(At at) { return g_at == at; }
 
-dftu_status fail(dftu_ctx* ctx, const char* callback) {
+dftu_status fail(dftu_ctx* ctx, dstd::StringView callback) {
     dstd::String msg = "refused in ";
     msg += callback;
     return dftu_fail(ctx, DFTU_E_PARSE, msg.c_str());
@@ -151,8 +151,8 @@ dstd::String first_error(const dftu_plugin& p,
     return message;
 }
 
-bool names(const dstd::String& error, const char* callback,
-           const char* detail) {
+bool names(dstd::StringView error, dstd::StringView callback,
+           dstd::StringView detail) {
     return error.find("cb_errors") != dstd::String::npos &&
            error.find(callback) != dstd::String::npos &&
            error.find(detail) != dstd::String::npos;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -26,18 +27,18 @@ struct IndexRun {
     long skipped = -1;
 };
 
-long field(const dstd::String& out, const dstd::String& label) {
-    const auto at = out.find(label);
+long field(dstd::CStringView out, dstd::StringView label) {
+    const auto at = out.view().find(label);
     if (at == dstd::String::npos) return -1;
     return std::strtol(out.c_str() + at + label.size(), nullptr, 10);
 }
 
-IndexRun run_index(const dstd::String& dir, bool force) {
+IndexRun run_index(dstd::CStringView dir, bool force) {
     const dstd::String binary = DFTRACER_UTILS_TEST_INDEX_BINARY;
     REQUIRE_MESSAGE(::access(binary.c_str(), X_OK) == 0,
                     binary << " is not built");
     dftu_utils_test::set_test_library_path(binary);
-    dstd::Vector<dstd::String> args{dir};
+    dstd::Vector<dstd::String> args{dstd::String(dir)};
     if (force) args.push_back("--force");
     IndexRun run;
     const dstd::String out = dftu_utils_test::run_process_capture(
@@ -47,7 +48,7 @@ IndexRun run_index(const dstd::String& dir, bool force) {
     return run;
 }
 
-dstd::Vector<dstd::String> index_files(const dstd::String& dir) {
+dstd::Vector<dstd::String> index_files(dstd::CStringView dir) {
     dstd::Vector<dstd::String> files;
     const dstd::Path root = dstd::Path(dir) / ".dftindex";
     if (!dstd::fs::exists(root).value()) return files;
@@ -59,8 +60,8 @@ dstd::Vector<dstd::String> index_files(const dstd::String& dir) {
     return files;
 }
 
-dstd::String trace_path(const dstd::String& dir, int id) {
-    return dir + "/trace_" + dstd::to_string(id) + ".pfw.gz";
+dstd::String trace_path(dstd::CStringView dir, int id) {
+    return dstd::String(dir) + "/trace_" + dstd::to_string(id) + ".pfw.gz";
 }
 
 void write_trace(dftu_utils_test::TestEnvironment& env, int id,

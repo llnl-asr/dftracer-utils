@@ -56,8 +56,8 @@ constexpr const char* MORE_EVENTS[] = {
     R"({"a":{"b":[{"c":1},{"c":2}]},"args":{"a":[1,2,3]}})",
     R"({"": 1, "args": {"": 2}})",
     R"({"dur":2000,"args":{"size":4096,"fd":3,"path":"/data/x","retry":0}})",
-    R"({"ph":"M","name":"process_name","args":{"name":"proc"}})",
-    R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":2,"ts":10,"dur":20})",
+    R"({"ph":4,"name":"process_name","args":{"name":"proc"}})",
+    R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":2,"ts":10,"dur":20})",
 };
 
 constexpr const char* MORE_FILTERS[] = {
@@ -91,8 +91,8 @@ constexpr const char* MORE_FILTERS[] = {
     R"(fname ~ "dir")",
     R"(size == 4096)",
     R"(args.size2 == 7)",
-    R"(ph != "M" and dur > 10)",
-    R"(ph == "M")",
+    R"(ph != 4 and dur > 10)",
+    R"(ph == 4)",
     R"((dur ?? 0) + (args.size ?? 0) > 5000)",
     R"(exists(args.tags))",
     R"(exists(nested.a))",
@@ -470,7 +470,7 @@ TEST_CASE("mixed reads and queries on malformed lines never crash") {
     // end must stay safe under any order of them.
     constexpr const char* BASE[] = {
         R"({"name":"read","cat":"POSIX","pid":1,"dur":2000,"args":{"size":4096,"tags":["a","b"],"x":{"y":1.5}}})",
-        ("{\"ph\":\"X\",\"name\":\"w\\u00e9\",\"ts\":-5,\"dur\":1e2,"
+        ("{\"ph\":1,\"name\":\"w\\u00e9\",\"ts\":-5,\"dur\":1e2,"
          "\"args\":{\"fname\":\"/a/b\",\"fd\":7,\"n\":null,\"t\":true}}"),
         R"({"tags":[1,2,[3,{"k":"v"}],null,true],"name":"MPI_Send","x":"\"q\"","dur":123456789012345678901})",
     };

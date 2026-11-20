@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/fatal.h>
+#include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <algorithm>
@@ -13,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <thread>
 #include <utility>
 
@@ -32,21 +34,96 @@ std::mutex g_process_mutex;
 /// the next context starts, or Open MPI stalls in its collectives.
 std::mutex g_mpi_mutex;
 dstd::Vector<dstd::WeakPtr<Context>> g_live;
+/// The threads that ended their own context. They are joined when the next
+/// context starts and at shutdown, so the memory they free is freed before
+/// the exit check counts and a process that starts many contexts keeps only
+/// the threads of the contexts that ended since the last start.
+std::mutex g_retired_mutex;
+dstd::Vector<dstd::Thread> g_retired;
+std::once_flag g_retired_hook;
 bool g_exit_hook = false;
+
+/// A thread of @ref Context::run_helper and whether it let go of its body.
+struct Helper {
+    dstd::Thread thread;
+    dstd::SharedPtr<std::atomic<bool>> done;
+};
+std::mutex g_helpers_mutex;
+dstd::Vector<Helper> g_helpers;
+std::once_flag g_helpers_hook;
+
+/// Joins the helpers that are done, and waits for the rest until @p until_ns.
+/// Gives whether any is left.
+bool join_helpers(std::uint64_t until_ns) noexcept {
+    for (;;) {
+        dstd::Vector<Helper> finished;
+        bool left = false;
+        {
+            std::lock_guard<std::mutex> lock(g_helpers_mutex);
+            for (auto at = g_helpers.begin(); at != g_helpers.end();) {
+                if (at->done->load(std::memory_order_acquire)) {
+                    finished.push_back(std::move(*at));
+                    at = g_helpers.erase(at);
+                } else {
+                    left = true;
+                    ++at;
+                }
+            }
+        }
+        for (Helper& helper : finished) helper.thread.join();
+        if (!left || dstd::steady_now_ns() >= until_ns) return left;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+/// A helper still in MPI after the wait waits for a peer that never came, and
+/// the stopping context ends that job with MPI_Abort, so it is left running.
+void join_helpers_at_shutdown() noexcept {
+    const std::uint64_t until =
+        dstd::steady_now_ns() +
+        common::constants::comm_settings::MPI_NATIVE_DRAIN_MS * 1'000'000;
+    if (!join_helpers(until)) return;
+    std::lock_guard<std::mutex> lock(g_helpers_mutex);
+    for (Helper& helper : g_helpers) helper.thread.detach();
+    g_helpers.clear();
+}
+
+/// Waits for every thread that @ref retire kept to leave, which is after it
+/// freed what it held.
+void join_retired() noexcept {
+    dstd::Vector<dstd::Thread> threads;
+    {
+        std::lock_guard<std::mutex> lock(g_retired_mutex);
+        threads.swap(g_retired);
+    }
+    for (dstd::Thread& thread : threads) thread.join();
+}
+
+/// Keeps @p thread, which is the caller, for @ref join_retired. The caller
+/// holds its context's lifecycle lock, so it joins nothing here.
+void retire(dstd::Thread&& thread) {
+    std::call_once(g_retired_hook, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, &join_retired);
+    });
+    std::lock_guard<std::mutex> lock(g_retired_mutex);
+    g_retired.push_back(std::move(thread));
+}
+
 /// Ends MPI at the end of the process when this library started it. The
 /// threads of every live context stop first, so none of them calls MPI while
 /// it ends. A process that starts a communicator more than once is allowed:
 /// MPI starts once per process.
 void finalize_at_exit() {
     Context::shutdown_all();
+    join_retired();
     int done = 0;
     MPI_Finalized(&done);
     if (!done) MPI_Finalize();
 }
 
-dstd::Error mpi_error(const char* what) {
+dstd::Error mpi_error(dstd::StringView what) {
     return dstd::Error::from_format<"MPI could not {}">(
-        dstd::Condition::Unsupported, dstd::StringView(what));
+        dstd::Condition::Unsupported, what);
 }
 
 /// Waits for @p request with @p mpi held only while MPI is called, so the
@@ -110,6 +187,8 @@ struct Leaving {
 }  // namespace
 
 dstd::Result<dstd::SharedPtr<Context>> Context::make(const void* app_comm) {
+    // Before any lock: a retired thread may still be ending its context.
+    join_retired();
     {
         std::lock_guard<std::mutex> lock(g_process_mutex);
         int ready = 0;
@@ -255,7 +334,7 @@ void Context::shutdown(bool force) {
         }
         wake_.notify_all();
         if (on_progress)
-            progress_.detach();
+            retire(std::move(progress_));
         else
             progress_.join();
         {
@@ -264,7 +343,7 @@ void Context::shutdown(bool force) {
         }
         finished_wake_.notify_all();
         if (on_completion)
-            completion_.detach();
+            retire(std::move(completion_));
         else
             completion_.join();
     } else if (force) {
@@ -290,6 +369,24 @@ void Context::shutdown_all() {
         g_live.clear();
     }
     for (const auto& context : live) context->shutdown(true);
+}
+
+void Context::run_helper(Job body, dstd::StringView name) {
+    std::call_once(g_helpers_hook, [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches,
+                                &join_helpers_at_shutdown);
+    });
+    join_helpers(0);
+    auto done = dstd::make_shared<std::atomic<bool>>(false);
+    dstd::Thread thread(
+        [run = std::move(body), done]() mutable {
+            run();
+            run = Job();
+            done->store(true, std::memory_order_release);
+        },
+        name);
+    std::lock_guard<std::mutex> lock(g_helpers_mutex);
+    g_helpers.push_back(Helper{std::move(thread), std::move(done)});
 }
 
 void Context::submit(Job job) {

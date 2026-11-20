@@ -586,9 +586,9 @@ dstd::Optional<V> parse_number(dstd::StringView s) {
     V out{};
     std::from_chars_result res{};
     if constexpr (std::is_same_v<V, double>)
-        res = dstd::from_chars_double(s.data(), s.data() + s.size(), out);
+        res = dstd::from_chars_double(s, out);
     else
-        res = dstd::from_chars(s.data(), s.data() + s.size(), out);
+        res = dstd::from_chars(s, out);
     if (res.ec != std::errc{} || res.ptr != s.data() + s.size())
         return dstd::nullopt;
     return out;
@@ -704,6 +704,10 @@ bool value_key(dstd::String& out, const Value& v) {
                 append_int_key(out, false, x);
                 return true;
             } else if constexpr (std::is_same_v<T, double>) {
+                if (std::isnan(x)) {
+                    append_nan_key(out);
+                    return true;
+                }
                 return append_double_key(out, x);
             } else if constexpr (std::is_same_v<T, dstd::StringView>) {
                 append_string_key(out, x);
@@ -775,8 +779,8 @@ dstd::Optional<dstd::StringView> str(const Value& v) {
 }
 
 // The container `json` spells, parsed into the scratch arena.
-Value parsed(const dstd::String& json) {
-    const Value v = t_scratch.parse(t_scratch.own(json));
+Value parsed(dstd::StringView json) {
+    const Value v = t_scratch.parse(t_scratch.own(dstd::String(json)));
     if (std::holds_alternative<VMissing>(v)) return VNull{};
     return v;
 }
@@ -1481,7 +1485,7 @@ struct JsonRecord {
     const JsonValue& event;
     bool args_fallback;
 
-    JsonValue lookup(const dstd::String& path) const {
+    JsonValue lookup(dstd::StringView path) const {
         JsonValue v = event.at(path);
         if (args_fallback && !v.exists() && !common::has_args_prefix(path))
             v = event.at(dstd::fmt<"args.{}">(path));
@@ -1603,8 +1607,8 @@ struct Resolver {
                 note(ev, code);
                 return false;
             }
-            const auto key = json::detail::read_key(
-                field.key(), ev.text.data() + ev.text.size(), ev.strings);
+            const auto key =
+                json::detail::read_key(field.key(), ev.text, ev.strings);
             if (key && *key == name) {
                 out = field.value();
                 return true;
@@ -1710,7 +1714,9 @@ OdLeaf read_leaf(const OnDemandEvent& ev, OnDemand& v) {
     OdLeaf out;
     const dstd::StringView head = v.raw_json_token();
     const char c = head.data()[0];
-    const char* const end = ev.text.data() + ev.text.size();
+    const dstd::StringView tail(
+        head.data(), static_cast<std::size_t>(ev.text.data() + ev.text.size() -
+                                              head.data()));
     switch (c) {
         case '{':
         case '[':
@@ -1737,7 +1743,7 @@ OdLeaf read_leaf(const OnDemandEvent& ev, OnDemand& v) {
         }
         case '"': {
             const auto s = json::detail::read_string(
-                json::detail::value_extent(head.data(), end), ev.strings);
+                json::detail::value_extent(tail), ev.strings);
             if (!s) {
                 ev.broken = true;
                 return out;
@@ -1749,7 +1755,7 @@ OdLeaf read_leaf(const OnDemandEvent& ev, OnDemand& v) {
         default:
             break;
     }
-    const dstd::StringView token = json::detail::value_extent(head.data(), end);
+    const dstd::StringView token = json::detail::value_extent(tail);
     simdjson::error_code code;
     if (token.find_first_of(".eE") != dstd::StringView::npos) {
         code = v.get_double().get(out.d);
@@ -1765,16 +1771,15 @@ OdLeaf read_leaf(const OnDemandEvent& ev, OnDemand& v) {
     }
     std::int64_t as_i64;
     std::uint64_t as_u64;
-    const char* const first = token.data();
-    const char* const last = first + token.size();
-    const auto i = dstd::from_chars(first, last, as_i64);
+    const char* const last = token.data() + token.size();
+    const auto i = dstd::from_chars(token, as_i64);
     if (i.ec == std::errc() && i.ptr == last) {
         code = v.get_int64().get(out.i);
         if (code) ev.broken = true;
         if (!code) out.kind = OdLeaf::Kind::Int;
         return out;
     }
-    const auto u = dstd::from_chars(first, last, as_u64);
+    const auto u = dstd::from_chars(token, as_u64);
     if (u.ec == std::errc() && u.ptr == last) {
         code = v.get_uint64().get(out.u);
         if (code) ev.broken = true;
@@ -1800,7 +1805,7 @@ struct OnDemandRecord {
     const OnDemandEvent& event;
     bool args_fallback;
 
-    bool lookup(const dstd::String& path, od::OnDemand& out) const {
+    bool lookup(dstd::StringView path, od::OnDemand& out) const {
         const od::Resolver resolver{event};
         if (resolver.resolve(path, out)) return true;
         if (!args_fallback || common::has_args_prefix(path)) return false;
@@ -1854,8 +1859,10 @@ struct OnDemandRecord {
                 return l.d;
             case OdLeaf::Kind::Container:
                 return t_scratch.parse(json::detail::value_extent(
-                    v.raw_json_token().data(),
-                    event.text.data() + event.text.size()));
+                    dstd::StringView(v.raw_json_token().data(),
+                                     static_cast<std::size_t>(
+                                         event.text.data() + event.text.size() -
+                                         v.raw_json_token().data()))));
             case OdLeaf::Kind::Null:
             case OdLeaf::Kind::Other:
                 break;

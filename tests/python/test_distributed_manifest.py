@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Tests for the distributed-build path producing a unified-shape index.
 
-Covers per-file AGG markers, ensure_indexed no-op after build, and end-to-end
+Covers per-file AGG markers, ensure no-op after build, and end-to-end
 correctness vs a serial single-node build.
 """
 
@@ -27,9 +27,10 @@ AGG_CFG = AggregationConfig(time_interval_ms=5000)
 def _agg_event_count(files, index_dir):
     """Total aggregated event count read from the index via the View tier."""
     import pyarrow as pa
+    import pyarrow.compute as pc
 
-    tbl = TraceViewer(files, index_path=index_dir).group_by("name").agg("count").collect()
-    return int(pa.compute.sum(pa.table(tbl)["count"]).as_py() or 0)
+    tbl = TraceViewer(files, index_dir=index_dir).group_by("name").agg("count").collect()
+    return int(pc.sum(pa.table(tbl)["count"]).as_py() or 0)
 
 
 def _build_distributed(env, pids, num_events=100):
@@ -39,7 +40,7 @@ def _build_distributed(env, pids, num_events=100):
     index_path = os.path.join(index_dir, ".dftindex")
     result = distributed_index(
         files=files,
-        index_path=index_path,
+        index_dir=index_path,
         client=None,
         aggregation_config=AGG_CFG,
     )
@@ -68,9 +69,8 @@ class TestDistributedIndexUnified:
                 files=files_dist,
                 index_dir=uni_index_dir,
                 aggregation_config=AGG_CFG,
-                force_rebuild=True,
             )
-            uni_indexer.ensure_indexed()
+            uni_indexer.build(force=True)
 
             uni_count = _agg_event_count(files_dist, uni_index_dir)
             dist_count = _agg_event_count(files_dist, os.path.dirname(dist_index_path))
@@ -79,7 +79,7 @@ class TestDistributedIndexUnified:
             )
             assert uni_count > 0
 
-    def test_ensure_indexed_is_noop_after_distributed_build(self):
+    def test_ensure_is_noop_after_distributed_build(self):
         import time as _time
 
         with Environment(lines=150) as env:
@@ -92,19 +92,18 @@ class TestDistributedIndexUnified:
                 require_checkpoint=True,
                 require_bloom=True,
                 aggregation_config=AGG_CFG,
-                force_rebuild=False,
             )
-            status = indexer.ensure_indexed()
+            status = indexer.ensure()
             elapsed = _time.monotonic() - t0
 
             assert status.total_files == len(files)
             assert len(status.ready) == len(files), (
-                f"post-distributed ensure_indexed wants to rebuild "
+                f"post-distributed ensure wants to rebuild "
                 f"{len(status.needs_work)} files (markers missing?)"
             )
             assert len(status.needs_work) == 0
             assert elapsed < 5.0, (
-                f"ensure_indexed took {elapsed:.2f}s on a {len(files)}-file "
+                f"ensure took {elapsed:.2f}s on a {len(files)}-file "
                 "distributed index; likely re-running the build"
             )
 
@@ -127,7 +126,7 @@ class TestDistributedWithDask:
                 index_path = os.path.join(index_dir, ".dftindex")
                 result = distributed_index(
                     files=files,
-                    index_path=index_path,
+                    index_dir=index_path,
                     client=client,
                     aggregation_config=AGG_CFG,
                 )
@@ -142,8 +141,7 @@ class TestDistributedWithDask:
                     require_checkpoint=True,
                     require_bloom=True,
                     aggregation_config=AGG_CFG,
-                    force_rebuild=False,
-                ).ensure_indexed()
+                ).ensure()
                 assert len(status.ready) == len(files)
                 assert len(status.needs_work) == 0
 
@@ -153,8 +151,7 @@ class TestDistributedWithDask:
                     files=files,
                     index_dir=serial_dir,
                     aggregation_config=AGG_CFG,
-                    force_rebuild=True,
-                ).ensure_indexed()
+                ).build(force=True)
                 serial_count = _agg_event_count(files, serial_dir)
                 assert serial_count > 0
                 assert _agg_event_count(files, index_dir) == serial_count
@@ -188,7 +185,7 @@ class TestDistributedWholeFiles:
                 os.makedirs(index_dir, exist_ok=True)
                 result = distributed_index(
                     files=files,
-                    index_path=os.path.join(index_dir, ".dftindex"),
+                    index_dir=os.path.join(index_dir, ".dftindex"),
                     client=client,
                     aggregation_config=AGG_CFG,
                 )
@@ -200,8 +197,7 @@ class TestDistributedWholeFiles:
                     files=files,
                     index_dir=serial_dir,
                     aggregation_config=AGG_CFG,
-                    force_rebuild=True,
-                ).ensure_indexed()
+                ).build(force=True)
                 serial_count = _agg_event_count(files, serial_dir)
                 assert serial_count > 1600
                 assert _agg_event_count(files, index_dir) == serial_count
@@ -214,7 +210,7 @@ class TestDistributedIndexIdempotent:
     def _run(self, files, index_path, **kw):
         return distributed_index(
             files=files,
-            index_path=index_path,
+            index_dir=index_path,
             client=None,
             aggregation_config=AGG_CFG,
             **kw,
@@ -243,11 +239,11 @@ class TestDistributedIndexIdempotent:
             assert part["total_files"] == 3
             assert sum(part["per_worker"]) == 1
 
-    def test_force_rebuild_reparses_all(self):
+    def test_force_reparses_all(self):
         with Environment(lines=50) as env:
             files, index_path = self._setup(env, [1, 2])
             self._run(files, index_path)
-            forced = self._run(files, index_path, force_rebuild=True)
+            forced = self._run(files, index_path, force=True)
             assert sum(forced["per_worker"]) == 2
 
 
@@ -264,26 +260,25 @@ class TestStoreSeesOtherProcesses:
             index_dir = os.path.join(env.temp_dir, "idx")
             os.makedirs(index_dir, exist_ok=True)
 
-            def resolve(files):
+            def status(files):
                 return Indexer(
                     files=files,
                     index_dir=index_dir,
                     require_checkpoint=True,
                     require_bloom=True,
-                    force_rebuild=False,
-                ).resolve()
+                ).status()
 
             Indexer(
                 files=[first], index_dir=index_dir, require_checkpoint=True, require_bloom=True
-            ).ensure_indexed()
+            ).ensure()
             # This process now holds the index, and sees the second file as new.
-            assert second in resolve([first, second]).needs_work
+            assert second in status([first, second]).needs_work
 
             child = textwrap.dedent(
                 f"""
                 from dftracer.utils import Indexer
                 Indexer(files=[{second!r}], index_dir={index_dir!r},
-                        require_checkpoint=True, require_bloom=True).ensure_indexed()
+                        require_checkpoint=True, require_bloom=True).ensure()
                 """
             )
             subprocess.run([sys.executable, "-c", child], check=True)
@@ -291,4 +286,4 @@ class TestStoreSeesOtherProcesses:
             # Past the check interval the held index sees the other process's
             # file without a refresh() call.
             time.sleep(1.2)
-            assert resolve([first, second]).needs_work == []
+            assert status([first, second]).needs_work == []

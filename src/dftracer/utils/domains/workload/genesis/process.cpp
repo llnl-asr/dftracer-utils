@@ -22,6 +22,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -606,7 +607,7 @@ class GroupReader {
         }
     }
 
-    GResult<void> load_gpu_csv(const dstd::Vector<dstd::String>& files) {
+    GResult<void> load_gpu_csv(dstd::Span<const dstd::String> files) {
         static constexpr const char* FIELDS[] = {
             "gpu.power.GPU_", "gpu.utilization.GPU_", "gpu.memory_used.GPU_"};
         for (const auto& f : files) {
@@ -756,7 +757,7 @@ class GroupReader {
         return {};
     }
 
-    GResult<void> handle_line(const dstd::String& file, dstd::StringView line) {
+    GResult<void> handle_line(dstd::StringView file, dstd::StringView line) {
         while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
             line.remove_prefix(1);
         while (!line.empty() && (line.back() == ',' || line.back() == ' ' ||
@@ -767,7 +768,7 @@ class GroupReader {
         if (parser_.parse(line.data(), line.size()).get(o) !=
                 simdjson::SUCCESS &&
             json::parse_refused(parser_, line).get(o) != simdjson::SUCCESS)
-            return fail(file, "invalid JSON line");
+            return fail(dstd::String(file), "invalid JSON line");
         // One pass over the keys of the record and one over its args, instead
         // of a lookup per key that scans the fields from the start each time.
         // The first of a repeated key wins, as with a lookup.
@@ -830,7 +831,7 @@ class GroupReader {
                     return {};
                 }
                 return fail(
-                    file,
+                    dstd::String(file),
                     dstd::fmt<"unknown per-process counter category {}">(cat));
             case trace::RecordPhase::Metadata:
                 if (name == "HH" && has_args)
@@ -842,7 +843,7 @@ class GroupReader {
         }
     }
 
-    GResult<void> handle_host(const dstd::String& file, dstd::StringView cat,
+    GResult<void> handle_host(dstd::StringView file, dstd::StringView cat,
                               dstd::StringView name, dstd::StringView hhash,
                               std::int64_t ts, simdjson::dom::object args) {
         const bool sys = cat == "sys";
@@ -850,7 +851,7 @@ class GroupReader {
         const bool io = cat == "io";
         const bool gpu = cat == "gpu";
         if (!sys && !net && !io && !gpu)
-            return fail(file,
+            return fail(dstd::String(file),
                         dstd::fmt<"unknown host counter category {}">(cat));
         const dstd::String series_name = strip_spaces(name);
         if (sys && is_per_core_cpu(series_name)) return {};
@@ -1132,11 +1133,13 @@ class SetAcc {
         while (!stack_.empty() && stack_.back().first <= ts) stack_.pop_back();
     }
 
-    std::uint32_t counter_id(const dstd::String& k) {
-        auto [it, fresh] = counter_ids_.try_emplace(
-            k, static_cast<std::uint32_t>(counter_keys_.size()));
-        if (fresh) counter_keys_.push_back(k);
-        return it->second;
+    std::uint32_t counter_id(dstd::StringView k) {
+        if (auto found = counter_ids_.find(k); found != counter_ids_.end())
+            return found->second;
+        const auto id = static_cast<std::uint32_t>(counter_keys_.size());
+        counter_ids_.emplace(dstd::String(k), id);
+        counter_keys_.emplace_back(k);
+        return id;
     }
 
     void open_lane(const SortRec& s) {
@@ -1298,7 +1301,7 @@ struct ReaderSize {
 // The READER_BYTES slots a reader of `file` takes: one for its buffers and as
 // many as its decoded gzip member needs, the size the decoder takes from the
 // file's last trailer. A file whose size cannot be read takes UNKNOWN_SLOTS.
-coro::CoroTask<ReaderSize> reader_size(const dstd::String& file) {
+coro::CoroTask<ReaderSize> reader_size(dstd::String file) {
     ReaderSize out;
     co_await probe_slots().acquire(1);
     SlotGuard probe(probe_slots(), 1);
@@ -1443,7 +1446,7 @@ struct ChunkRef {
 
 // The group's chunks in file order. Sequence numbers count every call, so they
 // do not depend on how the chunks are split between tasks.
-dstd::Vector<ChunkRef> chunk_refs(const dstd::Vector<FilePart>& parts,
+dstd::Vector<ChunkRef> chunk_refs(dstd::Span<const FilePart> parts,
                                   std::uint64_t* calls) {
     dstd::Vector<ChunkRef> out;
     std::uint64_t seq = 0;
@@ -1463,7 +1466,7 @@ dstd::Vector<ChunkRef> chunk_refs(const dstd::Vector<FilePart>& parts,
 // are dropped. Each chunk's memory is freed once replayed.
 template <class Emit>
 GResult<void> replay_chunks(dstd::Vector<FilePart>& parts,
-                            const dstd::Vector<GroupReader::IdMap>& maps,
+                            dstd::Span<const GroupReader::IdMap> maps,
                             const GroupReader& r,
                             const dstd::Deque<SetAcc>& sets, GroupMem& mem,
                             const ChunkRef* refs, std::size_t n,
@@ -1528,11 +1531,13 @@ constexpr std::size_t WALK_WAYS = 64;
 // the same time, each with its part of the sort buffer, so the spilled chunks
 // are read back in parallel. Each part's merge gives the same order either
 // way, because the order is total.
-coro::CoroTask<GResult<void>> replay(
-    coro::Scope& ctx, dstd::Vector<FilePart>& parts,
-    const dstd::Vector<GroupReader::IdMap>& maps, const GroupReader& r,
-    const dstd::Deque<SetAcc>& sets, dstd::Deque<CallSorter>& sorters,
-    GroupMem& mem, GroupProgress* progress) {
+coro::CoroTask<GResult<void>> replay(coro::Scope& ctx,
+                                     dstd::Vector<FilePart>& parts,
+                                     dstd::Vector<GroupReader::IdMap> maps,
+                                     const GroupReader& r,
+                                     const dstd::Deque<SetAcc>& sets,
+                                     dstd::Deque<CallSorter>& sorters,
+                                     GroupMem& mem, GroupProgress* progress) {
     const std::size_t ways = sorters.size();
     std::uint64_t calls = 0;
     const dstd::Vector<ChunkRef> refs = chunk_refs(parts, &calls);
@@ -1630,10 +1635,11 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
     GroupMem& mem = state->mem;
     mem.borrow = borrow;
     GroupReader& r = state->r;
-    auto skip_all = [&](const dstd::String& file, const dstd::String& reason) {
+    auto skip_all = [&](dstd::StringView file, dstd::StringView reason) {
         for (const auto& s : g.sets)
             result.skips.push_back(
-                {g.dir, file, dstd::fmt<"{}: {}">(s.keys.papi_set, reason)});
+                {g.dir, dstd::String(file),
+                 dstd::fmt<"{}: {}">(s.keys.papi_set, reason)});
     };
     if (!mem.open()) {
         skip_all("", "no memory pool is free for the group");
@@ -1694,8 +1700,8 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
     for (std::size_t w = 0; w < ways; ++w)
         sorters.emplace_back(
             SortLess{}, std::max<std::uint64_t>(1, mem.sort_budget / ways));
-    auto replayed = co_await replay(ctx, parts, maps, r, partials[0], sorters,
-                                    mem, progress);
+    auto replayed = co_await replay(ctx, parts, std::move(maps), r, partials[0],
+                                    sorters, mem, progress);
     if (!replayed) {
         result.over_budget = replayed.error().over_budget;
         skip_all(replayed.error().file, replayed.error().reason);

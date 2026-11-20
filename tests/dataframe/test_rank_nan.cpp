@@ -15,14 +15,13 @@ namespace {
 
 const double NAN_ = std::nan("");
 
-Series floats(const dstd::Vector<double>& v,
-              const dstd::Vector<std::uint8_t>& valid = {}) {
+Series floats(dstd::Vector<double> v, dstd::Vector<std::uint8_t> valid = {}) {
     return Series::flat_f64(v.data(), static_cast<std::int64_t>(v.size()),
                             valid.empty() ? nullptr : valid.data());
 }
 
 // Reference: drop the missing rows, rank the rest, scatter back.
-dstd::Vector<double> reference(const dstd::Vector<double>& x, RankMethod method,
+dstd::Vector<double> reference(dstd::Vector<double> x, RankMethod method,
                                bool descending, bool pct) {
     dstd::Vector<double> present;
     dstd::Vector<std::size_t> at;

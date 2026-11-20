@@ -164,6 +164,63 @@ void product_one(const dftu_series& v, dftu_scalar& out) {
     }
 }
 
+// The bitwise reduction `op` (0 AND, 1 OR, 2 XOR) over the valid values of an
+// integer column; a column with no valid value gives the NULL scalar. A signed
+// column gives I64 (sign-extended from its width), an unsigned one U64.
+template <class T>
+void bitwise_one(const dftu_series& v, int op, dftu_scalar& out) {
+    const T* p = reinterpret_cast<const T*>(v.data.data());
+    const bool has_null = static_cast<bool>(v.validity.block());
+    bool seen = false;
+    T acc{};
+    for (std::int64_t i = 0; i < v.length; ++i) {
+        if (has_null && !is_valid(v, i)) continue;
+        if (!seen) {
+            acc = p[i];
+            seen = true;
+        } else if (op == 0) {
+            acc = static_cast<T>(acc & p[i]);
+        } else if (op == 1) {
+            acc = static_cast<T>(acc | p[i]);
+        } else {
+            acc = static_cast<T>(acc ^ p[i]);
+        }
+    }
+    if (!seen) {
+        out.kind = DFTU_SCALAR_TAG_NULL;
+        out.value.i = 0;
+    } else if constexpr (std::is_unsigned_v<T>) {
+        out.kind = DFTU_SCALAR_TAG_U64;
+        out.value.u = static_cast<std::uint64_t>(acc);
+    } else {
+        out.kind = DFTU_SCALAR_TAG_I64;
+        out.value.i = static_cast<std::int64_t>(acc);
+    }
+}
+
+// The same over a bit-packed Bool column: an I64 scalar of 0 or 1.
+void bitwise_bool(const dftu_series& v, int op, dftu_scalar& out) {
+    const auto* bits = reinterpret_cast<const std::uint8_t*>(v.data.data());
+    const bool has_null = static_cast<bool>(v.validity.block());
+    bool seen = false;
+    bool acc = false;
+    for (std::int64_t i = 0; i < v.length; ++i) {
+        if (has_null && !is_valid(v, i)) continue;
+        const bool bit = ((bits[i >> 3] >> (i & 7)) & 1) != 0;
+        if (!seen)
+            acc = bit;
+        else if (op == 0)
+            acc = acc && bit;
+        else if (op == 1)
+            acc = acc || bit;
+        else
+            acc = acc != bit;
+        seen = true;
+    }
+    out.kind = seen ? DFTU_SCALAR_TAG_I64 : DFTU_SCALAR_TAG_NULL;
+    out.value.i = seen && acc ? 1 : 0;
+}
+
 template <class T>
 void argextreme_one(const dftu_series& v, bool is_min, std::int64_t& out_idx) {
     const T* p = reinterpret_cast<const T*>(v.data.data());
@@ -188,7 +245,7 @@ void argextreme_one(const dftu_series& v, bool is_min, std::int64_t& out_idx) {
 // count first attains the eventual maximum.
 template <class T>
 void mode_serial(const T* p,
-                 const dftracer::utils::dstd::Vector<std::int64_t>& idx,
+                 dftracer::utils::dstd::Span<const std::int64_t> idx,
                  dftu_scalar& out) {
     dftracer::utils::dstd::HashMap<T, std::int64_t> counts;
     T best{};
@@ -210,10 +267,25 @@ void mode_one(const dftu_series& v, dftu_scalar& out) {
     const std::int64_t n = v.length;
     const bool has_null = static_cast<bool>(v.validity.block());
 
+    // A float NaN is missing, as in pandas' mode, and -0.0 is 0.0: the
+    // values are counted as a copy with the zero's sign dropped.
+    dftracer::utils::dstd::Vector<T> unsigned_zero;
+    if constexpr (std::is_floating_point_v<T>) {
+        unsigned_zero.resize(static_cast<std::size_t>(n));
+        for (std::int64_t i = 0; i < n; ++i)
+            unsigned_zero[static_cast<std::size_t>(i)] =
+                p[i] == T{} ? T{} : p[i];
+        p = unsigned_zero.data();
+    }
+
     dftracer::utils::dstd::Vector<std::int64_t> idx;
     idx.reserve(static_cast<std::size_t>(n));
-    for (std::int64_t i = 0; i < n; ++i)
-        if (!has_null || is_valid(v, i)) idx.push_back(i);
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (has_null && !is_valid(v, i)) continue;
+        if constexpr (std::is_floating_point_v<T>)
+            if (p[i] != p[i]) continue;
+        idx.push_back(i);
+    }
     const std::int64_t m = static_cast<std::int64_t>(idx.size());
 
     if (m == 0) {
@@ -274,7 +346,7 @@ const char* reduce_op_name(std::int32_t op) {
 // The ERR scalar a reduction returns instead of a value. The error and its text
 // live in thread-local storage, so they stay valid until the next reduction on
 // this thread (dftu_error borrows its message).
-dftu_scalar refuse(const dftracer::utils::dstd::String& message) {
+dftu_scalar refuse(dftracer::utils::dstd::StringView message) {
     static thread_local dftracer::utils::dstd::String text;
     static thread_local dftu_error err;
     text = message;
@@ -399,7 +471,7 @@ dftu_scalar dftu_series_reduce(const dftu_series* v, dftu_reduce_op op) {
     return out;
 }
 
-int64_t dftu_series_count(const dftu_series* v) {
+std::int64_t dftu_series_count(const dftu_series* v) {
     if (v->rowwise_nulls()) {
         std::int64_t n = 0;
         for (std::int64_t i = 0; i < v->length; ++i)
@@ -440,7 +512,67 @@ dftu_scalar dftu_series_product(const dftu_series* v) {
     return out;
 }
 
-int32_t dftu_series_all(const dftu_series* v) {
+namespace {
+
+dftu_scalar bitwise_reduce(const dftu_series& v, int op,
+                           dftracer::utils::dstd::StringView name) {
+    using dftracer::utils::dataframe::TypeId;
+    dftu_scalar out{};
+    if (v.encoding == dftracer::utils::dataframe::Encoding::Flat) {
+        switch (v.type) {
+            case TypeId::Bool:
+                bitwise_bool(v, op, out);
+                return out;
+            case TypeId::Int8:
+                bitwise_one<std::int8_t>(v, op, out);
+                return out;
+            case TypeId::Int16:
+                bitwise_one<std::int16_t>(v, op, out);
+                return out;
+            case TypeId::Int32:
+                bitwise_one<std::int32_t>(v, op, out);
+                return out;
+            case TypeId::Int64:
+                bitwise_one<std::int64_t>(v, op, out);
+                return out;
+            case TypeId::Uint8:
+                bitwise_one<std::uint8_t>(v, op, out);
+                return out;
+            case TypeId::Uint16:
+                bitwise_one<std::uint16_t>(v, op, out);
+                return out;
+            case TypeId::Uint32:
+                bitwise_one<std::uint32_t>(v, op, out);
+                return out;
+            case TypeId::Uint64:
+                bitwise_one<std::uint64_t>(v, op, out);
+                return out;
+            default:
+                break;
+        }
+    }
+    return refuse(dftracer::utils::dstd::fmt<
+                  "{}: the column must be an integer or a bool">(name));
+}
+
+}  // namespace
+
+dftu_scalar dftu_series_bitwise_and(const dftu_series* v) {
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_bitwise_and(flat_v));
+    return bitwise_reduce(*v, 0, "bitwise_and");
+}
+
+dftu_scalar dftu_series_bitwise_or(const dftu_series* v) {
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_bitwise_or(flat_v));
+    return bitwise_reduce(*v, 1, "bitwise_or");
+}
+
+dftu_scalar dftu_series_bitwise_xor(const dftu_series* v) {
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_bitwise_xor(flat_v));
+    return bitwise_reduce(*v, 2, "bitwise_xor");
+}
+
+std::int32_t dftu_series_all(const dftu_series* v) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_all(flat_v));
 
     using dftracer::utils::dataframe::TypeId;
@@ -450,7 +582,7 @@ int32_t dftu_series_all(const dftu_series* v) {
     return dftracer::utils::dataframe::all_bits(*v) ? 1 : 0;
 }
 
-int32_t dftu_series_any(const dftu_series* v) {
+std::int32_t dftu_series_any(const dftu_series* v) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_any(flat_v));
 
     using dftracer::utils::dataframe::TypeId;
@@ -460,7 +592,7 @@ int32_t dftu_series_any(const dftu_series* v) {
     return dftracer::utils::dataframe::any_bits(*v) ? 1 : 0;
 }
 
-int64_t dftu_series_arg_min(const dftu_series* v) {
+std::int64_t dftu_series_arg_min(const dftu_series* v) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_arg_min(flat_v));
 
     using dftracer::utils::dataframe::is_arithmetic_type;
@@ -489,7 +621,7 @@ int64_t dftu_series_arg_min(const dftu_series* v) {
     return idx;
 }
 
-int64_t dftu_series_arg_max(const dftu_series* v) {
+std::int64_t dftu_series_arg_max(const dftu_series* v) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_arg_max(flat_v));
 
     using dftracer::utils::dataframe::is_arithmetic_type;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
@@ -38,7 +39,7 @@ dstd::String indexed_trace(TestEnvironment& env, int posix_n) {
     return gz;
 }
 
-auto plan_of(const dstd::String& gz) {
+auto plan_of(dstd::CStringView gz) {
     auto p = views::detail::scan::from_file(
         dstd::String(gz),
         dstd::String(dstd::String(determine_index_path(gz, ""))));

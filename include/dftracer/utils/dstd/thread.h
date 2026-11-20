@@ -111,7 +111,7 @@ class Thread {
         }
     };
 
-    static void set_current_name(const String& name) noexcept;
+    static void set_current_name(StringView name) noexcept;
     static Error make_error(int rc);
     void launch(void (*run)(void*), void* arg, std::size_t stack_size);
     int create(void (*run)(void*), void* arg, std::size_t stack_size) noexcept;

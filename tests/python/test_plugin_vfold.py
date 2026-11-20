@@ -24,7 +24,7 @@ def _write_trace(path, durs, pids=None):
             pid = 1 if pids is None else pids[i]
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{1000 + i},"dur":{d},"ph":"X","args":{{}}}}\n'
+                f'"ts":{1000 + i},"dur":{d},"ph":1,"args":{{}}}}\n'
             )
 
 
@@ -110,7 +110,7 @@ def test_vfold_keyed_sum_per_name(tmp_path):
         for i, (nm, d) in enumerate(zip(names, durs)):
             f.write(
                 f'{{"name":"{nm}","cat":"POSIX","pid":1,"tid":1,'
-                f'"ts":{1000 + i},"dur":{d},"ph":"X","args":{{}}}}\n'
+                f'"ts":{1000 + i},"dur":{d},"ph":1,"args":{{}}}}\n'
             )
     plugins = Plugins([ByName])
     got = _keyed(plugins.run(str(tmp_path)).results, "dur", "name")
@@ -341,7 +341,7 @@ def test_vfold_keyed_occupancy(tmp_path):
         for pid, ts, dur in events:
             f.write(
                 f'{{"name":"read","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{ts},"dur":{dur},"ph":"X","args":{{}}}}\n'
+                f'"ts":{ts},"dur":{dur},"ph":1,"args":{{}}}}\n'
             )
     plugins = Plugins([Occ])
     result = plugins.run(str(tmp_path)).results
@@ -368,7 +368,7 @@ def test_vfold_multi_key_groups_by_both_columns(tmp_path):
         for i, (pid, nm, d) in enumerate(rows):
             f.write(
                 f'{{"name":"{nm}","cat":"POSIX","pid":{pid},"tid":1,'
-                f'"ts":{1000 + i},"dur":{d},"ph":"X","args":{{}}}}\n'
+                f'"ts":{1000 + i},"dur":{d},"ph":1,"args":{{}}}}\n'
             )
 
     plugins = Plugins([Both])

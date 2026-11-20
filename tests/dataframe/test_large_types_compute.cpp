@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -101,8 +102,11 @@ TEST_SUITE("dataframe_large_types_compute") {
         CHECK(nfkc.string_at(0) == "caf\xC3\xA9 au lait");
         CHECK(nfkc.string_at(1) == "fi one two three");
         CHECK(nfkc.is_null(2));
-        Series tr = s.str_translate(Series::strings({"a", "o"}),
-                                    Series::strings({"A", "0"}));
+        Series tr = s.str_translate(
+            Series::strings(
+                dftu_utils_test::span_of<dstd::StringView>({"a", "o"})),
+            Series::strings(
+                dftu_utils_test::span_of<dstd::StringView>({"A", "0"})));
         REQUIRE(tr.valid());
         CHECK(tr.string_at(1) == "\xEF\xAC\x81 0ne tw0 three");
         CHECK(tr.is_null(2));
@@ -114,7 +118,8 @@ TEST_SUITE("dataframe_large_types_compute") {
 
     TEST_CASE("LargeString: is_in runs directly on the wide-offset column") {
         Series s = make_large_utf8({"a", "b", "c", "d"});
-        Series needles = Series::strings({"b", "d"});
+        Series needles = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"b", "d"}));
         REQUIRE(s.valid());
         REQUIRE(needles.valid());
         Series mask = s.is_in(needles);
@@ -196,7 +201,9 @@ TEST_SUITE("dataframe_large_types_compute") {
     TEST_CASE(
         "LargeList<int64>: child data survives materialize/take at "
         "64-bit offsets") {
-        Series s = make_large_list_i64({{1, 2, 3}, {}, {4, 5}});
+        Series s = make_large_list_i64(
+            dftu_utils_test::span_of<dstd::Vector<std::int64_t>>(
+                {{1, 2, 3}, {}, {4, 5}}));
         REQUIRE(s.valid());
         CHECK(s.type() == TypeId::LargeList);
         CHECK(is_wide_offset_type(s.type()));
@@ -226,8 +233,9 @@ TEST_SUITE("dataframe_large_types_compute") {
     TEST_CASE(
         "Nested large_list<large_utf8>: both levels are wide-offset "
         "and the string data survives") {
-        Series s =
-            make_large_list({0, 2, 3, 3}, make_large_utf8({"a", "bb", "ccc"}));
+        Series s = make_large_list(
+            dftu_utils_test::span_of<std::int64_t>({0, 2, 3, 3}),
+            make_large_utf8({"a", "bb", "ccc"}));
         REQUIRE(s.valid());
         CHECK(s.type() == TypeId::LargeList);
         CHECK(is_wide_offset_type(s.type()));
@@ -266,8 +274,9 @@ TEST_SUITE("dataframe_large_types_compute") {
         df.names = dstd::make_shared_strings({"k", "v"});
         df.columns.push_back(keys.share());
         df.columns.push_back(values.share());
-        DataFrame grouped = dftu_utils_test::ok(
-            df.group_by("k", {GroupAgg{Agg::Count, "v", "n"}}));
+        DataFrame grouped = dftu_utils_test::ok(df.group_by(
+            "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                     {GroupAgg{Agg::Count, "v", "n"}})));
         REQUIRE(grouped.num_rows() == 3);
         Series gk = grouped.column("k");
         REQUIRE(gk.type() == TypeId::LargeString);

@@ -14,7 +14,7 @@ namespace dftracer::utils::fileio::parallel {
 /// JSON/NDJSON, gzip members). Shards are left in place on failure.
 /// Returns 0 on success, -1 on any I/O failure.
 coro::CoroTask<int> merge_shards(dstd::CStringView target,
-                                 const dstd::Vector<dstd::String>& shards);
+                                 dstd::Vector<dstd::String> shards);
 
 }  // namespace dftracer::utils::fileio::parallel
 

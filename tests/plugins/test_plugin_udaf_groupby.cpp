@@ -17,12 +17,14 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/host/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dlfcn.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 
 #include <cstdint>
 
@@ -47,24 +49,25 @@ bool has(dstd::StringView text, dstd::StringView word) {
     return text.find(word) != dstd::StringView::npos;
 }
 
-dstd::Optional<plugins::host::Plugins> load(const char* path) {
-    auto built = plugins::host::Plugins::builder().add(path).build();
+dstd::Optional<plugins::host::Plugins> load(dstd::StringView path) {
+    auto built =
+        plugins::host::Plugins::builder().add(dstd::String(path)).build();
     INFO((built.has_value() ? dstd::String{}
                             : dstd::String(built.error().message())));
     REQUIRE(built.has_value());
     return std::move(*built);
 }
 
-void* plugin_symbol(const char* symbol) {
+void* plugin_symbol(dstd::CStringView symbol) {
     void* h = dlopen(UDAF_PLUGIN_PATH, RTLD_NOW | RTLD_NOLOAD);
     REQUIRE(h != nullptr);
-    void* fn = dlsym(h, symbol);
+    void* fn = dlsym(h, symbol.c_str());
     dlclose(h);
     REQUIRE(fn != nullptr);
     return fn;
 }
 
-std::int64_t counter(const char* symbol) {
+std::int64_t counter(dstd::CStringView symbol) {
     return reinterpret_cast<std::int64_t (*)()>(plugin_symbol(symbol))();
 }
 
@@ -104,7 +107,7 @@ DataFrame make_frame(std::int64_t rows, std::int64_t keys) {
     return df;
 }
 
-GroupAgg builtin(Agg op, const char* column, const char* out) {
+GroupAgg builtin(Agg op, dstd::StringView column, dstd::StringView out) {
     GroupAgg a;
     a.op = op;
     a.column = column;
@@ -112,7 +115,8 @@ GroupAgg builtin(Agg op, const char* column, const char* out) {
     return a;
 }
 
-GroupAgg udaf_agg(const char* fn, const char* column, const char* out) {
+GroupAgg udaf_agg(dstd::StringView fn, dstd::StringView column,
+                  dstd::StringView out) {
     GroupAgg a;
     a.op = Agg::Udaf;
     a.fn = fn;
@@ -134,7 +138,7 @@ double number(const Series& s, std::int64_t i) {
 }
 
 // The values of column `name` by the Int64 key `k`, whatever the row order.
-ByKey by_key(const DataFrame& df, const char* name) {
+ByKey by_key(const DataFrame& df, dstd::StringView name) {
     const Series key = df.column("k").materialize();
     const Series col = df.column(name).materialize();
     REQUIRE(key.valid());
@@ -183,7 +187,7 @@ Ints first_seen(std::int64_t rows, std::int64_t keys) {
     return order;
 }
 
-DataFrame collect_lazy(const DataFrame& df, const dstd::Vector<GroupAgg>& aggs,
+DataFrame collect_lazy(const DataFrame& df, dstd::Vector<GroupAgg> aggs,
                        std::int64_t batch) {
     auto out = default_runtime()
                    .submit(df.lazy().group_by("k", aggs).collect(batch))
@@ -291,8 +295,18 @@ TEST_CASE("two states fed apart and merged equal one state fed everything") {
     const Series k_head = k.slice(0, 250);
     const Series v_tail = v.slice(250, 350);
     const Series k_tail = k.slice(250, 350);
-    REQUIRE(dataframe::agg_accumulate(*twice, k_head, {&v_head}).has_value());
-    REQUIRE(dataframe::agg_accumulate(*twice, k_tail, {&v_tail}).has_value());
+    REQUIRE(
+        dataframe::agg_accumulate(
+            *twice, k_head,
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&v_head}))
+            .has_value());
+    REQUIRE(
+        dataframe::agg_accumulate(
+            *twice, k_tail,
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&v_tail}))
+            .has_value());
     same(by_key(dataframe::agg_finalize(*twice, "k"), "usum"),
          by_key(single, "usum"));
 }
@@ -311,7 +325,12 @@ TEST_CASE("a serialized state brings its UDAF states back") {
     specs[1].out = "usum";
     auto st = dataframe::agg_new(specs);
     const Series v = df.column("v");
-    REQUIRE(dataframe::agg_accumulate(*st, df.column("k"), {&v}).has_value());
+    REQUIRE(
+        dataframe::agg_accumulate(
+            *st, df.column("k"),
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&v}))
+            .has_value());
     for (const bool compact : {false, true}) {
         const dstd::String blob = dataframe::agg_serialize(*st, compact);
         REQUIRE(dataframe::agg_check(*st).has_value());
@@ -348,7 +367,7 @@ TEST_CASE("a UDAF without the parallel flag is never entered by two threads") {
     df.columns.push_back(Series::strings(keys));
     df.columns.push_back(ints(v));
 
-    auto sums = [](const DataFrame& out, const char* name) {
+    auto sums = [](const DataFrame& out, dstd::StringView name) {
         dstd::Map<dstd::String, std::int64_t> m;
         const Series key = out.column("k");
         const Series col = out.column(name);
@@ -359,15 +378,19 @@ TEST_CASE("a UDAF without the parallel flag is never entered by two threads") {
 
     const std::int64_t binds_before = counter("udaf_plugin_binds");
     auto safe = df.group_by(
-        "k", {builtin(Agg::Sum, "v", "sum"), udaf_agg("usum", "v", "usum")});
+        "k",
+        dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+            {builtin(Agg::Sum, "v", "sum"), udaf_agg("usum", "v", "usum")}));
     REQUIRE(safe.has_value());
     // The parallel-safe UDAF got a state set for each partition.
     CHECK(counter("udaf_plugin_binds") - binds_before > 2);
     CHECK(sums(*safe, "usum") == sums(*safe, "sum"));
 
     reset_active();
-    auto serial = df.group_by("k", {builtin(Agg::Sum, "v", "sum"),
-                                    udaf_agg("userial", "v", "userial")});
+    auto serial = df.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {builtin(Agg::Sum, "v", "sum"),
+                  udaf_agg("userial", "v", "userial")}));
     REQUIRE(serial.has_value());
     CHECK(counter("udaf_plugin_max_active") == 1);
     CHECK(sums(*serial, "userial") == sums(*serial, "sum"));
@@ -475,22 +498,30 @@ TEST_CASE("a UDAF name or call that does not fit is an error") {
     auto set = load(UDAF_PLUGIN_PATH);
     const DataFrame df = make_frame(40, 3);
 
-    auto unknown = df.group_by("k", {udaf_agg("nope", "v", "x")});
+    auto unknown = df.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {udaf_agg("nope", "v", "x")}));
     REQUIRE_FALSE(unknown.has_value());
     CHECK(has(unknown.error().message(), "nope"));
     CHECK(has(unknown.error().message(), "udaf"));
 
-    auto unnamed = df.group_by("k", {udaf_agg("", "v", "x")});
+    auto unnamed = df.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {udaf_agg("", "v", "x")}));
     REQUIRE_FALSE(unnamed.has_value());
     CHECK(has(unnamed.error().message(), "no function name"));
 
-    auto missing = df.group_by("k", {udaf_agg("usum", "absent", "x")});
+    auto missing = df.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {udaf_agg("usum", "absent", "x")}));
     REQUIRE_FALSE(missing.has_value());
     CHECK(has(missing.error().message(), "absent"));
 
     GroupAgg two = udaf_agg("usum", "v", "x");
     two.args.push_back("v");
-    auto arity = df.group_by("k", {two});
+    auto arity = df.group_by(
+        "k",
+        dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>({two}));
     REQUIRE_FALSE(arity.has_value());
     CHECK(has(arity.error().message(), "usum"));
     CHECK(has(arity.error().message(), "arguments"));
@@ -501,7 +532,9 @@ TEST_CASE("a UDAF name or call that does not fit is an error") {
     strings.columns.push_back(ints({1, 2}));
     strings.columns.push_back(
         Series::strings(dstd::Vector<dstd::String>{"a", "b"}));
-    auto refused = strings.group_by("k", {udaf_agg("usum", "v", "x")});
+    auto refused = strings.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {udaf_agg("usum", "v", "x")}));
     REQUIRE_FALSE(refused.has_value());
     CHECK(has(refused.error().message(), "usum"));
 
@@ -527,8 +560,16 @@ TEST_CASE("a batch whose argument type changed is refused") {
     const Series as_int = ints({1, 2, 3});
     const double floats[] = {1.5, 2.5, 3.5};
     const Series as_float = Series::flat_f64(floats, 3);
-    REQUIRE(dataframe::agg_accumulate(*st, k, {&as_int}).has_value());
-    auto changed = dataframe::agg_accumulate(*st, k, {&as_float});
+    REQUIRE(
+        dataframe::agg_accumulate(
+            *st, k,
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&as_int}))
+            .has_value());
+    auto changed = dataframe::agg_accumulate(
+        *st, k,
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&as_float}));
     REQUIRE_FALSE(changed.has_value());
     CHECK(has(changed.error().message(), "usum"));
     CHECK(has(changed.error().message(), "changed type"));
@@ -540,12 +581,16 @@ TEST_CASE("a failing UDAF callback reaches the caller with its message") {
     auto set = load(UDAF_PLUGIN_PATH);
     const DataFrame df = make_frame(40, 3);
 
-    auto update = df.group_by("k", {udaf_agg("ufail", "v", "x")});
+    auto update = df.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {udaf_agg("ufail", "v", "x")}));
     REQUIRE_FALSE(update.has_value());
     CHECK(has(update.error().message(), "ufail"));
     CHECK(has(update.error().message(), "refused on purpose"));
 
-    auto finalize = df.group_by("k", {udaf_agg("ubadrows", "v", "x")});
+    auto finalize = df.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {udaf_agg("ubadrows", "v", "x")}));
     REQUIRE_FALSE(finalize.has_value());
     CHECK(has(finalize.error().message(), "ubadrows"));
     CHECK(has(finalize.error().message(), "rows"));
@@ -560,8 +605,20 @@ TEST_CASE("a failing UDAF callback reaches the caller with its message") {
     const Series v = df.column("v");
     auto a = dataframe::agg_new(specs);
     auto b = dataframe::agg_new(specs);
-    REQUIRE(dataframe::agg_accumulate(*a, k, {&v}, 0, 20).has_value());
-    REQUIRE(dataframe::agg_accumulate(*b, k, {&v}, 20, 40).has_value());
+    REQUIRE(
+        dataframe::agg_accumulate(
+            *a, k,
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&v}),
+            0, 20)
+            .has_value());
+    REQUIRE(
+        dataframe::agg_accumulate(
+            *b, k,
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&v}),
+            20, 40)
+            .has_value());
     REQUIRE(dataframe::agg_check(*a).has_value());
     dataframe::agg_merge(*a, *b);
     auto merged = dataframe::agg_check(*a);
@@ -609,7 +666,7 @@ TEST_CASE("the C ABI group-by resolves an unknown op name to a UDAF") {
 // and combines the states: a run per batch under a one byte budget.
 namespace {
 
-void spill_equals_memory(const char* fn, const char* what,
+void spill_equals_memory(dstd::StringView fn, dstd::StringView what,
                          bool counts_binds = true) {
     constexpr std::int64_t ROWS = 6000;
     constexpr std::int64_t KEYS = 1500;
@@ -631,7 +688,11 @@ void spill_equals_memory(const char* fn, const char* what,
     for (std::int64_t at = 0; at < ROWS; at += BATCH) {
         const Series k = key.slice(at, BATCH);
         const Series v = val.slice(at, BATCH);
-        REQUIRE(dataframe::agg_accumulate(*state, k, {&v}).has_value());
+        REQUIRE(dataframe::agg_accumulate(
+                    *state, k,
+                    dftu_utils_test::span_of<
+                        const dftracer::utils::dataframe::Series*>({&v}))
+                    .has_value());
         auto spilled = spiller.maybe_spill(state);
         REQUIRE(spilled.has_value());
         CHECK(*spilled);
@@ -649,7 +710,9 @@ void spill_equals_memory(const char* fn, const char* what,
         CHECK(binds < KEYS / 10);
     }
 
-    auto memory = df.group_by("k", {udaf_agg(fn, "v", what)});
+    auto memory = df.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {udaf_agg(fn, "v", what)}));
     REQUIRE(memory.has_value());
     CHECK(drained->num_rows() == KEYS);
     same(by_key(*drained, what), by_key(*memory, what));

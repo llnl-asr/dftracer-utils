@@ -58,6 +58,9 @@ Series pct_change(const Series& v);
 Series sqrt(const Series& v);
 Series exp(const Series& v);
 Series log(const Series& v);
+/// log(1 + x) and exp(x) - 1 as a Float64 column, exact for a tiny x.
+Series log1p(const Series& v);
+Series expm1(const Series& v);
 
 }  // namespace dftracer::utils::dataframe
 

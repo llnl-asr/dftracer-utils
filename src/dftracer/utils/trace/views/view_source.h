@@ -117,7 +117,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     dstd::Optional<dftracer::utils::dataframe::SourceApplication> apply_filter(
         const dftracer::utils::dataframe::Expr& predicate) const override;
     dstd::Optional<dftracer::utils::dataframe::SourceApplication>
-    apply_projection(const dstd::Vector<dftracer::utils::dataframe::NamedExpr>&
+    apply_projection(dstd::Span<const dftracer::utils::dataframe::NamedExpr>
                          exprs) const override;
     dstd::Optional<dftracer::utils::dataframe::SourceApplication>
     apply_aggregation(
@@ -132,7 +132,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     /// acc_pat, window, clip, list and agg-engine tokens); the host cursor
     /// then handles it.
     dstd::Optional<dftracer::utils::dataframe::SourceApplication>
-    apply_distinct(const dstd::Vector<dstd::String>& subset) const override;
+    apply_distinct(dstd::Span<const dstd::String> subset) const override;
 
     /// Equal for sources that read the same files with the same scan
     /// settings (time range and scale, metadata, index roots, spill budget),
@@ -171,7 +171,7 @@ class ViewSource : public dftracer::utils::dataframe::Source {
         dstd::Vector<dstd::SharedPtr<const ViewSource>> members);
 
     /// The plan this source scans.
-    const detail::ScanPlan& plan() const { return plan_; }
+    const detail::ScanPlan& scan_plan() const { return plan_; }
     TraceOutput output() const { return output_; }
     /// Push projection into the plan's select and each translatable predicate
     /// into its query (reported Exact - the scan filters events, not just
@@ -189,8 +189,8 @@ class ViewSource : public dftracer::utils::dataframe::Source {
     static dstd::Vector<dstd::Function<
         dftracer::utils::dataframe::DataFrame(const ExportStats&)>>
     add_branches(ViewSession& session,
-                 const dstd::Vector<const ViewSource*>& members,
-                 const dstd::Vector<bool>& skip);
+                 dstd::Span<const ViewSource* const> members,
+                 dstd::Span<const std::uint8_t> skip);
 
     dstd::Result<dftracer::utils::dataframe::Schema> compute_schema() const;
 

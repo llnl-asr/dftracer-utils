@@ -39,7 +39,7 @@ class Fingerprint {
         bytes(s.data(), s.size());
     }
 
-    void strs(const dstd::Vector<dstd::String>& v) noexcept {
+    void strs(dstd::Span<const dstd::String> v) noexcept {
         pod(static_cast<std::uint64_t>(v.size()));
         for (const dstd::String& s : v) str(s);
     }

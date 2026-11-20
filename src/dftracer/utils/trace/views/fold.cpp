@@ -5,6 +5,7 @@
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -40,19 +41,19 @@
 
 namespace dftracer::utils::trace::views::detail {
 
-void DynamicPrune::exclude_file(const dstd::String& file_path) {
+void DynamicPrune::exclude_file(dstd::StringView file_path) {
     std::lock_guard<std::mutex> lk(mu_);
     excluded_files_.insert(file_path);
 }
 
 void DynamicPrune::exclude_checkpoints(
-    const dstd::String& file_path, dstd::Vector<std::uint64_t> checkpoints) {
+    dstd::StringView file_path, dstd::Vector<std::uint64_t> checkpoints) {
     std::lock_guard<std::mutex> lk(mu_);
     auto& set = excluded_checkpoints_[file_path];
     for (std::uint64_t c : checkpoints) set.insert(c);
 }
 
-bool DynamicPrune::is_excluded(const dstd::String& file_path,
+bool DynamicPrune::is_excluded(dstd::StringView file_path,
                                std::uint64_t checkpoint_idx) const {
     std::lock_guard<std::mutex> lk(mu_);
     if (excluded_files_.count(file_path)) return true;
@@ -369,10 +370,9 @@ void put_node(dstd::String& out, const JsonNode& n) {
     }
     if (array) {
         out += '[';
-        for (std::size_t i = 0; i < items.size(); ++i) {
-            if (i) out += ',';
-            put_node(out, *items[i]);
-        }
+        dstd::fmt_append_join<",">(
+            out, items,
+            [](dstd::String& o, const auto* item) { put_node(o, *item); });
         out += ']';
         return;
     }
@@ -916,7 +916,10 @@ bool read_phase_value(OnDemandValue& v, dstd::StringArena& arena,
 constexpr std::size_t MAX_KEY_POSITIONS = 64;
 
 // Two overlapping loads cover a key of up to 16 bytes without a library call.
-bool same_bytes(const char* a, const char* b, std::size_t n) {
+bool same_bytes(dstd::StringView first, dstd::StringView second) {
+    const char* const a = first.data();
+    const char* const b = second.data();
+    const std::size_t n = first.size();
     if (n >= 8) {
         if (n > 16) return std::memcmp(a, b, n) == 0;
         std::uint64_t a0, a1, b0, b1;
@@ -948,8 +951,7 @@ std::uint32_t key_at(dftracer::utils::dstd::Vector<DecodeHints::KeyAt>& slots,
     if (pos >= slots.size()) slots.resize(pos + 1);
     DecodeHints::KeyAt& slot = slots[pos];
     if (slot.id != dftracer::utils::dstd::StringIntern::NO_ID &&
-        slot.key.size() == key.size() &&
-        same_bytes(slot.key.data(), key.data(), key.size()))
+        slot.key.size() == key.size() && same_bytes(slot.key, key))
         return slot.id;
     slot.id = resolve(key);
     slot.key.assign(key.data(), key.size());
@@ -972,14 +974,14 @@ class OnDemandReader {
     // the other top-level ones.
     OnDemandReader(FoldEvent& ev, dftracer::utils::dstd::StringIntern& intern,
                    dftracer::utils::dstd::InternCache* cache, bool needs_args,
-                   const char* end, dstd::StringArena& arena,
+                   dstd::StringView rest, dstd::StringArena& arena,
                    bool capture_schema = false, DecodeHints* hints = nullptr)
         : ev_(ev),
           out_(&ev),
           ids_{intern, cache},
           plain_{intern, nullptr},
           needs_args_(needs_args),
-          end_(end),
+          end_(rest.data() + rest.size()),
           arena_(arena),
           schema_(capture_schema),
           walk_(capture_schema && needs_args && hints != nullptr),
@@ -1087,8 +1089,7 @@ class OnDemandReader {
     // together in one walk of the root and one of args; a name the walk cannot
     // settle on its own is resolved alone, reading `event` from its start
     // again. False on a read error.
-    bool capture_all(json::Value& event,
-                     const dstd::Vector<dstd::String>& names) {
+    bool capture_all(json::Value& event, dstd::Span<const dstd::String> names) {
         for (std::size_t from = 0; from < names.size(); from += BATCH) {
             const std::size_t count = std::min(BATCH, names.size() - from);
             if (!capture_batch(event, names.data() + from, count)) return false;
@@ -1135,12 +1136,13 @@ class OnDemandReader {
     // `start_object`, the object cursor of `start` is kept there when the
     // first step opens it, and `opened` says so, so the caller can search it
     // again.
-    Step resolve(OnDemandValue start, const char* path, OnDemandValue& out,
+    Step resolve(OnDemandValue start, dstd::CStringView path,
+                 OnDemandValue& out,
                  simdjson::ondemand::object* start_object = nullptr,
                  bool* opened = nullptr) {
         OnDemandValue current = start;
         bool at_start = true;
-        const char* p = path;
+        const char* p = path.c_str();
         while (*p) {
             if (*p == '.') {
                 ++p;
@@ -1230,9 +1232,12 @@ class OnDemandReader {
 
     struct Slot {
         const dstd::String* name = nullptr;
-        const char* path = nullptr;
+        dstd::CStringView path;
         std::size_t seg_size = 0;
         std::size_t run_size = 0;
+        dstd::CStringView path_after_segment() const {
+            return dstd::CStringView::unchecked(path.view().substr(seg_size));
+        }
         bool schema_field = false;
         // The args fallback applies to the name.
         bool eligible = false;
@@ -1255,7 +1260,7 @@ class OnDemandReader {
     }
 
     // The capture of `found` under `name`, appended to the sink.
-    bool emit_found(OnDemandValue& found, const dstd::String& name,
+    bool emit_found(OnDemandValue& found, dstd::StringView name,
                     bool schema_field) {
         const std::uint32_t key_id = ids_.get_or_insert(name);
         auto& into = schema_field ? out_->top_fields : out_->args;
@@ -1313,7 +1318,7 @@ class OnDemandReader {
 
     // Where JsonValue::at and the args fallback put `name`, for a name resolved
     // alone, on the line read from its start.
-    Step locate(json::Value& event, const dstd::String& name, bool schema_field,
+    Step locate(json::Value& event, dstd::CStringView name, bool schema_field,
                 OnDemandValue& found) {
         OnDemandValue root;
         if (!open(event, root)) return Step::Error;
@@ -1339,13 +1344,14 @@ class OnDemandReader {
     // the name of `slot` when its first segment is missing.
     static bool dotted_candidate(const Slot& slot, dstd::StringView key) {
         return key.size() > slot.seg_size && key.size() <= slot.run_size &&
-               std::memcmp(slot.path, key.data(), key.size()) == 0 &&
-               (key.size() == slot.run_size || slot.path[key.size()] == '.');
+               std::memcmp(slot.path.c_str(), key.data(), key.size()) == 0 &&
+               (key.size() == slot.run_size ||
+                slot.path.c_str()[key.size()] == '.');
     }
 
     static bool is_seg(const Slot& slot, dstd::StringView key) {
         return key.size() == slot.seg_size &&
-               std::memcmp(slot.path, key.data(), key.size()) == 0;
+               std::memcmp(slot.path.c_str(), key.data(), key.size()) == 0;
     }
 
     // The members of args, for the slots that need it. A slot that cannot
@@ -1384,7 +1390,7 @@ class OnDemandReader {
                     --open;
                     OnDemandValue found;
                     const Step step =
-                        resolve(child, slot.path + slot.seg_size, found);
+                        resolve(child, slot.path_after_segment(), found);
                     if (step == Step::Error) return false;
                     if (step == Step::Found &&
                         !emit_chunk(found, slot, slot.args))
@@ -1420,17 +1426,17 @@ class OnDemandReader {
         for (std::size_t i = 0; i < n; ++i) {
             Slot& slot = slots[i];
             slot.name = &names[i];
-            slot.path = names[i].c_str();
+            slot.path = names[i];
             slot.schema_field =
                 !is_nested_path(names[i]) && is_schema_field(names[i]);
             slot.eligible = !slot.schema_field &&
                             !dftracer::utils::common::has_args_prefix(names[i]);
             any_eligible = any_eligible || slot.eligible;
-            const char* p = slot.path;
+            const char* p = slot.path.c_str();
             while (*p && *p != '.' && *p != '[') ++p;
-            slot.seg_size = static_cast<std::size_t>(p - slot.path);
+            slot.seg_size = static_cast<std::size_t>(p - slot.path.c_str());
             while (*p && *p != '[') ++p;
-            slot.run_size = static_cast<std::size_t>(p - slot.path);
+            slot.run_size = static_cast<std::size_t>(p - slot.path.c_str());
             slot.merged = slot.seg_size > 0;
         }
         std::size_t merged = 0;
@@ -1441,11 +1447,11 @@ class OnDemandReader {
             // once; a name with the same first segment as an earlier one
             // cannot share it either.
             bool taken = any_eligible && slot.seg_size == 4 &&
-                         std::memcmp(slot.path, "args", 4) == 0;
+                         std::memcmp(slot.path.c_str(), "args", 4) == 0;
             for (std::size_t j = 0; j < i && !taken; ++j)
-                taken =
-                    slots[j].merged && slots[j].seg_size == slot.seg_size &&
-                    std::memcmp(slots[j].path, slot.path, slot.seg_size) == 0;
+                taken = slots[j].merged && slots[j].seg_size == slot.seg_size &&
+                        std::memcmp(slots[j].path.c_str(), slot.path.c_str(),
+                                    slot.seg_size) == 0;
             slot.merged = !taken;
             merged += slot.merged ? 1 : 0;
         }
@@ -1469,7 +1475,7 @@ class OnDemandReader {
                         slot.root_done = true;
                         OnDemandValue found;
                         const Step step =
-                            resolve(child, slot.path + slot.seg_size, found);
+                            resolve(child, slot.path_after_segment(), found);
                         if (step == Step::Error) return false;
                         if (step == Step::Found) {
                             slot.root_found = true;
@@ -1858,9 +1864,11 @@ class OnDemandReader {
     // A container below the depth limit stays under its path as its JSON text.
     bool keep_raw(OnDemandValue& v, OnDemandType type) {
         const std::uint32_t id = plain_.get_or_insert(path_);
-        out_->args.emplace_back(id,
-                                plain_.get_or_insert(json::detail::value_extent(
-                                    v.raw_json_token().data(), end_)));
+        const char* const token = v.raw_json_token().data();
+        out_->args.emplace_back(
+            id,
+            plain_.get_or_insert(json::detail::value_extent(dstd::StringView(
+                token, static_cast<std::size_t>(end_ - token)))));
         note_leaf(id, path_, container_tag(type));
         return true;
     }
@@ -1890,9 +1898,11 @@ class OnDemandReader {
             (code == simdjson::NUMBER_ERROR && refused_big_integer(v))) {
             // Wider than 64 bits: kept exact as its digits.
             tag = static_cast<std::uint8_t>(PathType::NullValue);
+            const char* const token = v.raw_json_token().data();
             out_->args.emplace_back(
-                key_id, ids.get_or_insert(json::detail::value_extent(
-                            v.raw_json_token().data(), end_)));
+                key_id,
+                ids.get_or_insert(json::detail::value_extent(dstd::StringView(
+                    token, static_cast<std::size_t>(end_ - token)))));
             return true;
         }
         if (code == simdjson::NUMBER_ERROR) {
@@ -1992,7 +2002,7 @@ DftracerRead read_dftracer(FoldEvent& ev, json::Value& event,
     if (!json::detail::ValueAccess::begin_object(event, walk))
         return DftracerRead::NotEvent;
     trace::internal::parse_walks::record_walk();
-    OnDemandReader reader(ev, intern, cache, needs_args, walk.end,
+    OnDemandReader reader(ev, intern, cache, needs_args, walk.rest,
                           *walk.strings, capture_schema, hints);
     bool ok = reader.run(walk.object);
     if (ok && reader.has_event() && captures && !captures->empty())
@@ -2060,7 +2070,7 @@ struct LeafDecode {
     // The declared field at `path`, found at `pos` in `paths` when set, or
     // remembered by the leaf's path id in `hints`.
     const dftracer::utils::trace::index::FieldSpec* field(
-        const dstd::String& path, std::size_t pos,
+        dstd::StringView path, std::size_t pos,
         std::uint32_t id = dftracer::utils::dstd::StringIntern::NO_ID) const {
         if (path_fields) return (*path_fields)[pos];
         if (!record_schema) return nullptr;
@@ -2084,8 +2094,8 @@ struct LeafDecode {
 };
 
 // The position of `path` in the sorted `paths`, or nullopt.
-dstd::Optional<std::size_t> position(const dstd::Vector<dstd::String>& paths,
-                                     const dstd::String& path) {
+dstd::Optional<std::size_t> position(dstd::Span<const dstd::String> paths,
+                                     dstd::StringView path) {
     const auto it = std::lower_bound(paths.begin(), paths.end(), path);
     if (it == paths.end() || *it != path) return dstd::nullopt;
     return static_cast<std::size_t>(it - paths.begin());
@@ -2302,8 +2312,7 @@ void bind_leaf(const dftracer::utils::trace::index::FieldSpec& f,
     }
 }
 
-bool wanted_below(const dstd::Vector<dstd::String>& paths,
-                  const dstd::String& path) {
+bool wanted_below(dstd::Span<const dstd::String> paths, dstd::StringView path) {
     auto it = std::lower_bound(paths.begin(), paths.end(), path);
     for (; it != paths.end() && it->starts_with(path); ++it)
         if (it->size() > path.size() && (*it)[path.size()] == '.') return true;
@@ -2312,7 +2321,7 @@ bool wanted_below(const dstd::Vector<dstd::String>& paths,
 
 // A declared json field at an object or array: its canonical text, keyed by
 // the field's path; the leaves below are decoded as well.
-void capture_json(const dstd::String& path, simdjson::dom::element v,
+void capture_json(dstd::StringView path, simdjson::dom::element v,
                   LeafDecode& d) {
     std::size_t pos = 0;
     if (d.paths) {
@@ -2333,8 +2342,7 @@ void capture_json(const dstd::String& path, simdjson::dom::element v,
 }
 
 // An array or object past max_children: one leaf of its canonical text.
-void collapse(const dstd::String& path, simdjson::dom::element v,
-              LeafDecode& d) {
+void collapse(dstd::StringView path, simdjson::dom::element v, LeafDecode& d) {
     const std::uint32_t id = d.intern.get_or_insert(path);
     // A declared json field already holds its text.
     if (!d.ev.args.empty() && d.ev.args.back().first == id) return;
@@ -2348,7 +2356,7 @@ void collapse(const dstd::String& path, simdjson::dom::element v,
 }
 
 // An empty array or object at a decoded path, for filters.
-void note_empty(const dstd::String& path, simdjson::dom::element v,
+void note_empty(dstd::StringView path, simdjson::dom::element v,
                 LeafDecode& d) {
     if (path.empty() || (d.paths && !position(*d.paths, path))) return;
     const std::uint32_t id = d.intern.get_or_insert(path);
@@ -2471,9 +2479,13 @@ LeafDecode make_leaf_decode(
 // decode_leaves over a record that is read once, forward.
 class PathReader {
    public:
-    PathReader(LeafDecode& d, dstd::String& path, const char* end,
+    PathReader(LeafDecode& d, dstd::String& path, dstd::StringView rest,
                dstd::StringArena& arena)
-        : d_(d), ids_(d.ids()), path_(path), end_(end), arena_(arena) {}
+        : d_(d),
+          ids_(d.ids()),
+          path_(path),
+          end_(rest.data() + rest.size()),
+          arena_(arena) {}
 
     // False on a read error. `path_` holds the path of the container.
     bool members(simdjson::ondemand::object& object) {
@@ -2525,8 +2537,12 @@ class PathReader {
             return leaf(v, type);
         const bool is_array = type == OnDemandType::array;
         const bool json_field = d_.json && !path_.empty();
-        const char* const start =
+        const char* const token =
             json_field || d_.max_children ? v.raw_json_token().data() : nullptr;
+        const dstd::StringView start =
+            token ? dstd::StringView(token,
+                                     static_cast<std::size_t>(end_ - token))
+                  : dstd::StringView();
         const bool listed =
             d_.paths && !path_.empty() && position(*d_.paths, path_);
         if (json_field && !listed) capture_json(start, is_array);
@@ -2541,8 +2557,12 @@ class PathReader {
         }
         if (d_.paths && !path_.empty() && !wanted_below(*d_.paths, path_))
             return true;
-        if (depth_ >= MAX_READ_DEPTH)
-            return collapse(v.raw_json_token().data(), is_array, true);
+        if (depth_ >= MAX_READ_DEPTH) {
+            const char* const at = v.raw_json_token().data();
+            return collapse(
+                dstd::StringView(at, static_cast<std::size_t>(end_ - at)),
+                is_array, true);
+        }
         const bool counted = d_.max_children && !path_.empty();
         std::size_t count = 0;
         if (is_array) {
@@ -2577,14 +2597,14 @@ class PathReader {
         return ok;
     }
 
-    dstd::String canonical_text(const char* start) const {
+    dstd::String canonical_text(dstd::StringView start) const {
         return dftracer::utils::json::canonical_json_text(
-            json::detail::value_extent(start, end_));
+            json::detail::value_extent(start));
     }
 
     // A declared json field at an object or array: its canonical text, keyed
     // by the field's path; the leaves below are decoded as well.
-    void capture_json(const char* start, bool is_array) {
+    void capture_json(dstd::StringView start, bool is_array) {
         std::size_t pos = 0;
         if (d_.paths) {
             const auto at = position(*d_.paths, path_);
@@ -2605,7 +2625,7 @@ class PathReader {
 
     // An array or object past max_children, or below the depth limit: one
     // leaf of its canonical text, or of its text as written when `raw`.
-    bool collapse(const char* start, bool is_array, bool raw = false) {
+    bool collapse(dstd::StringView start, bool is_array, bool raw = false) {
         using dftracer::utils::trace::index::store::PathType;
         const std::uint32_t id = ids_.get_or_insert(path_);
         // A declared json field already holds its text.
@@ -2615,7 +2635,7 @@ class PathReader {
                 id, static_cast<std::uint8_t>(is_array ? PathType::Array
                                                        : PathType::Object));
         const dstd::String text =
-            raw ? dstd::String(json::detail::value_extent(start, end_))
+            raw ? dstd::String(json::detail::value_extent(start))
                 : canonical_text(start);
         d_.ev.args.emplace_back(id, ids_.get_or_insert(text));
         d_.ev.specials.push_back({id, is_array
@@ -2725,7 +2745,7 @@ void decode_record_into(
     dstd::String local_path;
     dstd::String& path = hints ? hints->path : local_path;
     path.clear();
-    PathReader reader(d, path, walk.end, *walk.strings);
+    PathReader reader(d, path, walk.rest, *walk.strings);
     bool ok = true;
     OnDemandType type;
     if (walk.value.type().get(type)) {
@@ -2985,16 +3005,16 @@ dstd::Vector<dstd::String> extra_capture_fields(const ViewPlan& plan) {
     // Args come from needs_args, nested ones flattened; only top-level fields
     // the POD does not carry (anything but the six scalars) and nested paths
     // need capture, since a fold may not set needs_args.
-    auto is_pod_scalar = [](const dstd::String& f) {
+    auto is_pod_scalar = [](dstd::StringView f) {
         return f == "name" || f == "cat" || f == "pid" || f == "tid" ||
                f == "ts" || f == "dur";
     };
     dstd::Vector<dstd::String> out;
-    auto add = [&](const dstd::String& f) {
+    auto add = [&](dstd::StringView f) {
         if (f.empty()) return;
         for (const auto& e : out)
             if (e == f) return;
-        out.push_back(f);
+        out.emplace_back(f);
     };
     for (const auto& gk : plan.group_by)
         if (gk.kind == GroupKey::Kind::Field && !is_pod_scalar(gk.arg))

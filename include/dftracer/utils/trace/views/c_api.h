@@ -41,13 +41,13 @@ DFTU_EXPORT dftu_view* dftu_view_from_files(const char* const* paths,
                                             int32_t n);
 
 /** Scan `dir` recursively for .pfw.gz files (sorted by path for determinism)
- * and build a plan over them. `index_path` may be NULL or empty for the
+ * and build a plan over them. `index_dir` may be NULL or empty for the
  * sidecar default beside each trace. Unlike dftu_view_from_files this touches
  * the filesystem, so it runs on `rt` (NULL = the installed default runtime)
  * and returns NULL on failure: a missing directory, or no .pfw.gz files
  * found. */
 DFTU_EXPORT dftu_view* dftu_view_from_directory(const char* dir,
-                                                const char* index_path,
+                                                const char* index_dir,
                                                 dftu_runtime* rt);
 
 DFTU_EXPORT void dftu_view_free(dftu_view* v);

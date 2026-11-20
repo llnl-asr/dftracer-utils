@@ -44,16 +44,20 @@ class LazyOps {
     Derived topk(dstd::String name, std::int64_t k, bool largest = true) const {
         return wrap(lf().topk(std::move(name), k, largest));
     }
-    Derived sort_by(dstd::String name, bool descending = false) const {
-        return wrap(lf().sort_by(std::move(name), descending));
+    Derived sort_by(dstd::String name, bool descending = false,
+                    bool nulls_last = true) const {
+        return wrap(lf().sort_by(std::move(name), descending, nulls_last));
     }
     Derived sort_by_multi(dstd::Vector<dstd::String> by,
-                          bool descending = false) const {
-        return wrap(lf().sort_by_multi(std::move(by), descending));
+                          bool descending = false,
+                          bool nulls_last = true) const {
+        return wrap(lf().sort_by_multi(std::move(by), descending, nulls_last));
     }
     Derived sort_by_multi(dstd::Vector<dstd::String> by,
-                          dstd::Vector<bool> descending) const {
-        return wrap(lf().sort_by_multi(std::move(by), std::move(descending)));
+                          dstd::Vector<bool> descending,
+                          dstd::Vector<bool> nulls_last = {}) const {
+        return wrap(lf().sort_by_multi(std::move(by), std::move(descending),
+                                       std::move(nulls_last)));
     }
     Derived group_by(dstd::String key, dstd::Vector<GroupAgg> aggs) const {
         return wrap(lf().group_by(std::move(key), std::move(aggs)));

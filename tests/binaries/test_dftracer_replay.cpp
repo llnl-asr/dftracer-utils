@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -27,7 +29,7 @@ namespace {
 /// same `<<` and close(), but the bytes land compressed.
 class GzTraceWriter {
    public:
-    explicit GzTraceWriter(const dstd::String& path) : path_(path) {}
+    explicit GzTraceWriter(dstd::StringView path) : path_(path) {}
     ~GzTraceWriter() { close(); }
 
     template <typename T>
@@ -74,8 +76,8 @@ dstd::String find_replay_binary() {
 // unsafe (the child may run only async-signal-safe code before exec). Use
 // posix_spawn, which is built to launch a process safely from a multithreaded
 // parent, for every replay invocation.
-dstd::Vector<char*> make_argv(const dstd::String& binary,
-                              const dstd::Vector<dstd::String>& args) {
+dstd::Vector<char*> make_argv(dstd::CStringView binary,
+                              dstd::Span<const dstd::String> args) {
     dstd::Vector<char*> argv;
     argv.push_back(const_cast<char*>(binary.c_str()));
     for (const auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));
@@ -83,19 +85,18 @@ dstd::Vector<char*> make_argv(const dstd::String& binary,
     return argv;
 }
 
-dstd::String run_replay_capture(const dstd::String& binary,
-                                const dstd::Vector<dstd::String>& args,
+dstd::String run_replay_capture(dstd::CStringView binary,
+                                dstd::Vector<dstd::String> args,
                                 int* exit_code);
 
-int run_replay(const dstd::String& binary,
-               const dstd::Vector<dstd::String>& args) {
+int run_replay(dstd::CStringView binary, dstd::Vector<dstd::String> args) {
     int rc = -1;
     run_replay_capture(binary, args, &rc);
     return rc;
 }
 
-dstd::String run_replay_capture(const dstd::String& binary,
-                                const dstd::Vector<dstd::String>& args,
+dstd::String run_replay_capture(dstd::CStringView binary,
+                                dstd::Vector<dstd::String> args,
                                 int* exit_code) {
     int pipefd[2];
     if (::pipe(pipefd) < 0) return "";
@@ -133,7 +134,7 @@ dstd::String run_replay_capture(const dstd::String& binary,
 
 // Create a plain .pfw trace file with sample events.
 // The replay binary handles uncompressed .pfw without needing an index.
-void create_sample_trace(const dstd::String& path, int event_count = 10) {
+void create_sample_trace(dstd::StringView path, int event_count = 10) {
     GzTraceWriter file(path);
     file << "[\n";
     for (int i = 0; i < event_count; i++) {
@@ -141,7 +142,7 @@ void create_sample_trace(const dstd::String& path, int event_count = 10) {
              << R"(,"name":"read","cat":"POSIX","pid":12345,"tid":12345,)";
         file << R"("ts":)" << (1000000 + i * 1000) << R"(,"dur":)"
              << (100 + i * 10);
-        file << R"(,"ph":"X","args":{"fhash":"hash)" << i << R"(","size":)"
+        file << R"(,"ph":1,"args":{"fhash":"hash)" << i << R"(","size":)"
              << (1024 * (i + 1));
         file << R"(,"level":1}})";
         if (i < event_count - 1) file << ",";
@@ -151,23 +152,23 @@ void create_sample_trace(const dstd::String& path, int event_count = 10) {
     file.close();
 }
 
-void create_multi_category_trace(const dstd::String& path) {
+void create_multi_category_trace(dstd::StringView path) {
     GzTraceWriter file(path);
     file << "[\n";
     file
-        << R"({"id":1,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":1000000,"dur":1500,"ph":"X","args":{"size":1024}})"
+        << R"({"id":1,"name":"read","cat":"POSIX","pid":12345,"tid":12345,"ts":1000000,"dur":1500,"ph":1,"args":{"size":1024}})"
         << ",\n";
     file
-        << R"({"id":2,"name":"fopen","cat":"STDIO","pid":12345,"tid":12345,"ts":1002000,"dur":500,"ph":"X","args":{}})"
+        << R"({"id":2,"name":"fopen","cat":"STDIO","pid":12345,"tid":12345,"ts":1002000,"dur":500,"ph":1,"args":{}})"
         << ",\n";
     file
-        << R"({"id":3,"name":"write","cat":"POSIX","pid":12345,"tid":12345,"ts":1003000,"dur":2000,"ph":"X","args":{"size":2048}})"
+        << R"({"id":3,"name":"write","cat":"POSIX","pid":12345,"tid":12345,"ts":1003000,"dur":2000,"ph":1,"args":{"size":2048}})"
         << ",\n";
     file
-        << R"({"id":4,"name":"fread","cat":"STDIO","pid":12345,"tid":12345,"ts":1006000,"dur":800,"ph":"X","args":{"size":512}})"
+        << R"({"id":4,"name":"fread","cat":"STDIO","pid":12345,"tid":12345,"ts":1006000,"dur":800,"ph":1,"args":{"size":512}})"
         << ",\n";
     file
-        << R"({"id":5,"name":"open","cat":"POSIX","pid":12345,"tid":12345,"ts":1007500,"dur":300,"ph":"X","args":{}})"
+        << R"({"id":5,"name":"open","cat":"POSIX","pid":12345,"tid":12345,"ts":1007500,"dur":300,"ph":1,"args":{}})"
         << "\n";
     file << "]";
     file.close();
@@ -695,8 +696,7 @@ TEST_SUITE("DFTracerReplay") {
             expected += static_cast<std::size_t>(3 + i);
         }
 
-        auto count_after = [](const dstd::String& out,
-                              const dstd::String& key) {
+        auto count_after = [](dstd::StringView out, dstd::StringView key) {
             const auto at = out.find(key);
             REQUIRE(at != dstd::String::npos);
             return dftu_utils_test::to_number<unsigned long long>(

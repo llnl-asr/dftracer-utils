@@ -1075,6 +1075,7 @@ DataFrame import_frame(const ArrowSchema* schema, ArrowArray* array,
         df.names.emplace_back(cs->name != nullptr ? cs->name : "");
         df.columns.push_back(import_any(cs, owner->array.children[i], owner));
     }
+    import_frame_metadata(schema, df);
     return df;
 }
 

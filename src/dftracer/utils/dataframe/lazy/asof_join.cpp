@@ -61,7 +61,7 @@ bool is_bytes_type(TypeId t) {
            p == TypeId::LargeString || p == TypeId::LargeBinary;
 }
 
-const Field* field_named(const dstd::Vector<Field>& fs, const dstd::String& n) {
+const Field* field_named(dstd::Span<const Field> fs, dstd::StringView n) {
     const auto it = std::find_if(fs.begin(), fs.end(),
                                  [&](const Field& f) { return f.name == n; });
     return it == fs.end() ? nullptr : &*it;
@@ -70,10 +70,10 @@ const Field* field_named(const dstd::Vector<Field>& fs, const dstd::String& n) {
 // The type checks of the eager ops, over the fields both plans declare. A type
 // that is not known yet (Unknown) is checked when the first morsels arrive.
 dstd::Result<void> check_field_types(
-    const dstd::Vector<Field>& lf, const dstd::Vector<Field>& rf,
-    const dstd::String& who, const dstd::String& lt_name,
-    const dstd::String& rt_name, const dstd::Vector<dstd::String>& by,
-    const dstd::Vector<dstd::String>& right_also) {
+    dstd::Span<const Field> lf, dstd::Span<const Field> rf,
+    dstd::StringView who, dstd::StringView lt_name, dstd::StringView rt_name,
+    dstd::Span<const dstd::String> by,
+    dstd::Span<const dstd::String> right_also) {
     const auto known = [](const Field* f) {
         return f && f->type.id != TypeId::Unknown;
     };
@@ -106,11 +106,10 @@ dstd::Result<void> check_field_types(
 // The names of the left columns, then of the right columns not in `skip`; a
 // right name that is taken gets "_right", and a second clash is an error.
 dstd::Result<dstd::Vector<dstd::String>> joined_names(
-    const dstd::Vector<dstd::String>& left,
-    const dstd::Vector<dstd::String>& right,
-    const dstd::Vector<dstd::String>& skip, const dstd::String& who) {
-    dstd::Vector<dstd::String> out = left;
-    const auto taken = [&](const dstd::String& n) {
+    dstd::Span<const dstd::String> left, dstd::Span<const dstd::String> right,
+    dstd::Span<const dstd::String> skip, dstd::StringView who) {
+    dstd::Vector<dstd::String> out(left.begin(), left.end());
+    const auto taken = [&](dstd::StringView n) {
         return std::find(out.begin(), out.end(), n) != out.end();
     };
     for (const dstd::String& r : right) {
@@ -821,8 +820,8 @@ constexpr const char* INTERVAL_WHO = "interval";
 namespace lazy_internal {
 
 CursorResult make_ordered_join(dstd::UniquePtr<Cursor>& in,
-                               const dstd::Vector<dstd::String>& sch,
-                               const dstd::String& name,
+                               dstd::Span<const dstd::String> sch,
+                               dstd::StringView name,
                                const OwnedFrameOpArgs& args_ref,
                                const LazyFrame& other, std::uint64_t budget) {
     const OwnedFrameOpArgs* args = &args_ref;
@@ -884,9 +883,9 @@ CursorResult make_ordered_join(dstd::UniquePtr<Cursor>& in,
     lkeys.push_back(ltime);
     rkeys = by;
     rkeys.push_back(rtime);
-    auto sorted_made =
-        make_sort_merge(std::move(in), sch, lkeys,
-                        dstd::Vector<bool>(lkeys.size(), false), budget);
+    auto sorted_made = make_sort_merge(
+        std::move(in), dstd::Vector<dstd::String>(sch.begin(), sch.end()),
+        lkeys, dstd::Vector<bool>(lkeys.size(), false), budget);
     if (!sorted_made) return sorted_made.error();
     dstd::UniquePtr<Cursor> sorted_left = std::move(*sorted_made);
     LazyFrame sorted_right =
@@ -906,16 +905,16 @@ CursorResult make_ordered_join(dstd::UniquePtr<Cursor>& in,
 }
 
 dstd::Result<LazyFrame> compose_asof(const LazyFrame& left, LazyFrame other,
-                                     const dstd::String& on,
-                                     const dstd::Vector<dstd::String>& by,
+                                     dstd::StringView on,
+                                     dstd::Span<const dstd::String> by,
                                      AsofDirection direction,
                                      dstd::Optional<double> tolerance) {
     if (tolerance && !(*tolerance >= 0))
         return invalid_argument<"asof: tolerance must not be negative">();
     const dstd::Vector<dstd::String> lnames = left.schema();
     const dstd::Vector<dstd::String> rnames = other.schema();
-    dstd::Vector<dstd::String> skip = by;
-    skip.push_back(on);
+    dstd::Vector<dstd::String> skip(by.begin(), by.end());
+    skip.emplace_back(on);
     dstd::Vector<dstd::String> names;
     if (!lnames.empty() && !rnames.empty()) {
         auto left_on = require_col(lnames, on, ASOF_WHO);
@@ -939,8 +938,8 @@ dstd::Result<LazyFrame> compose_asof(const LazyFrame& left, LazyFrame other,
     dstd::Vector<const char*> by_ptrs;
     for (const dstd::String& n : by) by_ptrs.push_back(n.c_str());
     OpArgs args;
-    args.str(2, on.c_str())
-        .strlist(3, by_ptrs.data(), static_cast<std::int32_t>(by_ptrs.size()))
+    args.str(2, on)
+        .strlist(3, by_ptrs)
         .i32(4, static_cast<std::int32_t>(direction))
         .f64(5, tolerance ? *tolerance : -1.0);
     LazyFrame out = left.frame_op(ASOF_OP, std::move(args), {std::move(other)},
@@ -950,17 +949,18 @@ dstd::Result<LazyFrame> compose_asof(const LazyFrame& left, LazyFrame other,
 }
 
 dstd::Result<LazyFrame> compose_interval(const LazyFrame& left, LazyFrame other,
-                                         const dstd::String& point,
-                                         const dstd::String& lo,
-                                         const dstd::String& hi,
-                                         const dstd::Vector<dstd::String>& by,
+                                         dstd::StringView point,
+                                         dstd::StringView lo,
+                                         dstd::StringView hi,
+                                         dstd::Span<const dstd::String> by,
                                          bool outer) {
     const dstd::Vector<dstd::String> lnames = left.schema();
     const dstd::Vector<dstd::String> rnames = other.schema();
-    dstd::Vector<dstd::String> skip = by;
-    skip.push_back(lo);
-    skip.push_back(hi);
+    dstd::Vector<dstd::String> skip(by.begin(), by.end());
+    skip.emplace_back(lo);
+    skip.emplace_back(hi);
     dstd::Vector<dstd::String> names;
+    const dstd::String hi_name(hi);
     if (!lnames.empty() && !rnames.empty()) {
         auto point_at = require_col(lnames, point, INTERVAL_WHO);
         if (!point_at) return point_at.error();
@@ -974,9 +974,10 @@ dstd::Result<LazyFrame> compose_interval(const LazyFrame& left, LazyFrame other,
             auto right_by = require_col(rnames, n, INTERVAL_WHO);
             if (!right_by) return right_by.error();
         }
-        auto typed = check_field_types(left.output_schema().fields,
-                                       other.output_schema().fields,
-                                       INTERVAL_WHO, point, lo, by, {hi});
+        auto typed = check_field_types(
+            left.output_schema().fields, other.output_schema().fields,
+            INTERVAL_WHO, point, lo, by,
+            dstd::Span<const dstd::String>(&hi_name, 1));
         if (!typed) return typed.error();
         auto joined = joined_names(lnames, rnames, skip, INTERVAL_WHO);
         if (!joined) return joined.error();
@@ -985,10 +986,10 @@ dstd::Result<LazyFrame> compose_interval(const LazyFrame& left, LazyFrame other,
     dstd::Vector<const char*> by_ptrs;
     for (const dstd::String& n : by) by_ptrs.push_back(n.c_str());
     OpArgs args;
-    args.str(2, point.c_str())
-        .str(3, lo.c_str())
-        .str(4, hi.c_str())
-        .strlist(5, by_ptrs.data(), static_cast<std::int32_t>(by_ptrs.size()))
+    args.str(2, point)
+        .str(3, lo)
+        .str(4, hi)
+        .strlist(5, by_ptrs)
         .i32(6, outer ? 1 : 0);
     LazyFrame out = left.frame_op(INTERVAL_OP, std::move(args),
                                   {std::move(other)}, std::move(names));

@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -29,11 +31,11 @@ using namespace dftracer::utils;
 
 namespace {
 
-dstd::String event(int i, const dstd::String& name, const dstd::String& args) {
+dstd::String event(int i, dstd::StringView name, dstd::StringView args) {
     dstd::String o;
     dstd::fmt_append<
         "{\"id\":{},\"name\":\"{}\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":2,"
-        "\"ph\":\"X\",\"ts\":{},\"dur\":5,\"type\":\"x\",\"args\":{}}\n">(
+        "\"ph\":1,\"ts\":{},\"dur\":5,\"type\":\"x\",\"args\":{}}\n">(
         o, i, name, 1000 + i, args);
     return o;
 }
@@ -41,10 +43,10 @@ dstd::String event(int i, const dstd::String& name, const dstd::String& args) {
 // 200 events: nested, array, bool, big uint, double and null args; `mix` is a
 // number on the first 100 events and a string after; only the last carries
 // `retry`. A metadata record carries args the catalog must not list.
-dstd::String write_fixture(const dstd::String& dir) {
+dstd::String write_fixture(dstd::CStringView dir) {
     dstd::String body = "[\n";
     body +=
-        R"({"name":"FH","ph":"M","pid":1,"tid":1,"args":{"name":"/a","value":"abc"}})"
+        R"({"name":"FH","ph":4,"pid":1,"tid":1,"args":{"name":"/a","value":"abc"}})"
         "\n";
     for (int i = 0; i < 200; ++i) {
         dstd::String a;
@@ -62,14 +64,14 @@ dstd::String write_fixture(const dstd::String& dir) {
         body += event(i, i % 3 ? "read" : "write", a);
     }
     body += "]\n";
-    return dftu_utils_test::write_gz_trace(dir + "/fixture.pfw.gz", body);
+    return dftu_utils_test::write_gz_trace(
+        dstd::String(dir) + "/fixture.pfw.gz", body);
 }
 
 // `body` as `<name>.pfw.gz` over gzip members of about `member` bytes.
-dstd::String write_members(const dstd::String& dir, const dstd::String& name,
-                           const dstd::String& body,
-                           std::size_t member = 1024) {
-    const auto plain = dir + "/" + name + ".pfw";
+dstd::String write_members(dstd::CStringView dir, dstd::StringView name,
+                           dstd::StringView body, std::size_t member = 1024) {
+    const auto plain = dstd::String(dir) + "/" + dstd::String(name) + ".pfw";
     {
         dstd::fs::write_file(dstd::PathView(plain), body).discard();
     }
@@ -81,7 +83,7 @@ dstd::String write_members(const dstd::String& dir, const dstd::String& name,
 }
 
 // 110 events over several members: `a` on 100 of them, `b` on 10.
-dstd::String write_budget_trace(const dstd::String& dir) {
+dstd::String write_budget_trace(dstd::CStringView dir) {
     dstd::String body = "[\n";
     for (int i = 0; i < 110; ++i)
         body += event(i, "read",
@@ -91,8 +93,8 @@ dstd::String write_budget_trace(const dstd::String& dir) {
     return write_members(dir, "budget", body);
 }
 
-std::size_t count_rows(const dstd::String& trace, const dstd::String& index_dir,
-                       const dstd::String& query, bool skip_pruning) {
+std::size_t count_rows(dstd::CStringView trace, dstd::CStringView index_dir,
+                       dstd::StringView query, bool skip_pruning) {
     auto run = [&]() -> coro::CoroTask<std::size_t> {
         trace::reader::TraceReader reader(
             {.file_path = dstd::String(trace),
@@ -112,7 +114,7 @@ std::size_t count_rows(const dstd::String& trace, const dstd::String& index_dir,
     return dftu_utils_test::ok(run().get());
 }
 
-trace::index::IndexerOptions options(const dstd::String& index_dir,
+trace::index::IndexerOptions options(dstd::CStringView index_dir,
                                      std::size_t budget = 0) {
     trace::index::IndexerOptions o;
     o.index_dir = index_dir;
@@ -135,13 +137,13 @@ dstd::Vector<dstd::String> zonemap_paths(const Indexed& t) {
     return out;
 }
 
-bool has(const dstd::Vector<dstd::String>& v, const dstd::String& x) {
+bool has(dstd::Span<const dstd::String> v, dstd::StringView x) {
     return std::find(v.begin(), v.end(), x) != v.end();
 }
 
 // The zones of `path`, by chunk.
 dstd::Map<std::uint64_t, trace::index::extensions::kinds::Zone> zones_of(
-    const Indexed& t, const dstd::String& path) {
+    const Indexed& t, dstd::CStringView path) {
     const auto snapshot = dftu_utils_test::index_snapshot(t.index_path);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, t.trace);
     dstd::Map<std::uint64_t, trace::index::extensions::kinds::Zone> out;
@@ -158,7 +160,7 @@ dstd::Map<std::uint64_t, trace::index::extensions::kinds::Zone> zones_of(
 }
 
 dstd::Set<std::uint64_t> read_chunks(const trace::index::Indexer& ix,
-                                     const dstd::String& query) {
+                                     dstd::StringView query) {
     const auto e = dftu_utils_test::ok(ix.explain(query));
     REQUIRE(e.size() == 1);
     return {e[0].read.begin(), e[0].read.end()};
@@ -168,8 +170,8 @@ std::uint64_t chunk_count(const trace::index::Indexer& ix) {
     return dftu_utils_test::ok(ix.explain(R"(name == "read")"))[0].chunks;
 }
 
-void check_full_scan(const Indexed& t, const dstd::String& index_dir,
-                     const dstd::Vector<dstd::String>& queries) {
+void check_full_scan(const Indexed& t, dstd::CStringView index_dir,
+                     dstd::Vector<dstd::String> queries) {
     for (const auto& q : queries) {
         CAPTURE(q);
         CHECK(count_rows(t.trace, index_dir, q, false) ==
@@ -178,7 +180,7 @@ void check_full_scan(const Indexed& t, const dstd::String& index_dir,
 }
 
 dstd::Map<dstd::String, trace::index::store::PathStat> catalog_of(
-    const dstd::String& trace, dstd::StringView index_path) {
+    dstd::CStringView trace, dstd::CStringView index_path) {
     const auto snapshot = dftu_utils_test::index_snapshot(index_path);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     dstd::Map<dstd::String, trace::index::store::PathStat> out;
@@ -190,7 +192,7 @@ dstd::Map<dstd::String, trace::index::store::PathStat> catalog_of(
 
 // The column types of the file's catalog, without the "args." prefix.
 dstd::Map<dstd::String, trace::index::store::ColumnType> column_types(
-    const dstd::String& trace, dstd::StringView index_path) {
+    dstd::CStringView trace, dstd::CStringView index_path) {
     constexpr dstd::StringView ARGS = "args.";
     const auto snapshot = dftu_utils_test::index_snapshot(index_path);
     const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
@@ -251,7 +253,7 @@ TEST_SUITE("PathCatalog") {
         const auto st = dftu_utils_test::ok(ix.build());
         const auto cat = catalog_of(trace, st.index_path);
 
-        auto type_of = [&](const dstd::String& p) {
+        auto type_of = [&](dstd::StringView p) {
             const dstd::String key(p.data(), p.size());
             REQUIRE_MESSAGE(cat.count(key), p);
             return cat.at(key).type;
@@ -499,7 +501,7 @@ TEST_SUITE("PathCatalog") {
         }
         body += "]\n";
         const auto trace = write_members(env.dir(), "capped", body, 4096);
-        auto build = [&](const dstd::String& idx) {
+        auto build = [&](dstd::CStringView idx) {
             auto ix = dftu_utils_test::ok(trace::index::Indexer::open(
                 {dstd::String(dstd::StringView(trace))}, options(idx)));
             return Indexed{trace, dftu_utils_test::ok(ix.build()).index_path};
@@ -515,10 +517,10 @@ TEST_SUITE("PathCatalog") {
         }
         REQUIRE_FALSE(kept.empty());
         REQUIRE_FALSE(dropped.empty());
-        auto rank = [&](const dstd::String& p) {
+        auto rank = [&](dstd::StringView p) {
             return dstd::Pair<std::int64_t, dstd::String>{
                 -static_cast<std::int64_t>(
-                    cat.at(dstd::String("args." + p)).count),
+                    cat.at(dstd::String("args." + dstd::String(p))).count),
                 p};
         };
         dstd::Pair<std::int64_t, dstd::String> worst_kept = rank(kept.front());
@@ -689,7 +691,7 @@ TEST_SUITE("TopLevelShadow") {
             dstd::String o;
             dstd::fmt_append<
                 "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
-                "\"tid\":2,\"ph\":\"X\",\"ts\":{},\"dur\":5,\"type\":\"x\","
+                "\"tid\":2,\"ph\":1,\"ts\":{},\"dur\":5,\"type\":\"x\","
                 "\"foo\":\"top{}\",\"args\":{\"id\":{},\"cat\":\"ARG{}\","
                 "\"type\":\"arg{}\",\"foo\":\"arg{}\"}}\n">(
                 o, i, 1000 + i, i, 100000 + i, i, i, i);

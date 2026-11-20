@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/detail/coro.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
@@ -18,8 +20,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-void write_single_member(const dstd::String& path,
-                         const dstd::String& content) {
+void write_single_member(dstd::CStringView path, dstd::StringView content) {
     fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
@@ -33,17 +34,17 @@ void write_single_member(const dstd::String& path,
 dstd::String make_trace_with_fh(int n) {
     dstd::String s = "[\n";
     s +=
-        R"({"id":1,"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"h1","name":"node0","value":"h1"}})";
+        R"({"id":1,"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"hhash":"h1","name":"node0","value":"h1"}})";
     s += "\n";
     s +=
-        R"({"id":2,"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"h1","name":"/scratch/data/x.bin","value":"f00d"}})";
+        R"({"id":2,"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":4,"args":{"hhash":"h1","name":"/scratch/data/x.bin","value":"f00d"}})";
     s += "\n";
     for (int i = 0; i < n; ++i) {
         s +=
             R"({"id":)" + dstd::to_string(i + 3) +
             R"(,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)" +
             dstd::to_string(1000 + i) +
-            R"(,"dur":100,"ph":"X","args":{"hhash":"h1","fhash":"f00d","ret":4096}})";
+            R"(,"dur":100,"ph":1,"args":{"hhash":"h1","fhash":"f00d","ret":4096}})";
         s += "\n";
     }
     return s;
@@ -77,8 +78,14 @@ TEST_SUITE("hash_table_aggregation") {
         });
         REQUIRE_FALSE(index_path.empty());
 
-        const ::dftracer::utils::trace::index::plan::GroupResolver files(
-            {{gz, index_path}}, {{"path", "files", "fhash", "path"}});
+        using ::dftracer::utils::trace::index::plan::GroupResolver;
+        const dftracer::utils::trace::index::plan::RowSetFile file{gz,
+                                                                   index_path};
+        const GroupResolver::Column column{"path", "files", "fhash", "path"};
+        const GroupResolver files(
+            dstd::Span<const dftracer::utils::trace::index::plan::RowSetFile>(
+                &file, 1),
+            dstd::Span<const GroupResolver::Column>(&column, 1));
         CHECK(files.value("path", "f00d") == "/scratch/data/x.bin");
     }
 }

@@ -7,7 +7,9 @@
 // Result itself.
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
 
 #include <string_view>
@@ -36,12 +38,13 @@ auto& ok_ref(R&& result) {
 // Checks that a Result is an error of the given code, and when `text` is not
 // null that its message is exactly `text`.
 template <typename R>
-void expect_error(const R& result, dftracer::utils::common::ErrorCode code,
-                  const char* text = nullptr) {
+void expect_error(
+    const R& result, dftracer::utils::common::ErrorCode code,
+    dftracer::utils::dstd::Optional<dftracer::utils::dstd::StringView> text =
+        {}) {
     REQUIRE_MESSAGE(!result.has_value(), "expected an error result");
     CHECK(dftracer::utils::common::errorcode_of(result.error()) == code);
-    if (text != nullptr)
-        CHECK(std::string_view(result.error().c_str()) == text);
+    if (text) CHECK(std::string_view(result.error().c_str()) == *text);
 }
 
 }  // namespace dftu_utils_test

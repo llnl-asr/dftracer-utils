@@ -120,13 +120,12 @@ inline bool may_start_double(char c) {
 /// `text` as a number when all of it is one: an integer as int64, or uint64
 /// above int64's range, anything else as a double.
 inline dstd::Optional<Number> parse_number(dstd::StringView text) {
-    const char* first = text.data();
-    const char* last = first + text.size();
+    const char* last = text.data() + text.size();
     if (std::int64_t i = 0;
-        dstd::from_chars(first, last, i).ptr == last && !text.empty())
+        dstd::from_chars(text, i).ptr == last && !text.empty())
         return Number{i};
     if (std::uint64_t u = 0;
-        dstd::from_chars(first, last, u).ptr == last && !text.empty())
+        dstd::from_chars(text, u).ptr == last && !text.empty())
         return Number{u};
     if (text.empty() || !may_start_double(text.front())) return dstd::nullopt;
     // strtod, not from_chars: the double overload is not on older macOS.

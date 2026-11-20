@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -45,14 +48,13 @@ dstd::String find_split_binary() {
                                                 "dftracer_split");
 }
 
-int run_split(const dstd::String& binary,
-              const dstd::Vector<dstd::String>& args) {
+int run_split(dstd::String binary, dstd::Vector<dstd::String> args) {
     return dftu_utils_test::run_process(binary, args);
 }
 
 // Count non-empty lines across all .pfw.gz files in a directory by
 // decompressing each with zlib.
-int count_gz_lines_in_dir(const dstd::String& dir) {
+int count_gz_lines_in_dir(dstd::StringView dir) {
     int total = 0;
     for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (!(entry.kind == dstd::fs::FileKind::File)) continue;
@@ -78,7 +80,7 @@ int count_gz_lines_in_dir(const dstd::String& dir) {
 }
 
 // Count .pfw.gz files in a directory.
-int count_gz_files(const dstd::String& dir) {
+int count_gz_files(dstd::StringView dir) {
     int n = 0;
     for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (!(entry.kind == dstd::fs::FileKind::File)) continue;
@@ -90,7 +92,7 @@ int count_gz_files(const dstd::String& dir) {
 
 // Count gzip members across all .pfw.gz output files (each member starts with
 // the RFC 1952 magic 1F 8B 08).
-int count_gzip_members(const dstd::String& dir) {
+int count_gzip_members(dstd::StringView dir) {
     int members = 0;
     for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (!(entry.kind == dstd::fs::FileKind::File)) continue;
@@ -107,7 +109,7 @@ int count_gzip_members(const dstd::String& dir) {
 }
 
 // True when the first line of every .pfw.gz file in the directory is an event.
-bool all_files_start_with_event(const dstd::String& dir) {
+bool all_files_start_with_event(dstd::StringView dir) {
     for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (!(entry.kind == dstd::fs::FileKind::File)) continue;
         const dstd::String p(entry.path.str());
@@ -241,8 +243,9 @@ TEST_SUITE("DFTracerSplit") {
         int rc = -1;
         const dstd::String text = dftu_utils_test::run_process_capture(
             binary,
-            {input_dir(env), "-o", out, "--chunk-size", "4",
-             "--disable-watchdog"},
+            dftu_utils_test::span_of<dstd::String>({input_dir(env), "-o", out,
+                                                    "--chunk-size", "4",
+                                                    "--disable-watchdog"}),
             true, &rc);
         INFO(text);
         CHECK(rc != 0);
@@ -401,7 +404,7 @@ TEST_SUITE("DFTracerSplit") {
 
         {
             dftu_utils_test::FileOut plain(input_dir(env) + "/plain.pfw");
-            plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\"}\n";
+            plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":1}\n";
         }
 
         dstd::String out_dir = env.dir() + "/split_plain";
@@ -423,15 +426,16 @@ TEST_SUITE("DFTracerSplit") {
 
         {
             dftu_utils_test::FileOut plain(input_dir(env) + "/plain.pfw");
-            plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\"}\n";
+            plain << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":1}\n";
         }
 
         dftu_utils_test::set_test_library_path(binary);
         int rc = 0;
         const dstd::String out = dftu_utils_test::run_process_capture(
             binary,
-            {input_dir(env), "-o", env.dir() + "/split_plain",
-             "--disable-watchdog"},
+            dftu_utils_test::span_of<dstd::String>({input_dir(env), "-o",
+                                                    env.dir() + "/split_plain",
+                                                    "--disable-watchdog"}),
             true, &rc);
         CHECK(rc != 0);
         CHECK(out.find("No trace files found") != dstd::String::npos);

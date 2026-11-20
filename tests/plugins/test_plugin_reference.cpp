@@ -38,7 +38,7 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
     dstd::String ofs;
     for (int i = 0; i < EVENTS; ++i)
         dstd::fmt_append<
-            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
             "\"tid\":1,\"ts\":{},\"dur\":{}{}\n">(ofs, (1000 + i * 100),
                                                   (10 + i), R"(,"args":{}})");
     dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();
@@ -66,7 +66,7 @@ plugins::host::PluginRun run_single(const plugins::host::Plugins& set,
     return out;
 }
 
-int32_t reference_ok(plugins::host::PluginRun& run) {
+std::int32_t reference_ok(plugins::host::PluginRun& run) {
     auto it = run.results.results().find("reference_ok");
     REQUIRE(it != run.results.results().end());
     const auto& bytes = std::get<dstd::Vector<std::byte>>(it->second);
@@ -98,7 +98,7 @@ std::uint64_t expected_dur_sum() {
     return total;
 }
 
-plugins::host::ConfigTree config_of(const dstd::String& json) {
+plugins::host::ConfigTree config_of(dstd::StringView json) {
     auto tree = plugins::host::ConfigTree::from_json_string(json);
     REQUIRE(tree.has_value());
     return std::move(*tree);

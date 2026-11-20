@@ -80,7 +80,7 @@ TEST_SUITE("BloomFilter") {
         bf.add("gamma");
 
         auto blob = bf.serialize();
-        CHECK(blob.size() > 12);  // At least header (12 bytes) + some bits
+        CHECK(blob.size() > 13);  // At least header (13 bytes) + some bits
 
         auto bf2 = dftu_utils_test::ok(
             BloomFilter::from_blob(blob.data(), blob.size()));

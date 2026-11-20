@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash/value_hash.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
@@ -43,7 +45,7 @@ struct BuildOutcome {
     std::size_t total_lines = 0;
 };
 
-BuildOutcome build_one(const dstd::String& gz, bool force = false) {
+BuildOutcome build_one(dstd::CStringView gz, bool force = false) {
     BuildOutcome out;
     run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto cfg = dstd::make_shared<IndexBuildBatchConfig>();
@@ -63,7 +65,7 @@ BuildOutcome build_one(const dstd::String& gz, bool force = false) {
 // Build a gzip file out of `member_texts`, one gzip member each, and return
 // its path plus the compressed offset of every member.
 dstd::Pair<dstd::String, dstd::Vector<std::uint64_t>> write_multi_member_gz(
-    const dstd::Vector<dstd::String>& member_texts) {
+    dstd::Vector<dstd::String> member_texts) {
     dstd::Vector<std::uint8_t> bytes;
     dstd::Vector<std::uint64_t> offsets;
     for (const auto& text : member_texts) {
@@ -86,16 +88,14 @@ dstd::Pair<dstd::String, dstd::Vector<std::uint64_t>> write_multi_member_gz(
     return {dstd::String(path.str()), offsets};
 }
 
-dstd::String dftu_lines(int start_id, int count,
-                        const dstd::String& name = "op") {
+dstd::String dftu_lines(int start_id, int count, dstd::StringView name = "op") {
     dstd::String out;
     for (int i = 0; i < count; ++i) {
         out += "{\"id\":" + dstd::to_string(start_id + i) + ",\"name\":\"" +
-               name +
+               dstd::String(name) +
                "\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
                "\"ts\":" +
-               dstd::to_string(1000 + start_id + i) +
-               ",\"dur\":10,\"ph\":\"X\"}\n";
+               dstd::to_string(1000 + start_id + i) + ",\"dur\":10,\"ph\":1}\n";
     }
     return out;
 }
@@ -344,15 +344,13 @@ TEST_SUITE("IndexBuilder") {
         // confined to one member yields exactly that chunk.
         auto rare_chunks = index_take(trace::index::posting_granules(
             snapshot, file, "name",
-            dftracer::utils::trace::index::extensions::kinds::value_hash(
-                "rare")));
+            dftracer::utils::dstd::hash::value_hash_string("rare")));
         REQUIRE(rare_chunks.size() == 1);
         CHECK(rare_chunks[0] == 1);
 
         auto common_chunks = index_take(trace::index::posting_granules(
             snapshot, file, "name",
-            dftracer::utils::trace::index::extensions::kinds::value_hash(
-                "op")));
+            dftracer::utils::dstd::hash::value_hash_string("op")));
         std::sort(common_chunks.begin(), common_chunks.end());
         REQUIRE(common_chunks.size() == 2);
         CHECK(common_chunks[0] == 0);

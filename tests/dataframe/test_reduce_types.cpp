@@ -9,9 +9,12 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
+#include <cmath>
 #include <cstdint>
+#include <initializer_list>
 
 using namespace dftracer::utils;
 
@@ -23,33 +26,35 @@ dataframe::Series i64(dstd::Vector<std::int64_t> v) {
 }
 
 // A Bool column; `valid` (when non-empty) marks the non-null slots.
-dataframe::Series bools(const dstd::Vector<bool>& v,
-                        const dstd::Vector<bool>& valid = {}) {
+dataframe::Series bools(std::initializer_list<bool> v,
+                        std::initializer_list<bool> valid = {}) {
     const std::size_t nbytes = (v.size() + 7) / 8;
     dstd::Vector<std::uint8_t> bits(nbytes, 0);
     dstd::Vector<std::uint8_t> vbits(nbytes, 0);
     for (std::size_t i = 0; i < v.size(); ++i) {
-        if (v[i]) bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        if (valid.empty() || valid[i])
+        if (v.begin()[i])
+            bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+        if (valid.size() == 0 || valid.begin()[i])
             vbits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
     }
     return dataframe::Series::flat(dataframe::TypeId::Bool, bits.data(),
                                    static_cast<std::int64_t>(v.size()),
-                                   valid.empty() ? nullptr : vbits.data());
+                                   valid.size() == 0 ? nullptr : vbits.data());
 }
 
-dataframe::Series strs(const dstd::Vector<dstd::StringView>& v,
-                       const dstd::Vector<bool>& valid = {}) {
+dataframe::Series strs(std::initializer_list<dstd::StringView> v,
+                       std::initializer_list<bool> valid = {}) {
     dstd::Vector<std::uint8_t> vbits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
-        if (valid.empty() || valid[i])
+        if (valid.size() == 0 || valid.begin()[i])
             vbits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-    return dataframe::Series::strings(dstd::Span<const dstd::StringView>(v),
-                                      valid.empty() ? nullptr : vbits.data());
+    return dataframe::Series::strings(
+        dstd::Span<const dstd::StringView>(v.begin(), v.size()),
+        valid.size() == 0 ? nullptr : vbits.data());
 }
 
-dataframe::Series timestamps(const dstd::Vector<std::int64_t>& v) {
-    return dataframe::Series::flat(dataframe::TypeId::Timestamp, v.data(),
+dataframe::Series timestamps(std::initializer_list<std::int64_t> v) {
+    return dataframe::Series::flat(dataframe::TypeId::Timestamp, v.begin(),
                                    static_cast<std::int64_t>(v.size()));
 }
 
@@ -60,9 +65,9 @@ dstd::String error_text(dftu_scalar s) {
     return s.value.err->message;
 }
 
-bool names(const dstd::String& text, const char* a, const char* b) {
-    return text.find(a) != dstd::String::npos &&
-           text.find(b) != dstd::String::npos;
+bool names(dstd::StringView text, dstd::StringView a, dstd::StringView b) {
+    return text.find(a) != dstd::StringView::npos &&
+           text.find(b) != dstd::StringView::npos;
 }
 
 }  // namespace
@@ -95,7 +100,8 @@ TEST_CASE("a bool reduction agrees with the group-by sum") {
     df.columns.push_back(i64({7, 7, 7, 7}));
     df.columns.push_back(bools({true, false, true, true}));
     dataframe::DataFrame g = dftu_utils_test::ok(df.group_by(
-        "k", {dataframe::GroupAgg{dataframe::Agg::Sum, "flag", "total"}}));
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {dataframe::GroupAgg{dataframe::Agg::Sum, "flag", "total"}})));
     REQUIRE(g.num_rows() == 1);
     CHECK(g.column("total").data<std::int64_t>()[0] == expected);
 }
@@ -156,7 +162,7 @@ TEST_CASE("a code that is not sum, min or max is refused") {
     }
 }
 
-TEST_CASE("numeric reductions and an empty column are unchanged") {
+TEST_CASE("numeric reductions, and an empty column has no extreme or mean") {
     dataframe::Series x = i64({3, 1, 4});
     CHECK(dftu_utils_test::ok(x.sum()).i64() == 8);
     CHECK(dftu_utils_test::ok(x.min()).i64() == 1);
@@ -165,5 +171,7 @@ TEST_CASE("numeric reductions and an empty column are unchanged") {
 
     dataframe::Series none = i64({});
     CHECK(dftu_utils_test::ok(none.sum()).i64() == 0);
-    CHECK(dftu_utils_test::ok(none.mean()) == 0.0);
+    CHECK(std::isnan(dftu_utils_test::ok(none.mean())));
+    CHECK(dftu_utils_test::ok(none.min()).tag() == DFTU_SCALAR_TAG_NULL);
+    CHECK(dftu_utils_test::ok(none.max()).tag() == DFTU_SCALAR_TAG_NULL);
 }

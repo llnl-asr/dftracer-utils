@@ -81,30 +81,13 @@
 #include <cstdint>
 #include <cstdlib>
 
-#if defined(__linux__)
-#include <sched.h>
-#endif
-
 namespace dftracer::utils::common {
 
-/// CPUs this process may run on (its affinity mask on Linux, else the cores
-/// the machine reports), never 0. Overridable with
-/// DFTRACER_UTILS_HW_CONCURRENCY.
-inline std::size_t hardware_concurrency() {
-    if (const auto v = Env::get<std::uint64_t>("DFTRACER_UTILS_HW_CONCURRENCY");
-        v && *v > 0)
-        return static_cast<std::size_t>(*v);
-#if defined(__linux__)
-    cpu_set_t set;
-    CPU_ZERO(&set);
-    if (sched_getaffinity(0, sizeof(set), &set) == 0) {
-        const int allowed = CPU_COUNT(&set);
-        if (allowed > 0) return static_cast<std::size_t>(allowed);
-    }
-#endif
-    const auto n = dstd::Thread::hardware_concurrency();
-    return n == 0 ? 1u : static_cast<std::size_t>(n);
-}
+/// CPUs this process may use, never 0: the smallest of the CPUs the machine
+/// reports, its affinity mask (Linux) and the CPU quota of its cgroup rounded
+/// up (Linux). DFTRACER_UTILS_HW_CONCURRENCY, when set above 0, wins alone.
+/// The quota is read once per process.
+std::size_t hardware_concurrency();
 
 /// Threads for one of `local_ranks` processes on a node. When `allowed` (the
 /// CPUs of this process's affinity mask) is below `online` (the CPUs of the

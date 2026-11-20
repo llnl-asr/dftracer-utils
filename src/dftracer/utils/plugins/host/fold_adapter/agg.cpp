@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/host/fold_adapter.h>
@@ -25,8 +26,14 @@ dftu_status host_agg_new(::dftu_ctx* ctx, void* h, const char* name,
                          const ::dftu_agg_col* specs, std::uint32_t spec_n,
                          ::dftu_agg** out) {
     if (!out) return host_fail(ctx, DFTU_E_INVALID, "agg_new: out is NULL");
-    auto made = static_cast<PluginFold*>(h)->agg_new(name, key_names, key_n,
-                                                     specs, spec_n);
+    if (!name || (key_n && !key_names) || spec_n == 0 || !specs) {
+        return host_fail(
+            ctx, DFTU_E_INVALID,
+            "agg_new: a name, at least one aggregate and the key names are "
+            "required");
+    }
+    auto made = static_cast<PluginFold*>(h)->agg_new(name, {key_names, key_n},
+                                                     {specs, spec_n});
     if (!made) return host_fail(ctx, made.error());
     *out = *made;
     return DFTU_OK;
@@ -42,6 +49,10 @@ dftu_status host_agg_accumulate(::dftu_ctx* ctx, void* h, ::dftu_agg* a,
 dftu_status host_agg_result(::dftu_ctx* ctx, void* h, const char* name,
                             ::dftu_dataframe** out) {
     if (!out) return host_fail(ctx, DFTU_E_INVALID, "agg_result: out is NULL");
+    if (!name) {
+        *out = nullptr;
+        return DFTU_OK;
+    }
     auto found = static_cast<PluginFold*>(h)->agg_result(name);
     if (!found) return host_fail(ctx, found.error());
     *out = *found;
@@ -86,17 +97,9 @@ dstd::Result<::dftu_dataframe*> finalize_to_frame(const AggAccum& acc) {
 
 const void* detail::agg_ext_vtable() { return &g_agg; }
 
-dstd::Result<::dftu_agg*> PluginFold::agg_new(const char* name,
-                                              const char* const* key_names,
-                                              std::uint32_t key_n,
-                                              const ::dftu_agg_col* specs,
-                                              std::uint32_t spec_n) {
-    if (!name || (key_n && !key_names) || spec_n == 0 || !specs) {
-        return common::make_error<
-            "plugin '{}' agg_new: a name, at least one aggregate and the key "
-            "names are required">(common::ErrorCode::InvalidArgument,
-                                  plugin_label());
-    }
+dstd::Result<::dftu_agg*> PluginFold::agg_new(
+    dstd::StringView name, dstd::Span<const char* const> key_names,
+    dstd::Span<const ::dftu_agg_col> specs) {
     if (is_host_namespace(name)) {
         return common::make_error<
             "plugin '{}' agg '{}' refused: the 'dftu.' namespace belongs to "
@@ -108,8 +111,7 @@ dstd::Result<::dftu_agg*> PluginFold::agg_new(const char* name,
         return reinterpret_cast<::dftu_agg*>(slot->get());
 
     dstd::Vector<dstd::String> value_names;
-    auto column_index = [&](const char* col) -> std::int32_t {
-        if (!col) return -1;
+    auto column_index = [&](dstd::StringView col) -> std::int32_t {
         for (std::size_t i = 0; i < value_names.size(); ++i)
             if (value_names[i] == col) return static_cast<std::int32_t>(i);
         value_names.emplace_back(col);
@@ -117,8 +119,8 @@ dstd::Result<::dftu_agg*> PluginFold::agg_new(const char* name,
     };
 
     dstd::Vector<dataframe::AggSpec> aspecs;
-    aspecs.reserve(spec_n);
-    for (std::uint32_t i = 0; i < spec_n; ++i) {
+    aspecs.reserve(specs.size());
+    for (std::uint32_t i = 0; i < specs.size(); ++i) {
         if (specs[i].op < DFTU_AGG_COUNT || specs[i].op > DFTU_AGG_REGR_R2) {
             return common::make_error<
                 "plugin '{}' agg '{}' aggregate {} has an out-of-range op "
@@ -133,19 +135,19 @@ dstd::Result<::dftu_agg*> PluginFold::agg_new(const char* name,
         }
         dataframe::AggSpec s;
         s.op = static_cast<dataframe::AggOp>(specs[i].op);
-        s.value_col = column_index(specs[i].value);
+        s.value_col = specs[i].value ? column_index(specs[i].value) : -1;
         s.out = specs[i].out;
         s.param = specs[i].param;
-        s.by_col = column_index(specs[i].by);
+        s.by_col = specs[i].by ? column_index(specs[i].by) : -1;
         aspecs.push_back(std::move(s));
     }
 
     dstd::UniquePtr<AggAccum>* slot = aggs_.get_or_create(key, [&] {
         auto acc = dstd::make_unique<AggAccum>();
-        acc->name = name;
-        acc->key_names.reserve(key_n);
-        for (std::uint32_t i = 0; i < key_n; ++i)
-            acc->key_names.emplace_back(key_names[i] ? key_names[i] : "");
+        acc->name = dstd::String(name);
+        acc->key_names.reserve(key_names.size());
+        for (const char* key_name : key_names)
+            acc->key_names.emplace_back(key_name ? key_name : "");
         acc->value_names = std::move(value_names);
         acc->state = dataframe::agg_new(std::move(aspecs));
         acc->spiller = dataframe::AggSpiller(memory_budget_);
@@ -212,8 +214,9 @@ dstd::Result<void> PluginFold::agg_accumulate(::dftu_agg* a,
 // The fold order puts every provider before its consumers, so a declared name
 // is always there; an undeclared one reads back null rather than this fold's
 // own partial state.
-dstd::Result<::dftu_dataframe*> PluginFold::agg_result(const char* name) const {
-    if (!name || !results_) return nullptr;
+dstd::Result<::dftu_dataframe*> PluginFold::agg_result(
+    dstd::StringView name) const {
+    if (!results_) return nullptr;
     auto it =
         results_->aggs.find(dftracer::utils::dstd::hash::fnv1a_hash(name));
     if (it == results_->aggs.end() || !it->second) return nullptr;
@@ -226,8 +229,7 @@ dstd::Result<::dftu_dataframe*> PluginFold::agg_result(const char* name) const {
     return *frame;
 }
 
-std::size_t PluginFold::agg_spill_runs(const char* name) const {
-    if (!name) return 0;
+std::size_t PluginFold::agg_spill_runs(dstd::StringView name) const {
     const std::uint64_t key = dftracer::utils::dstd::hash::fnv1a_hash(name);
     auto it = aggs_.index().find(key);
     if (it == aggs_.index().end()) return 0;

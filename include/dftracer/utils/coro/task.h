@@ -152,7 +152,7 @@ TaskResult<T> stopped_result() {
 
 /// One flag of a chain that cancels a task and every task it awaits. A task
 /// that owns a flag, such as a task of the plugin ABI, makes a node for it, and
-/// @ref PromiseBase::launch links the node to the awaiter's chain, so a cancel
+/// `PromiseBase::launch` links the node to the awaiter's chain, so a cancel
 /// of an outer task reaches the inner ones. The node must outlive the task.
 struct CancelLink {
     explicit CancelLink(const std::atomic<bool>* f) noexcept : flag(f) {}
@@ -368,8 +368,8 @@ struct FailWith {
  *
  * Bind the result to a local before the `co_await`. The task is not resumed
  * and its frame is destroyed by its owner. A task that awaits it with
- * `co_await` ends with the same error, and @ref settle gives the error to the
- * awaiter without ending it.
+ * `co_await` ends with the same error, and @ref dftracer::utils::coro::settle
+ * gives the error to the awaiter without ending it.
  */
 inline detail::FailWith fail_with(dstd::Error error) noexcept {
     return {std::move(error)};
@@ -671,7 +671,10 @@ class CoroTask {
         if (common::logger::detail::enabled(common::logger::Level::Trace))
             [[unlikely]] {
             p.trace_handle = common::logger::detail::coro_trace_enter(
-                coro_handle_.address(), p.trace_file, p.trace_line);
+                coro_handle_.address(),
+                p.trace_file != nullptr ? dstd::StringView{p.trace_file}
+                                        : dstd::StringView{},
+                p.trace_line);
         }
 #endif
         p.started = true;
@@ -680,7 +683,7 @@ class CoroTask {
         return true;
     }
 
-    /// Closes what @ref launch opened for the awaiter, on every way out.
+    /// Closes what `launch` opened for the awaiter, on every way out.
     static void report_await_end(promise_type& p) noexcept {
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
         if (p.trace_handle) [[unlikely]] {
@@ -1172,8 +1175,8 @@ struct OrFailTask {
         return true;
     }
 };
-/// The outcome of a task awaited through @ref settle: a value, a stop, or the
-/// error it ended with. Exactly one is set.
+/// The outcome of a task awaited through @ref dftracer::utils::coro::settle
+/// "settle": a value, a stop, or the error it ended with. Exactly one is set.
 template <typename T>
 struct Settled {
     dstd::Optional<T> value;
@@ -1247,14 +1250,15 @@ detail::SettleTask<T, CoroTask<T>> settle(CoroTask<T>&& task) noexcept {
     return {std::move(task)};
 }
 
-/// @ref settle on a task that stays where it is.
+/// @ref dftracer::utils::coro::settle on a task that stays where it is.
 template <typename T>
 detail::SettleTask<T, CoroTask<T>&> settle(CoroTask<T>& task) noexcept {
     return {task};
 }
 
-/// @ref settle for any awaitable with a `result_type` that stays where it is: a
-/// task is awaited as is, anything else through a frame that holds the await.
+/// @ref dftracer::utils::coro::settle for any awaitable with a `result_type`
+/// that stays where it is: a task is awaited as is, anything else through a
+/// frame that holds the await.
 template <typename A>
 auto settle_in_place(A& awaitable) {
     if constexpr (detail::is_coro_task_v<A>) {

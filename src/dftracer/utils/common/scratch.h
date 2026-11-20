@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -69,7 +70,7 @@ class ScratchSession {
 /// times $DFTRACER_UTILS_INDEX_SIZE_FACTOR, or nullopt when no scratch mount
 /// has room. The caller publishes the store it builds there with publish_path.
 dstd::Optional<ScratchSession> staged_build_scratch(
-    const dstd::Vector<dstd::String>& files);
+    dstd::Span<const dstd::String> files);
 
 /// Move `src` (a directory or file built on scratch) to `dst`, replacing any
 /// existing `dst`. Renames when both live on one filesystem, else recursively

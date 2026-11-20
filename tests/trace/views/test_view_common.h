@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
@@ -22,6 +23,7 @@
 #include <testing_utilities.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -66,7 +68,7 @@ dftracer::utils::dstd::Result<void> status_of(
 // Checks that `what` kept or returned an error of `code` whose message holds
 // `text`.
 template <class T>
-void expect_refused(const T& what, const char* text,
+void expect_refused(const T& what, dftracer::utils::dstd::StringView text,
                     dftracer::utils::common::ErrorCode code =
                         dftracer::utils::common::ErrorCode::InvalidArgument) {
     const auto status = status_of(what);
@@ -83,12 +85,12 @@ inline dftracer::utils::dstd::String create_mixed_trace(
     dftracer::utils::dstd::String pfw = env.dir() + "/mixed.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < posix_n; ++i) {
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
             << "\n";
     }
     for (int i = 0; i < stdio_n; ++i) {
-        ofs << R"({"ph":"X","name":"fwrite","cat":"STDIO","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"fwrite","cat":"STDIO","pid":1,"tid":1,"ts":)"
             << (5000 + i * 100) << R"(,"dur":)" << (20 + i) << R"(,"args":{}})"
             << "\n";
     }
@@ -108,7 +110,7 @@ inline dftracer::utils::dstd::String create_multimember_trace(
     dftracer::utils::dstd::String pfw = env.dir() + "/mm.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < n; ++i) {
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
             << "\n";
     }
@@ -119,18 +121,18 @@ inline dftracer::utils::dstd::String create_multimember_trace(
     return gz;
 }
 
-// A trace with ph="X" events plus ph="C" counter events (aggregator style).
+// A trace with ph=1 events plus ph=2 counter events (aggregator style).
 inline dftracer::utils::dstd::String create_trace_with_counters(
     dftu_utils_test::TestEnvironment& env) {
     dftracer::utils::dstd::String pfw = env.dir() + "/ctr.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < 10; ++i)
-        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":10,"args":{}})" << "\n";
     // Two counter events reporting cpu percentages.
-    ofs << R"({"ph":"C","name":"cpu","cat":"sys","pid":0,"tid":0,"ts":1000,"args":{"user_pct":40,"idle_pct":60}})"
+    ofs << R"({"ph":2,"name":"cpu","cat":"sys","pid":0,"tid":0,"ts":1000,"args":{"user_pct":40,"idle_pct":60}})"
         << "\n";
-    ofs << R"({"ph":"C","name":"cpu","cat":"sys","pid":0,"tid":0,"ts":2000,"args":{"user_pct":80,"idle_pct":20}})"
+    ofs << R"({"ph":2,"name":"cpu","cat":"sys","pid":0,"tid":0,"ts":2000,"args":{"user_pct":80,"idle_pct":20}})"
         << "\n";
     ofs.close();
     dftracer::utils::dstd::String gz = pfw + ".gz";
@@ -139,7 +141,7 @@ inline dftracer::utils::dstd::String create_trace_with_counters(
     return gz;
 }
 
-// Many ph="C" counter events over two names (cpu, gpu), enough to span several
+// Many ph=2 counter events over two names (cpu, gpu), enough to span several
 // scan batches so a tiny memory budget forces multiple spills of each group.
 inline dftracer::utils::dstd::String create_bulk_counters(
     dftu_utils_test::TestEnvironment& env, int n) {
@@ -147,7 +149,7 @@ inline dftracer::utils::dstd::String create_bulk_counters(
     dftu_utils_test::FileOut ofs(pfw);
     for (int i = 0; i < n; ++i) {
         const char* nm = (i % 2 == 0) ? "cpu" : "gpu";
-        ofs << R"({"ph":"C","name":")" << nm
+        ofs << R"({"ph":2,"name":")" << nm
             << R"(","cat":"sys","pid":0,"tid":0,"ts":)" << (1000 + i * 100)
             << R"(,"args":{"util":)" << (i % 100) << R"(}})" << "\n";
     }
@@ -162,18 +164,19 @@ inline dftracer::utils::dstd::String create_bulk_counters(
 // event).
 inline dftracer::utils::dstd::String create_counter_file(
     dftu_utils_test::TestEnvironment& env,
-    const dftracer::utils::dstd::String& tag,
-    const dftracer::utils::dstd::Vector<int>& user_pcts) {
+    dftracer::utils::dstd::StringView tag,
+    dftracer::utils::dstd::Vector<int> user_pcts) {
     // Each shard gets its own dir so its index (keyed off the parent dir) does
     // not collide with the other shard's.
-    dftracer::utils::dstd::String dir = env.dir() + "/" + tag;
+    dftracer::utils::dstd::String dir = env.dir() + "/";
+    dir.append(tag);
     REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
     dftracer::utils::dstd::String pfw = dir + "/ctr.pfw";
     dftu_utils_test::FileOut ofs(pfw);
     int ts = 1000;
     for (int v : user_pcts) {
-        ofs << R"({"ph":"C","name":"cpu","cat":"sys","pid":0,"tid":0,"ts":)"
-            << ts << R"(,"args":{"user_pct":)" << v << R"(}})" << "\n";
+        ofs << R"({"ph":2,"name":"cpu","cat":"sys","pid":0,"tid":0,"ts":)" << ts
+            << R"(,"args":{"user_pct":)" << v << R"(}})" << "\n";
         ts += 1000;
     }
     ofs.close();
@@ -204,8 +207,8 @@ struct StringSink : dftracer::utils::trace::views::ExportSink {
 };
 
 inline std::size_t count_containing(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& lines,
-    const dftracer::utils::dstd::String& needle) {
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> lines,
+    dftracer::utils::dstd::StringView needle) {
     std::size_t n = 0;
     for (const auto& l : lines)
         if (l.find(needle) != dftracer::utils::dstd::String::npos) ++n;
@@ -259,7 +262,7 @@ inline dftracer::utils::dstd::String bstr(
 inline dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
 sorted_row_keys(
     const dftracer::utils::dataframe::DataFrame& b,
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& cols) {
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> cols) {
     using T = dftracer::utils::dataframe::TypeId;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> keys;
     dftracer::utils::dstd::Vector<dftracer::utils::dataframe::Series> mat;
@@ -318,6 +321,14 @@ struct SharedIndexedTrace {
 inline const SharedIndexedTrace& shared_trace() {
     static SharedIndexedTrace t;
     return t;
+}
+
+// The partials as a contiguous array a call can borrow, in place of a braced
+// list, which does not convert to a Span.
+template <class... S>
+std::array<dftracer::utils::dstd::StringView, sizeof...(S)> partial_views(
+    const S&... partials) {
+    return {dftracer::utils::dstd::StringView(partials)...};
 }
 
 }  // namespace test_view_common

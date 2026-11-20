@@ -67,10 +67,10 @@ struct Route {
 /// Simple prefix-based HTTP router.
 class Router {
    public:
-    void get(const dstd::String& path, RouteHandler handler);
-    void get(const dstd::String& path, RouteHandler handler, RouteDoc doc);
-    void post(const dstd::String& path, RouteHandler handler);
-    void post(const dstd::String& path, RouteHandler handler, RouteDoc doc);
+    void get(dstd::String path, RouteHandler handler);
+    void get(dstd::String path, RouteHandler handler, RouteDoc doc);
+    void post(dstd::String path, RouteHandler handler);
+    void post(dstd::String path, RouteHandler handler, RouteDoc doc);
 
     /// Registered routes in registration order (for API-docs generation).
     const dstd::Vector<Route>& routes() const { return routes_; }

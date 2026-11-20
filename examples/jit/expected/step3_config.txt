@@ -1,0 +1,3 @@
+40 {1: 76, 2: 38}
+50 {1: 36, 2: 18}
+rejected: Slow config field 'threshold' expects int, got str ('high')

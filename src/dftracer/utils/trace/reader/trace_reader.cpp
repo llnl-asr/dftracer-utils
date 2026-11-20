@@ -58,7 +58,7 @@ thread_local dftracer::utils::json::RecordParser t_parser;
 /// that was never compressed fails at the reader instead of silently taking
 /// a path with no index, no pruning and no random access.
 dstd::Result<void> reject_unless_gzip(common::ArchiveFormat format,
-                                      const dstd::String& file_path) {
+                                      dstd::StringView file_path) {
     if (format == common::ArchiveFormat::Gzip) return {};
     return reader_error<ReaderErrorType::InvalidArgument,
                         "Not a gzip trace: {} (dftracer traces must be "
@@ -580,14 +580,10 @@ coro::CoroTask<dstd::Result<trace::TimeMetric>> TraceReader::read_time_metric(
         if (!line_opt) break;
         if (!line_opt->has_value()) co_return line_opt->error();
         const Line& line = **line_opt;
-        const char* start = nullptr;
-        std::size_t len = 0;
-        if (!json::trim_and_validate(line.content.data(), line.content.size(),
-                                     start, len))
-            continue;
-        auto doc = parser.parse(start, len);
-        if (doc.error())
-            doc = json::parse_refused(parser, dstd::StringView(start, len));
+        dstd::StringView trimmed;
+        if (!json::trim_and_validate(line.content, trimmed)) continue;
+        auto doc = parser.parse(trimmed.data(), trimmed.size());
+        if (doc.error()) doc = json::parse_refused(parser, trimmed);
         if (doc.error()) continue;
         DFTracerEvent event;
         if (!DFTracerEvent::parse(json::JsonValue(doc.value_unsafe()), event))
@@ -696,7 +692,7 @@ coro::AsyncGenerator<dstd::Result<JsonLine>> TraceReader::read_json(
 
     // chunk_prune_only path: dim_stats already proved every event with the
     // predicate field matches; we still need to skip events lacking the
-    // field (e.g., metadata "ph":"M" events). Field-presence probe is
+    // field (e.g., metadata "ph":4 events). Field-presence probe is
     // cheaper than full ValueMap eval.
     dstd::Vector<dstd::String> presence_check_paths;
     if (query && config.chunk_prune_only) {
@@ -747,8 +743,8 @@ coro::AsyncGenerator<dstd::Result<JsonLine>> TraceReader::read_json(
             if (trimmed.empty()) continue;
             simdjson::padded_string padded(trimmed);
 
-            internal::PaddedLines docs(bulk_parser, padded.data(),
-                                       padded.size());
+            internal::PaddedLines docs(
+                bulk_parser, dstd::StringView(padded.data(), padded.size()));
             simdjson::ondemand::document_reference doc;
             dstd::StringView src;
             dstd::StringView text;
@@ -884,13 +880,11 @@ coro::AsyncGenerator<dstd::Result<JsonLine>> TraceReader::read_json(
             co_return;
         }
         const Line& line = **line_opt;
-        const char* trimmed;
-        std::size_t trimmed_size;
-        if (!dftracer::utils::json::trim_and_validate_with_comma(
-                line.content.data(), line.content.size(), trimmed,
-                trimmed_size))
+        dstd::StringView trimmed;
+        if (!dftracer::utils::json::trim_and_validate_with_comma(line.content,
+                                                                 trimmed))
             continue;
-        if (!parser.parse(dstd::StringView(trimmed, trimmed_size))) {
+        if (!parser.parse(trimmed)) {
             count_dropped(dropped);
             continue;
         }
@@ -945,9 +939,7 @@ coro::AsyncGenerator<dstd::Result<JsonLine>> TraceReader::read_json(
         }
 
         parser.rewind();
-        if (internal::is_cropped_object(
-                dstd::StringView(trimmed, trimmed_size)))
-            count_dropped(dropped);
+        if (internal::is_cropped_object(trimmed)) count_dropped(dropped);
         co_yield JsonLine{line.content, line.line_number, &parser};
     }
     warn_dropped(dropped);

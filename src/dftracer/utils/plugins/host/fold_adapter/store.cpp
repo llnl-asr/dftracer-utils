@@ -38,21 +38,19 @@ const char* bad_name_byte(dstd::StringView name) {
 }
 
 dftu_status name_refused(dftu_ctx* ctx, dstd::StringView name,
-                         const char* why) {
+                         dstd::StringView why) {
     return host_fail(ctx, DFTU_E_INVALID,
-                     dstd::String("dftu.svc.store: namespace '") +
-                         dstd::String(name.data(), name.size()) + "' " + why);
+                     dstd::fmt<"dftu.svc.store: namespace '{}' {}">(name, why));
 }
 
 // The full name the store registers for the plugin's `name`: plugin.<plugin
 // name>.<name>. Refuses an escape out of the plugin's own namespaces.
 dftu_status namespace_name(dftu_ctx* ctx, dstd::StringView plugin,
-                           const char* raw, dstd::String* out) {
+                           dstd::StringView name, dstd::String* out) {
     out->clear();
-    if (raw == nullptr || *raw == '\0')
+    if (name.empty())
         return host_fail(ctx, DFTU_E_INVALID,
                          "dftu.svc.store: the namespace name is empty");
-    const dstd::StringView name(raw);
     if (const char* why = bad_name_byte(name); why != nullptr)
         return name_refused(ctx, name, why);
     if (name.find("..") != dstd::StringView::npos)
@@ -144,18 +142,17 @@ T* inner_of(const void* handle) {
 void free_owned(void* handle) { delete static_cast<Owned*>(handle); }
 
 // The error for a NULL handle of `what`.
-dftu_status handle_null(dftu_ctx* ctx, const char* what) {
-    return host_fail(
-        ctx, DFTU_E_INVALID,
-        dstd::String("dftu.svc.store: the ") + what + " handle is NULL");
+dftu_status handle_null(dftu_ctx* ctx, dstd::StringView what) {
+    return host_fail(ctx, DFTU_E_INVALID,
+                     dstd::fmt<"dftu.svc.store: the {} handle is NULL">(what));
 }
 
 // The handle inside a host-made handle. Every call that takes a namespace,
 // batch, snapshot or cursor goes through it, so a NULL never reaches the store
 // C ABI through a null struct.
 template <class T>
-dftu_status handle_inner(dftu_ctx* ctx, const void* handle, const char* what,
-                         T** out) {
+dftu_status handle_inner(dftu_ctx* ctx, const void* handle,
+                         dstd::StringView what, T** out) {
     *out = nullptr;
     if (handle == nullptr) return handle_null(ctx, what);
     *out = inner_of<T>(handle);
@@ -164,13 +161,14 @@ dftu_status handle_inner(dftu_ctx* ctx, const void* handle, const char* what,
 
 // The store of `h`, plus the check that `handle` is one this store made.
 dftu_status checked_store(dftu_ctx* ctx, void* h, const void* handle,
-                          const char* what, dftu_store_t** out) {
+                          dstd::StringView what, dftu_store_t** out) {
     if (const dftu_status st = fold_store(ctx, h, out); st < 0) return st;
     if (handle == nullptr) return handle_null(ctx, what);
     if (owner_of(handle) != fold_of(h)->store_identity())
-        return host_fail(ctx, DFTU_E_INVALID,
-                         dstd::String("dftu.svc.store: the ") + what +
-                             " handle was made by another host's store");
+        return host_fail(
+            ctx, DFTU_E_INVALID,
+            dstd::fmt<"dftu.svc.store: the {} handle was made by another "
+                      "host's store">(what));
     return DFTU_OK;
 }
 
@@ -190,16 +188,19 @@ dftu_status checked_pair(dftu_ctx* ctx, const dftu_store_snapshot_t* snapshot,
 }
 
 dftu_status store_ns(dftu_ctx* ctx, void* h, const char* name,
-                     uint32_t format_version, dftu_store_fold_kind fold,
-                     int32_t durable, int32_t shared, dftu_store_ns_t** out) {
+                     std::uint32_t format_version, dftu_store_fold_kind fold,
+                     std::int32_t durable, std::int32_t shared,
+                     dftu_store_ns_t** out) {
     if (out == nullptr)
         return host_fail(ctx, DFTU_E_INVALID, "dftu.svc.store: ns out is NULL");
     *out = nullptr;
     dftu_store_t* store = nullptr;
     if (const dftu_status st = fold_store(ctx, h, &store); st < 0) return st;
     dstd::String full;
-    if (const dftu_status st =
-            namespace_name(ctx, fold_of(h)->plugin_name(), name, &full);
+    if (const dftu_status st = namespace_name(
+            ctx, fold_of(h)->plugin_name(),
+            name != nullptr ? dstd::StringView(name) : dstd::StringView(),
+            &full);
         st < 0)
         return st;
     dftu_store_ns_t* made = nullptr;
@@ -219,9 +220,10 @@ void store_ns_free(::dftu_store_ns_t* ns) {
 }
 
 dftu_status store_batch(dftu_ctx* ctx, void* h, const dftu_store_ns_t* ns,
-                        const dftu_store_scope* scope, uint64_t params_hash,
+                        const dftu_store_scope* scope,
+                        std::uint64_t params_hash,
                         const dftu_store_source_stat* sources,
-                        uint64_t source_count, dftu_store_batch_t** out) {
+                        std::uint64_t source_count, dftu_store_batch_t** out) {
     if (out == nullptr)
         return host_fail(ctx, DFTU_E_INVALID,
                          "dftu.svc.store: batch out is NULL");
@@ -248,8 +250,8 @@ void store_batch_free(::dftu_store_batch_t* batch) {
 }
 
 dftu_status store_put(dftu_ctx* ctx, dftu_store_batch_t* batch,
-                      const uint8_t* key, uint64_t key_size,
-                      const uint8_t* value, uint64_t value_size) {
+                      const std::uint8_t* key, std::uint64_t key_size,
+                      const std::uint8_t* value, std::uint64_t value_size) {
     dftu_store_batch_t* inner = nullptr;
     if (const dftu_status st = handle_inner(ctx, batch, "batch", &inner);
         st < 0)
@@ -261,8 +263,8 @@ dftu_status store_put(dftu_ctx* ctx, dftu_store_batch_t* batch,
 }
 
 dftu_status store_fold(dftu_ctx* ctx, dftu_store_batch_t* batch,
-                       const uint8_t* key, uint64_t key_size,
-                       const uint8_t* value, uint64_t value_size) {
+                       const std::uint8_t* key, std::uint64_t key_size,
+                       const std::uint8_t* value, std::uint64_t value_size) {
     dftu_store_batch_t* inner = nullptr;
     if (const dftu_status st = handle_inner(ctx, batch, "batch", &inner);
         st < 0)
@@ -274,7 +276,7 @@ dftu_status store_fold(dftu_ctx* ctx, dftu_store_batch_t* batch,
 }
 
 dftu_status store_erase(dftu_ctx* ctx, dftu_store_batch_t* batch,
-                        const uint8_t* key, uint64_t key_size) {
+                        const std::uint8_t* key, std::uint64_t key_size) {
     dftu_store_batch_t* inner = nullptr;
     if (const dftu_status st = handle_inner(ctx, batch, "batch", &inner);
         st < 0)
@@ -285,8 +287,9 @@ dftu_status store_erase(dftu_ctx* ctx, dftu_store_batch_t* batch,
 }
 
 dftu_status store_erase_range(dftu_ctx* ctx, dftu_store_batch_t* batch,
-                              const uint8_t* begin, uint64_t begin_size,
-                              const uint8_t* end, uint64_t end_size) {
+                              const std::uint8_t* begin,
+                              std::uint64_t begin_size, const std::uint8_t* end,
+                              std::uint64_t end_size) {
     dftu_store_batch_t* inner = nullptr;
     if (const dftu_status st = handle_inner(ctx, batch, "batch", &inner);
         st < 0)
@@ -346,7 +349,7 @@ void store_snapshot_free(::dftu_store_snapshot_t* snapshot) {
 
 dftu_status store_get(dftu_ctx* ctx, const dftu_store_snapshot_t* snapshot,
                       const dftu_store_ns_t* ns, const dftu_store_scope* scope,
-                      const uint8_t* key, uint64_t key_size,
+                      const std::uint8_t* key, std::uint64_t key_size,
                       dftu_store_value_t** out) {
     if (const dftu_status st = checked_pair(ctx, snapshot, ns); st < 0)
         return st;
@@ -361,7 +364,7 @@ dftu_status store_multi_get(dftu_ctx* ctx,
                             const dftu_store_snapshot_t* snapshot,
                             const dftu_store_ns_t* ns,
                             const dftu_store_scope* scope,
-                            const dftu_store_bytes* keys, uint64_t n,
+                            const dftu_store_bytes* keys, std::uint64_t n,
                             dftu_store_value_list_t** out) {
     if (const dftu_status st = checked_pair(ctx, snapshot, ns); st < 0)
         return st;
@@ -376,7 +379,8 @@ dftu_status store_scan_prefix(dftu_ctx* ctx,
                               const dftu_store_snapshot_t* snapshot,
                               const dftu_store_ns_t* ns,
                               const dftu_store_scope* scope,
-                              const uint8_t* prefix, uint64_t prefix_size,
+                              const std::uint8_t* prefix,
+                              std::uint64_t prefix_size,
                               dftu_store_cursor_t** out) {
     if (const dftu_status st = checked_pair(ctx, snapshot, ns); st < 0)
         return st;
@@ -392,8 +396,9 @@ dftu_status store_scan_range(dftu_ctx* ctx,
                              const dftu_store_snapshot_t* snapshot,
                              const dftu_store_ns_t* ns,
                              const dftu_store_scope* scope,
-                             const uint8_t* begin, uint64_t begin_size,
-                             const uint8_t* end, uint64_t end_size,
+                             const std::uint8_t* begin,
+                             std::uint64_t begin_size, const std::uint8_t* end,
+                             std::uint64_t end_size,
                              dftu_store_cursor_t** out) {
     if (const dftu_status st = checked_pair(ctx, snapshot, ns); st < 0)
         return st;

@@ -20,7 +20,7 @@ namespace {
 // ones by position, as the ops above read it, then its own. Columns past the
 // declared ones are those its input returned beyond its schema.
 dstd::Vector<std::uint32_t> frame_ids(
-    const dataframe::DataFrame& f, const dstd::Vector<dstd::String>& declared,
+    const dataframe::DataFrame& f, dstd::Span<const dstd::String> declared,
     dftracer::utils::dstd::StringIntern& intern) {
     const bool by_name =
         std::all_of(declared.begin(), declared.end(), [&](const auto& n) {
@@ -233,7 +233,7 @@ class MapSource final : public dataframe::Source {
 // `f` with the columns `in` names, in order; one its rows lack is null.
 dataframe::DataFrame aligned(
     dataframe::DataFrame f,
-    const dstd::Vector<dstd::Pair<dstd::String, dataframe::TypeId>>& in) {
+    dstd::Span<const dstd::Pair<dstd::String, dataframe::TypeId>> in) {
     bool same = f.names.size() == in.size();
     for (std::size_t i = 0; same && i < in.size(); ++i)
         same = f.names[i] == in[i].first;

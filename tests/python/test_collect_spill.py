@@ -12,7 +12,7 @@ from dftracer.utils import DataFrame  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
-    not hasattr(_ext, "_LazyFrame"), reason="extension built without Arrow support"
+    not hasattr(_ext, "LazyFrame"), reason="extension built without Arrow support"
 )
 
 N = 3000

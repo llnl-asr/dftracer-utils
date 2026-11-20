@@ -9,6 +9,7 @@
 //   gzip_crc_bench [uncompressed_MB] [rounds]
 
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/gzip_stream_inflater.h>
@@ -42,7 +43,7 @@ dftracer::utils::dstd::String hex_lines(std::size_t bytes) {
 }
 
 template <typename Inflate>
-double run(const dftracer::utils::dstd::Vector<std::uint8_t>& gz,
+double run(dftracer::utils::dstd::Span<const std::uint8_t> gz,
            std::size_t expect, Inflate&& inflate_fn) {
     dftracer::utils::dstd::Vector<unsigned char> out(OUT_CHUNK);
     const auto t0 = dstd::steady_now();
@@ -68,7 +69,7 @@ int main(int argc, char** argv) {
     dftracer::utils::dstd::Vector<std::uint8_t> gz;
     if (!c.compress_member_into(gz, text.data(), text.size())) return 1;
 
-    auto zlib_gzip = [](const dftracer::utils::dstd::Vector<std::uint8_t>& in,
+    auto zlib_gzip = [](dftracer::utils::dstd::Span<const std::uint8_t> in,
                         dftracer::utils::dstd::Vector<unsigned char>& out,
                         std::size_t& total) {
         zng_stream zs{};
@@ -85,21 +86,20 @@ int main(int argc, char** argv) {
         zng_inflateEnd(&zs);
         if (rc != Z_STREAM_END) std::exit(2);
     };
-    auto libdeflate_crc =
-        [](const dftracer::utils::dstd::Vector<std::uint8_t>& in,
-           dftracer::utils::dstd::Vector<unsigned char>& out,
-           std::size_t& total) {
-            fileio::compress::GzipStreamInflater inf;
-            inf.init(31);
-            inf.set_input(in.data(), in.size());
-            fileio::compress::InflateStatus rc;
-            do {
-                inf.set_output(out.data(), out.size());
-                rc = inf.inflate();
-                total += out.size() - inf.avail_out();
-            } while (rc == fileio::compress::InflateStatus::Ok);
-            if (rc != fileio::compress::InflateStatus::StreamEnd) std::exit(2);
-        };
+    auto libdeflate_crc = [](dftracer::utils::dstd::Span<const std::uint8_t> in,
+                             dftracer::utils::dstd::Vector<unsigned char>& out,
+                             std::size_t& total) {
+        fileio::compress::GzipStreamInflater inf;
+        inf.init(31);
+        inf.set_input(in.data(), in.size());
+        fileio::compress::InflateStatus rc;
+        do {
+            inf.set_output(out.data(), out.size());
+            rc = inf.inflate();
+            total += out.size() - inf.avail_out();
+        } while (rc == fileio::compress::InflateStatus::Ok);
+        if (rc != fileio::compress::InflateStatus::StreamEnd) std::exit(2);
+    };
 
     double best_zlib = 1e9;
     double best_new = 1e9;

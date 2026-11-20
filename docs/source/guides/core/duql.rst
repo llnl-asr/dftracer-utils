@@ -28,7 +28,7 @@ Start from a field, compare it, and combine.
          # filter() accepts the Expr directly (or a duql string):
          df = TraceViewer("traces/").filter(q).group_by("cat").agg("count").collect()
 
-      ``F.dur`` is shorthand for ``Field("dur")``. For a nested or
+      ``F.dur`` is shorthand for ``col("dur")``. For a nested or
       non-identifier field name, call or subscript it:
       ``F("args.level")`` or ``F["args.io.size"]``. A path descends objects by
       ``.`` and indexes arrays by ``[N]`` or a bare numeric segment
@@ -105,7 +105,7 @@ Start from a field, compare it, and combine.
 Operators
 ---------
 
-Every field supports the full set. In Python they are methods on ``Field``/``F``
+Every field supports the full set. In Python they are methods on ``col``/``F``
 (and operators for the comparisons); in C++ they are methods on
 ``dftracer::utils::duql::Field`` (and ``&&`` / ``||`` / ``!``). The
 ``dataframe::field`` ``F`` of the C++ tab above is a different type and has no
@@ -244,7 +244,7 @@ Python, ``Indexer(files=["trace.pfw.gz"]).rowset("files")`` returns the
 stored rows of an indexed trace as a DataFrame.
 
 A query with no ``from`` reads the source's ``data``: for a dftracer trace,
-every record but the ``ph: M`` metadata records. ``from all`` reads every
+every record but the ``ph: 4`` metadata records. ``from all`` reads every
 record.
 
 Name a condition with a macro

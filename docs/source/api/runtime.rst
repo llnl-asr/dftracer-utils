@@ -46,6 +46,29 @@ Module-level Functions
 
 .. autofunction:: dftracer.utils.peek_default_runtime
 
+Worker Processes
+----------------
+
+Several worker processes on one host split it with these (see
+:doc:`../environment`).
+
+.. autofunction:: dftracer.utils.worker_share
+
+.. autofunction:: dftracer.utils.apply_worker_share
+
+.. autoclass:: dftracer.utils.WorkerShare
+   :members:
+
+Memory Advice
+-------------
+
+Check a footprint before a run (see :doc:`../guides/runtime/memory-budget`).
+
+.. autofunction:: dftracer.utils.memory_budget_advice
+
+.. autoclass:: dftracer.utils.MemoryBudgetAdvice
+   :members:
+
 Submitting Tasks
 ----------------
 
@@ -83,11 +106,11 @@ needs nothing else.
 
    import dftracer.utils as dft
 
-   indexer = dft.Indexer(directory="traces/")
+   indexer = dft.Indexer("traces/")
    building = indexer.build_async()    # returns at once
    frame = lazy_frame.collect_async()  # a TaskHandle[DataFrame]
    print(building.done())              # False until the build ends
-   building.get()                      # None, or the error build() raises
+   building.get()                      # the IndexStatus build() returns, or its error
    df = frame.get()                    # the DataFrame collect() returns
 
 ``get()`` and ``wait()`` release the GIL while they block, so other Python
@@ -220,7 +243,7 @@ Progress Tracking
        "tasks": [
            {"name": "iter_lines", "state": "completed",
             "execution_duration_ms": 12.3, "queued_duration_ms": 0.1,
-            "progress_pct": 100.0, ...},
+            "progress_pct": 100.0},  # and more keys
        ],
        "errors": [],
    }

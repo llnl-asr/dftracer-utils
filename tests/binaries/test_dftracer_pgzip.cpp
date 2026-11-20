@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -38,12 +40,11 @@ dstd::String find_pgzip_binary() {
                                                 "dftracer_pgzip");
 }
 
-int run_pgzip(const dstd::String& binary,
-              const dstd::Vector<dstd::String>& args) {
+int run_pgzip(dstd::String binary, dstd::Vector<dstd::String> args) {
     return dftu_utils_test::run_process(binary, args);
 }
 
-dstd::String gunzip_all(const dstd::String& path) {
+dstd::String gunzip_all(dstd::CStringView path) {
     gzFile gz = gzopen(path.c_str(), "rb");
     dstd::String out;
     if (!gz) return out;

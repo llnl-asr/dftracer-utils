@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/path.h>
@@ -31,8 +32,8 @@ const char* op_of(int i) {
 
 // NDJSON records of no trace format: `op` cycles read/write/close, `lat` is
 // i % 50, `io.off` is i * 4096 and `name` cycles x0..x4.
-dstd::String write_ndjson(TestEnvironment& env, const dstd::String& name) {
-    const dstd::String plain = env.dir() + "/" + name + ".ndjson";
+dstd::String write_ndjson(TestEnvironment& env, dstd::StringView name) {
+    const dstd::String plain = env.dir() + "/" + dstd::String(name) + ".ndjson";
     {
         dftu_utils_test::FileOut out(plain);
         for (int i = 0; i < RECORDS; ++i)
@@ -52,7 +53,7 @@ dstd::String write_ndjson(TestEnvironment& env, const dstd::String& name) {
     return gz;
 }
 
-View view_of(const dstd::String& gz) {
+View view_of(dstd::CStringView gz) {
     return View::from_file(
         dstd::String(gz),
         dstd::String(dstd::String(determine_index_path(gz, ""))));
@@ -151,7 +152,7 @@ TEST_SUITE("GenericView") {
     TEST_CASE("trace operations need roles the schema binds") {
         TestEnvironment env(10);
         const auto gz = write_ndjson(env, "r");
-        auto fails_with = [](auto&& fn, const dstd::String& text) {
+        auto fails_with = [](auto&& fn, dstd::StringView text) {
             const auto status = fn().status();
             REQUIRE_FALSE(status.has_value());
             const dstd::String what = status.error().c_str();
@@ -235,7 +236,7 @@ TEST_SUITE("GenericView") {
         mixed(counted.materialize_partials({}).get());
         mixed(counted.aggregate_partial().collect().get());
         mixed(counted.collect().get());
-        mixed(v.collect_typed().get());
+        mixed(v.collect_index_records().get());
         mixed(v.materialize().get());
         mixed(counted.sink_counters(sink).get());
     }
@@ -256,7 +257,7 @@ TEST_SUITE("GenericView") {
             const dstd::String meta((dir / "rank_2.pfw").str());
             dftu_utils_test::FileOut(meta)
                 << R"({"name":"HH","cat":"dftracer","pid":2,"tid":2,)"
-                   R"("ph":"M","args":{"name":"host","value":"h1"}})"
+                   R"("ph":4,"args":{"name":"host","value":"h1"}})"
                 << "\n";
             REQUIRE(dftu_utils_test::compress_file_to_gzip(meta, meta + ".gz"));
             dstd::fs::remove(meta).discard();

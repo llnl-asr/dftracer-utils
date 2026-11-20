@@ -43,14 +43,15 @@ CoroTask<Collected> collect_lines(AsyncGenerator<dstd::Result<Line>> gen) {
     co_return out;
 }
 
-Collected read(const dstd::String& path, std::size_t start = 0,
+Collected read(dstd::StringView path, std::size_t start = 0,
                std::size_t end = 0, std::size_t chunk = 1 << 20) {
     return dftu_utils_test::ok(
-        collect_lines(async_streaming_plain_lines(path, start, end, chunk))
+        collect_lines(
+            async_streaming_plain_lines(dstd::String(path), start, end, chunk))
             .get());
 }
 
-dstd::String write_plain(const dstd::String& text) {
+dstd::String write_plain(dstd::StringView text) {
     dstd::Path p = dftu_utils_test::make_unique_test_path("plain_lines.pfw");
     dstd::fs::write_file(dstd::PathView(p), text).discard();
     return dstd::String(p.str());

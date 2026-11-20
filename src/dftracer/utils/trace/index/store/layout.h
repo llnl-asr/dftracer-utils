@@ -51,6 +51,12 @@ namespace metadata_kind {
 inline constexpr std::uint8_t CHUNK = 0;
 }  // namespace metadata_kind
 
+/// The plugin file format of a file: one RECORD record per file, a
+/// @ref FormatRecord.
+namespace format_kind {
+inline constexpr std::uint8_t RECORD = 0;
+}  // namespace format_kind
+
 /// The catalog: one PATH record per file and JSON path, keyed [path].
 namespace catalog_kind {
 inline constexpr std::uint8_t PATH = 0;
@@ -105,6 +111,11 @@ dstd::String prefix_end(dstd::StringView prefix);
 
 dstd::String encode_chunk_metadata(const ChunkMetadata& metadata);
 dstd::Optional<ChunkMetadata> decode_chunk_metadata(dstd::StringView body);
+
+/// A format record: {feeder u8, params hash u64, chunk count u64, token count
+/// u64, name length u32, name, tokens u64 each}.
+dstd::String encode_format_record(const FormatRecord& record);
+dstd::Optional<FormatRecord> decode_format_record(dstd::StringView body);
 
 /// A catalog record: {type u8, seen u8, count u64}.
 dstd::String encode_path_stat(const PathStat& stat);

@@ -194,7 +194,7 @@ inline dstd::Unexpected<dstd::Error> cell_key_error(TypeId refused) {
 
 /// Exact dedupe key of row `i` across `cols` (already FLAT), appended to `k`.
 /// False, with the column type in `refused`, when a column has no per-row key.
-inline bool try_row_key(const dstd::Vector<Series>& cols, std::int64_t i,
+inline bool try_row_key(dstd::Span<const Series> cols, std::int64_t i,
                         dstd::String& k, TypeId& refused) {
     for (const Series& c : cols)
         if (!try_append_cell(k, c, i, refused)) return false;
@@ -254,7 +254,7 @@ inline void append_cell(dstd::String& key, const Series& c, std::int64_t i,
 
 /// Exact dedupe key of row `i` across `cols` (already FLAT). A column with no
 /// per-row key is recorded in `refusal` and the key is unfinished.
-inline dstd::String row_key(const dstd::Vector<Series>& cols, std::int64_t i,
+inline dstd::String row_key(dstd::Span<const Series> cols, std::int64_t i,
                             KeyRefusal& refusal) {
     dstd::String k;
     TypeId refused = TypeId::Unknown;

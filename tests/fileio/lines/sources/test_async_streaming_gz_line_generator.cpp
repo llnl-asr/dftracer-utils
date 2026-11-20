@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
@@ -50,14 +51,14 @@ dstd::Vector<dstd::String> lines_of(dstd::Result<Collected> collected) {
 }
 
 // Compress `text` into one gzip member and append it to `out`.
-void append_member(dstd::Vector<std::uint8_t>& out, const dstd::String& text) {
+void append_member(dstd::Vector<std::uint8_t>& out, dstd::StringView text) {
     fileio::compress::GzipMemberCompressor comp;
     auto member = comp.compress_member(text.data(), text.size());
     REQUIRE(member.has_value());
     out.insert(out.end(), member->begin(), member->end());
 }
 
-dstd::String write_gz(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::String write_gz(dstd::Span<const std::uint8_t> bytes) {
     dstd::Path p = dftu_utils_test::make_unique_test_path("stream_gz.pfw.gz");
     dstd::String ofs;
     ofs.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());

@@ -14,10 +14,10 @@ using namespace dftracer::utils;
 namespace {
 
 dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names_of(
-    const char* const* items, std::int32_t n) {
+    dftracer::utils::dstd::Span<const char* const> items) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out;
-    out.reserve(static_cast<std::size_t>(n));
-    for (std::int32_t i = 0; i < n; ++i) out.emplace_back(items[i]);
+    out.reserve(items.size());
+    for (const char* item : items) out.emplace_back(item);
     return out;
 }
 
@@ -25,58 +25,72 @@ dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> names_of(
 
 dftu_dataframe* dftu_dataframe_window(
     const dftu_dataframe* frame, const char* const* partition_by,
-    int32_t n_part, const char* const* order_by, int32_t n_order,
-    const dftu_window_spec* specs, int32_t n_specs) {
-    if (!frame) return nullptr;
+    std::int32_t n_part, const char* const* order_by, std::int32_t n_order,
+    const dftu_window_spec* specs, std::int32_t n_specs) {
+    if (!frame || n_part < 0 || (n_part > 0 && !partition_by) || n_order < 0 ||
+        (n_order > 0 && !order_by) || n_specs < 0 || (n_specs > 0 && !specs))
+        return nullptr;
     dftracer::utils::dstd::Result<dataframe::DataFrame> out =
-        dataframe::window_checked(dataframe::dataframe_handle_view(frame),
-                                  partition_by, n_part, order_by, n_order,
-                                  specs, n_specs);
+        dataframe::window_checked(
+            dataframe::dataframe_handle_view(frame),
+            dftracer::utils::dstd::Span<const char* const>(
+                partition_by, static_cast<std::size_t>(n_part)),
+            dftracer::utils::dstd::Span<const char* const>(
+                order_by, static_cast<std::size_t>(n_order)),
+            dftracer::utils::dstd::Span<const dftu_window_spec>(
+                specs, static_cast<std::size_t>(n_specs)));
     if (!out) return nullptr;
     return dataframe::dataframe_handle_wrap(std::move(*out));
 }
 
 dftu_dataframe* dftu_dataframe_gap_fill(
     const dftu_dataframe* frame, const char* const* partition_by,
-    int32_t n_part, const char* time, int64_t bucket, const char* const* values,
-    int32_t n_values, dftu_gap_fill_mode mode, const int64_t* range,
-    int32_t n_range) {
-    if (!frame || !time || (n_part > 0 && !partition_by) ||
-        (n_values > 0 && !values) || (n_range != 0 && n_range != 2) ||
-        (n_range == 2 && !range))
+    std::int32_t n_part, const char* time, std::int64_t bucket,
+    const char* const* values, std::int32_t n_values, dftu_gap_fill_mode mode,
+    const std::int64_t* range, std::int32_t n_range) {
+    if (!frame || !time || n_part < 0 || (n_part > 0 && !partition_by) ||
+        n_values < 0 || (n_values > 0 && !values) ||
+        (n_range != 0 && n_range != 2) || (n_range == 2 && !range))
         return nullptr;
     if (mode != DFTU_GAP_FILL_NONE && mode != DFTU_GAP_FILL_LOCF &&
         mode != DFTU_GAP_FILL_LINEAR)
         return nullptr;
     dftracer::utils::dstd::Optional<
-        dftracer::utils::dstd::Pair<int64_t, int64_t>>
+        dftracer::utils::dstd::Pair<std::int64_t, std::int64_t>>
         r;
     if (n_range == 2)
-        r = dftracer::utils::dstd::Pair<int64_t, int64_t>{range[0], range[1]};
+        r = dftracer::utils::dstd::Pair<std::int64_t, std::int64_t>{range[0],
+                                                                    range[1]};
     dftracer::utils::dstd::Result<dataframe::DataFrame> out =
-        dataframe::gap_fill(dataframe::dataframe_handle_view(frame),
-                            names_of(partition_by, n_part), time, bucket,
-                            names_of(values, n_values),
-                            static_cast<dataframe::GapFillMode>(mode), r);
+        dataframe::gap_fill(
+            dataframe::dataframe_handle_view(frame),
+            names_of(dftracer::utils::dstd::Span<const char* const>(
+                partition_by, static_cast<std::size_t>(n_part))),
+            time, bucket,
+            names_of(dftracer::utils::dstd::Span<const char* const>(
+                values, static_cast<std::size_t>(n_values))),
+            static_cast<dataframe::GapFillMode>(mode), r);
     if (!out) return nullptr;
     return dataframe::dataframe_handle_wrap(std::move(*out));
 }
 
 dftu_dataframe* dftu_dataframe_asof(const dftu_dataframe* left,
                                     const dftu_dataframe* right, const char* on,
-                                    const char* const* by, int32_t n_by,
+                                    const char* const* by, std::int32_t n_by,
                                     dftu_asof_direction direction,
                                     double tolerance) {
-    if (!left || !right || !on || (n_by > 0 && !by)) return nullptr;
+    if (!left || !right || !on || n_by < 0 || (n_by > 0 && !by)) return nullptr;
     if (direction != DFTU_ASOF_BACKWARD && direction != DFTU_ASOF_FORWARD &&
         direction != DFTU_ASOF_NEAREST)
         return nullptr;
     dftracer::utils::dstd::Optional<double> tol;
     if (tolerance >= 0) tol = tolerance;
-    dftracer::utils::dstd::Result<dataframe::DataFrame> out = dataframe::asof(
-        dataframe::dataframe_handle_view(left),
-        dataframe::dataframe_handle_view(right), on, names_of(by, n_by),
-        static_cast<dataframe::AsofDirection>(direction), tol);
+    dftracer::utils::dstd::Result<dataframe::DataFrame> out =
+        dataframe::asof(dataframe::dataframe_handle_view(left),
+                        dataframe::dataframe_handle_view(right), on,
+                        names_of(dftracer::utils::dstd::Span<const char* const>(
+                            by, static_cast<std::size_t>(n_by))),
+                        static_cast<dataframe::AsofDirection>(direction), tol);
     if (!out) return nullptr;
     return dataframe::dataframe_handle_wrap(std::move(*out));
 }
@@ -85,13 +99,17 @@ dftu_dataframe* dftu_dataframe_interval(const dftu_dataframe* left,
                                         const dftu_dataframe* right,
                                         const char* point, const char* lo,
                                         const char* hi, const char* const* by,
-                                        int32_t n_by, int32_t outer) {
-    if (!left || !right || !point || !lo || !hi || (n_by > 0 && !by))
+                                        std::int32_t n_by, std::int32_t outer) {
+    if (!left || !right || !point || !lo || !hi || n_by < 0 ||
+        (n_by > 0 && !by))
         return nullptr;
     dftracer::utils::dstd::Result<dataframe::DataFrame> out =
-        dataframe::interval(dataframe::dataframe_handle_view(left),
-                            dataframe::dataframe_handle_view(right), point, lo,
-                            hi, names_of(by, n_by), outer != 0);
+        dataframe::interval(
+            dataframe::dataframe_handle_view(left),
+            dataframe::dataframe_handle_view(right), point, lo, hi,
+            names_of(dftracer::utils::dstd::Span<const char* const>(
+                by, static_cast<std::size_t>(n_by))),
+            outer != 0);
     if (!out) return nullptr;
     return dataframe::dataframe_handle_wrap(std::move(*out));
 }

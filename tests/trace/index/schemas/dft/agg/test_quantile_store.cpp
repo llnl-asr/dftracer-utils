@@ -42,19 +42,20 @@ double rel(double a, double b) {
     return std::abs(a - b) / std::max(std::abs(b), 1e-300);
 }
 
-trace::index::schemas::dft::agg::QuantileStore build(
-    const dstd::Vector<double>& v, std::size_t b, std::size_t e) {
+trace::index::schemas::dft::agg::QuantileStore build(dstd::Vector<double> v,
+                                                     std::size_t b,
+                                                     std::size_t e) {
     trace::index::schemas::dft::agg::QuantileStore s(ACCURACY);
     for (std::size_t i = b; i < e; ++i) s.add(v[i]);
     return s;
 }
 
 void check_sketch_like(const trace::index::schemas::dft::agg::QuantileStore& s,
-                       const dstd::Vector<double>& all) {
+                       dstd::Span<const double> all) {
     REQUIRE(s.count() == all.size());
     dataframe::MergeSketch direct(ACCURACY);
     for (double x : all) direct.add(x);
-    dstd::Vector<double> sorted = all;
+    dstd::Vector<double> sorted(all.begin(), all.end());
     std::sort(sorted.begin(), sorted.end());
     for (double q : QS) {
         const double got = s.quantile(q);
@@ -95,7 +96,7 @@ dstd::Vector<double> log_uniform(std::size_t n, unsigned seed) {
     return v;
 }
 
-dstd::Span<const double> dstd_span(const dstd::Vector<double>& v,
+dstd::Span<const double> dstd_span(dstd::Span<const double> v,
                                    std::size_t from) {
     return {v.data() + from, v.size() - from};
 }

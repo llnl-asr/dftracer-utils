@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -36,14 +38,13 @@ dstd::String find_info_binary() {
                                                 "dftracer_info");
 }
 
-int run_info(const dstd::String& binary,
-             const dstd::Vector<dstd::String>& args) {
+int run_info(dstd::String binary, dstd::Vector<dstd::String> args) {
     dftu_utils_test::set_test_library_path(binary);
     return dftu_utils_test::run_process(binary, args);
 }
 
-dstd::String run_info_capture(const dstd::String& binary,
-                              const dstd::Vector<dstd::String>& args,
+dstd::String run_info_capture(dstd::String binary,
+                              dstd::Vector<dstd::String> args,
                               int* exit_code = nullptr) {
     dftu_utils_test::set_test_library_path(binary);
     return dftu_utils_test::run_process_capture(binary, args, true, exit_code);
@@ -156,7 +157,7 @@ TEST_SUITE("DFTracerInfo") {
             return;
         }
 
-        auto valid_events = [](const dstd::String& out) -> long {
+        auto valid_events = [](dstd::String out) -> long {
             auto p = out.find("Valid Events");
             if (p == dstd::String::npos) return -1;
             p = out.find_first_of("0123456789", p);

@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -43,15 +44,15 @@ dstd::SharedPtr<spill::Dir> make_dir() {
     return dftu_utils_test::ok(spill::Dir::create());
 }
 
-spill::Writer open_writer(const dstd::String& path) {
+spill::Writer open_writer(dstd::CStringView path) {
     return dftu_utils_test::ok(spill::Writer::open(path));
 }
 
-dstd::UniquePtr<spill::Reader> open_reader(const dstd::String& path) {
+dstd::UniquePtr<spill::Reader> open_reader(dstd::CStringView path) {
     return dftu_utils_test::ok(spill::Reader::open(path));
 }
 
-dstd::Result<void> drain_run(const dstd::String& path) {
+dstd::Result<void> drain_run(dstd::CStringView path) {
     auto reader = spill::Reader::open(path);
     if (!reader) return reader.error();
     for (;;) {
@@ -107,8 +108,8 @@ TEST_SUITE("spill") {
 
     TEST_CASE("compressed morsels read back exactly and take less room") {
         struct Env {
-            explicit Env(const char* v) {
-                ::setenv("DFTRACER_UTILS_SPILL_COMPRESS", v, 1);
+            explicit Env(dstd::CStringView v) {
+                ::setenv("DFTRACER_UTILS_SPILL_COMPRESS", v.c_str(), 1);
             }
             ~Env() { ::unsetenv("DFTRACER_UTILS_SPILL_COMPRESS"); }
         };
@@ -131,7 +132,7 @@ TEST_SUITE("spill") {
         cols.push_back(Series::flat_i64(a.data(), N, valid.data()));
         cols.push_back(Series::strings(s));
 
-        auto round_trip = [&](const char* mode, std::uintmax_t* bytes) {
+        auto round_trip = [&](dstd::CStringView mode, std::uintmax_t* bytes) {
             Env env(mode);
             const auto dir_owner = make_dir();
             spill::Dir& dir = *dir_owner;

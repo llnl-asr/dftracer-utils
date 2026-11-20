@@ -9,11 +9,13 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/python/core/errors.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -79,7 +81,7 @@ PyObject* range_error(const char* what) {
 }
 
 // The `zoneinfo.ZoneInfo` (or fixed-offset timezone) of `name`, cached.
-PyObject* zone_of(const dftracer::utils::dstd::String& name) {
+PyObject* zone_of(dftracer::utils::dstd::CStringView name) {
     static PyObject* cache = nullptr;
     if (!cache && !(cache = PyDict_New())) return nullptr;
     PyObject* key = PyUnicode_FromString(name.c_str());
@@ -93,7 +95,7 @@ PyObject* zone_of(const dftracer::utils::dstd::String& name) {
         return nullptr;
     }
     PyObject* zone = nullptr;
-    if (!name.empty() && (name[0] == '+' || name[0] == '-')) {
+    if (!name.empty() && (name.c_str()[0] == '+' || name.c_str()[0] == '-')) {
         int hh = 0, mm = 0;
         if (std::sscanf(name.c_str() + 1, "%d:%d", &hh, &mm) < 1) {
             Py_DECREF(key);
@@ -101,13 +103,13 @@ PyObject* zone_of(const dftracer::utils::dstd::String& name) {
                          name.c_str());
             return nullptr;
         }
-        const int sign = name[0] == '-' ? -1 : 1;
+        const int sign = name.c_str()[0] == '-' ? -1 : 1;
         PyObject* delta = PyDelta_FromDSU(0, sign * (hh * 3600 + mm * 60), 0);
         if (delta) {
             zone = PyTimeZone_FromOffset(delta);
             Py_DECREF(delta);
         }
-    } else if (name == "UTC") {
+    } else if (name.view() == "UTC") {
         zone = PyDateTime_TimeZone_UTC;
         Py_XINCREF(zone);
     } else {
@@ -565,7 +567,7 @@ bool fast_pylist(const Series& col, PyObject** result) {
 }  // namespace
 
 PyObject* Series_to_pylist(PyObject* self, PyObject*) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a || !datetime_ready()) return nullptr;
     if (a->type() == TypeId::String || a->type() == TypeId::LargeString)
         return strings_to_list(*a, Py_None);
@@ -576,7 +578,7 @@ PyObject* Series_to_pylist(PyObject* self, PyObject*) {
         PyObject* fast = nullptr;
         if (fast_pylist(col, &fast)) return fast;
     }
-    try {
+    return guard_as(PyExc_TypeError, [&]() -> PyObject* {
         const Node node = build_node(*a);
         const std::int64_t n = node.col.length();
         PyObject* out = PyList_New(static_cast<Py_ssize_t>(n));
@@ -590,10 +592,7 @@ PyObject* Series_to_pylist(PyObject* self, PyObject*) {
             PyList_SET_ITEM(out, static_cast<Py_ssize_t>(i), v);
         }
         return out;
-    } catch (const std::invalid_argument& e) {
-        PyErr_SetString(PyExc_TypeError, e.what());
-        return nullptr;
-    }
+    });
 }
 
 namespace {
@@ -894,7 +893,7 @@ PyObject* strings_to_list(const Series& col, PyObject* na) {
 //  - String / LargeString: a list of str, null rows holding `na`; dtype "O";
 //  - any other type: TypeError.
 PyObject* Series_np_parts(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     int nullable = 0;
     PyObject* na = Py_None;
@@ -937,7 +936,7 @@ PyObject* Series_np_parts(PyObject* self, PyObject* args) {
         return tuple3(widen_to_double(static_cast<const T*>(data), valid, n),
                       nullptr, "<f8");
     };
-    try {
+    return guard_as(PyExc_TypeError, [&]() -> PyObject* {
         switch (col.type()) {
             case TypeId::Int8:
                 return valid && !nullable ? widen(std::int8_t{}, "i1")
@@ -990,24 +989,22 @@ PyObject* Series_np_parts(PyObject* self, PyObject* args) {
                                 "column type has no native numpy conversion");
                 return nullptr;
         }
-    } catch (const std::exception& e) {
-        PyErr_SetString(PyExc_TypeError, e.what());
-        return nullptr;
-    }
+    });
 }
 
 // str_into(out, na): the String column's rows into `out`, a writable
 // one-dimensional numpy object array of the column's length (made with
 // numpy.empty(n, dtype=object)); null rows get `na`. Returns None.
 PyObject* Series_str_into(PyObject* self, PyObject* args) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     PyObject* out = nullptr;
     PyObject* na = Py_None;
     if (!PyArg_ParseTuple(args, "O|O", &out, &na)) return nullptr;
     const Series& col = *a;
     if (col.type() != TypeId::String && col.type() != TypeId::LargeString) {
-        PyErr_SetString(PyExc_TypeError, "str_into needs a String column");
+        PyErr_SetString(core::g_dft_value_error,
+                        "str_into needs a String column");
         return nullptr;
     }
     Py_buffer view;
@@ -1032,7 +1029,7 @@ PyObject* Series_str_into(PyObject* self, PyObject* args) {
 }
 
 PyObject* Series_item(PyObject* self, PyObject* arg) {
-    Series* a = as_series(self);
+    Series* a = as_native<Series>(self);
     if (!a || !datetime_ready()) return nullptr;
     const Py_ssize_t i = PyLong_AsSsize_t(arg);
     if (i == -1 && PyErr_Occurred()) return nullptr;
@@ -1040,14 +1037,27 @@ PyObject* Series_item(PyObject* self, PyObject* arg) {
         PyErr_SetString(PyExc_IndexError, "Series index out of range");
         return nullptr;
     }
-    try {
+    return guard_as(PyExc_TypeError, [&] {
         if (a->encoding() == dataframe::Encoding::Chunked)
             return cell(build_node(a->slice(i, 1)), 0);
         return cell(build_node(*a), i);
-    } catch (const std::invalid_argument& e) {
-        PyErr_SetString(PyExc_TypeError, e.what());
+    });
+}
+
+// The element at a position of a Series without row labels: a labelled one
+// has no lookup by label yet, so `s[i]` is refused rather than read by
+// position.
+PyObject* Series_item_unlabelled(PyObject* self, PyObject* arg) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    if (a->has_index()) {
+        PyErr_SetString(PyExc_NotImplementedError,
+                        "s[label] looks a row up by label, which a Series "
+                        "with row labels does not support yet; use "
+                        "s.iloc[position]");
         return nullptr;
     }
+    return Series_item(self, arg);
 }
 
 namespace {
@@ -1494,7 +1504,7 @@ PyObject* build_lists(PyObject** items, Py_ssize_t n, Bits& bits) {
         from_items(flat.data(), static_cast<Py_ssize_t>(flat.size()), 0,
                    static_cast<int>(TypeId::String));
     if (!child) return nullptr;
-    Series* c = as_series(child);
+    Series* c = as_native<Series>(child);
     Series list = Series::list(offsets, c->share());
     Py_DECREF(child);
     return with_validity(std::move(list), bits, n);
@@ -1530,7 +1540,7 @@ PyObject* build_structs(PyObject** items, Py_ssize_t n, Bits& bits) {
             from_items(column.data(), static_cast<Py_ssize_t>(column.size()), 0,
                        static_cast<int>(TypeId::String));
         if (!built) return nullptr;
-        fields.push_back(as_series(built)->share());
+        fields.push_back(as_native<Series>(built)->share());
         Py_DECREF(built);
     }
     for (Py_ssize_t i = 0; i < n; ++i)
@@ -1618,7 +1628,7 @@ PyObject* from_items(PyObject** items, Py_ssize_t n, int want, int empty) {
                             any_big);
     }
     if (!built || want == 0) return built;
-    Series* got = as_series(built);
+    Series* got = as_native<Series>(built);
     if (!got || static_cast<int>(got->type()) == want) return built;
     Series cast = got->cast(static_cast<TypeId>(want));
     Py_DECREF(built);

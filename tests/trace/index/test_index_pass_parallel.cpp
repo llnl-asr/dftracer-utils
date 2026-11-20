@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
@@ -36,7 +38,7 @@ dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
     return s;
 }
 
-dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
+dstd::Vector<std::uint8_t> gzip(dstd::StringView text) {
     fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
@@ -47,7 +49,7 @@ dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
 
 struct TempFile {
     dstd::String path;
-    explicit TempFile(const dstd::Vector<std::uint8_t>& bytes) {
+    explicit TempFile(dstd::Span<const std::uint8_t> bytes) {
         char tmpl[] = "/tmp/dftu_index_pass_XXXXXX";
         const int fd = ::mkstemp(tmpl);
         REQUIRE(fd >= 0);
@@ -68,15 +70,14 @@ class Recorder : public trace::index::build::IndexVisitor {
         checkpoints.push_back(idx);
         co_return dstd::Result<void>{};
     }
-    coro::CoroTask<dstd::Result<void>> on_chunk(const char* data,
-                                                std::size_t len,
+    coro::CoroTask<dstd::Result<void>> on_chunk(dstd::StringView data,
                                                 std::size_t) override {
-        bytes.append(data, len);
+        bytes.append(data);
         co_return dstd::Result<void>{};
     }
 };
 
-trace::index::gzip::GzipBuildArtifacts build(const dstd::String& path,
+trace::index::gzip::GzipBuildArtifacts build(dstd::CStringView path,
                                              Recorder* rec) {
     dstd::Optional<trace::index::gzip::GzipBuildArtifacts> arts;
     dftu_utils_test::run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
@@ -112,8 +113,8 @@ void check_same(const trace::index::gzip::GzipBuildArtifacts& a,
     }
 }
 
-void check_file(const dstd::Vector<std::uint8_t>& comp,
-                const dstd::String& expected) {
+void check_file(dstd::Span<const std::uint8_t> comp,
+                dstd::StringView expected) {
     TempFile f(comp);
     const auto bare = build(f.path, nullptr);
     Recorder rec;
@@ -206,8 +207,7 @@ TEST_SUITE("index pass without visitors") {
     TEST_CASE("a visitor that fails ends the pass with its error") {
         class Thrower : public Recorder {
            public:
-            coro::CoroTask<dstd::Result<void>> on_chunk(const char*,
-                                                        std::size_t,
+            coro::CoroTask<dstd::Result<void>> on_chunk(dstd::StringView,
                                                         std::size_t) override {
                 if (++chunks == 5)
                     co_return common::make_error<"bad chunk">(

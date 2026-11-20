@@ -95,9 +95,8 @@ inline dstd::Vector<std::uint8_t> export_ipc(const DataFrame& frame) {
 }
 
 /// The one record batch of an IPC stream, read back.
-inline DataFrame import_ipc(const dstd::Vector<std::uint8_t>& bytes) {
-    auto reader = arrow::Reader::from_bytes(
-        dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()));
+inline DataFrame import_ipc(dstd::Span<const std::uint8_t> bytes) {
+    auto reader = arrow::Reader::from_bytes(bytes);
     REQUIRE(reader.has_value());
     auto next = reader->next();
     REQUIRE(next.has_value());

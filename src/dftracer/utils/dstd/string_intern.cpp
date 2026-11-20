@@ -176,15 +176,16 @@ const char* StringIntern::slot_value(std::uint32_t id) const {
     return block[id & (BLOCK_SIZE - 1)].load(std::memory_order_acquire);
 }
 
-StringView StringIntern::record_view(const char* rec) {
+StringView StringIntern::record_view(const void* rec) {
+    const auto* bytes = static_cast<const char*>(rec);
     std::uint32_t len;
-    std::memcpy(&len, rec, sizeof len);
-    return {rec + RECORD_HEADER, len};
+    std::memcpy(&len, bytes, sizeof len);
+    return {bytes + RECORD_HEADER, len};
 }
 
-std::uint32_t StringIntern::record_chunk(const char* rec) {
+std::uint32_t StringIntern::record_chunk(const void* rec) {
     std::uint32_t c;
-    std::memcpy(&c, rec + 4, sizeof c);
+    std::memcpy(&c, static_cast<const char*>(rec) + 4, sizeof c);
     return c;
 }
 
@@ -199,7 +200,7 @@ std::size_t StringIntern::shard_of(std::size_t h) {
     return (h >> 40) & (SHARDS - 1);
 }
 
-Error StringIntern::collision(const char* existing, StringView sv) {
+Error StringIntern::collision(const void* existing, StringView sv) {
     return Error(
         Condition::InvalidArgument,
         StringView(fmt<"string intern: deterministic id collision between "
@@ -354,7 +355,8 @@ void StringIntern::log_entry(std::uint32_t id) {
     block[n & (BLOCK_SIZE - 1)].store(id + 1, std::memory_order_release);
 }
 
-bool StringIntern::bind_slot(std::uint32_t id, const char* str, bool cas) {
+bool StringIntern::bind_slot(std::uint32_t id, const void* record, bool cas) {
+    const auto* str = static_cast<const char*>(record);
     if (id >= FAST_CAPACITY) {
         fatal("string intern: exhausted the id space at", id_text(id).c_str());
     }

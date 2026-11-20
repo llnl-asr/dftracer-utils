@@ -25,13 +25,15 @@ struct AggExprSpec {
     AggOp op = AggOp::Count;
     Expr value;
     dstd::String out;
-    double param = 0.0;  ///< Pct: the quantile level q in [0, 1]; SetUnion:
-                         ///< nonzero asks for the typed list
+    double param = 0.0;  ///< Pct, Quantile: the quantile level q in [0, 1];
+                         ///< SetUnion: nonzero asks for the typed list
     Expr by{};           ///< ArgMax: the value maximized (value is the field
                          ///< represented); unused otherwise
     dstd::String fn{};   ///< Udaf: the registered name of the aggregate
     dstd::Vector<Expr> args{};  ///< Udaf: the arguments after `value`, which
                                 ///< is argument 0 (unset for no argument)
+    Interpolation interp = Interpolation::Linear;  ///< Quantile: the result
+                                                   ///< between two ranks
 
     /// Rename the output column (fluent), e.g. `agg_sum(a + b).as("sum_ab")`.
     AggExprSpec as(dstd::String name) const {
@@ -56,8 +58,21 @@ AggExprSpec agg_var(Expr value, dstd::String out = "var");
 AggExprSpec agg_std(Expr value, dstd::String out = "std");
 AggExprSpec agg_skew(Expr value, dstd::String out = "skew");
 AggExprSpec agg_kurt(Expr value, dstd::String out = "kurt");
-/// A DDSketch quantile at level `q` in [0, 1] (mergeable, order-independent).
+/// The pandas sample skewness (NaN below three values) and sample excess
+/// kurtosis (NaN below four); NaN for a constant column.
+AggExprSpec agg_skew_unbiased(Expr value, dstd::String out = "skew");
+AggExprSpec agg_kurt_unbiased(Expr value, dstd::String out = "kurt");
+/// An approximate DDSketch quantile at level `q` in [0, 1]: mergeable in
+/// bounded memory and order-independent, exact only to the sketch's relative
+/// accuracy. @ref agg_quantile is the exact one.
 AggExprSpec agg_pct(Expr value, double q, dstd::String out = "pct");
+/// The exact quantile at level `q` in [0, 1], @p interp choosing the result
+/// between two ranks; null for a group with no present value. The state keeps
+/// every present value (see @ref AggOp::Quantile). An InvalidArgument error
+/// for a level outside [0, 1] or NaN.
+dstd::Result<AggExprSpec> agg_quantile(
+    Expr value, double q, Interpolation interp = Interpolation::Linear,
+    dstd::String out = "quantile");
 /// The DDSketch histogram of `value`, a list<struct{lo,hi,count}> per group.
 AggExprSpec agg_hist(Expr value, dstd::String out = "hist");
 /// Sum of squares of `value` (Float64), from the shared @ref FieldStat.
@@ -80,13 +95,14 @@ AggExprSpec agg_set_union(Expr value, dstd::String out = "set_union",
 /// expression that is not numeric, and any @ref eval or @ref group_agg error
 /// come back as an error result.
 dstd::Result<DataFrame> group_agg_expr(
-    const dstd::Vector<Expr>& keys, const dstd::Vector<AggExprSpec>& specs,
-    const dstd::Vector<const Series*>& inputs,
-    const dstd::Vector<dstd::String>& key_names);
+    dstd::Span<const Expr> keys, dstd::Span<const AggExprSpec> specs,
+    dstd::Span<const Series* const> inputs,
+    dstd::Span<const dstd::String> key_names);
 /// Single-key convenience: forwards to the N-key form.
-dstd::Result<DataFrame> group_agg_expr(
-    const Expr& key, const dstd::Vector<AggExprSpec>& specs,
-    const dstd::Vector<const Series*>& inputs, const dstd::String& key_name);
+dstd::Result<DataFrame> group_agg_expr(const Expr& key,
+                                       dstd::Span<const AggExprSpec> specs,
+                                       dstd::Span<const Series* const> inputs,
+                                       dstd::StringView key_name);
 
 }  // namespace dftracer::utils::dataframe
 

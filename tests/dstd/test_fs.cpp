@@ -24,7 +24,7 @@ using namespace dftracer::utils;
 namespace {
 
 dstd::Path in(const dftu_utils_test::ScopedTestDir& dir,
-              const dstd::String& name) {
+              dstd::StringView name) {
     return dstd::Path(dir.file(name));
 }
 
@@ -941,7 +941,7 @@ TEST_CASE("copy_tree keeps file and directory modes") {
     REQUIRE(dstd::fs::copy_tree(in(dir, "src").view(), in(dir, "dst").view(),
                                 dstd::fs::CopyMode::FailIfExists)
                 .has_value());
-    const auto mode_of = [&](const char* name) {
+    const auto mode_of = [&](dstd::StringView name) {
         return dstd::fs::stat(in(dir, name).view())->mode & 07777;
     };
     CHECK(mode_of("dst/secret.txt") == 0600);

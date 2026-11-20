@@ -4,16 +4,22 @@
 
 #include <Python.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/python/core/type_helpers.h>
 
-namespace dftracer::utils::dataframe {
-class Series;
-}
+#include <cstdint>
 
 namespace dftracer::utils::python::frame {
 
 // Register the Series type and its factories on module `m`.
 // Returns 0 on success, -1 with the Python error set on failure.
 int init_series(PyObject* m);
+
+// The Series type and the slot its factories allocate, for _bind_types.
+TypeBinding series_binding();
 
 // Wrap an owned dataframe::Series in a new Series Python object (steals the
 // column). Used by the trace view to hand its scanned batch to Python.
@@ -28,6 +34,30 @@ const dftracer::utils::dataframe::Series* unwrap_vec_column(PyObject* o);
 // dataframe::Series. Returns an invalid Series with a Python error set on
 // failure.
 dftracer::utils::dataframe::Series column_from_arrow(PyObject* arrow_array);
+
+// The Series of a sequence (as a list or tuple of Series), sharing their
+// buffers. False with a TypeError set when `seq` is no sequence or holds
+// another object.
+bool series_list_from_py(
+    PyObject* seq, const char* what,
+    dftracer::utils::dstd::Vector<dftracer::utils::dataframe::Series>& out);
+
+// The row indices a take reads from `obj`: an Int64 Series without nulls is
+// read in place (`holder` keeps its flat column alive), any other sequence of
+// ints is parsed into `parsed`. `out` views whichever holds them. False with a
+// Python error set.
+bool row_indices_from_py(PyObject* obj, const char* what,
+                         dftracer::utils::dataframe::Series& holder,
+                         dftracer::utils::dstd::Vector<std::int64_t>& parsed,
+                         dftracer::utils::dstd::Span<const std::int64_t>& out);
+
+// The label lookup results as Python values: `(positions, missing)`, two lists
+// of ints; `(offset, length)`. A failed lookup sets the Python exception its
+// error maps to and returns nullptr.
+PyObject* located_to_py(
+    dftracer::utils::dstd::Result<dftracer::utils::dataframe::Located>&& r);
+PyObject* label_span_to_py(
+    dftracer::utils::dstd::Result<dftracer::utils::dataframe::LabelSpan>&& r);
 
 }  // namespace dftracer::utils::python::frame
 

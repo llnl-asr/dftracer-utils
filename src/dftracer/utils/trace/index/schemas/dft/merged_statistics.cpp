@@ -16,9 +16,8 @@ dstd::Result<void> add_path_counts(const Snapshot& snapshot,
     for (const auto& [granule, bytes] : *found) {
         auto counts = trace::index::extensions::kinds::decode_counts(bytes);
         if (!counts || !counts->compressed) continue;
-        const auto values = trace::index::extensions::ChunkDimensionStats::
-            decompress_value_counts(counts->compressed->data(),
-                                    counts->compressed->size());
+        const auto values = trace::index::extensions::CountsBuilder::decompress(
+            counts->compressed->data(), counts->compressed->size());
         for (const auto& [k, v] : values) into[k] += v;
     }
     return {};

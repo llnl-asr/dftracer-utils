@@ -89,7 +89,12 @@ std::size_t agg_approx_bytes(const AggState& st) {
         for (const dstd::String& v : st.arg_repr) total += v.size();
     }
     if (st.has_bitor) total += st.bitor_acc.size() * sizeof(std::uint64_t);
+    if (st.has_bw)
+        total += st.bw_acc.size() * sizeof(std::uint64_t) + st.bw_seen.size();
     if (st.has_prod) total += st.prod_acc.size() * sizeof(double);
+    if (st.has_qv)
+        for (const dstd::Vector<double>& v : st.qv)
+            total += v.capacity() * sizeof(double) + sizeof(v);
     if (st.has_msk)
         for (const MergeSketch& sk : st.msk)
             total += sk.bins().size() * 24 + 64;
@@ -192,7 +197,9 @@ DataType set_union_element_type(TypeId t) {
     }
 }
 
-DataType agg_output_type(AggOp op, TypeId value_type, double param) {
+DataType agg_output_type(AggOp op, const DataType& value, double param) {
+    const TypeId value_type = value.id;
+    const bool temporal = is_temporal_type(value_type);
     auto widened = [&] {
         if (value_type == TypeId::Unknown) return scalar(TypeId::Unknown);
         switch (col_domain(value_type)) {
@@ -210,19 +217,28 @@ DataType agg_output_type(AggOp op, TypeId value_type, double param) {
         case AggOp::Distinct:
             return scalar(TypeId::Int64);
         case AggOp::Sum:
+            return value_type == TypeId::Duration ? value : widened();
         case AggOp::Min:
         case AggOp::Max:
-            return widened();
+            return temporal ? value : widened();
         case AggOp::First:
         case AggOp::Last:
+            if (temporal) return value;
             return value_type == TypeId::String ? scalar(TypeId::String)
                                                 : widened();
         case AggOp::Mean:
+            return value_type == TypeId::Timestamp ||
+                           value_type == TypeId::Duration
+                       ? value
+                       : scalar(TypeId::Float64);
         case AggOp::Var:
         case AggOp::Std:
         case AggOp::Skew:
         case AggOp::Kurt:
+        case AggOp::SkewUnbiased:
+        case AggOp::KurtUnbiased:
         case AggOp::Pct:
+        case AggOp::Quantile:
         case AggOp::SumSq:
         case AggOp::Busy:
         case AggOp::Concurrency:
@@ -246,8 +262,15 @@ DataType agg_output_type(AggOp op, TypeId value_type, double param) {
         case AggOp::ArgMax:
         case AggOp::ArgMin:
             return scalar(TypeId::String);
+        case AggOp::ArgMaxPos:
+        case AggOp::ArgMinPos:
+            return scalar(TypeId::Int64);
         case AggOp::BitOr:
             return scalar(TypeId::Uint64);
+        case AggOp::BitwiseAnd:
+        case AggOp::BitwiseOr:
+        case AggOp::BitwiseXor:
+            return scalar(value_type);
         case AggOp::Hist:
             return list_of(
                 struct_of({Field{"lo", scalar(TypeId::Float64), true},

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/gzip_member_reader.h>
@@ -39,7 +41,7 @@ dstd::String hex_lines(std::size_t bytes, std::uint32_t seed) {
     return s;
 }
 
-dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
+dstd::Vector<std::uint8_t> gzip(dstd::StringView text) {
     fileio::compress::GzipMemberCompressor c;
     dstd::Vector<std::uint8_t> out(c.bound(text.size()));
     auto n = c.compress(text.data(), text.size(), out.data(), out.size());
@@ -50,7 +52,7 @@ dstd::Vector<std::uint8_t> gzip(const dstd::String& text) {
 
 struct TempFile {
     dstd::String path;
-    explicit TempFile(const dstd::Vector<std::uint8_t>& bytes) {
+    explicit TempFile(dstd::Span<const std::uint8_t> bytes) {
         char tmpl[] = "/tmp/dftu_inflater_XXXXXX";
         const int fd = ::mkstemp(tmpl);
         REQUIRE(fd >= 0);
@@ -61,7 +63,7 @@ struct TempFile {
     ~TempFile() { std::remove(path.c_str()); }
 };
 
-dstd::String read_all(const dstd::String& path) {
+dstd::String read_all(dstd::CStringView path) {
     auto fd_file = dstd::File::open(path, {});
     REQUIRE(fd_file);
     const int fd = fd_file->native_handle();
@@ -87,7 +89,7 @@ dstd::String read_all(const dstd::String& path) {
     return out;
 }
 
-dstd::String read_members(const dstd::String& path) {
+dstd::String read_members(dstd::CStringView path) {
     auto fd_file = dstd::File::open(path, {});
     REQUIRE(fd_file);
     const int fd = fd_file->native_handle();

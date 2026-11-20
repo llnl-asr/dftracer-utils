@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_FLAME_ARENA_H
 #define DFTRACER_UTILS_DATAFRAME_FLAME_ARENA_H
 
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // StringViewMap
 #include <dftracer/utils/dstd/vector.h>
@@ -58,7 +59,7 @@ inline std::uint32_t fold_flame_node(dstd::Vector<FlameNode>& arena,
 /// Merge partial tree `src` (subtree `si`) into `dst` (node `di`), summing
 /// stats per name-path. `src` node names stay alive for the whole merge.
 inline void merge_flame_arena(dstd::Vector<FlameNode>& dst, std::uint32_t di,
-                              const dstd::Vector<FlameNode>& src,
+                              dstd::Span<const FlameNode> src,
                               std::uint32_t si) {
     dst[di].total += src[si].total;
     dst[di].self += src[si].self;
@@ -99,7 +100,7 @@ inline T get(const std::uint8_t*& p, const std::uint8_t* end) {
 /// are written (name/total/self/count/children); the kids map is rebuilt on
 /// merge. Homogeneous-endianness transport (a cluster of like machines).
 inline dstd::Vector<std::uint8_t> serialize_flame_arena(
-    const dstd::Vector<FlameNode>& arena) {
+    dstd::Span<const FlameNode> arena) {
     dstd::Vector<std::uint8_t> b;
     flame_detail::put<std::uint32_t>(b, 0x464c414du);  // 'FLAM'
     flame_detail::put<std::uint32_t>(b,

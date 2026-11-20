@@ -11,6 +11,7 @@
 //   hash_bench --reps R       (R reps per case)
 
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
@@ -141,9 +142,10 @@ double median_ns(const KeySet& set, Fn fn, int reps, std::uint64_t& sink) {
     return times[times.size() / 2];
 }
 
-void report(const KeySet& set, const char* name, double ns) {
-    std::printf("%-12s %-8s %10.2f %10.0f\n", set.label.c_str(), name, ns,
-                set.mean_bytes / ns * 1000.0);
+void report(const KeySet& set, dftracer::utils::dstd::CStringView name,
+            double ns) {
+    std::printf("%-12s %-8s %10.2f %10.0f\n", set.label.c_str(), name.c_str(),
+                ns, set.mean_bytes / ns * 1000.0);
 }
 
 }  // namespace

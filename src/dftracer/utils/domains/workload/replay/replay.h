@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/json/parser.h>
@@ -260,7 +261,7 @@ class ReplayEngine {
      * @param trace_files Vector of trace file paths
      * @return Aggregated replay results
      */
-    ReplayResult replay(const dstd::Vector<dstd::String>& trace_files);
+    ReplayResult replay(dstd::Span<const dstd::String> trace_files);
 
     /**
      * Replay traces using call tree structure
@@ -287,7 +288,7 @@ class ReplayEngine {
      * Returns the first read error of a file; `result` is then not merged.
      */
     coro::CoroTask<dstd::Result<void>> run_pipelined(
-        coro::Scope& scope, const dstd::Vector<dstd::String>& files,
+        coro::Scope& scope, dstd::Vector<dstd::String> files,
         ReplayResult& result, std::size_t channel_capacity = 4096);
 
    private:

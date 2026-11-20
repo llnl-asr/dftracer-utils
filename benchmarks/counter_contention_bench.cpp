@@ -41,6 +41,7 @@
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -156,18 +157,19 @@ void group_by(const Sizes& s) {
                "task");
 }
 
-void genesis(const dstd::String& root) {
+void genesis(dstd::StringView root) {
     require_ok(default_runtime()
                    .submit(coro::with_scope([&](coro::Scope& ctx) {
-                       return genesis_run(ctx, root);
+                       return genesis_run(ctx, dstd::String(root));
                    }))
                    .wait(),
                "task");
 }
 
-dstd::String prepare_genesis(const dstd::String& dir, const Sizes& s) {
+dstd::String prepare_genesis(dstd::StringView dir, const Sizes& s) {
     dstd::fs::remove_all(dir).discard();
-    const dstd::String run = dir + "/genesis/app1/sys1/in1/nodes_1/ppn_1";
+    const dstd::String run =
+        dstd::String(dir) + "/genesis/app1/sys1/in1/nodes_1/ppn_1";
     require_ok(dstd::fs::create_directories(run), "create_directories");
     require_ok(
         dstd::fs::write_file(
@@ -177,7 +179,7 @@ dstd::String prepare_genesis(const dstd::String& dir, const Sizes& s) {
                 "\"in1\",\"nodes\":1,\"ppn\":{},\"sets\":[\"set1\"]}">(RANKS)),
         "write summary.json");
     write_gz(run + "/compacted/set1.pfw.gz", genesis_text(s.genesis_calls));
-    return dir + "/genesis";
+    return dstd::String(dir) + "/genesis";
 }
 
 struct SizeMix {
@@ -315,7 +317,7 @@ class BatchedCounter {
 };
 
 template <class Counter>
-void counter_worker(Counter counter, const dstd::Vector<std::size_t>& table,
+void counter_worker(Counter counter, dstd::Span<const std::size_t> table,
                     std::size_t pairs, ThreadStats& st) {
     struct Slot {
         void* p = nullptr;
@@ -372,7 +374,7 @@ struct RemoteShared {
 
 template <bool BUFFERED>
 void remote_worker(RemoteShared& sh, std::size_t t, std::size_t threads,
-                   std::size_t groups, const dstd::Vector<std::size_t>& table,
+                   std::size_t groups, dstd::Span<const std::size_t> table,
                    std::size_t rounds, ThreadStats& st) {
     const std::size_t batch = SLICE * groups;
     std::size_t at = 0;

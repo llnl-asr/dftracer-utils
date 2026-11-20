@@ -34,6 +34,26 @@ How Series relates to its wrapper base:
    :undoc-members:
    :show-inheritance:
 
+The ``s.str``, ``s.dt`` and ``s.list`` accessors are properties of ``Series`` and
+of ``Expr``; the accessor methods are listed in the Series methods above under
+their ``str_*``, ``dt_*`` and ``list_*`` flat names. The pandas and polars
+spellings of one method are aliases; see :ref:`pandas-polars-names`.
+
+Windows
+-------
+
+``Series.rolling(window)`` and ``Series.ewm(...)`` return native window objects.
+
+.. automethod:: dftracer.utils.Series.rolling
+
+.. automethod:: dftracer.utils.Series.ewm
+
+.. autoclass:: dftracer.utils.dftracer_utils_ext.Rolling
+   :members:
+
+.. autoclass:: dftracer.utils.dftracer_utils_ext.Ewm
+   :members:
+
 Comparisons (``<``, ``<=``, ``>``, ``>=``, ``==``, ``!=``, plus the named
 ``gt``/``ge``/``lt``/``le``/``eq``/``ne`` methods) return a boolean mask
 ``Series``, as in pandas and polars. A ``Series`` is therefore unhashable. The

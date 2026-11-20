@@ -1,0 +1,3 @@
+slow: 114
+total: 300
+worst: 59

@@ -66,7 +66,7 @@ class GzipStream : public StreamBase {
 
     virtual ~GzipStream() { reset(); }
 
-    bool matches(const dstd::String &gz_path, std::size_t /*start_bytes*/,
+    bool matches(dstd::StringView gz_path, std::size_t /*start_bytes*/,
                  std::size_t end_bytes) const {
         // Reuse the stream if same file and same end position.
         // For POSIX-style sequential reads, the stream continues from
@@ -146,7 +146,7 @@ class GzipStream : public StreamBase {
     }
 
    protected:
-    dstd::Result<dstd::File> open_file(const dstd::String &path) {
+    dstd::Result<dstd::File> open_file(dstd::StringView path) {
         auto file = dstd::File::open(dstd::PathView(path), {});
         if (!file) {
             return reader_error<ReaderErrorType::FileIoError,
@@ -160,7 +160,7 @@ class GzipStream : public StreamBase {
     /// Records the request only. Opening and seeking happen on the first
     /// read, so a stream is built without blocking a caller who is going to
     /// await the data anyway.
-    void initialize(const dstd::String &gz_path, std::size_t start_bytes,
+    void initialize(dstd::StringView gz_path, std::size_t start_bytes,
                     std::size_t end_bytes,
                     dftracer::utils::trace::index::gzip::CheckpointIndexer
                         &indexer) override {

@@ -18,10 +18,9 @@ namespace {
 
 /// A one-row, one-column frame named "x": the batch a Python consumer would
 /// hand the reconciler.
-arrow::Batch one_row(const char* type, std::int64_t i64, double f64) {
-    Series column = dstd::StringView(type) == "int64"
-                        ? Series::flat_i64(&i64, 1)
-                        : Series::flat_f64(&f64, 1);
+arrow::Batch one_row(dstd::StringView type, std::int64_t i64, double f64) {
+    Series column =
+        type == "int64" ? Series::flat_i64(&i64, 1) : Series::flat_f64(&f64, 1);
     DataFrame frame;
     frame.names.push_back(dstd::SharedString{"x"});
     frame.columns.push_back(std::move(column));

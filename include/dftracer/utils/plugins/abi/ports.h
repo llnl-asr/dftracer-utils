@@ -179,7 +179,9 @@ typedef struct dftu_svc_ports {
                                     const void* data, uint32_t len,
                                     dftu_port_status* out_status);
     /** End the sends. A receive still gets what was queued, then
-       DFTU_PORT_CLOSED. The host closes every channel when the scan ends. */
+       DFTU_PORT_CLOSED. The host closes a channel when every plugin that
+       opened it with DFTU_CHANNEL_F_SENDS has finished on_finalize (or failed
+       it, or has none), and every channel when the scan ends. */
     dftu_status (*channel_close)(dftu_ctx* ctx, void* h, uint64_t channel);
 
     /** A latest port is a hint: the last value set under `name`, and a read

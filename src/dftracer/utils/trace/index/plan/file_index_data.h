@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_INDEX_PLAN_FILE_INDEX_DATA_H
 #define DFTRACER_UTILS_TRACE_INDEX_PLAN_FILE_INDEX_DATA_H
 
+#include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
@@ -74,28 +75,39 @@ struct FileIndexData {
     /// record may hold at its top level, where the evaluator looks first
     /// and the args evidence does not, has none. The accessors below take
     /// query paths and map them through this.
-    const dstd::Optional<dstd::String>& evidence_name(const dstd::String& path);
+    const dstd::Optional<dstd::String>& evidence_name(dstd::StringView path);
 
-    const Zones& zones(const dstd::String& path);
-    const Counts& counts(const dstd::String& path);
-    const Blooms& blooms(const dstd::String& path);
+    const Zones& zones(dstd::StringView path);
+    const Counts& counts(dstd::StringView path);
+    const Blooms& blooms(dstd::StringView path);
     using Catalog =
         dstd::Vector<dstd::Pair<dstd::String, trace::index::store::PathStat>>;
     /// The file's path catalog; empty when it is not current.
     const Catalog& catalog();
 
+    /// Whether `path` may hold strings, so a number literal on it is also
+    /// probed by its text. True when the catalog does not say.
+    bool may_hold_strings(dstd::StringView path);
+
+    /// The type of the column `path` is in the file's catalog (an integer
+    /// path is Int64, one with unsigned values above int64 Uint64), or
+    /// Unknown when the catalog does not say or the values have several types.
+    dataframe::TypeId path_type(dstd::StringView path);
+
     /// The file-level bloom of `path`; nullptr when there is none.
     const trace::index::extensions::ScalableBloomFilter* file_bloom(
-        const dstd::String& path);
+        dstd::StringView path);
 
-    /// Chunks holding `val` of `path` per its postings; empty when the
-    /// postings name none.
-    const dstd::Set<std::uint64_t>& posting_chunks(const dstd::String& path,
-                                                   const dstd::String& val);
-    /// Whether the file holds `val` of `path` per its postings; nullopt when
-    /// the file has no postings for the path.
-    dstd::Optional<bool> posting_contains(const dstd::String& path,
-                                          const dstd::String& val);
+    /// Chunks holding the value of canonical hash `value_hash` (see
+    /// @ref dstd::hash::value_hash_int64) of `path` per its postings; empty
+    /// when the postings name none.
+    const dstd::Set<std::uint64_t>& posting_chunks(dstd::StringView path,
+                                                   std::uint64_t value_hash);
+    /// Whether the file holds that value of `path` per its postings; nullopt
+    /// when the file has no postings for the path, or postings of another
+    /// hash version.
+    dstd::Optional<bool> posting_contains(dstd::StringView path,
+                                          std::uint64_t value_hash);
 
    private:
     bool current(IndexExtension ext);

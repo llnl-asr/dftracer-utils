@@ -15,6 +15,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -121,7 +122,7 @@ bool equal_at(const Series& v, std::int64_t a, std::int64_t b) {
 // Decimal128/256 are ValueDomain::Bytes (exact compare needs the scaled
 // integer) but read_f64 decodes them to a real number, so they window like
 // Float16; every other Bytes/None type has no numeric magnitude to widen.
-bool refuse_non_numeric(const char* op, TypeId t) {
+bool refuse_non_numeric(dstd::StringView op, TypeId t) {
     if (value_domain(t) == ValueDomain::Numeric || t == TypeId::Decimal128 ||
         t == TypeId::Decimal256)
         return false;
@@ -134,11 +135,15 @@ bool refuse_non_numeric(const char* op, TypeId t) {
 
 double variance(const Series& v, bool sample) {
     if (refuse_non_numeric("variance", v.type())) return 0.0;
+    if (const auto n = v.length() - v.null_count(); n == 0 || (sample && n < 2))
+        return std::nan("");
     return field_stat_reduce(v, 0, v.length()).variance(sample);
 }
 
 double stddev(const Series& v, bool sample) {
     if (refuse_non_numeric("stddev", v.type())) return 0.0;
+    if (const auto n = v.length() - v.null_count(); n == 0 || (sample && n < 2))
+        return std::nan("");
     return field_stat_reduce(v, 0, v.length()).stddev(sample);
 }
 
@@ -152,12 +157,25 @@ double kurtosis(const Series& v) {
     return field_stat_reduce(v, 0, v.length()).kurtosis();
 }
 
+double skewness_unbiased(const Series& v) {
+    if (refuse_non_numeric("skewness", v.type())) return 0.0;
+    return field_stat_reduce(v, 0, v.length()).skewness_unbiased();
+}
+
+double kurtosis_unbiased(const Series& v) {
+    if (refuse_non_numeric("kurtosis", v.type())) return 0.0;
+    return field_stat_reduce(v, 0, v.length()).kurtosis_unbiased();
+}
+
 namespace {
 
-// The order-preserving bit pattern of a double (the sort kernels' key).
+// The order-preserving bit pattern of a double (the sort kernels' key); every
+// NaN, whatever its sign bit, takes the largest key so it ranks above every
+// number.
 // FloatFlip by Michael Herf, Radix Tricks (2001), MIT-style license,
 // https://stereopsis.com/radix.html
 std::uint64_t sortable_key(double f) {
+    if (std::isnan(f)) return ~0ULL;
     std::uint64_t u = std::bit_cast<std::uint64_t>(f);
     return u ^ ((u >> 63) ? ~0ULL : 0x8000000000000000ULL);
 }
@@ -167,7 +185,8 @@ std::uint64_t sortable_key(double f) {
 // cells), without sorting: sampled splitters cut the key range into
 // buckets, one parallel histogram places the two positions, and only the
 // bucket (or two) that holds them is collected and sorted. Falls back to
-// a full sort (NaN) when the keys crowd one bucket.
+// a full sort (NaN) when the keys crowd one bucket, or when either position
+// ranks among the NaN cells of a float column.
 template <class T, class KeyFn>
 dstd::Pair<double, double> two_order_statistics(const T* x, std::size_t n,
                                                 const std::uint8_t* validity,
@@ -236,8 +255,12 @@ dstd::Pair<double, double> two_order_statistics(const T* x, std::size_t n,
             dstd::Vector<T>& out = parts[static_cast<std::size_t>(b) / GRAIN];
             for (std::int64_t i = b; i < e; ++i) {
                 const std::size_t k = which[static_cast<std::size_t>(i)];
-                if (k >= b0 && k <= b1)
-                    out.push_back(x[static_cast<std::size_t>(i)]);
+                if (k < b0 || k > b1) continue;
+                const T v = x[static_cast<std::size_t>(i)];
+                if constexpr (std::is_floating_point_v<T>) {
+                    if (std::isnan(v)) continue;
+                }
+                out.push_back(v);
             }
         });
     dstd::Vector<T> held;
@@ -245,6 +268,9 @@ dstd::Pair<double, double> two_order_statistics(const T* x, std::size_t n,
     for (const auto& p : parts) held.insert(held.end(), p.begin(), p.end());
     std::sort(held.begin(), held.end());
     const std::size_t at = lo - start[b0];
+    const std::size_t in_range = start[b1 + 1] - start[b0];
+    if (at >= held.size() || (at + 1 < in_range && at + 1 >= held.size()))
+        return {std::nan(""), std::nan("")};
     return {
         static_cast<double>(held[at]),
         static_cast<double>(at + 1 < held.size() ? held[at + 1] : held[at])};
@@ -257,16 +283,22 @@ std::uint64_t sortable_i64(std::int64_t v) {
 }  // namespace
 
 double quantile(const Series& v, double q) {
-    if (refuse_non_numeric("quantile", v.type())) return std::nan("");
+    return quantile(v, q, Interpolation::Linear);
+}
+
+double quantile(const Series& v, double q, Interpolation interp) {
+    if (refuse_non_numeric("quantile", v.type()) || std::isnan(q))
+        return std::nan("");
     const auto n = static_cast<std::size_t>(v.length() - v.null_count());
     if (n == 0) return std::nan("");
     double pos = std::clamp(q, 0.0, 1.0) * static_cast<double>(n - 1);
     std::size_t lo = static_cast<std::size_t>(pos);
     double frac = pos - static_cast<double>(lo);
     if (lo + 1 >= n) frac = 0.0;
+    const bool linear = interp == Interpolation::Linear;
     // A flat Float64 / Int64 column is read in place, nulls skipped by the
     // bitmap; the bucket pass copies only the bucket the position falls in.
-    if (n > (std::size_t{1} << 18) && parallel_backend_installed() &&
+    if (linear && n > (std::size_t{1} << 18) && parallel_backend_installed() &&
         v.encoding() == Encoding::Flat &&
         (v.type() == TypeId::Float64 || v.type() == TypeId::Int64)) {
         const auto total = static_cast<std::size_t>(v.length());
@@ -282,15 +314,60 @@ double quantile(const Series& v, double q) {
             return frac == 0.0 ? a : a * (1.0 - frac) + b * frac;
     }
     dstd::Vector<double> x = nonnull_values(v);
-    if (n > (std::size_t{1} << 18) && parallel_backend_installed()) {
+    const bool is_float = v.type() == TypeId::Float64 ||
+                          v.type() == TypeId::Float32 ||
+                          v.type() == TypeId::Float16;
+    return quantile_of(x, q, interp, is_float);
+}
+
+double quantile_of(dstd::Vector<double>& x, double q, Interpolation interp,
+                   bool may_have_nan) {
+    const std::size_t n = x.size();
+    if (n == 0 || std::isnan(q)) return std::nan("");
+    const double pos = std::clamp(q, 0.0, 1.0) * static_cast<double>(n - 1);
+    const auto lo = static_cast<std::size_t>(pos);
+    double frac = pos - static_cast<double>(lo);
+    if (lo + 1 >= n) frac = 0.0;
+    const bool linear = interp == Interpolation::Linear;
+    // The selection keys a NaN above every number and gives up when a rank
+    // falls among the NaN cells, so it needs no scan for one.
+    if (linear && n > (std::size_t{1} << 18) && parallel_backend_installed()) {
         auto [a, b] =
             two_order_statistics(x.data(), n, nullptr, lo, sortable_key);
         if (!std::isnan(a))
             return frac == 0.0 ? a : a * (1.0 - frac) + b * frac;
     }
-    parallel_packed_sort(x.data(), n, [](double a, double b) { return a < b; });
-    if (lo + 1 >= n) return x[lo];
-    return x[lo] * (1.0 - frac) + x[lo + 1] * frac;
+    // NaN ranks above every number: sort the numbers and let the ranks past
+    // them read NaN, so the sort never compares a NaN.
+    const auto is_nan = [](double d) { return d != d; };
+    const std::size_t numbers =
+        may_have_nan && std::any_of(x.begin(), x.end(), is_nan)
+            ? static_cast<std::size_t>(
+                  std::partition(x.begin(), x.end(),
+                                 [&](double d) { return !is_nan(d); }) -
+                  x.begin())
+            : n;
+    const std::size_t hi = std::min(lo + 1, n - 1);
+    parallel_packed_sort(x.data(), numbers,
+                         [](double a, double b) { return a < b; });
+    const auto rank = [&](std::size_t i) {
+        return i < numbers ? x[i] : std::nan("");
+    };
+    switch (interp) {
+        case Interpolation::Linear:
+            return frac == 0.0 ? rank(lo)
+                               : rank(lo) * (1.0 - frac) + rank(hi) * frac;
+        case Interpolation::Nearest:
+            return rank(
+                std::min(static_cast<std::size_t>(std::round(pos)), n - 1));
+        case Interpolation::Lower:
+            return rank(lo);
+        case Interpolation::Higher:
+            return rank(frac == 0.0 ? lo : hi);
+        case Interpolation::Midpoint:
+            return frac == 0.0 ? rank(lo) : (rank(lo) + rank(hi)) / 2.0;
+    }
+    return std::nan("");
 }
 
 double median(const Series& v) { return quantile(v, 0.5); }
@@ -298,56 +375,29 @@ double median(const Series& v) { return quantile(v, 0.5); }
 std::int64_t nunique(const Series& v) {
     if (v.length() == 0) return 0;
     if (refuse_nested_value("nunique", v.type())) return 0;
-    return unique(v).length();
+    return unique(v).length() - (v.null_count() > 0 ? 1 : 0);
 }
 
-Series unique(const Series& v) {
-    if (refuse_nested_value("unique", v.type())) return Series{};
-    const TypeId t = v.type();
-    // Floats keep the sort over every row: NaN != NaN keeps each NaN row, and
-    // which of 0.0 and -0.0 survives depends on that sort, so ids keyed by
-    // bits would change the result.
-    if (t == TypeId::Float64 || t == TypeId::Float32 || t == TypeId::Float16) {
-        const Series f =
-            v.encoding() == Encoding::Flat ? v.share() : v.materialize();
-        const std::int64_t n = f.length();
-        Series order = argsort(f, false);
-        const std::int64_t* idx = order.data<std::int64_t>();
-        const bool has_nulls = f.null_count() > 0;
-        dstd::Vector<std::int64_t> keep;
-        std::int64_t prev = -1;
-        for (std::int64_t k = 0; k < n; ++k) {
-            std::int64_t i = idx[k];
-            if (has_nulls && f.is_null(i)) break;
-            if (prev < 0 || !equal_at(f, i, prev)) {
-                keep.push_back(i);
-                prev = i;
-            }
-        }
-        return take(f, keep);
-    }
-    ValueIds ids;
-    value_ids(*v.handle(), ids);
+// The first row of every distinct value, ascending: one null row stands for
+// all the nulls. Every type compares as value_ids does, so a float's -0.0 is
+// 0.0 and every NaN is one value (as pandas and Polars key a float).
+static dstd::Vector<std::int64_t> distinct_first_rows(const Series& f) {
     dstd::Vector<std::int64_t> firsts;
-    firsts.reserve(ids.first.size());
-    for (std::size_t id = 0; id < ids.first.size(); ++id)
-        if (static_cast<std::int32_t>(id) != ids.null_id)
-            firsts.push_back(ids.first[id]);
-    Series d = v.take(firsts);
+    ValueIds ids;
+    value_ids(*f.handle(), ids);
+    firsts.assign(ids.first.begin(), ids.first.end());
+    return firsts;
+}
+
+Series unique(const Series& v, bool maintain_order) {
+    if (refuse_nested_value("unique", v.type())) return Series{};
+    const Series f =
+        v.encoding() == Encoding::Flat ? v.share() : v.materialize();
+    const dstd::Vector<std::int64_t> firsts = distinct_first_rows(f);
+    Series d = f.take(firsts);
     if (d.encoding() != Encoding::Flat) d = d.materialize();
-    const std::int64_t n = d.length();
-    Series order = argsort(d, false);
-    const std::int64_t* idx = order.data<std::int64_t>();
-    dstd::Vector<std::int64_t> keep;
-    std::int64_t prev = -1;
-    for (std::int64_t k = 0; k < n; ++k) {
-        std::int64_t i = idx[k];
-        if (prev < 0 || !equal_at(d, i, prev)) {
-            keep.push_back(i);
-            prev = i;
-        }
-    }
-    return take(d, keep);
+    if (maintain_order) return d;
+    return d.sort(false, false);
 }
 
 Series rank(const Series& v, RankMethod method, bool descending, bool pct) {
@@ -593,7 +643,7 @@ double quantile_sorted(dstd::Vector<double>& x, double q) {
 }
 
 // Sample variance of a scratch window (divide by n-1); 0 for fewer than 2.
-double window_sample_var(const dstd::Vector<double>& x) {
+double window_sample_var(dstd::Span<const double> x) {
     const std::size_t n = x.size();
     if (n < 2) return 0.0;
     double mean = 0.0;
@@ -615,7 +665,7 @@ double window_sample_var(const dstd::Vector<double>& x) {
 // ever touch their own disjoint `out` slots.
 template <class Agg>
 Series rolling_window(const Series& v, std::int64_t window, Agg agg,
-                      const char* op_name) {
+                      dstd::StringView op_name) {
     if (refuse_non_numeric(op_name, v.type())) return Series{};
     const std::int64_t n = v.length();
     if (window < 1) window = 1;
@@ -681,14 +731,14 @@ Series rolling_window(const Series& v, std::int64_t window, Agg agg,
 Series rolling_var(const Series& v, std::int64_t window) {
     return rolling_window(
         v, window,
-        [](const dstd::Vector<double>& w) { return window_sample_var(w); },
+        [](dstd::Span<const double> w) { return window_sample_var(w); },
         "rolling_var");
 }
 
 Series rolling_std(const Series& v, std::int64_t window) {
     return rolling_window(
         v, window,
-        [](const dstd::Vector<double>& w) {
+        [](dstd::Span<const double> w) {
             return std::sqrt(window_sample_var(w));
         },
         "rolling_std");
@@ -982,36 +1032,109 @@ Series ewm_std(const Series& v, double alpha) {
     return Series::flat(TypeId::Float64, out.data(), n, valid.data());
 }
 
+namespace {
+
+// True when the column reads exactly as int64 (signed integers, Bool and the
+// Int64-backed temporal types), so a cut can compare without a double.
+bool exact_int_column(const Series& c) {
+    switch (physical_type(c.type())) {
+        case TypeId::Bool:
+        case TypeId::Int8:
+        case TypeId::Int16:
+        case TypeId::Int32:
+        case TypeId::Int64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// The bin of each value: the count of breaks below it (right-closed) or at or
+// below it. Values that arrive in ascending order walk one pointer along the
+// sorted edges; a value below its predecessor falls back to a binary search.
+template <class T, class Read>
+Series cut_with(const Series& v, dstd::Span<const T> edges, bool right,
+                bool inner, Read read) {
+    const std::int64_t n = v.length();
+    const std::int64_t nb = static_cast<std::int64_t>(edges.size());
+    dstd::Vector<std::int32_t> out(static_cast<std::size_t>(n), -1);
+    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
+    const bool has_nulls = v.null_count() > 0;
+    std::int64_t at = 0;
+    bool have_prev = false;
+    T prev{};
+    std::uint8_t acc = 0;
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (!(has_nulls && v.is_null(i))) {
+            const T x = read(v, i);
+            if (have_prev && x >= prev) {
+                if (right)
+                    while (at < nb && edges[static_cast<std::size_t>(at)] < x)
+                        ++at;
+                else
+                    while (at < nb && edges[static_cast<std::size_t>(at)] <= x)
+                        ++at;
+            } else {
+                auto it = right
+                              ? std::lower_bound(edges.begin(), edges.end(), x)
+                              : std::upper_bound(edges.begin(), edges.end(), x);
+                at = it - edges.begin();
+            }
+            prev = x;
+            have_prev = true;
+            std::int32_t bin = static_cast<std::int32_t>(at);
+            bool in_range = true;
+            if (inner) {
+                in_range = bin >= 1 && bin < static_cast<std::int32_t>(nb);
+                --bin;
+            }
+            if (in_range) {
+                out[static_cast<std::size_t>(i)] = bin;
+                acc |= static_cast<std::uint8_t>(1u << (i & 7));
+            }
+        }
+        if ((i & 7) == 7) {
+            valid[static_cast<std::size_t>(i >> 3)] = acc;
+            acc = 0;
+        }
+    }
+    if ((n & 7) != 0) valid[static_cast<std::size_t>(n >> 3)] = acc;
+    return Series::flat(TypeId::Int32, out.data(), n, valid.data());
+}
+
+}  // namespace
+
 Series cut(const Series& v, const Series& breaks, std::int32_t flags) {
     if (refuse_non_numeric("cut", v.type())) return Series{};
     if ((flags & ~(DFTU_CUT_RIGHT | DFTU_CUT_INNER)) != 0) return Series{};
     const bool right = (flags & DFTU_CUT_RIGHT) != 0;
     const bool inner = (flags & DFTU_CUT_INNER) != 0;
-    const std::int64_t n = v.length();
     const std::int64_t nb = breaks.length();
+    if (exact_int_column(v) && exact_int_column(breaks)) {
+        dstd::Vector<std::int64_t> edges(static_cast<std::size_t>(nb));
+        for (std::int64_t k = 0; k < nb; ++k)
+            edges[static_cast<std::size_t>(k)] = read_i64(breaks, k);
+        std::sort(edges.begin(), edges.end());
+        const dstd::Span<const std::int64_t> span(edges.data(), edges.size());
+        if (physical_type(v.type()) == TypeId::Int64 &&
+            v.encoding() == Encoding::Flat) {
+            const std::int64_t* raw = v.data<std::int64_t>();
+            return cut_with(
+                v, span, right, inner,
+                [raw](const Series&, std::int64_t i) { return raw[i]; });
+        }
+        return cut_with(
+            v, span, right, inner,
+            [](const Series& c, std::int64_t i) { return read_i64(c, i); });
+    }
     dstd::Vector<double> edges(static_cast<std::size_t>(nb));
     for (std::int64_t k = 0; k < nb; ++k)
         edges[static_cast<std::size_t>(k)] = read_f64(breaks, k);
     std::sort(edges.begin(), edges.end());
-    dstd::Vector<std::int32_t> out(static_cast<std::size_t>(n), -1);
-    dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
-    const bool has_nulls = v.null_count() > 0;
-    for (std::int64_t i = 0; i < n; ++i) {
-        if (has_nulls && v.is_null(i)) continue;
-        const double x = read_f64(v, i);
-        // The count of breaks below x (right-closed) or at or below it.
-        auto it = right ? std::lower_bound(edges.begin(), edges.end(), x)
-                        : std::upper_bound(edges.begin(), edges.end(), x);
-        std::int32_t bin = static_cast<std::int32_t>(it - edges.begin());
-        if (inner) {
-            if (bin < 1 || bin >= static_cast<std::int32_t>(nb)) continue;
-            --bin;
-        }
-        out[static_cast<std::size_t>(i)] = bin;
-        valid[static_cast<std::size_t>(i >> 3)] |=
-            static_cast<std::uint8_t>(1u << (i & 7));
-    }
-    return Series::flat(TypeId::Int32, out.data(), n, valid.data());
+    const dstd::Span<const double> span(edges.data(), edges.size());
+    return cut_with(v, span, right, inner, [](const Series& c, std::int64_t i) {
+        return read_f64(c, i);
+    });
 }
 
 Series qcut(const Series& v, std::int32_t q) {
@@ -1042,7 +1165,7 @@ Series qcut(const Series& v, std::int32_t q) {
     return Series::flat(TypeId::Int32, out.data(), n, valid.data());
 }
 
-Series search_sorted(const Series& v, const Series& values) {
+Series search_sorted(const Series& v, const Series& values, bool right) {
     if (refuse_non_numeric("search_sorted", v.type())) return Series{};
     if (refuse_non_numeric("search_sorted", values.type())) return Series{};
     const std::int64_t n = v.length();
@@ -1053,7 +1176,8 @@ Series search_sorted(const Series& v, const Series& values) {
     dstd::Vector<std::int64_t> out(static_cast<std::size_t>(m), 0);
     for (std::int64_t k = 0; k < m; ++k) {
         const double qv = read_f64(values, k);
-        auto it = std::lower_bound(self.begin(), self.end(), qv);
+        auto it = right ? std::upper_bound(self.begin(), self.end(), qv)
+                        : std::lower_bound(self.begin(), self.end(), qv);
         out[static_cast<std::size_t>(k)] =
             static_cast<std::int64_t>(it - self.begin());
     }
@@ -1141,7 +1265,7 @@ Series interpolate(const Series& v) {
 
 }  // namespace dftracer::utils::dataframe
 
-double dftu_series_variance(const dftu_series* v, int32_t sample) {
+double dftu_series_variance(const dftu_series* v, std::int32_t sample) {
     if (!v) return 0.0;
     DFTU_FLAT_INPUT(v, dftu_series_variance, sample);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1149,7 +1273,7 @@ double dftu_series_variance(const dftu_series* v, int32_t sample) {
     c.release();
     return r;
 }
-double dftu_series_stddev(const dftu_series* v, int32_t sample) {
+double dftu_series_stddev(const dftu_series* v, std::int32_t sample) {
     if (!v) return 0.0;
     DFTU_FLAT_INPUT(v, dftu_series_stddev, sample);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1173,6 +1297,22 @@ double dftu_series_kurtosis(const dftu_series* v) {
     c.release();
     return r;
 }
+double dftu_series_skewness_unbiased(const dftu_series* v) {
+    if (!v) return 0.0;
+    DFTU_FLAT_INPUT(v, dftu_series_skewness_unbiased);
+    dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
+    double r = dftracer::utils::dataframe::skewness_unbiased(c);
+    c.release();
+    return r;
+}
+double dftu_series_kurtosis_unbiased(const dftu_series* v) {
+    if (!v) return 0.0;
+    DFTU_FLAT_INPUT(v, dftu_series_kurtosis_unbiased);
+    dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
+    double r = dftracer::utils::dataframe::kurtosis_unbiased(c);
+    c.release();
+    return r;
+}
 double dftu_series_quantile(const dftu_series* v, double q) {
     if (!v) return 0.0;
     DFTU_FLAT_INPUT(v, dftu_series_quantile, q);
@@ -1181,10 +1321,22 @@ double dftu_series_quantile(const dftu_series* v, double q) {
     c.release();
     return r;
 }
-int64_t dftu_series_nunique(const dftu_series* v) {
+double dftu_series_quantile_interp(const dftu_series* v, double q,
+                                   dftu_interpolation interp) {
+    if (!v) return 0.0;
+    if (interp < DFTU_INTERP_LINEAR || interp > DFTU_INTERP_MIDPOINT)
+        return std::nan("");
+    DFTU_FLAT_INPUT(v, dftu_series_quantile_interp, q, interp);
+    dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
+    double r = dftracer::utils::dataframe::quantile(
+        c, q, static_cast<dftracer::utils::dataframe::Interpolation>(interp));
+    c.release();
+    return r;
+}
+std::int64_t dftu_series_nunique(const dftu_series* v) {
     if (!v) return 0;
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
-    int64_t r = dftracer::utils::dataframe::nunique(c);
+    std::int64_t r = dftracer::utils::dataframe::nunique(c);
     c.release();
     return r;
 }
@@ -1192,12 +1344,21 @@ dftu_series* dftu_series_unique(const dftu_series* v) {
     if (!v) return nullptr;
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series r =
-        dftracer::utils::dataframe::unique(c);
+        dftracer::utils::dataframe::unique(c.drop_nulls(), false);
+    c.release();
+    return r.release();
+}
+dftu_series* dftu_series_unique_nulls(const dftu_series* v,
+                                      std::int32_t maintain_order) {
+    if (!v) return nullptr;
+    dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
+    dftracer::utils::dataframe::Series r =
+        dftracer::utils::dataframe::unique(c, maintain_order != 0);
     c.release();
     return r.release();
 }
 dftu_series* dftu_series_rank(const dftu_series* v, dftu_rank_method method,
-                              int32_t flags) {
+                              std::int32_t flags) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_rank, method, flags);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1208,7 +1369,7 @@ dftu_series* dftu_series_rank(const dftu_series* v, dftu_rank_method method,
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_rolling(const dftu_series* v, int64_t window,
+dftu_series* dftu_series_rolling(const dftu_series* v, std::int64_t window,
                                  dftu_rolling_op op) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_rolling, window, op);
@@ -1218,7 +1379,8 @@ dftu_series* dftu_series_rolling(const dftu_series* v, int64_t window,
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_rolling_var(const dftu_series* v, int64_t window) {
+dftu_series* dftu_series_rolling_var(const dftu_series* v,
+                                     std::int64_t window) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_rolling_var, window);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1227,7 +1389,8 @@ dftu_series* dftu_series_rolling_var(const dftu_series* v, int64_t window) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_rolling_std(const dftu_series* v, int64_t window) {
+dftu_series* dftu_series_rolling_std(const dftu_series* v,
+                                     std::int64_t window) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_rolling_std, window);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1236,7 +1399,8 @@ dftu_series* dftu_series_rolling_std(const dftu_series* v, int64_t window) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_rolling_median(const dftu_series* v, int64_t window) {
+dftu_series* dftu_series_rolling_median(const dftu_series* v,
+                                        std::int64_t window) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_rolling_median, window);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1245,8 +1409,8 @@ dftu_series* dftu_series_rolling_median(const dftu_series* v, int64_t window) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_rolling_quantile(const dftu_series* v, int64_t window,
-                                          double q) {
+dftu_series* dftu_series_rolling_quantile(const dftu_series* v,
+                                          std::int64_t window, double q) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_rolling_quantile, window, q);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1274,7 +1438,7 @@ dftu_series* dftu_series_ewm_std(const dftu_series* v, double alpha) {
     return r.release();
 }
 dftu_series* dftu_series_cut(const dftu_series* v, const dftu_series* breaks,
-                             int32_t flags) {
+                             std::int32_t flags) {
     if (!v || !breaks) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_cut, breaks, flags);
     if (breaks->encoding != dftracer::utils::dataframe::Encoding::Flat) {
@@ -1292,7 +1456,7 @@ dftu_series* dftu_series_cut(const dftu_series* v, const dftu_series* breaks,
     b.release();
     return r.release();
 }
-dftu_series* dftu_series_qcut(const dftu_series* v, int32_t q) {
+dftu_series* dftu_series_qcut(const dftu_series* v, std::int32_t q) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_qcut, q);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
@@ -1303,19 +1467,24 @@ dftu_series* dftu_series_qcut(const dftu_series* v, int32_t q) {
 }
 dftu_series* dftu_series_search_sorted(const dftu_series* v,
                                        const dftu_series* values) {
+    return dftu_series_search_sorted_side(v, values, 0);
+}
+dftu_series* dftu_series_search_sorted_side(const dftu_series* v,
+                                            const dftu_series* values,
+                                            std::int32_t right) {
     if (!v || !values) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_search_sorted, values);
+    DFTU_FLAT_INPUT(v, dftu_series_search_sorted_side, values, right);
     if (values->encoding != dftracer::utils::dataframe::Encoding::Flat) {
         dftu_series* flat = dftu_series_materialize(values);
         if (!flat) return nullptr;
-        dftu_series* r = dftu_series_search_sorted(v, flat);
+        dftu_series* r = dftu_series_search_sorted_side(v, flat, right);
         dftu_series_free(flat);
         return r;
     }
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series q{const_cast<dftu_series*>(values)};
     dftracer::utils::dataframe::Series r =
-        dftracer::utils::dataframe::search_sorted(c, q);
+        dftracer::utils::dataframe::search_sorted(c, q, right != 0);
     c.release();
     q.release();
     return r.release();

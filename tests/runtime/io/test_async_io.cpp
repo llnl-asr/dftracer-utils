@@ -24,7 +24,7 @@
 using namespace dftracer::utils;
 
 // Helper: create a temp file with known content, return path.
-static dstd::String create_temp_file(const dstd::String& content) {
+static dstd::String create_temp_file(dstd::StringView content) {
     char path[] = "/tmp/dftracer_io_test_XXXXXX";
     int fd = ::mkstemp(path);
     REQUIRE(fd >= 0);
@@ -689,8 +689,8 @@ TEST_CASE("AsyncIO - large pread with executor") {
 
 /// Helper: run the open+pread+close lifecycle on a forced backend.
 static void run_lifecycle_on_backend(runtime::io::IoBackendType type,
-                                     const char* type_name) {
-    dstd::String data = dstd::String("backend test: ") + type_name;
+                                     dstd::StringView type_name) {
+    dstd::String data = dstd::fmt<"backend test: {}">(type_name);
     auto path = create_temp_file(data);
 
     Runtime rt(ExecutorConfig{.thread_count = 2, .io_backend_type = type});
@@ -724,7 +724,8 @@ static void run_lifecycle_on_backend(runtime::io::IoBackendType type,
     };
 
     dftu_utils_test::ok(rt.block_on(body()));
-    MESSAGE("Backend requested: ", type_name, ", actual: ", backend_name);
+    MESSAGE("Backend requested: ", dstd::String(type_name),
+            ", actual: ", backend_name);
     CHECK(success.load());
     CHECK(read_data == data);
 
@@ -733,13 +734,13 @@ static void run_lifecycle_on_backend(runtime::io::IoBackendType type,
 
 /// Helper: run write to pipe on a forced backend (regression test).
 static void run_pipe_write_on_backend(runtime::io::IoBackendType type,
-                                      const char* type_name) {
+                                      dstd::StringView type_name) {
     int pipefd[2];
     REQUIRE(::pipe(pipefd) == 0);
 
     Runtime rt(ExecutorConfig{.thread_count = 2, .io_backend_type = type});
 
-    dstd::String data = dstd::String("pipe write on ") + type_name;
+    dstd::String data = dstd::fmt<"pipe write on {}">(type_name);
     std::atomic<bool> success{false};
 
     auto body = [&]() -> coro::CoroTask<void> {

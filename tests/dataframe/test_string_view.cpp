@@ -19,6 +19,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -48,7 +49,7 @@ void on_release(void* ctx) {
     dstd::Delete<Owner>{}(o);
 }
 
-void put_view(std::uint8_t* v, const dstd::String& s, std::int32_t index,
+void put_view(std::uint8_t* v, dstd::StringView s, std::int32_t index,
               std::int32_t offset) {
     const auto size = static_cast<std::int32_t>(s.size());
     std::memset(v, 0, 16);
@@ -325,8 +326,10 @@ TEST_SUITE("string view") {
         std::memcpy(writable(d->data), codes, sizeof(codes));
         d->set_child(dstd::make_shared<dftu_series>(*view.handle()));
         const Series dict{d};
-        const Series from = Series::strings({"a", "\xC3\xA9"});
-        const Series to = Series::strings({"A", "e"});
+        const Series from = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"a", "\xC3\xA9"}));
+        const Series to = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"A", "e"}));
         for (const Series* in : {&view, &dict}) {
             const Series ref = make_flat(rows_of(in->materialize()));
             CHECK(rows_of(in->str_normalize(DFTU_NORM_NFKC)) ==
@@ -426,7 +429,9 @@ TEST_SUITE("string view kernels match the flat column") {
         };
         auto counts = [&](const Series& key) {
             DataFrame g = dftu_utils_test::ok(frame(key).group_by(
-                dstd::String("k"), {GroupAgg{Agg::Count, "v", "n"}}));
+                dstd::String("k"),
+                dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                    {GroupAgg{Agg::Count, "v", "n"}})));
             g = dftu_utils_test::ok(g.sort_by("k"));
             dstd::Vector<dstd::Pair<Row, std::int64_t>> out;
             const Series k = g.column("k");
@@ -441,13 +446,14 @@ TEST_SUITE("string view kernels match the flat column") {
         DataFrame right;
         right.names = dstd::make_shared_strings({"k", "w"});
         right.columns.push_back(
-            Series::strings({"pear", "short", "zz another long value here"}));
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"pear", "short", "zz another long value here"})));
         const std::int64_t w[3] = {10, 20, 30};
         right.columns.push_back(Series::flat_i64(w, 3));
-        const DataFrame jv =
-            dftu_utils_test::ok(frame(p.view).join(right, {"k"}));
-        const DataFrame jf =
-            dftu_utils_test::ok(frame(p.flat).join(right, {"k"}));
+        const DataFrame jv = dftu_utils_test::ok(frame(p.view).join(
+            right, dftu_utils_test::span_of<dstd::String>({"k"})));
+        const DataFrame jf = dftu_utils_test::ok(frame(p.flat).join(
+            right, dftu_utils_test::span_of<dstd::String>({"k"})));
         REQUIRE(jv.num_rows() == jf.num_rows());
         CHECK(jv.num_rows() == 4);
         for (std::int64_t i = 0; i < jv.num_rows(); ++i) {
@@ -461,13 +467,14 @@ TEST_SUITE("string view kernels match the flat column") {
         DataFrame right_view;
         right_view.names = dstd::make_shared_strings({"k", "w"});
         right_view.columns.push_back(
-            Series::strings({"pear", "short", "zz another long value here"}));
+            Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+                {"pear", "short", "zz another long value here"})));
         right_view.columns.push_back(Series::flat_i64(w, 3));
         right_view.columns[0] = make_view(
             {Row("pear"), Row("short"), Row("zz another long value here")},
             &released);
-        const DataFrame jw =
-            dftu_utils_test::ok(left_flat.join(right_view, {"k"}));
+        const DataFrame jw = dftu_utils_test::ok(left_flat.join(
+            right_view, dftu_utils_test::span_of<dstd::String>({"k"})));
         CHECK(rows_of(jw.column("k")) == rows_of(jf.column("k")));
         CHECK(jw.num_rows() == 4);
     }
@@ -482,13 +489,21 @@ TEST_SUITE("string view kernels match the flat column") {
         both.insert(both.end(), other.begin(), other.end());
 
         CHECK(rows_of(dftu_utils_test::ok(
-                  concat_columns({&p.view, &other_view}))) == both);
+                  concat_columns(dftu_utils_test::span_of<
+                                 const dftracer::utils::dataframe::Series*>(
+                      {&p.view, &other_view})))) == both);
         CHECK(rows_of(dftu_utils_test::ok(
-                  concat_columns({&p.view, &other_flat}))) == both);
+                  concat_columns(dftu_utils_test::span_of<
+                                 const dftracer::utils::dataframe::Series*>(
+                      {&p.view, &other_flat})))) == both);
         CHECK(rows_of(dftu_utils_test::ok(
-                  concat_columns({&p.flat, &other_view}))) == both);
+                  concat_columns(dftu_utils_test::span_of<
+                                 const dftracer::utils::dataframe::Series*>(
+                      {&p.flat, &other_view})))) == both);
         CHECK(rows_of(dftu_utils_test::ok(
-                  concat_columns({&p.flat, &other_flat}))) == both);
+                  concat_columns(dftu_utils_test::span_of<
+                                 const dftracer::utils::dataframe::Series*>(
+                      {&p.flat, &other_flat})))) == both);
     }
 }
 
@@ -554,8 +569,7 @@ Series make_large(const Rows& rows, bool binary = false) {
     return Series{w};
 }
 
-Series make_selection(const Series& base,
-                      const dstd::Vector<std::int64_t>& idx) {
+Series make_selection(const Series& base, dstd::Vector<std::int64_t> idx) {
     auto* s = new dftu_series();
     s->type = base.type();
     s->encoding = Encoding::Selection;
@@ -592,7 +606,9 @@ TEST_SUITE("string view concat") {
         Series v = make_view(SAMPLE, &released);
         Series d = make_flat(dict_rows).dictionary_encode();
         REQUIRE(d.encoding() == Encoding::Dictionary);
-        Series out = dftu_utils_test::ok(concat_columns({&f, &v, &d}));
+        Series out = dftu_utils_test::ok(concat_columns(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&f, &v, &d})));
         CHECK(out.encoding() == Encoding::View);
         CHECK(out.type() == TypeId::String);
         CHECK(out.length() == 16);
@@ -612,7 +628,9 @@ TEST_SUITE("string view concat") {
         int r1 = 0, r2 = 0;
         Series a = make_view(SAMPLE, &r1);
         Series b = make_view(SAMPLE, &r2);
-        Series out = dftu_utils_test::ok(concat_columns({&a, &b, &a}));
+        Series out = dftu_utils_test::ok(concat_columns(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&a, &b, &a})));
         CHECK(out.handle()->blobs->size() == 4);
         CHECK(rows_of(out) == join({SAMPLE, SAMPLE, SAMPLE}));
         CHECK(rows_of(out.materialize()) == join({SAMPLE, SAMPLE, SAMPLE}));
@@ -623,7 +641,9 @@ TEST_SUITE("string view concat") {
         Series base = make_view(SAMPLE, &released);
         Series sel = make_selection(base, {8, -1, 3, 1});
         Series f = make_flat({Row("tail")});
-        Series out = dftu_utils_test::ok(concat_columns({&sel, &f}));
+        Series out = dftu_utils_test::ok(concat_columns(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&sel, &f})));
         CHECK(out.encoding() == Encoding::View);
         CHECK(rows_of(out) ==
               Rows{SAMPLE[8], Row(), SAMPLE[3], SAMPLE[1], Row("tail")});
@@ -637,7 +657,9 @@ TEST_SUITE("string view concat") {
         Series fa = make_flat(a);
         Series vb = make_view(b, &released);
         Series dc = make_flat({Row("p"), Row()}).dictionary_encode();
-        Series out = dftu_utils_test::ok(concat_columns({&fa, &vb, &dc}));
+        Series out = dftu_utils_test::ok(concat_columns(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&fa, &vb, &dc})));
         CHECK(rows_of(out) == join({a, b, rows_of(dc)}));
         CHECK(out.null_count() == 4);
     }
@@ -652,7 +674,9 @@ TEST_SUITE("string view concat") {
         Series d2 = make_flat({Row("beta"), Row("a long distinct value"),
                                Row("gamma"), Row("beta")})
                         .dictionary_encode();
-        Series out = dftu_utils_test::ok(concat_columns({&d1, &d2}));
+        Series out = dftu_utils_test::ok(concat_columns(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&d1, &d2})));
         CHECK(out.encoding() == Encoding::Dictionary);
         CHECK(out.handle()->child()->encoding == Encoding::View);
         CHECK(out.handle()->child()->length == 4);
@@ -669,7 +693,9 @@ TEST_SUITE("string view concat") {
             codes, make_flat({Row("p"), Row("a long value past twelve")}),
             &valid);
         Series v = make_flat({Row("q")}).dictionary_encode();
-        Series out = dftu_utils_test::ok(concat_columns({&a, &v}));
+        Series out = dftu_utils_test::ok(concat_columns(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&a, &v})));
         CHECK(out.encoding() == Encoding::Dictionary);
         CHECK(rows_of(out) == Rows{Row("p"), Row(), Row("p"), Row("q")});
     }
@@ -681,7 +707,9 @@ TEST_SUITE("string view concat") {
         Series b =
             make_view({Row("{\"k\":\"a long json object value\"}")}, &released)
                 .as_json();
-        Series out = dftu_utils_test::ok(concat_columns({&a, &b}));
+        Series out = dftu_utils_test::ok(concat_columns(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&a, &b})));
         CHECK(out.is_json());
         CHECK(out.encoding() == Encoding::View);
         CHECK(rows_of(out) ==
@@ -695,14 +723,18 @@ TEST_SUITE("string view concat") {
                            Row("w")};
         Series w = make_large(rows);
         Series f = make_flat({Row("narrow")});
-        Series out = dftu_utils_test::ok(concat_columns({&w, &f}));
+        Series out = dftu_utils_test::ok(concat_columns(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&w, &f})));
         CHECK(out.type() == TypeId::String);
         CHECK(out.encoding() == Encoding::View);
         CHECK(blobs_hold(out, w.handle()->data));
         CHECK(rows_of(out) == join({rows, Rows{Row("narrow")}}));
 
         Series wb = make_large(rows, true);
-        Series bin = dftu_utils_test::ok(concat_columns({&wb, &wb}));
+        Series bin = dftu_utils_test::ok(concat_columns(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&wb, &wb})));
         CHECK(bin.type() == TypeId::Binary);
         CHECK(bin.encoding() == Encoding::View);
         CHECK(bin.length() == 6);
@@ -713,21 +745,31 @@ TEST_SUITE("string view concat") {
     TEST_CASE("empty and single parts") {
         Series e = make_flat({});
         Series a = make_flat({Row("one"), Row("a value over twelve bytes")});
-        Series out = dftu_utils_test::ok(concat_columns({&e, &a, &e}));
+        Series out = dftu_utils_test::ok(concat_columns(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&e, &a, &e})));
         CHECK(out.encoding() == Encoding::View);
         CHECK(rows_of(out) == rows_of(a));
-        Series none = dftu_utils_test::ok(concat_columns({&e, &e}));
+        Series none = dftu_utils_test::ok(concat_columns(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&e, &e})));
         CHECK(none.length() == 0);
         CHECK(none.null_count() == 0);
-        Series one = dftu_utils_test::ok(concat_columns({&a}));
+        Series one = dftu_utils_test::ok(concat_columns(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&a})));
         CHECK(rows_of(one) == rows_of(a));
     }
 
     TEST_CASE("a concat result filters and concatenates again") {
         Series a = make_flat({Row("keep this long value"), Row("drop")});
         Series b = make_flat({Row("keep that long value")});
-        Series once = dftu_utils_test::ok(concat_columns({&a, &b}));
-        Series twice = dftu_utils_test::ok(concat_columns({&once, &a}));
+        Series once = dftu_utils_test::ok(concat_columns(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&a, &b})));
+        Series twice = dftu_utils_test::ok(concat_columns(
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&once, &a})));
         CHECK(rows_of(twice) == Rows{Row("keep this long value"), Row("drop"),
                                      Row("keep that long value"),
                                      Row("keep this long value"), Row("drop")});

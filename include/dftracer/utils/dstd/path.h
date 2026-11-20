@@ -205,7 +205,7 @@ class Path {
     operator PathView() const noexcept { return view(); }
 
     operator CStringView() const noexcept {
-        return CStringView::unchecked(path_.c_str(), path_.size());
+        return CStringView::unchecked(path_);
     }
 
     /// An absolute rhs replaces the path, an empty rhs adds nothing.

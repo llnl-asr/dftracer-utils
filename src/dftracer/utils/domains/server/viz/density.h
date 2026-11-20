@@ -3,7 +3,7 @@
 #define DFTRACER_UTILS_DOMAINS_SERVER_VIZ_DENSITY_H
 
 // Density and counter per-event primitives: the DensityMap fold, the I/O
-// CounterAcc fold, and the ph="C" counter-series fold, plus group-value
+// CounterAcc fold, and the ph=2 counter-series fold, plus group-value
 // extraction and containment-depth assignment. Internal to the server.
 
 #include <dftracer/utils/domains/server/viz/internal.h>
@@ -14,6 +14,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -68,7 +69,7 @@ struct DensityAgg {
     std::uint32_t depth = 0;  // containment depth, set by assign_view_depths
     dstd::String
         name;  // representative: name of the longest event in the bucket
-    // ph="C" counter aggregation: a bucket carries the summed sample value
+    // ph=2 counter aggregation: a bucket carries the summed sample value
     // (mean = value_sum / count) so the block can surface the reading on hover.
     bool counter = false;
     double value_sum = 0;
@@ -259,9 +260,9 @@ inline DensityFold fold_density(json::Value& root, double threshold,
 // Demote a set of individual events (indices into `big`, already kept whole
 // because dur >= threshold) into density blocks. Lets a dense window cap its
 // individual-event count without dropping any activity from the view.
-inline void fold_overflow_events(const dstd::Vector<dstd::String>& big,
-                                 const dstd::Vector<double>& big_dur,
-                                 const dstd::Vector<std::uint32_t>& overflow,
+inline void fold_overflow_events(dstd::Span<const dstd::String> big,
+                                 dstd::Span<const double> big_dur,
+                                 dstd::Span<const std::uint32_t> overflow,
                                  double threshold, double begin,
                                  DensityMap& dens, dstd::StringView group_col) {
     json::Document document;
@@ -369,7 +370,7 @@ inline bool parse_lane_ts_dur(dstd::StringView event, std::int64_t& pid,
 // [ts, ts+threshold]; a bucket-sized sibling that merely overlaps it is not an
 // ancestor, so folded events stay on their sibling's row.
 inline dstd::Vector<std::uint32_t> assign_view_depths(
-    const dstd::Vector<dstd::String>& big, DensityMap& dens, double begin,
+    dstd::Span<const dstd::String> big, DensityMap& dens, double begin,
     double threshold) {
     dstd::Vector<std::uint32_t> depth(big.size(), 0);
 
@@ -455,14 +456,14 @@ inline dstd::Vector<std::uint32_t> assign_view_depths(
     return depth;
 }
 
-// Give each ph="C" counter series its own row, stacked above the events already
+// Give each ph=2 counter series its own row, stacked above the events already
 // occupying its (pid, tid) lane. assign_view_depths cannot: it treats density
 // blocks as non-row-reserving (one per pid/tid/col), but a lane can hold many
 // counter series at the same column, and a counter can share a real thread
 // lane. Stable row order by series name so rows do not swap between
 // requests/zooms.
-inline void assign_counter_depths(const dstd::Vector<dstd::String>& big,
-                                  const dstd::Vector<std::uint32_t>& big_depth,
+inline void assign_counter_depths(dstd::Span<const dstd::String> big,
+                                  dstd::Span<const std::uint32_t> big_depth,
                                   DensityMap& dens) {
     auto lane_of = [](std::int64_t pid, std::int64_t tid) {
         return (pid << 20) ^ tid;
@@ -546,7 +547,7 @@ inline void fold_counter(dstd::StringView event, double begin, double bucket_us,
         acc.read_bytes[col] += bytes;
 }
 
-// --- Real ph="C" counters as aggregated density blocks ----------------------
+// --- Real ph=2 counters as aggregated density blocks ----------------------
 // A counter event carries one or more numeric args; each (name, arg-key) is a
 // series. Aggregation is aggregation of normal events, so a counter folds into
 // the SAME density map: one block per (series, pid, tid, column) spanning the
@@ -571,7 +572,7 @@ inline void add_counter_bucket(DensityMap& dens, std::int64_t pid,
     if (a.name.empty()) a.name.assign(series);
 }
 
-// Fold one ph="C" event into the density map at its column, one block per
+// Fold one ph=2 event into the density map at its column, one block per
 // numeric arg. Reads the event the partition already holds. Adds nothing when
 // a read hit a syntax error.
 inline void fold_counter_density(json::Value& root, double begin,

@@ -10,6 +10,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 #include <nanoarrow/nanoarrow.h>
+#include <span_list.h>
 
 #include <cstring>
 
@@ -78,7 +79,8 @@ TEST_SUITE("vec_arrow") {
     }
 
     TEST_CASE("string round-trips through Arrow zero-copy") {
-        Series s = Series::strings({"foo", "bar", "bazz"});
+        Series s = Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"foo", "bar", "bazz"}));
 
         ArrowSchema schema;
         ArrowArray array;
@@ -99,7 +101,8 @@ TEST_SUITE("vec_arrow") {
     }
 
     TEST_CASE("dictionary string exports as an Arrow dictionary of strings") {
-        Series d = dictionary_encode(Series::strings({"x", "y", "x", "z"}));
+        Series d = dictionary_encode(Series::strings(
+            dftu_utils_test::span_of<dstd::StringView>({"x", "y", "x", "z"})));
 
         ArrowSchema schema;
         ArrowArray array;

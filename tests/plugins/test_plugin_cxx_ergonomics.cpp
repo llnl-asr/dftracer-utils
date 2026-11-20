@@ -8,6 +8,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/agg_op_codes.h>
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
@@ -52,9 +53,10 @@ struct HostFixture {
     dstd::UniquePtr<plugins::host::PluginFold> fold =
         dstd::make_unique<plugins::host::PluginFold>(plugin, intern);
     dftu_plugin_host& host() { return fold->host(); }
-    dftu_str intern_str(const char* s) {
-        return host().intern(host().h, s,
-                             static_cast<std::uint32_t>(std::strlen(s)));
+    dftu_str intern_str(dstd::CStringView s) {
+        return host().intern(
+            host().h, s.c_str(),
+            static_cast<std::uint32_t>(std::strlen(s.c_str())));
     }
     ~HostFixture() {
         fold.reset();
@@ -74,7 +76,7 @@ dftu_status drive_task(dftu_plugin_host& host, MakeTask make,
 // co_awaits the Io ops directly, and once through Host::await to prove the
 // AsyncOp->dftu_task* decay still composes.
 dftracer::utils::plugins::Task read_probe(dftracer::utils::plugins::Host h,
-                                          const char* path,
+                                          dstd::String path,
                                           std::int64_t* bytes) {
     dftracer::utils::plugins::Io io = h.io();
     int fd = -1;

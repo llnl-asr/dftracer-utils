@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <cstdint>
@@ -53,7 +54,8 @@ DataFrame sample() {
 
     // List<String>: ["a","b"], [], ["c"], ["d","e","f"]
     f.columns.push_back(
-        Series::list({0, 2, 2, 3, 6}, strings({"a", "b", "c", "d", "e", "f"})));
+        Series::list(dftu_utils_test::span_of<std::int32_t>({0, 2, 2, 3, 6}),
+                     strings({"a", "b", "c", "d", "e", "f"})));
 
     dstd::Vector<Series> fields;
     fields.push_back(Series::flat_i64(ints, 4));
@@ -63,8 +65,9 @@ DataFrame sample() {
     // List<Struct{n}> with a list offset that does not start at zero.
     dstd::Vector<Series> inner;
     inner.push_back(Series::flat_i64(ints, 4));
-    f.columns.push_back(Series::list({0, 1, 3, 3, 4},
-                                     Series::structs({"n"}, std::move(inner))));
+    f.columns.push_back(
+        Series::list(dftu_utils_test::span_of<std::int32_t>({0, 1, 3, 3, 4}),
+                     Series::structs({"n"}, std::move(inner))));
     return f;
 }
 
@@ -124,11 +127,28 @@ TEST_SUITE("native frame") {
         CHECK(b->names == empty.names);
     }
 
+    TEST_CASE("the row index round-trips") {
+        const DataFrame f = sample();
+        const dstd::StringView index[] = {"s", "i"};
+        auto indexed = f.with_index(index);
+        REQUIRE(indexed);
+        const dstd::String bytes = bytes_of(*indexed);
+        const auto back = frame_from_native(bytes);
+        REQUIRE(back);
+        REQUIRE(back->index_names().size() == 2);
+        CHECK(dstd::StringView(back->index_names()[0]) == "s");
+        CHECK(dstd::StringView(back->index_names()[1]) == "i");
+        CHECK(bytes_of(*back) == bytes);
+        CHECK(frame_from_native(bytes_of(f))->index_names().empty());
+    }
+
     TEST_CASE("a slice writes its own rows") {
         const DataFrame f = sample();
         DataFrame cut;
         cut.names = f.names;
-        for (const Series& c : f.columns) cut.columns.push_back(c.take({1, 2}));
+        for (const Series& c : f.columns)
+            cut.columns.push_back(
+                c.take(dftu_utils_test::span_of<std::int64_t>({1, 2})));
         const auto back = frame_from_native(bytes_of(cut));
         REQUIRE(back);
         CHECK(back->num_rows() == 2);
@@ -153,7 +173,8 @@ TEST_SUITE("native frame") {
         DataFrame f;
         f.names = dstd::make_shared_strings({"m", "fl"});
         Series m =
-            Series::list({0, 1, 1}, Series::structs({"key", "value"}, [] {
+            Series::list(dftu_utils_test::span_of<std::int32_t>({0, 1, 1}),
+                         Series::structs({"key", "value"}, [] {
                              dstd::Vector<Series> c;
                              c.push_back(strings({"a"}));
                              const std::int64_t v[] = {7};
@@ -162,7 +183,9 @@ TEST_SUITE("native frame") {
                          }()));
         m.handle()->type = TypeId::Map;
         f.columns.push_back(std::move(m));
-        Series fl = Series::list({0, 2, 4}, strings({"a", "b", "c", "d"}));
+        Series fl =
+            Series::list(dftu_utils_test::span_of<std::int32_t>({0, 2, 4}),
+                         strings({"a", "b", "c", "d"}));
         fl.handle()->type = TypeId::FixedSizeList;
         fl.handle()->set_fixed_size(2);
         fl.handle()->offsets = {};
@@ -182,8 +205,10 @@ TEST_SUITE("native frame") {
         f.columns.push_back(strings({"1", "\"1\"", "1", "\"1\""}).as_json());
         const std::int64_t v[] = {1, 2, 3, 4};
         f.columns.push_back(Series::flat_i64(v, 4));
-        const DataFrame g = dftu_utils_test::ok(
-            f.group_by(dstd::String("k"), {GroupAgg{Agg::Sum, "v", "s"}}));
+        const DataFrame g = dftu_utils_test::ok(f.group_by(
+            dstd::String("k"),
+            dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                {GroupAgg{Agg::Sum, "v", "s"}})));
         REQUIRE(g.num_rows() == 2);
         CHECK(g.column("k").is_json());
         const auto back =

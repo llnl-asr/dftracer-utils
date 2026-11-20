@@ -207,9 +207,15 @@ bool Reader::Impl::start(const std::uint8_t* bytes, std::size_t n,
     // The decoder builds its own array view from a copy of the schema and
     // does not keep it, so the copy lives only for this call.
     auto for_decoder = dstd::make_unique<ArrowSchema>();
-    if (ArrowSchemaDeepCopy(&schema, for_decoder.get()) != NANOARROW_OK ||
-        ArrowIpcDecoderSetSchema(decoder, for_decoder.get(), &nano_error) !=
-            NANOARROW_OK) {
+    if (ArrowSchemaDeepCopy(&schema, for_decoder.get()) != NANOARROW_OK) {
+        *error = common::make_error<"{}: schema copy failed">(
+            common::ErrorCode::Internal, what);
+        return false;
+    }
+    const int set_rc =
+        ArrowIpcDecoderSetSchema(decoder, for_decoder.get(), &nano_error);
+    for_decoder->release(for_decoder.get());
+    if (set_rc != NANOARROW_OK) {
         *error = common::make_error<"{}: schema rejected: {}">(
             common::ErrorCode::Parse, what, nano_error.message);
         return false;

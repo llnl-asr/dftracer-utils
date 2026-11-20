@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -26,6 +27,53 @@
 namespace dftracer::utils::dataframe {
 
 struct DataFrame;
+
+/// The rows that label keys select, from @ref Series::locate or
+/// @ref DataFrame::locate.
+struct Located {
+    /// The row positions in key order: every row of the first key that has
+    /// rows, then those of the next (a label held by several rows gives them
+    /// all, in row order; a label repeated in the keys is repeated).
+    dstd::Vector<std::int64_t> positions;
+    /// The key rows that no label matches, ascending; `positions` has nothing
+    /// for them.
+    dstd::Vector<std::int64_t> missing;
+};
+
+/// A run of rows, `length` rows from `offset`.
+struct LabelSpan {
+    std::int64_t offset = 0;
+    std::int64_t length = 0;
+};
+
+/// How @ref Series::reindex fills a label that has no row, as the pandas
+/// `method`: the row of the nearest label before it (Pad, `ffill`), after it
+/// (Backfill, `bfill`) or on either side (Nearest; a tie takes the larger
+/// label). Before and after are in label order, whether the labels increase or
+/// decrease.
+enum class FillMethod : std::uint8_t { None, Pad, Backfill, Nearest };
+
+/// The options of @ref Series::reindex and @ref DataFrame::reindex. With no
+/// method, a label with no row gets a null and `limit` and `tolerance` must be
+/// left unset.
+struct ReindexOptions {
+    FillMethod method = FillMethod::None;
+    /// The most target labels that one row fills, counting only the labels it
+    /// fills (not an exact match), or negative for no limit. A limit needs
+    /// labels that increase and target labels that do not decrease.
+    std::int64_t limit = -1;
+    /// The farthest a fill may reach, `|target - label| <= tolerance`, in the
+    /// units of the label (a timestamp counts its ticks), or infinite for no
+    /// limit. Labels must be numbers or temporal values. Integer and temporal
+    /// labels are compared exactly (a count above 2**53 is not rounded), floats
+    /// in double precision.
+    double tolerance = std::numeric_limits<double>::infinity();
+    /// For Timestamp, Duration and Time labels, a tolerance as whole
+    /// nanoseconds, exact in any unit of the labels and keys (`tolerance` is
+    /// then ignored). An InvalidArgument error for labels with no time unit.
+    bool tolerance_is_nanos = false;
+    std::int64_t tolerance_nanos = 0;
+};
 
 /// A typed column. Move-only owning wrapper over the C ABI handle; the buffers,
 /// encoding, and null handling live behind it. Typed accessors are inline
@@ -132,7 +180,7 @@ class Series {
 
     /// Build a FLAT String column from `values` (offsets + concatenated bytes).
     /// Ends the process when the total bytes pass INT32_MAX.
-    static Series strings(const dstd::Vector<dstd::String>& values) {
+    static Series strings(dstd::Span<const dstd::String> values) {
         dstd::Vector<std::int32_t> offsets(values.size() + 1, 0);
         std::size_t total = 0;
         for (const auto& v : values) total += v.size();
@@ -206,23 +254,20 @@ class Series {
     /// Build a STRUCT column from field `names` and `columns` (each the same
     /// length, aligned to names); takes ownership of the field columns. The
     /// columns are move-only, so pass them in a vector built by move.
-    static Series structs(dstd::Vector<dstd::String> names,
-                          dstd::Vector<Series> columns) {
-        dstd::Vector<dftu_series*> handles;
-        dstd::Vector<const char*> cnames;
-        handles.reserve(columns.size());
-        cnames.reserve(names.size());
-        for (Series& c : columns) handles.push_back(c.release());
-        for (const dstd::String& s : names) cnames.push_back(s.c_str());
-        return Series{
-            dftu_series_new_struct(handles.data(), cnames.data(),
-                                   static_cast<std::int32_t>(handles.size()))};
-    }
+    static Series structs(dstd::Span<const dstd::String> names,
+                          dstd::Vector<Series> columns);
+
+    /// @ref structs over shared names: the names are read, not copied.
+    static Series structs(dstd::Span<const dstd::SharedString> names,
+                          dstd::Vector<Series> columns);
+
+    /// @ref structs over literal names, such as `structs({"a", "b"}, ...)`.
+    static Series structs(std::initializer_list<const char*> names,
+                          dstd::Vector<Series> columns);
 
     /// Build a LIST column: `offsets` (n+1 entries) index into `values`; takes
     /// ownership of `values`.
-    static Series list(const dstd::Vector<std::int32_t>& offsets,
-                       Series values) {
+    static Series list(dstd::Span<const std::int32_t> offsets, Series values) {
         return Series{dftu_series_new_list(
             offsets.data(), static_cast<std::int64_t>(offsets.size()) - 1,
             values.release())};
@@ -378,6 +423,104 @@ class Series {
     /// bump, no data copy).
     Series share() const noexcept { return Series{dftu_series_share(handle_)}; }
 
+    /// The number of row-label levels; 0 for a positional column (the pandas
+    /// RangeIndex, nothing materialized). The labels are ordinary columns as
+    /// long as this one. @ref share, @ref rename, @ref slice and @ref as_json
+    /// keep them. A method that keeps the rows in place (a unary op, cast,
+    /// fillna, cumsum, shift, rank, scalar arithmetic) keeps them, and one that
+    /// selects or reorders rows (@ref sort, @ref head, @ref tail, @ref filter,
+    /// @ref take, @ref drop_nulls, @ref top_k, @ref bottom_k, @ref sample,
+    /// @ref reverse) moves them with the rows. A reducer, @ref unique and
+    /// @ref value_counts give none. Labels match by value: see @ref
+    /// align_labels.
+    std::int32_t index_count() const noexcept {
+        return dftu_series_index_count(handle_);
+    }
+    bool has_index() const noexcept { return index_count() > 0; }
+    /// Name of label level `i`, valid while this column lives; empty out of
+    /// range.
+    dstd::StringView index_name(std::int32_t i) const noexcept {
+        const char* p = nullptr;
+        std::size_t n = 0;
+        return dftu_series_index_name(handle_, i, &p, &n) == 0
+                   ? dstd::StringView(p, n)
+                   : dstd::StringView();
+    }
+    /// Label column of level `i`, sharing its buffers and carrying no labels
+    /// of its own; invalid out of range.
+    Series index_level(std::int32_t i) const {
+        return Series{dftu_series_index_column(handle_, i)};
+    }
+    /// A zero-copy copy of this column whose labels are `levels` named
+    /// `names`; empty spans drop them. Invalid when the spans differ in size, a
+    /// level is not as long as this column, a level is a List or Struct, or a
+    /// name repeats.
+    Series with_index(dstd::Span<const dstd::StringView> names,
+                      dstd::Span<const Series> levels) const;
+    /// A zero-copy copy of this column with no labels.
+    Series without_index() const;
+    /// This column under the labels of `source`, shared, not copied; the column
+    /// unchanged when `source` has none or has another length.
+    Series with_index_of(const Series& source) const;
+    /// The label levels as a frame, one column per level in order, whose row
+    /// index is all of them; an empty frame when there are none.
+    DataFrame index_frame() const;
+    /// The rows whose labels equal `keys`, as pandas `loc` finds them. `keys`
+    /// holds one column per label level, the leading levels when it holds fewer
+    /// than this column has (a partial key of a MultiIndex), each as long as
+    /// the number of keys: row `r` of every column is key `r`. A positional
+    /// column has one level, the positions 0 .. length-1. Labels compare by
+    /// value: an integer key finds a float label of the same value, a null key
+    /// finds the null labels (and a NaN key, which is a null label), a string
+    /// key finds no number. A key of a type that has no label of that kind
+    /// finds nothing. The lookup hashes the labels once, on the first call, and
+    /// keeps the hash with the labels (shared by every copy of this column,
+    /// built once even when several threads call at once; a later call costs
+    /// the keys only). An InvalidArgument error for no keys, more key levels
+    /// than this column has labels, keys of different lengths or a List or
+    /// Struct key.
+    dstd::Result<Located> locate(dstd::Span<const Series> keys) const;
+    /// The rows between two label bounds, both ends included, as pandas
+    /// `loc[start:stop]`. `start` and `stop` are one-row columns per level,
+    /// leading levels as in @ref locate; an empty span is an open end. On a
+    /// monotonic index (increasing or decreasing, lexicographic across levels,
+    /// no null label) a bound need not be a label: the run is found by binary
+    /// search. On any other index a bound must be one label that no other row
+    /// has, and the run is the rows from the start row to the stop row (empty
+    /// when the stop row is first), and a MultiIndex that is not monotonic is
+    /// refused. A NotFound error naming the bound for a missing or repeated
+    /// bound, or the unsorted MultiIndex; an InvalidArgument error for bounds
+    /// of a type that does not compare with the labels.
+    dstd::Result<LabelSpan> locate_range(dstd::Span<const Series> start,
+                                         dstd::Span<const Series> stop) const;
+    /// This column on the labels `keys` as pandas `reindex`: row `r` of the
+    /// result is the row whose label equals key `r`, and a null where none
+    /// does (or the row @p options names). `keys` holds one column per label
+    /// level, as long as the number of keys; a positional column has the one
+    /// level 0 .. length-1. The result carries `keys` as its labels, under the
+    /// level names of this column (the default `__index_level_<i>__` when it
+    /// has none). An integer column that gains nulls becomes Float64. With a
+    /// one-row @p fill, a row with no label takes that value instead: the
+    /// column keeps its type when the value fits it (an integer in range for an
+    /// integer column, any number for a float one, a string for a string
+    /// column) and widens to Float64 for a float value in an integer column; a
+    /// null the column already held stays. Labels that are the same as the
+    /// keys, row for row, return the column unchanged even when they repeat.
+    /// Otherwise an InvalidArgument error for repeated labels ("cannot reindex
+    /// on an axis with duplicate labels"), a key level count other than the
+    /// label level count, a @p fill that does not fit the type, a limit or
+    /// tolerance with no method, a method on labels that are not monotonic
+    /// ("index must be monotonic increasing or decreasing"), a limit on labels
+    /// that do not increase or targets that decrease, a tolerance or the
+    /// nearest method on labels that do not subtract (text) or on more than one
+    /// level.
+    dstd::Result<Series> reindex(dstd::Span<const Series> keys,
+                                 const ReindexOptions& options,
+                                 const Series& fill) const;
+    /// @ref reindex with no fill value.
+    dstd::Result<Series> reindex(dstd::Span<const Series> keys,
+                                 const ReindexOptions& options = {}) const;
+
     /// Whether this is a JSON column: String values of canonical JSON text.
     bool is_json() const noexcept { return dftu_series_is_json(handle_) != 0; }
 
@@ -402,7 +545,9 @@ class Series {
     Series div(const Series& other) const;
     /// Python-semantics floor division, remainder and power: Int64 when both
     /// operands are integral, else Float64; a zero divisor or a negative
-    /// integer exponent is null.
+    /// integer exponent is null. A row that lacks a side after label alignment
+    /// is null in every op; pandas follows IEEE `pow` there, so `1 ** NaN` and
+    /// `NaN ** 0` are 1.0 in pandas and null here.
     Series floordiv(const Series& other) const;
     Series mod(const Series& other) const;
     Series pow(const Series& other) const;
@@ -415,7 +560,9 @@ class Series {
     /// and max of a string column give a STR scalar borrowing the column. A
     /// reduction the engine does not define for the column type (sum of a
     /// string, sum of a timestamp) returns an InvalidArgument error naming the
-    /// operation and the type; it never returns 0 for a refusal.
+    /// operation and the type; it never returns 0 for a refusal. A column with
+    /// no valid row gives sum 0, and min and max a NULL scalar (no value); the
+    /// refusal of a type comes first.
     dstd::Result<Scalar> sum() const;
     dstd::Result<Scalar> min() const;
     dstd::Result<Scalar> max() const;
@@ -426,13 +573,25 @@ class Series {
     std::int64_t arg_min() const;  ///< index of min non-null value (-1 if none)
     std::int64_t arg_max() const;  ///< index of max non-null value (-1 if none)
     std::int64_t count() const;    ///< non-null row count
-    /// The mean; the error of sum() for a type with no sum.
+    /// The mean; the error of sum() for a type with no sum. NaN for a column
+    /// with no valid row.
     dstd::Result<double> mean() const;
+    /// The variance and standard deviation: NaN for a column with no valid row
+    /// and, for the sample form, for one valid row.
     double variance(bool sample = true) const;
     double stddev(bool sample = true) const;
     double skewness() const;
     double kurtosis() const;
+    /// The pandas sample skewness (NaN below three values) and sample excess
+    /// kurtosis (NaN below four); NaN for a column with no spread.
+    double skewness_unbiased() const;
+    double kurtosis_unbiased() const;
+    /// The exact quantile of the valid values, `q` clamped to [0, 1]; NaN for
+    /// no valid row or a NaN `q`.
     double quantile(double q) const;
+    /// The exact quantile with @p interp choosing the result between ranks.
+    double quantile(double q, Interpolation interp) const;
+    /// The median; NaN for a column with no valid row.
     double median() const;
     std::int64_t nunique() const;
 
@@ -465,13 +624,15 @@ class Series {
     /// Bin values by the ascending `breaks` edges (count of breaks <= x) ->
     /// Int32; a null input row yields a null bin. `flags` is DFTU_CUT_RIGHT
     /// (count the breaks < x: right-closed intervals) and/or DFTU_CUT_INNER
-    /// (null outside the interior intervals, bins numbered from 0).
+    /// (null outside the interior intervals, bins numbered from 0). Integer,
+    /// Bool and temporal values with integer breaks compare exactly as int64;
+    /// any float on either side compares as doubles.
     Series cut(const Series& breaks, std::int32_t flags = 0) const;
     /// Bin values by the column's `q`-quantile edges -> Int32 (bins 0..q-1).
     Series qcut(std::int32_t q) const;
     /// Lower-bound insertion index of each `values` element into this (assumed
     /// sorted) column -> Int64.
-    Series search_sorted(const Series& values) const;
+    Series search_sorted(const Series& values, bool right = false) const;
     /// Linearly interpolate null interior values; leading/trailing nulls stay
     /// null -> Float64.
     Series interpolate() const;
@@ -516,7 +677,48 @@ class Series {
     Series sqrt() const;
     Series exp() const;
     Series log() const;
-    Series unique() const;
+    /// log(1 + x) and exp(x) - 1, exact for a tiny x.
+    Series log1p() const;
+    Series expm1() const;
+    /// Elementwise math: a Float32 column stays Float32, any other numeric
+    /// column gives Float64; a value outside the domain is NaN. cot is
+    /// 1 / tan.
+    Series sin() const;
+    Series cos() const;
+    Series tan() const;
+    Series cot() const;
+    Series arcsin() const;
+    Series arccos() const;
+    Series arctan() const;
+    Series sinh() const;
+    Series cosh() const;
+    Series tanh() const;
+    Series arcsinh() const;
+    Series arccosh() const;
+    Series arctanh() const;
+    Series cbrt() const;
+    Series log10() const;
+    Series erf() const;
+    Series erfc() const;
+    /// Bit counts of an integer or Bool column as a Uint32 column, within the
+    /// column's own width; a signed value is read as its two's complement
+    /// bits. Another column type gives an invalid Series.
+    Series bitwise_count_ones() const;
+    Series bitwise_count_zeros() const;
+    Series bitwise_leading_ones() const;
+    Series bitwise_leading_zeros() const;
+    Series bitwise_trailing_ones() const;
+    Series bitwise_trailing_zeros() const;
+    /// The bitwise AND, OR and XOR of the non-null values of an integer or
+    /// Bool column: a signed integer or a Bool gives an I64 Scalar, an unsigned
+    /// integer a U64 one, a column with no non-null value a NULL one, another
+    /// column type an ERR one.
+    Scalar bitwise_and() const;
+    Scalar bitwise_or() const;
+    Scalar bitwise_xor() const;
+    /// The distinct values, a null kept once; first-occurrence order when
+    /// `maintain_order`, otherwise ascending with the null first.
+    Series unique(bool maintain_order = false) const;
     Series dictionary_encode() const;
 
     Series null_mask() const;      ///< Bool mask: row is null.
@@ -526,13 +728,17 @@ class Series {
     Series is_infinite() const;    ///< Bool mask: value is +/-Inf (floats).
     Series is_unique() const;      ///< Bool mask: value occurs exactly once.
     Series is_duplicated() const;  ///< Bool mask: value is repeated.
+    /// Bool mask of the repeats: `keep` 0 leaves the first row of each value
+    /// unmarked, 1 the last; another value marks every row of a repeated value.
+    Series duplicated(std::int32_t keep = 0) const;
     /// Whether the column is sorted ascending (or descending); single scan.
     bool is_sorted(bool descending = false) const;
     Series drop_nulls() const;  ///< Selection over the non-null rows.
     /// Bool mask, true where the value is present in `values`.
     Series is_in(const Series& values) const;
-    /// Rows sorted ascending (or descending): take(argsort(v, descending)).
-    Series sort(bool descending = false) const;
+    /// Rows sorted ascending (or descending): take(argsort(v, descending,
+    /// nulls_last)). Nulls go last, or first when `nulls_last` is false.
+    Series sort(bool descending = false, bool nulls_last = true) const;
     Series head(std::int64_t n) const;  ///< First n rows (n clamped to length).
     Series tail(std::int64_t n) const;  ///< Last n rows (n clamped to length).
     Series reverse() const;             ///< Rows in reverse order.
@@ -543,14 +749,16 @@ class Series {
     /// A deterministic sample of n distinct rows (mix64(index, seed) hash).
     Series sample(std::int64_t n, std::uint64_t seed = 0) const;
 
-    Series argsort(bool descending = false) const;
-    Series take(const dstd::Vector<std::int64_t>& indices) const;
+    Series argsort(bool descending = false, bool nulls_last = true) const;
     Series take(dstd::Span<const std::int64_t> indices) const;
     Series materialize() const;
     /// Keep the rows where the bit-packed Bool `mask` (same length) is true.
     Series filter(const Series& mask) const;
     /// Per row, this column's value where `mask` is true, else `other`'s
-    /// (`mask ? this : other`); both must share a type and length.
+    /// (`mask ? this : other`); both must share a type and length. Columns
+    /// that carry row labels must carry the same ones (@ref same_labels): an
+    /// invalid column otherwise. The result takes the labels of this column,
+    /// else of @p other, else of @p mask.
     Series where(const Series& mask, const Series& other) const;
 
     Series str_eq(dstd::StringView rhs) const;
@@ -620,6 +828,8 @@ class Series {
     Series str_remove_suffix(dstd::StringView suffix) const;
     Series str_repeat(std::int64_t n) const;
     Series str_center(std::int64_t width, char fill = ' ') const;
+    /// Row-wise concatenation; two columns that carry row labels must carry
+    /// the same ones (@ref same_labels), an invalid column otherwise.
     Series str_cat(const Series& other) const;
     Series str_findall(dstd::StringView pattern) const;
     Series str_partition(dstd::StringView sep, bool from_right = false) const;
@@ -642,9 +852,28 @@ class Series {
     /// trailing '%' or an input that is not a time or Int64 column.
     Series dt_format(dstd::StringView fmt,
                      TimeUnit unit = TimeUnit::Micro) const;
+    /// dftu_series_dt_as_unit: a Timestamp or Duration column in `unit`,
+    /// the instant kept, a coarser unit rounded by `mode`
+    /// (dftu_dt_unit_rounding). Invalid (not valid()) for another type or
+    /// when a value overflows Int64 in the finer unit.
+    Series dt_as_unit(TimeUnit unit,
+                      std::int32_t mode = DFTU_DT_UNIT_FLOOR) const;
+    /// dftu_series_dt_date: each Timestamp (its wall day in the column's
+    /// zone, else the UTC day) or Date64 row as Date32.
+    Series dt_date() const;
+    /// dftu_series_dt_time: each Timestamp row's time of day (wall time in the
+    /// column's zone, else UTC), in the column's own unit (Time32 for s and
+    /// ms, Time64 for us and ns).
+    Series dt_time() const;
     /// dftu_series_with_timezone: this Timestamp column under zone `tz`
-    /// (empty for naive), buffers shared.
+    /// (empty for naive), buffers shared. Invalid (not valid()) for a zone
+    /// that is not in the time zone database.
     Series with_timezone(dstd::StringView tz) const;
+    /// dftu_series_tz_localize: this column's wall times in zone `tz` as UTC
+    /// instants (dftu_tz_ambiguous, dftu_tz_nonexistent; `shift` in ticks).
+    /// Invalid (not valid()) for a refused wall time or an unknown zone.
+    Series tz_localize(dstd::StringView tz, std::int32_t ambiguous,
+                       std::int32_t nonexistent, std::int64_t shift = 0) const;
 
     Series logical_and(const Series& other) const;
     Series logical_or(const Series& other) const;
@@ -739,6 +968,9 @@ class Series {
     }
 
    private:
+    static Series structs_from(dstd::Span<const char* const> names,
+                               dstd::Vector<Series> columns);
+
     template <class T>
     static dftu_scalar as_scalar(T v) {
         return to_scalar(v);
@@ -755,9 +987,54 @@ class Series {
     Series derived(dftu_series* result) const;
     /// Same for a binary op: the name is kept only when @p other has the same.
     Series derived(dftu_series* result, const Series& other) const;
+    /// A binary op over this column and @p other, aligned on their row labels
+    /// first (see @ref align_labels); an invalid column when they cannot align.
+    template <class Op>
+    Series paired(const Series& other, Op op) const;
 
     dftu_series* handle_ = nullptr;
 };
+
+/// Two columns aligned on their row labels, each carrying the result labels.
+struct AlignedSeries {
+    Series left;
+    Series right;
+};
+
+/// Aligns `a` and `b` for a binary op as pandas does. Two positional columns
+/// pass through unchanged (their lengths are the op's to check). A positional
+/// column counts as the labels 0 .. length-1 once the other has labels. Labels
+/// that are the same by value, level for level, and in the same order leave
+/// the rows in place under those labels. Otherwise the result is the outer
+/// join of the labels, sorted by them, with a null where a side has no row
+/// (an integer column that gains a null becomes Float64 first, a Bool one
+/// takes false, as the pandas logical ops); a duplicated label matches every
+/// row that has it. A null label equals another null label (the pandas index
+/// treats NaN as one label) and sorts last. Numeric labels of different types
+/// meet in the numpy common type (Int32 with Int64 in Int64, an integer with
+/// a float in Float64); a string label never meets a number. The result labels
+/// take `a`'s level names (the default `__index_level_<i>__` for a positional
+/// `a`), as pandas. An InvalidArgument error when the labels have a different
+/// number of levels or a level whose two types have no common type, or when the
+/// engine's join refuses the labels.
+dstd::Result<AlignedSeries> align_labels(const Series& a, const Series& b);
+
+/// Aligns `a` and `b` on their labels as pandas `Series.align(join=how)`: the
+/// result labels are those of the outer join (sorted, nulls last), the inner
+/// join (the order of `a`), `a`'s own (Left) or `b`'s own (Right), a repeated
+/// label meeting every row that has it (the rows of `a` outermost). Labels that
+/// are the same, level for level, leave the rows in place. A column that
+/// misses a row has a null there (an integer column becomes Float64). A
+/// positional column counts as 0 .. length-1 even when the other has none, so
+/// two positional columns of different lengths align too. The errors of
+/// @ref align_labels, and an InvalidArgument error for a `how` that is not
+/// Inner, Left, Right or Outer.
+dstd::Result<AlignedSeries> align_labels(const Series& a, const Series& b,
+                                         JoinHow how);
+
+/// Whether `a` and `b` carry the same labels as @ref align_labels counts them
+/// (a positional column is 0 .. length-1), so a comparison needs no alignment.
+bool same_labels(const Series& a, const Series& b);
 
 // Reflected scalar arithmetic: `v + s`, `v * s` (commutative) and `v - s`.
 // Reflected division `v / s` is intentionally absent (no reciprocal kernel).

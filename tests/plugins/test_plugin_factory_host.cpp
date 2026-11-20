@@ -6,6 +6,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/c_api.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -22,9 +23,48 @@
 #include <testing_utilities.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
 using namespace dftracer::utils;
+
+namespace {
+
+dstd::String destroy_marks(dstd::StringView marker) {
+    auto text = dstd::fs::read_file(dstd::PathView(marker));
+    return text ? dstd::String(*text) : dstd::String();
+}
+
+}  // namespace
+
+TEST_CASE("a plugin the host rejects after its factory is destroyed") {
+    dftu_utils_test::TestEnvironment env;
+    const dstd::String marker = env.dir() + "/reject_destroy.marker";
+    ::setenv("REJECT_DESTROY_MARKER", marker.c_str(), 1);
+
+    SUBCASE("a config violation") {
+        ::unsetenv("REJECT_DESTROY_PLAN");
+        auto set = plugins::host::Plugins::builder()
+                       .add(REJECT_DESTROY_PLUGIN_PATH)
+                       .build();
+        REQUIRE_FALSE(set.has_value());
+        CHECK(destroy_marks(marker) == "d");
+    }
+
+    SUBCASE("a plan_duql that does not parse") {
+        ::setenv("REJECT_DESTROY_PLAN", "this is ((( not a query", 1);
+        auto set =
+            plugins::host::Plugins::builder()
+                .add(REJECT_DESTROY_PLUGIN_PATH, dstd::String("{\"n\": 1}"))
+                .build();
+        REQUIRE_FALSE(set.has_value());
+        CHECK(set.error().message().find("does not parse") !=
+              dstd::String::npos);
+        CHECK(destroy_marks(marker) == "d");
+    }
+    ::unsetenv("REJECT_DESTROY_PLAN");
+    ::unsetenv("REJECT_DESTROY_MARKER");
+}
 
 using View = dftracer::utils::trace::views::View;
 using ViewFile = dftracer::utils::trace::views::ViewFile;
@@ -38,20 +78,23 @@ using ViewFile = dftracer::utils::trace::views::ViewFile;
 #ifndef BUILDER_PLUGIN_PATH
 #error "BUILDER_PLUGIN_PATH must be defined by CMake"
 #endif
+#ifndef REJECT_DESTROY_PLUGIN_PATH
+#error "REJECT_DESTROY_PLUGIN_PATH must be defined by CMake"
+#endif
 
 namespace {
 
 constexpr int EVENTS = 64;
 
 ViewFile make_trace(dftu_utils_test::TestEnvironment& env,
-                    const dstd::String& tag) {
-    const dstd::String dir = env.dir() + "/" + tag;
+                    dstd::CStringView tag) {
+    const dstd::String dir = env.dir() + "/" + tag.c_str();
     REQUIRE(dstd::fs::create_directories(dir).has_value());
     const dstd::String pfw = dir + "/trace.pfw";
     dstd::String ofs;
     for (int i = 0; i < EVENTS; ++i)
         dstd::fmt_append<
-            "{\"ph\":\"X\",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
+            "{\"ph\":1,\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,"
             "\"tid\":1,\"ts\":{},\"dur\":{}{}\n">(ofs, (1000 + i * 100),
                                                   (10 + i), R"(,"args":{}})");
     dstd::fs::write_file(dstd::PathView(pfw), ofs).discard();

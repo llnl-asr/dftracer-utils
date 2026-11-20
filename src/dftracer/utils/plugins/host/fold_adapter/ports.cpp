@@ -23,23 +23,21 @@ dstd::Vector<std::byte> copy_bytes(const void* data, std::uint32_t len) {
 }
 
 // The hub of the scan, or the failure of a call that needs one.
-PortHub* hub_of(::dftu_ctx* ctx, PluginFold& fold, const char* what,
+PortHub* hub_of(::dftu_ctx* ctx, PluginFold& fold, dstd::StringView what,
                 dftu_status* failed) {
     PortHub* hub = fold.port_hub();
     if (hub == nullptr) {
-        *failed =
-            host_fail(ctx, DFTU_E_UNSUPPORTED,
-                      dstd::fmt<"{}: this host has no port hub for the scan">(
-                          dstd::StringView(what)));
+        *failed = host_fail(
+            ctx, DFTU_E_UNSUPPORTED,
+            dstd::fmt<"{}: this host has no port hub for the scan">(what));
     }
     return hub;
 }
 
 // The name the plugin passed, qualified and matched to its slots once.
-PortNames::Entry* named(::dftu_ctx* ctx, PluginFold& fold, const char* name,
-                        dftu_status* failed) {
-    auto entry =
-        fold.port_names()->resolve(name != nullptr ? name : dstd::StringView());
+PortNames::Entry* named(::dftu_ctx* ctx, PluginFold& fold,
+                        dstd::StringView name, dftu_status* failed) {
+    auto entry = fold.port_names()->resolve(name);
     if (!entry) {
         *failed = host_fail(ctx, entry.error());
         return nullptr;
@@ -141,14 +139,13 @@ dftu_status host_channel_open(::dftu_ctx* ctx, void* h,
 }
 
 PortChannel* channel_of(::dftu_ctx* ctx, PluginFold& fold, std::uint64_t handle,
-                        const char* what, dftu_status* failed) {
+                        dstd::StringView what, dftu_status* failed) {
     PortHub* hub = hub_of(ctx, fold, what, failed);
     if (hub == nullptr) return nullptr;
     PortChannel* channel = hub->channel(handle);
     if (channel == nullptr) {
         *failed = host_fail(ctx, DFTU_E_NOT_FOUND,
-                            dstd::fmt<"{}: no channel has this handle">(
-                                dstd::StringView(what)));
+                            dstd::fmt<"{}: no channel has this handle">(what));
     }
     return channel;
 }
@@ -269,7 +266,9 @@ dftu_status host_latest_set(::dftu_ctx* ctx, void* h, const char* name,
     PluginFold& fold = fold_of(h);
     dftu_status failed = DFTU_OK;
     if (hub_of(ctx, fold, "latest_set", &failed) == nullptr) return failed;
-    PortNames::Entry* entry = named(ctx, fold, name, &failed);
+    PortNames::Entry* entry = named(
+        ctx, fold,
+        name != nullptr ? dstd::StringView(name) : dstd::StringView(), &failed);
     if (entry == nullptr) return failed;
     *out_generation = fold.port_names()->latest(entry)->set(data, len);
     return DFTU_OK;
@@ -289,7 +288,9 @@ dftu_status host_latest_get(::dftu_ctx* ctx, void* h, const char* name,
     PluginFold& fold = fold_of(h);
     dftu_status failed = DFTU_OK;
     if (hub_of(ctx, fold, "latest_get", &failed) == nullptr) return failed;
-    PortNames::Entry* entry = named(ctx, fold, name, &failed);
+    PortNames::Entry* entry = named(
+        ctx, fold,
+        name != nullptr ? dstd::StringView(name) : dstd::StringView(), &failed);
     if (entry == nullptr) return failed;
     *out_status = fold.port_names()->latest(entry)->get(buf, cap, out_len,
                                                         out_generation);
@@ -325,7 +326,9 @@ dftu_status host_phase_contribute(::dftu_ctx* ctx, void* h, const char* name,
     dftu_status failed = DFTU_OK;
     if (hub_of(ctx, fold, "phase_contribute", &failed) == nullptr)
         return failed;
-    PortNames::Entry* entry = named(ctx, fold, name, &failed);
+    PortNames::Entry* entry = named(
+        ctx, fold,
+        name != nullptr ? dstd::StringView(name) : dstd::StringView(), &failed);
     if (entry == nullptr) return failed;
     if (entry->phase == nullptr)
         return undeclared_phase(ctx, entry, generation);
@@ -340,7 +343,9 @@ dftu_status host_phase_seal(::dftu_ctx* ctx, void* h, const char* name,
     PluginFold& fold = fold_of(h);
     dftu_status failed = DFTU_OK;
     if (hub_of(ctx, fold, "phase_seal", &failed) == nullptr) return failed;
-    PortNames::Entry* entry = named(ctx, fold, name, &failed);
+    PortNames::Entry* entry = named(
+        ctx, fold,
+        name != nullptr ? dstd::StringView(name) : dstd::StringView(), &failed);
     if (entry == nullptr) return failed;
     if (entry->phase == nullptr)
         return undeclared_phase(ctx, entry, generation);
@@ -361,7 +366,9 @@ dftu_status host_phase_result(::dftu_ctx* ctx, void* h, const char* name,
     PluginFold& fold = fold_of(h);
     dftu_status failed = DFTU_OK;
     if (hub_of(ctx, fold, "phase_result", &failed) == nullptr) return failed;
-    PortNames::Entry* entry = named(ctx, fold, name, &failed);
+    PortNames::Entry* entry = named(
+        ctx, fold,
+        name != nullptr ? dstd::StringView(name) : dstd::StringView(), &failed);
     if (entry == nullptr) return failed;
     if (entry->phase == nullptr)
         return undeclared_phase(ctx, entry, generation);

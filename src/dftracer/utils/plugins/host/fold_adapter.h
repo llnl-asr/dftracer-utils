@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -227,33 +228,31 @@ class PluginFold : public trace::views::detail::Fold {
     // Emit a named, kind-tagged result into the host registry; moves the
     // frame/lazyframe handle carried in `v` (bytes are copied). Fails on
     // a NULL name/v/registry or an unrecognized kind.
-    dstd::Result<void> emit_result(const char* name, dftu_result_value* v);
+    dstd::Result<void> emit_result(dstd::StringView name, dftu_result_value* v);
 
     // Get-or-create this slice's named dft.svc.agg accumulator; fails on a bad
     // op code or a missing output name. A name seen before keeps its
     // creation-time specs. agg_accumulate skips a batch missing any referenced
     // column.
-    dstd::Result<dftu_agg*> agg_new(const char* name,
-                                    const char* const* key_names,
-                                    std::uint32_t key_n,
-                                    const dftu_agg_col* specs,
-                                    std::uint32_t spec_n);
+    dstd::Result<dftu_agg*> agg_new(dstd::StringView name,
+                                    dstd::Span<const char* const> key_names,
+                                    dstd::Span<const dftu_agg_col> specs);
     dstd::Result<void> agg_accumulate(dftu_agg* a, const dftu_dataframe* df);
     // The merged, finalized accumulator named `name` from any plugin in the
     // fuse, as a new owned handle the caller frees; null when no plugin has
     // published that name yet. Finalize-time read (see SharedResultRegistry).
-    dstd::Result<dftu_dataframe*> agg_result(const char* name) const;
+    dstd::Result<dftu_dataframe*> agg_result(dstd::StringView name) const;
     /// Spill runs written by the accumulator named `name` (0 when it stayed in
     /// memory, or when there is no such accumulator). The observable signal
     /// that the memory budget engaged.
-    std::size_t agg_spill_runs(const char* name) const;
+    std::size_t agg_spill_runs(dstd::StringView name) const;
 
     /// Spill runs written by the registered state named `name`; the same
     /// budget-engaged signal as agg_spill_runs, for a tier-2 state.
-    std::size_t state_spill_runs(const char* name) const;
+    std::size_t state_spill_runs(dstd::StringView name) const;
     /// True when the state named `name` ran past the budget with no
     /// serialize/deserialize pair, so the host had to refuse it a spill.
-    bool state_spill_refused(const char* name) const;
+    bool state_spill_refused(dstd::StringView name) const;
 
     /// The pool and the reservations of this fold's plugin.
     PluginMemory& memory() { return *memory_; }
@@ -285,7 +284,7 @@ class PluginFold : public trace::views::detail::Fold {
         }
         return nullptr;
     }
-    ::dftu_trace_writer* make_trace_writer(const char* path);
+    ::dftu_trace_writer* make_trace_writer(dstd::String path);
     dstd::Result<void> close_trace_writer(::dftu_trace_writer* w);
 
     /// The store of the scan's index root (dftu.svc.store), opened on the
@@ -353,8 +352,7 @@ class PluginFold : public trace::views::detail::Fold {
     ::dftu_plugin_host& host() { return host_; }
 
     // Valid until this PluginFold is destroyed; fails on a parse error.
-    dstd::Result<::dftu_duql*> compile_query(const char* src,
-                                             std::uint32_t len);
+    dstd::Result<::dftu_duql*> compile_query(dstd::StringView src);
     int match_query(const duql::Query& q, const dftu_dataframe* df,
                     std::int64_t row);
 
@@ -398,7 +396,7 @@ class PluginFold : public trace::views::detail::Fold {
     // A batch an earlier plugin rewrote, as this plugin sees it.
     dataframe::DataFrame rewritten_batch(
         const dataframe::DataFrame& frame,
-        const dstd::Vector<dstd::String>& projection);
+        dstd::Span<const dstd::String> projection);
     bool query_on_rewrite_refused_ = false;
 
     // dft.ext.agg accumulators; unique_ptr keeps each handed-out dftu_agg*

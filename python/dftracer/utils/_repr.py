@@ -4,7 +4,12 @@
 
 import html
 import math
-from typing import Any, List, Sequence, Tuple
+from typing import TYPE_CHECKING, List, Sequence, Tuple
+
+if TYPE_CHECKING:
+    from .dataframe import DataFrame
+    from .enums import DType
+    from .series import Series
 
 MAX_ROWS = 60
 EDGE_ROWS = 5
@@ -16,8 +21,8 @@ def _float_cells(values: Sequence[object]) -> List[str]:
     plain = all(v == 0 or 1e-6 <= abs(v) < 1e6 for v in finite)
     decimals = 1
     if plain:
-        for v in finite:
-            text = f"{v:.6f}".rstrip("0")
+        for x in finite:
+            text = f"{x:.6f}".rstrip("0")
             decimals = max(decimals, len(text) - text.index(".") - 1)
     out = []
     for v in values:
@@ -38,7 +43,7 @@ def _cells(values: Sequence[object], is_float: bool) -> List[str]:
     return ["None" if v is None else str(v) for v in values]
 
 
-def _is_float(dtype: Any) -> bool:
+def _is_float(dtype: "DType") -> bool:
     return str(getattr(dtype, "name", "")).startswith("FLOAT")
 
 
@@ -48,7 +53,7 @@ def _shown(n: int) -> "Tuple[bool, List[int]]":
     return True, list(range(EDGE_ROWS)) + list(range(n - EDGE_ROWS, n))
 
 
-def _column(series: Any, cut: bool) -> List[str]:
+def _column(series: "Series", cut: bool) -> List[str]:
     if cut:
         values = series.head(EDGE_ROWS).to_list() + series.tail(EDGE_ROWS).to_list()
     else:
@@ -91,11 +96,11 @@ def _table(
 
 
 def _frame_parts(
-    frame: Any,
+    frame: "DataFrame",
 ) -> "Tuple[bool, List[str], List[List[str]], List[str], List[List[str]]]":
-    columns = list(frame.columns)
+    columns = list(frame._names())
     cut, _ = _shown(len(frame))
-    index = getattr(frame, "_index", None)
+    index = frame.index_names()
     if index:
         index_names = list(index)
         index_cols = [_column(frame[c], cut) for c in index_names]
@@ -111,8 +116,8 @@ def _frame_parts(
     return cut, index_names, index_cols, names, cols
 
 
-def frame_repr(frame: Any) -> str:
-    columns = list(frame.columns)
+def frame_repr(frame: "DataFrame") -> str:
+    columns = list(frame._names())
     n = len(frame)
     if n == 0 or not columns:
         return f"Empty DataFrame\nColumns: [{', '.join(columns)}]\nIndex: []"
@@ -123,8 +128,8 @@ def frame_repr(frame: Any) -> str:
     return text
 
 
-def frame_html(frame: Any) -> str:
-    columns = list(frame.columns)
+def frame_html(frame: "DataFrame") -> str:
+    columns = list(frame._names())
     n = len(frame)
     if n == 0 or not columns:
         return f"<pre>{html.escape(frame_repr(frame))}</pre>"
@@ -147,17 +152,29 @@ def frame_html(frame: Any) -> str:
     return "\n".join(out)
 
 
-def series_repr(series: Any) -> str:
+def series_repr(series: "Series") -> str:
     n = len(series)
     dtype = str(series.dtype.name).lower()
     name = f"Name: {series.name}, " if series.name is not None else ""
     if n == 0:
         return f"Series([], {name}dtype: {dtype})"
     cut, _ = _shown(n)
-    labels = _row_labels(n, cut)
+    from ._series_index import levels_of, names_of, public_name
+
+    level_names = names_of(series)
+    if level_names:
+        parts = [_column(level, cut) for level in levels_of(series)]
+        widths = [max(len(c) for c in part) for part in parts]
+        labels = [" ".join(c.ljust(w) for c, w in zip(row, widths)) for row in zip(*parts)]
+    else:
+        labels = _row_labels(n, cut)
     cells = _column(series, cut)
     lw = max(len(s) for s in labels)
     vw = max(len(s) for s in cells)
     lines = [f"{a.ljust(lw)}    {b.rjust(vw)}" for a, b in zip(labels, cells)]
+    shown = [public_name(name) or "" for name in level_names]
+    if any(shown):
+        header = " ".join(h.ljust(w) for h, w in zip(shown, widths))
+        lines.insert(0, header.rstrip())
     footer = f"{name}Length: {n}, dtype: {dtype}" if cut else f"{name}dtype: {dtype}"
     return "\n".join(lines + [footer])

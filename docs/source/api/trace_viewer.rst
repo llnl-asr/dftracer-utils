@@ -18,7 +18,7 @@ index exists next to the traces, the same query is served from the index
    from dftracer.utils import TraceViewer
 
    # A directory is scanned recursively for .pfw.gz traces, in parallel.
-   view = TraceViewer("traces/")           # index_path optional; sidecar used when present
+   view = TraceViewer("traces/")           # index_dir optional; sidecar used when present
 
    # Top I/O calls by total time.
    df = (
@@ -34,10 +34,10 @@ Constructing a view
 
 .. code-block:: python
 
-   TraceViewer(files, index_path=None, runtime=None)
+   TraceViewer(files, index_dir=None, runtime=None)
 
 ``files`` is a directory (scanned recursively for ``.pfw.gz`` traces), a single
-file path, or a list of file paths. Pass ``index_path`` to point at an index
+file path, or a list of file paths. Pass ``index_dir`` to point at an index
 directory explicitly; omit it to use the sidecar convention. An optional
 :class:`~dftracer.utils.Runtime` controls the thread pool.
 
@@ -70,7 +70,7 @@ aggregated output.
    * - ``filter(pred)`` / ``duql(pred)`` / ``query(pred)``
      - Keep events matching the :doc:`duql <duql>` (e.g. ``'dur >= 1000 and cat == "POSIX"'``) or a columnar expression (``col("dur") > 1000``). A plain field predicate with only filters before it is pushed to the index; otherwise it filters the plan's rows.
    * - ``phase(name)``
-     - Restrict to a record family: ``"events"`` (``ph="X"``), ``"counters"`` (``ph="C"``), ``"aggregated"`` (rollup records), ``"metadata"`` (``ph="M"``), or ``"any"``, which reads every record, metadata included, as rows the filters and aggregations see. Without a phase a viewer reads the record schema's ``data`` row set, which for dftracer traces leaves the metadata records out.
+     - Restrict to a record family: ``"events"`` (``ph=1``), ``"counters"`` (``ph=2``), ``"aggregated"`` (rollup records), ``"metadata"`` (``ph=4``), or ``"any"``, which reads every record, metadata included, as rows the filters and aggregations see. Without a phase a viewer reads the record schema's ``data`` row set, which for dftracer traces leaves the metadata records out.
    * - ``time_range(begin, end)``
      - Keep the events that start in ``[begin, end)``. The occupancy aggregates (``busy``, ``concurrency``, ``utilization``, ``active``) instead take every event that overlaps the window, clipped to it. Metadata records are not windowed.
    * - ``time_bucket(interval_us, normalize_to=None)``
@@ -81,7 +81,7 @@ aggregated output.
      - Interpret/scale the trace's native time unit (see the :doc:`quickstart <../quickstart>`).
    * - ``select(*cols)``
      - Names on raw events are the fields the scan reads (a bare arg name such as ``"size"`` reads ``args.size``); after ``group_by`` / ``agg`` it projects the output.
-   * - ``head(n)`` / ``limit(n)`` / ``offset(n)`` / ``slice(offset, length)``
+   * - ``head(n)`` / ``offset(n)`` / ``slice(offset, length)``
      - Paginate the result rows.
    * - ``group_by(*keys)``
      - Group by zero or more keys; no keys folds every event into one row.
@@ -148,18 +148,19 @@ the columnar engine (see :doc:`../columnar-engine`):
        .collect()                        # -> DataFrame
    )
 
-``collect_typed`` does a single pass over an aggregation index and returns its
-three record families at once, useful for building several frames from one
-scan:
+``collect_index_records`` does a single pass over an aggregation index and
+returns its three record families at once as an
+:class:`~dftracer.utils.IndexRecords`, useful for building several frames from
+one scan:
 
 .. code-block:: python
 
-   typed = TraceViewer(files).group_by("name").agg("count", "sum:dur").collect_typed()
-   regular    = typed["regular"]      # ph="X" events
-   aggregated = typed["aggregated"]   # aggregated records (incl. extra-key dims)
-   counters   = typed["counters"]     # ph="C" counters (incl. system)
+   records = TraceViewer(files).group_by("name").agg("count", "sum:dur").collect_index_records()
+   regular    = records.regular      # ph=1 events
+   aggregated = records.aggregated   # aggregated records (incl. extra-key dims)
+   counters   = records.counters     # ph=2 counters (incl. system)
 
-``collect_typed`` runs now; ``typed(...)`` is its lazy form, a
+``collect_index_records`` runs now; ``index_records(...)`` is its lazy form, a
 :class:`~dftracer.utils.LazyResult`.
 
 Other terminals: ``stream(batch_size=65536)`` yields
@@ -312,10 +313,10 @@ viewer and returns the final node DataFrame:
 Sessions
 --------
 
-``view.session()`` returns a :class:`~dftracer.utils.Session`. Plans and lazy
+``view.session()`` returns a :class:`~dftracer.utils.trace.Session`. Plans and lazy
 results registered on it run together, as :func:`~dftracer.utils.collect_all`
 runs them, at the end of the ``with`` block or on the first
-:meth:`Handle.result <dftracer.utils.Handle.result>`:
+:meth:`Handle.result <dftracer.utils.trace.Handle.result>`:
 
 .. code-block:: python
 
@@ -353,7 +354,7 @@ In C++ the same calls are ``trace::views::LiveView::snapshot()`` and ``status()`
        print(new.group_by("name").agg("count").collect())
 
 Nothing is copied.
-The index lives where ``TraceViewer`` puts it, or at ``index_path`` when you give one.
+The index lives where ``TraceViewer`` puts it, or at ``index_dir`` when you give one.
 A snapshot stays fixed, so an old snapshot keeps its rows after the file grows.
 ``new_rows()`` returns a viewer of the rows no earlier call returned, or ``None``.
 ``follow()`` yields those viewers, sleeps when there is nothing new and has no end, so stop iterating to stop.
@@ -368,9 +369,7 @@ Distributed use
 ---------------
 
 For Dask, :class:`~dftracer.utils.dask.DaskTraceViewer` fans the same builder
-API across workers; the dfanalyzer bridge builds its high-level metrics on
-:class:`~dftracer.utils.dfanalyzer.DFAnalyzerAggregatedTraceViewer`, a subclass
-that composes the HLM as one View aggregation. See :doc:`dfanalyzer`.
+API across workers.
 
 Reference
 ---------
@@ -398,11 +397,15 @@ How the viewer types relate and what they return:
    :members:
    :undoc-members:
 
-.. autoclass:: dftracer.utils.Session
+.. autoclass:: dftracer.utils.IndexRecords
    :members:
    :undoc-members:
 
-.. autoclass:: dftracer.utils.Handle
+.. autoclass:: dftracer.utils.trace.Session
+   :members:
+   :undoc-members:
+
+.. autoclass:: dftracer.utils.trace.Handle
    :members:
    :undoc-members:
 
@@ -411,6 +414,14 @@ How the viewer types relate and what they return:
    :undoc-members:
 
 .. autoclass:: dftracer.utils.LazyScalar
+   :members:
+   :undoc-members:
+
+.. autoclass:: dftracer.utils.BoundColumn
+   :members:
+   :undoc-members:
+
+.. autoclass:: dftracer.utils.SinkSummary
    :members:
    :undoc-members:
 

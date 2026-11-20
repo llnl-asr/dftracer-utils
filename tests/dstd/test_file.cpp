@@ -16,7 +16,8 @@ using namespace dftracer::utils;
 
 namespace {
 
-dstd::Path in(const dftu_utils_test::ScopedTestDir& dir, const char* name) {
+dstd::Path in(const dftu_utils_test::ScopedTestDir& dir,
+              dstd::StringView name) {
     return dstd::Path(dir.file(name));
 }
 

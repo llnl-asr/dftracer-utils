@@ -297,8 +297,8 @@ struct ScopeGroup {
 /// SHARDS shards, each with its own mutex. The leaf blocks own the groups.
 class GroupIndex {
    public:
-    const ScopeGroup* find(const dstd::String& key) const;
-    void add(const dstd::String& key, const ScopeGroup* group) const;
+    const ScopeGroup* find(dstd::StringView key) const;
+    void add(dstd::String key, const ScopeGroup* group) const;
 
    private:
     static constexpr std::size_t SHARDS = 16;
@@ -307,7 +307,7 @@ class GroupIndex {
         dstd::HashMap<dstd::String, const ScopeGroup*> groups;
     };
 
-    Shard& shard_of(const dstd::String& key) const;
+    Shard& shard_of(dstd::StringView key) const;
 
     mutable Shard shards_[SHARDS];
 };
@@ -521,9 +521,10 @@ class ScopeCursor {
     /// the heap by its first key from the record, so no extent is read until
     /// the segment reaches the top. Reads the extent refs of summary commits
     /// whose range meets [begin, end). Every commit of the copy not synced must
-    /// be Good.
+    /// be Good. The cursor reads `hidden` until it is gone, so `hidden` must
+    /// outlive the cursor.
     void open(const Snapshot& snapshot, const detail::CopyData& copy,
-              const dstd::Vector<detail::HiddenRange>& hidden,
+              dstd::Span<const detail::HiddenRange> hidden,
               dstd::ByteView begin, dstd::ByteView end);
     void settle();
     void advance_matching();
@@ -551,7 +552,7 @@ class ScopeCursor {
     /// segment index.
     dstd::Vector<std::size_t> heap_;
     dstd::Vector<std::size_t> matching_;
-    const dstd::Vector<detail::HiddenRange>* hidden_ = nullptr;
+    dstd::Span<const detail::HiddenRange> hidden_;
     const detail::CopyData* copy_ = nullptr;
     dstd::ByteView key_;
     dstd::ByteView begin_;

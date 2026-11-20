@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -16,12 +17,6 @@
 namespace dftracer::utils::trace::index::extensions::kinds {
 
 namespace {
-bool parse(const dstd::String& text, std::uint64_t& out) {
-    const auto* end = text.data() + text.size();
-    auto [ptr, ec] = dstd::from_chars(text.data(), end, out);
-    return ec == std::errc() && ptr == end;
-}
-
 // Per chunk, the [min, max] of the zonemap of `path`.
 dstd::Result<
     dstd::HashMap<std::uint64_t, dstd::Pair<std::uint64_t, std::uint64_t>>>
@@ -35,12 +30,13 @@ chunk_bounds(const trace::index::Snapshot& snapshot,
         snapshot, file, trace::index::store::IndexExtension::Zonemap, path);
     if (!stored) return stored.error();
     for (const auto& [granule, bytes] : *stored) {
-        auto zone = decode_zone(bytes);
-        std::uint64_t lo = 0;
-        std::uint64_t hi = 0;
-        if (zone && parse(zone->min, lo) && parse(zone->max, hi))
+        const auto zone = decode_zone(bytes);
+        if (!zone || !zone->exact()) continue;
+        const auto lo = zone->min_u64();
+        const auto hi = zone->max_u64();
+        if (lo && hi)
             out.emplace(granule,
-                        dstd::Pair<std::uint64_t, std::uint64_t>{lo, hi});
+                        dstd::Pair<std::uint64_t, std::uint64_t>{*lo, *hi});
     }
     return out;
 }
@@ -103,22 +99,16 @@ chunk_value_ranges(const trace::index::Snapshot& snapshot,
     if (!trace::index::extension_current(
             snapshot, file, trace::index::store::IndexExtension::Zonemap))
         return out;
-    auto number = [](const dstd::String& text, double& v) {
-        char* end = nullptr;
-        v = std::strtod(text.c_str(), &end);
-        return !text.empty() && end == text.c_str() + text.size();
-    };
     const auto stored = trace::index::granules(
         snapshot, file, trace::index::store::IndexExtension::Zonemap, path);
     if (!stored) return stored.error();
     for (const auto& [granule, bytes] : *stored) {
-        auto zone = decode_zone(bytes);
-        double lo = 0;
-        double hi = 0;
-        if (!zone || zone->value_type == "string" || !number(zone->min, lo) ||
-            !number(zone->max, hi) || lo > hi)
-            continue;
-        out.emplace(granule, dstd::Pair<double, double>{lo, hi});
+        const auto zone = decode_zone(bytes);
+        if (!zone) continue;
+        const auto lo = zone->min_double();
+        const auto hi = zone->max_double();
+        if (lo && hi && *lo <= *hi)
+            out.emplace(granule, dstd::Pair<double, double>{*lo, *hi});
     }
     return out;
 }

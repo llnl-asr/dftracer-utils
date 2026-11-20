@@ -109,9 +109,9 @@ dstd::Expected<dstd::Vector<FoundFile>, dstd::Error> find_all_on_pool(
 
 /// A list of names for @ref FindOptions::patterns or @ref
 /// FindOptions::skip_dirs.
-template <std::size_t N>
-dstd::Vector<dstd::String> names_of(const char* const (&names)[N]) {
-    return dstd::Vector<dstd::String>(names, names + N);
+inline dstd::Vector<dstd::String> names_of(
+    dstd::Span<const char* const> names) {
+    return dstd::Vector<dstd::String>(names.begin(), names.end());
 }
 
 }  // namespace dftracer::utils::runtime::fs

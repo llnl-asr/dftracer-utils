@@ -15,6 +15,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -83,7 +84,8 @@ TEST_CASE("DataFrame select / filter / sort_by / column") {
     CHECK(df.column_index("val") == 1);
     CHECK(df.column_index("missing") == -1);
 
-    DataFrame just_val = dftu_utils_test::ok(df.select({"val"}));
+    DataFrame just_val = dftu_utils_test::ok(
+        df.select(dftu_utils_test::span_of<dstd::String>({"val"})));
     CHECK(just_val.num_columns() == 1);
 
     DataFrame sorted = dftu_utils_test::ok(df.sort_by("val"));
@@ -94,14 +96,81 @@ TEST_CASE("DataFrame select / filter / sort_by / column") {
     CHECK(top2.num_rows() == 2);
 }
 
+TEST_CASE("column_index finds every name of a wide frame") {
+    constexpr std::size_t WIDTH = 300;
+    DataFrame df;
+    for (std::size_t i = 0; i < WIDTH; ++i) {
+        df.names.emplace_back(dstd::StringView(dstd::fmt<"c{}">(i)));
+        {
+            const auto value = static_cast<std::int64_t>(i);
+            df.columns.push_back(Series::flat_i64(&value, 1));
+        }
+    }
+    for (std::size_t i = 0; i < WIDTH; ++i)
+        CHECK(df.column_index(dstd::fmt<"c{}">(i)) ==
+              static_cast<std::int64_t>(i));
+    CHECK(df.column_index("c300") == -1);
+    CHECK(df.column_index("") == -1);
+
+    // Names that change after a lookup are still found.
+    df.names.emplace_back("late");
+    {
+        const std::int64_t value = -1;
+        df.columns.push_back(Series::flat_i64(&value, 1));
+    }
+    CHECK(df.column_index("late") == static_cast<std::int64_t>(WIDTH));
+    df.names.erase(df.names.begin());
+    df.columns.erase(df.columns.begin());
+    CHECK(df.column_index("c0") == -1);
+    CHECK(df.column_index("c1") == 0);
+    CHECK(df.column_index("late") == static_cast<std::int64_t>(WIDTH - 1));
+
+    DataFrame moved = std::move(df);
+    CHECK(moved.column_index("c1") == 0);
+    CHECK(moved.column("c299").data<std::int64_t>()[0] == 299);
+}
+
+TEST_CASE("column_index sees a name replaced in place") {
+    constexpr std::size_t WIDTH = 40;
+    DataFrame df;
+    for (std::size_t i = 0; i < WIDTH; ++i) {
+        df.names.emplace_back(dstd::StringView(dstd::fmt<"c{}">(i)));
+        const auto value = static_cast<std::int64_t>(i);
+        df.columns.push_back(Series::flat_i64(&value, 1));
+    }
+    CHECK(df.column_index("c21") == 21);
+    df.names[21] = dstd::SharedString(dstd::StringView("renamed"));
+    CHECK(df.column_index("c21") == -1);
+    CHECK(df.column_index("renamed") == 21);
+    std::rotate(df.names.begin() + 5, df.names.begin() + 6,
+                df.names.begin() + 30);
+    CHECK(df.column_index("c5") == 29);
+    CHECK(df.column_index("c6") == 5);
+}
+
+TEST_CASE("column_index returns the first of a repeated name") {
+    DataFrame df;
+    for (std::size_t i = 0; i < 40; ++i) {
+        df.names.emplace_back(dstd::StringView(dstd::fmt<"c{}">(i % 20)));
+        {
+            const auto value = static_cast<std::int64_t>(i);
+            df.columns.push_back(Series::flat_i64(&value, 1));
+        }
+    }
+    for (std::size_t i = 0; i < 20; ++i)
+        CHECK(df.column_index(dstd::fmt<"c{}">(i)) ==
+              static_cast<std::int64_t>(i));
+}
+
 TEST_CASE("DataFrame group_by aggregates") {
     DataFrame df;
     df.names = dstd::make_shared_strings({"k", "v"});
     df.columns.push_back(i64({1, 2, 1, 2, 1}));
     df.columns.push_back(i64({10, 5, 20, 7, 30}));
-    DataFrame g =
-        dftu_utils_test::ok(df.group_by("k", {GroupAgg{Agg::Sum, "v", "total"},
-                                              GroupAgg{Agg::Count, "", "n"}}));
+    DataFrame g = dftu_utils_test::ok(df.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {GroupAgg{Agg::Sum, "v", "total"},
+                  GroupAgg{Agg::Count, "", "n"}})));
     CHECK(g.num_rows() == 2);
     // key 1 -> sum 60 count 3 ; key 2 -> sum 12 count 2 (first-seen order)
     const std::int64_t* total = g.column("total").data<std::int64_t>();
@@ -134,14 +203,20 @@ TEST_CASE(
     present.value = cyc;
     present.out = "present";
     DataFrame g = dftu_utils_test::ok(dataframe::group_agg_expr(
-        dataframe::expr_col(0), {cnt, present}, inputs, "name"));
+        dataframe::expr_col(0),
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggExprSpec>(
+            {cnt, present}),
+        inputs, "name"));
     REQUIRE(g.num_rows() == 2);
     CHECK(g.column("n").data<std::int64_t>()[0] == 2);
     CHECK(g.column("n").data<std::int64_t>()[1] == 2);
     CHECK(g.column("present").data<std::int64_t>()[0] == 1);  // cpu: row 2 null
     CHECK(g.column("present").data<std::int64_t>()[1] == 2);
     auto refused = dataframe::group_agg_expr(
-        dataframe::expr_col(0), {dataframe::agg_sum(cyc, "s")}, inputs, "name");
+        dataframe::expr_col(0),
+        dftu_utils_test::span_of<dftracer::utils::dataframe::AggExprSpec>(
+            {dataframe::agg_sum(cyc, "s")}),
+        inputs, "name");
     REQUIRE(!refused.has_value());
     CHECK(common::errorcode_of(refused.error()) ==
           common::ErrorCode::InvalidArgument);
@@ -201,9 +276,10 @@ TEST_CASE("DataFrame group_by pct (DDSketch quantile) is close to exact") {
     b.names = dstd::make_shared_strings({"k", "v"});
     b.columns.push_back(Series::flat_i64(k.data(), 2 * per));
     b.columns.push_back(Series::flat_i64(v.data(), 2 * per));
-    DataFrame g = dftu_utils_test::ok(
-        b.group_by("k", {GroupAgg{dataframe::Agg::Pct, "v", "p50", 0.5},
-                         GroupAgg{dataframe::Agg::Pct, "v", "p90", 0.9}}));
+    DataFrame g = dftu_utils_test::ok(b.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {GroupAgg{dataframe::Agg::Pct, "v", "p50", 0.5},
+                  GroupAgg{dataframe::Agg::Pct, "v", "p90", 0.9}})));
     REQUIRE(g.num_rows() == 2);
     const std::int64_t* key = g.column("k").data<std::int64_t>();
     const double* p50 = g.column("p50").data<double>();
@@ -349,8 +425,9 @@ TEST_CASE("DataFrame group_by hist emits a list<struct> per group") {
     b.names = dstd::make_shared_strings({"k", "v"});
     b.columns.push_back(Series::flat_i64(k.data(), 1000));
     b.columns.push_back(Series::flat_i64(v.data(), 1000));
-    DataFrame g = dftu_utils_test::ok(
-        b.group_by("k", {GroupAgg{dataframe::Agg::Hist, "v", "h"}}));
+    DataFrame g = dftu_utils_test::ok(b.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {GroupAgg{dataframe::Agg::Hist, "v", "h"}})));
     REQUIRE(g.num_rows() == 2);
     const Series& h = g.column("h");
     CHECK(h.type() == dataframe::TypeId::List);
@@ -368,7 +445,9 @@ TEST_CASE("DataFrame group_by first / last") {
     df.columns.push_back(i64({1, 2, 1, 2, 1}));
     df.columns.push_back(i64({10, 5, 20, 7, 30}));
     DataFrame g = dftu_utils_test::ok(df.group_by(
-        "k", {GroupAgg{Agg::First, "v", "f"}, GroupAgg{Agg::Last, "v", "l"}}));
+        "k",
+        dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+            {GroupAgg{Agg::First, "v", "f"}, GroupAgg{Agg::Last, "v", "l"}})));
     REQUIRE(g.num_rows() == 2);
     const std::int64_t* f = g.column("f").data<std::int64_t>();
     const std::int64_t* l = g.column("l").data<std::int64_t>();
@@ -393,9 +472,10 @@ TEST_CASE("group_agg first/last is exact across the parallel-chunk merge") {
     b.names = dstd::make_shared_strings({"k", "v"});
     b.columns.push_back(Series::flat_i64(k.data(), n));
     b.columns.push_back(Series::flat_i64(v.data(), n));
-    DataFrame g = dftu_utils_test::ok(
-        b.group_by("k", {GroupAgg{dataframe::Agg::First, "v", "f"},
-                         GroupAgg{dataframe::Agg::Last, "v", "l"}}));
+    DataFrame g = dftu_utils_test::ok(b.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {GroupAgg{dataframe::Agg::First, "v", "f"},
+                  GroupAgg{dataframe::Agg::Last, "v", "l"}})));
     REQUIRE(g.num_rows() == 3);
     const std::int64_t* key = g.column("k").data<std::int64_t>();
     const std::int64_t* f = g.column("f").data<std::int64_t>();
@@ -412,8 +492,9 @@ TEST_CASE("DataFrame group_by sumsq matches FieldStat::sumsq") {
     df.names = dstd::make_shared_strings({"k", "v"});
     df.columns.push_back(i64({1, 2, 1, 2, 1}));
     df.columns.push_back(i64({10, 5, 20, 7, 30}));
-    DataFrame g = dftu_utils_test::ok(
-        df.group_by("k", {GroupAgg{dataframe::Agg::SumSq, "v", "ssq"}}));
+    DataFrame g = dftu_utils_test::ok(df.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {GroupAgg{dataframe::Agg::SumSq, "v", "ssq"}})));
     REQUIRE(g.num_rows() == 2);
     const std::int64_t* key = g.column("k").data<std::int64_t>();
     const double* ssq = g.column("ssq").data<double>();
@@ -429,11 +510,14 @@ TEST_CASE("DataFrame group_by argmax picks the repr at the max by-value") {
     DataFrame df;
     df.names = dstd::make_shared_strings({"k", "name", "dur"});
     df.columns.push_back(i64({1, 1, 1, 2, 2}));
-    df.columns.push_back(Series::strings({"a", "b", "c", "x", "y"}));
+    df.columns.push_back(Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"a", "b", "c", "x", "y"})));
     df.columns.push_back(i64({10, 30, 20, 5, 8}));
     GroupAgg spec{dataframe::Agg::ArgMax, "name", "argmax_name"};
     spec.by = "dur";
-    DataFrame g = dftu_utils_test::ok(df.group_by("k", {spec}));
+    DataFrame g = dftu_utils_test::ok(df.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {spec})));
     REQUIRE(g.num_rows() == 2);
     const std::int64_t* key = g.column("k").data<std::int64_t>();
     const Series& out = g.column("argmax_name");
@@ -450,9 +534,12 @@ TEST_CASE("DataFrame group_by set_union sorts and joins distinct values") {
     DataFrame df;
     df.names = dstd::make_shared_strings({"k", "tag"});
     df.columns.push_back(i64({1, 1, 1, 2}));
-    df.columns.push_back(Series::strings({"posix", "stdio", "posix", "mpi"}));
-    DataFrame g = dftu_utils_test::ok(
-        df.group_by("k", {GroupAgg{dataframe::Agg::SetUnion, "tag", "tags"}}));
+    df.columns.push_back(
+        Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"posix", "stdio", "posix", "mpi"})));
+    DataFrame g = dftu_utils_test::ok(df.group_by(
+        "k", dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                 {GroupAgg{dataframe::Agg::SetUnion, "tag", "tags"}})));
     REQUIRE(g.num_rows() == 2);
     const std::int64_t* key = g.column("k").data<std::int64_t>();
     const Series& out = g.column("tags");
@@ -517,9 +604,11 @@ TEST_CASE("group_agg_expr argmax/sumsq/set_union via the expression builders") {
     DataFrame b;
     b.names = dstd::make_shared_strings({"k", "name", "dur", "tag"});
     b.columns.push_back(i64({1, 1, 1, 2, 2}));
-    b.columns.push_back(Series::strings({"a", "b", "c", "x", "y"}));
+    b.columns.push_back(Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"a", "b", "c", "x", "y"})));
     b.columns.push_back(i64({10, 30, 20, 5, 8}));
-    b.columns.push_back(Series::strings({"p", "q", "p", "r", "r"}));
+    b.columns.push_back(Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"p", "q", "p", "r", "r"})));
     dstd::Vector<const Series*> inputs;
     for (const Series& c : b.columns) inputs.push_back(&c);
 
@@ -557,7 +646,9 @@ TEST_CASE(
     b.columns.push_back(i64({1, 2, 3, 4, 5, 6}));
 
     DataFrame expected = dftu_utils_test::ok(b.group_by(
-        "k", {GroupAgg{Agg::Sum, "v", "s"}, GroupAgg{Agg::Mean, "v", "m"}}));
+        "k",
+        dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+            {GroupAgg{Agg::Sum, "v", "s"}, GroupAgg{Agg::Mean, "v", "m"}})));
 
     dstd::Vector<dataframe::AggExprSpec> specs{
         dataframe::agg_sum(dataframe::expr_col(1), "s"),
@@ -615,13 +706,18 @@ TEST_CASE("Expr operators build and evaluate a fused expression") {
     Series b = i64({10, 20, 30, 40});
     // (a + b) evaluated over [a, b]
     dataframe::Expr e = dataframe::col(0) + dataframe::col(1);
-    Series r = dftu_utils_test::eval_ok(e, {&a, &b});
+    Series r = dftu_utils_test::eval_ok(
+        e, dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+               {&a, &b}));
     REQUIRE(r.length() == 4);
     CHECK(r.data<std::int64_t>()[0] == 11);
     CHECK(r.data<std::int64_t>()[3] == 44);
     // a comparison expression yields a Bool mask
     dataframe::Expr mask = dataframe::col(0) > std::int64_t(2);
-    Series m = dftu_utils_test::eval_ok(mask, {&a});
+    Series m = dftu_utils_test::eval_ok(
+        mask,
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&a}));
     CHECK(((m.data<std::uint8_t>()[0] >> 0) & 1) == 0);  // 1 > 2 = false
     CHECK(((m.data<std::uint8_t>()[0] >> 3) & 1) == 1);  // 4 > 2 = true
 }
@@ -632,7 +728,8 @@ TEST_CASE("Expr unary math / clip / cast evaluate") {
 
     Series fl = dftu_utils_test::eval_ok(
         dataframe::expr_unary(dataframe::UnaryOp::Floor, dataframe::col(0)),
-        {&x});
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&x}));
     CHECK(fl.data<double>()[0] == doctest::Approx(-4.0));
     CHECK(fl.data<double>()[3] == doctest::Approx(9.0));
 
@@ -640,20 +737,24 @@ TEST_CASE("Expr unary math / clip / cast evaluate") {
         dataframe::expr_clip(dataframe::col(0),
                              dataframe::detail::expr_scalar_d(-2.0),
                              dataframe::detail::expr_scalar_d(5.0)),
-        {&x});
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&x}));
     CHECK(cl.data<double>()[0] == doctest::Approx(-2.0));
     CHECK(cl.data<double>()[3] == doctest::Approx(5.0));
 
     Series n = i64({1, 2, 3, 4});
     Series cf = dftu_utils_test::eval_ok(
         dataframe::expr_cast(dataframe::TypeId::Float64, dataframe::col(0)),
-        {&n});
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&n}));
     CHECK(cf.type() == dataframe::TypeId::Float64);
     CHECK(cf.data<double>()[2] == doctest::Approx(3.0));
 
     auto unary = [&](dataframe::UnaryOp op, Series& in) {
         return dftu_utils_test::eval_ok(
-            dataframe::expr_unary(op, dataframe::col(0)), {&in});
+            dataframe::expr_unary(op, dataframe::col(0)),
+            dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+                {&in}));
     };
 
     dstd::Vector<double> pv{1.0, 4.0, 9.0, 16.0};
@@ -717,7 +818,8 @@ TEST_CASE("Expr engine is null-aware: fillna and null-preserving ops") {
     Series filled = dftu_utils_test::eval_ok(
         dataframe::expr_fillna(dataframe::col(0),
                                dataframe::detail::expr_scalar_i(-7)),
-        {&nul});
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&nul}));
     CHECK(filled.data<std::int64_t>()[0] == 5);
     CHECK(filled.data<std::int64_t>()[1] == -7);
     CHECK(filled.data<std::int64_t>()[2] == 7);
@@ -727,7 +829,8 @@ TEST_CASE("Expr engine is null-aware: fillna and null-preserving ops") {
     // A math op over a nullable column preserves the null positions.
     Series abs_nul = dftu_utils_test::eval_ok(
         dataframe::expr_unary(dataframe::UnaryOp::Abs, dataframe::col(0)),
-        {&nul});
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&nul}));
     CHECK(abs_nul.null_count() == 2);
 
     // fillna after abs closes the nulls.
@@ -735,7 +838,8 @@ TEST_CASE("Expr engine is null-aware: fillna and null-preserving ops") {
         dataframe::expr_fillna(
             dataframe::expr_unary(dataframe::UnaryOp::Abs, dataframe::col(0)),
             dataframe::detail::expr_scalar_i(0)),
-        {&nul});
+        dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(
+            {&nul}));
     CHECK(both.null_count() == 0);
     CHECK(both.data<std::int64_t>()[1] == 0);
 }
@@ -778,7 +882,8 @@ TEST_CASE("DataFrame sort_by_multi lexicographic") {
     df.names = dstd::make_shared_strings({"a", "b"});
     df.columns.push_back(i64({2, 1, 2, 1}));
     df.columns.push_back(i64({9, 8, 7, 6}));
-    DataFrame s = dftu_utils_test::ok(df.sort_by_multi({"a", "b"}, false));
+    DataFrame s = dftu_utils_test::ok(df.sort_by_multi(
+        dftu_utils_test::span_of<dstd::String>({"a", "b"}), false));
     // a asc then b asc: (1,6),(1,8),(2,7),(2,9)
     const std::int64_t* a = s.column("a").data<std::int64_t>();
     const std::int64_t* b = s.column("b").data<std::int64_t>();
@@ -817,8 +922,8 @@ TEST_CASE("DataFrame sort_by_multi on a permutation key") {
                                  ukey.data(), n)
                   : i64(key));
             df.columns.push_back(i64(payload));
-            const DataFrame s =
-                dftu_utils_test::ok(df.sort_by_multi({"k"}, desc));
+            const DataFrame s = dftu_utils_test::ok(df.sort_by_multi(
+                dftu_utils_test::span_of<dstd::String>({"k"}), desc));
             const std::int64_t* p = s.column("p").data<std::int64_t>();
             for (std::int64_t i = 0; i < n; ++i) {
                 const std::int64_t want = desc ? n - 1 - i : i;
@@ -843,7 +948,8 @@ TEST_CASE("DataFrame sort_by_multi on a non-permutation key is stable") {
         df.names = dstd::make_shared_strings({"k", "p"});
         df.columns.push_back(i64(key));
         df.columns.push_back(i64({10, 11, 12, 13}));
-        const DataFrame s = dftu_utils_test::ok(df.sort_by_multi({"k"}, false));
+        const DataFrame s = dftu_utils_test::ok(df.sort_by_multi(
+            dftu_utils_test::span_of<dstd::String>({"k"}), false));
         dstd::Vector<std::int64_t> want_order = {0, 1, 2, 3};
         dstd::stable_sort(want_order.begin(), want_order.end(),
                           [&](std::int64_t a, std::int64_t b) {
@@ -860,7 +966,8 @@ TEST_CASE("DataFrame sort_by_multi puts a null key last") {
     df.names = dstd::make_shared_strings({"k", "p"});
     df.columns.push_back(i64_nullable({1, 0, 2, 0}, {1, 1, 0, 1}));
     df.columns.push_back(i64({10, 11, 12, 13}));
-    const DataFrame s = dftu_utils_test::ok(df.sort_by_multi({"k"}, false));
+    const DataFrame s = dftu_utils_test::ok(
+        df.sort_by_multi(dftu_utils_test::span_of<dstd::String>({"k"}), false));
     const std::int64_t* p = s.column("p").data<std::int64_t>();
     CHECK(p[0] == 11);
     CHECK(p[1] == 13);
@@ -895,9 +1002,9 @@ TEST_CASE(
     df.columns.push_back(
         Series::flat(dftracer::utils::dataframe::TypeId::Int32, c.data(), n));
     df.columns.push_back(i64(id));
-    const dstd::Vector<bool> desc{false, true, true};
-    const DataFrame s =
-        dftu_utils_test::ok(df.sort_by_multi({"a", "w", "c"}, desc));
+    const dstd::Vector<std::uint8_t> desc{0, 1, 1};
+    const DataFrame s = dftu_utils_test::ok(df.sort_by_multi(
+        dftu_utils_test::span_of<dstd::String>({"a", "w", "c"}), desc));
 
     dstd::Vector<std::int64_t> want(static_cast<std::size_t>(n));
     std::iota(want.begin(), want.end(), std::int64_t{0});
@@ -953,8 +1060,8 @@ TEST_CASE("float keys sort as one total order: NaN last, -0.0 equals 0.0") {
                               const double b = f[static_cast<std::size_t>(y)];
                               return desc ? less(b, a) : less(a, b);
                           });
-        const DataFrame one =
-            dftu_utils_test::ok(df.sort_by_multi({"f"}, desc));
+        const DataFrame one = dftu_utils_test::ok(df.sort_by_multi(
+            dftu_utils_test::span_of<dstd::String>({"f"}), desc));
         const DataFrame single = dftu_utils_test::ok(df.sort_by("f", desc));
         for (std::int64_t i = 0; i < n; ++i) {
             REQUIRE(one.column("id").data<std::int64_t>()[i] ==
@@ -970,8 +1077,9 @@ TEST_CASE("float keys sort as one total order: NaN last, -0.0 equals 0.0") {
                 if (equal(f[ux], f[uy])) return x < y;
                 return desc ? less(f[uy], f[ux]) : less(f[ux], f[uy]);
             });
-        const DataFrame two =
-            dftu_utils_test::ok(df.sort_by_multi({"g", "f"}, {false, desc}));
+        const DataFrame two = dftu_utils_test::ok(df.sort_by_multi(
+            dftu_utils_test::span_of<dstd::String>({"g", "f"}),
+            dstd::Vector<std::uint8_t>{0, static_cast<std::uint8_t>(desc)}));
         for (std::int64_t i = 0; i < n; ++i)
             REQUIRE(two.column("id").data<std::int64_t>()[i] ==
                     want[static_cast<std::size_t>(i)]);
@@ -986,7 +1094,8 @@ TEST_CASE("DataFrame sort_by_multi per-column direction") {
 
     // [false, true]: a asc, b desc -> (1,8),(1,6),(2,9),(2,7).
     DataFrame mixed = dftu_utils_test::ok(
-        df.sort_by_multi({"a", "b"}, dstd::Vector<bool>{false, true}));
+        df.sort_by_multi(dftu_utils_test::span_of<dstd::String>({"a", "b"}),
+                         dstd::Vector<std::uint8_t>{0, 1}));
     const std::int64_t* a = mixed.column("a").data<std::int64_t>();
     const std::int64_t* b = mixed.column("b").data<std::int64_t>();
     CHECK(a[0] == 1);
@@ -1000,7 +1109,8 @@ TEST_CASE("DataFrame sort_by_multi per-column direction") {
 
     // Distinct from [true, true] (both descending).
     DataFrame both = dftu_utils_test::ok(
-        df.sort_by_multi({"a", "b"}, dstd::Vector<bool>{true, true}));
+        df.sort_by_multi(dftu_utils_test::span_of<dstd::String>({"a", "b"}),
+                         dstd::Vector<std::uint8_t>{1, 1}));
     const std::int64_t* a2 = both.column("a").data<std::int64_t>();
     const std::int64_t* b2 = both.column("b").data<std::int64_t>();
     CHECK(a2[0] == 2);
@@ -1009,17 +1119,25 @@ TEST_CASE("DataFrame sort_by_multi per-column direction") {
 
     // A single-flag list broadcasts to every key.
     DataFrame broadcast = dftu_utils_test::ok(
-        df.sort_by_multi({"a", "b"}, dstd::Vector<bool>{true}));
+        df.sort_by_multi(dftu_utils_test::span_of<dstd::String>({"a", "b"}),
+                         dstd::Vector<std::uint8_t>{1}));
     CHECK(broadcast.column("a").data<std::int64_t>()[0] ==
           both.column("a").data<std::int64_t>()[0]);
     CHECK(broadcast.column("b").data<std::int64_t>()[0] ==
           both.column("b").data<std::int64_t>()[0]);
 
+    // An empty list is every key ascending, as a list of zeros.
+    DataFrame ascending = dftu_utils_test::ok(
+        df.sort_by_multi(dftu_utils_test::span_of<dstd::String>({"a", "b"}),
+                         dstd::Vector<std::uint8_t>{}));
+    DataFrame zeros = dftu_utils_test::ok(
+        df.sort_by_multi(dftu_utils_test::span_of<dstd::String>({"a", "b"}),
+                         dstd::Vector<std::uint8_t>{0, 0}));
+    CHECK(ascending.column("b").data<std::int64_t>()[0] ==
+          zeros.column("b").data<std::int64_t>()[0]);
     dftu_utils_test::expect_error(
-        df.sort_by_multi({"a", "b"}, dstd::Vector<bool>{}),
-        dftracer::utils::common::ErrorCode::InvalidArgument);
-    dftu_utils_test::expect_error(
-        df.sort_by_multi({"a", "b"}, dstd::Vector<bool>{true, true, false}),
+        df.sort_by_multi(dftu_utils_test::span_of<dstd::String>({"a", "b"}),
+                         dstd::Vector<std::uint8_t>{1, 1, 0}),
         dftracer::utils::common::ErrorCode::InvalidArgument);
 }
 
@@ -1164,7 +1282,9 @@ TEST_CASE("DataFrame unpivot / melt wide -> long") {
     df.columns.push_back(i64({10, 20}));
     df.columns.push_back(i64({30, 40}));
 
-    DataFrame m = dftu_utils_test::ok(df.unpivot({"id"}, {"a", "b"}));
+    DataFrame m = dftu_utils_test::ok(
+        df.unpivot(dftu_utils_test::span_of<dstd::String>({"id"}),
+                   dftu_utils_test::span_of<dstd::String>({"a", "b"})));
     REQUIRE(m.num_rows() == 4);  // 2 rows * 2 value_vars
     REQUIRE(m.num_columns() == 3);
     CHECK(m.names[0] == "id");
@@ -1186,7 +1306,9 @@ TEST_CASE("DataFrame unpivot / melt wide -> long") {
     CHECK(var.string_at(3) == "b");
 
     // melt is an alias.
-    DataFrame m2 = dftu_utils_test::ok(df.melt({"id"}, {"a", "b"}));
+    DataFrame m2 = dftu_utils_test::ok(
+        df.melt(dftu_utils_test::span_of<dstd::String>({"id"}),
+                dftu_utils_test::span_of<dstd::String>({"a", "b"})));
     CHECK(m2.num_rows() == 4);
 }
 
@@ -1241,7 +1363,8 @@ TEST_CASE("DataFrame pivot long->wide") {
     DataFrame df;
     df.names = dstd::make_shared_strings({"idx", "col", "val"});
     df.columns.push_back(i64({1, 1, 2, 1}));
-    df.columns.push_back(Series::strings({"a", "b", "a", "a"}));
+    df.columns.push_back(Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"a", "b", "a", "a"})));
     df.columns.push_back(i64({10, 20, 30, 40}));
     // (idx=1, col=a) collides across rows 0 (10) and 3 (40).
 
@@ -1286,7 +1409,9 @@ TEST_CASE("DataFrame group_by_dynamic tumbling and sliding") {
     SUBCASE("tumbling (period defaults to every)") {
         DataFrame g = dftu_utils_test::ok(df.group_by_dynamic(
             "t", 2, 0,
-            {GroupAgg{Agg::Sum, "v", "sv"}, GroupAgg{Agg::Count, "", "n"}}));
+            dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                {GroupAgg{Agg::Sum, "v", "sv"},
+                 GroupAgg{Agg::Count, "", "n"}})));
         REQUIRE(g.num_rows() == 3);
         const std::int64_t* start = g.column("t").data<std::int64_t>();
         const std::int64_t* sv = g.column("sv").data<std::int64_t>();
@@ -1300,8 +1425,10 @@ TEST_CASE("DataFrame group_by_dynamic tumbling and sliding") {
         CHECK(sv[2] == 110);  // [4,6): 50+60
     }
     SUBCASE("sliding (period > every overlaps)") {
-        DataFrame g = dftu_utils_test::ok(
-            df.group_by_dynamic("t", 2, 4, {GroupAgg{Agg::Sum, "v", "sv"}}));
+        DataFrame g = dftu_utils_test::ok(df.group_by_dynamic(
+            "t", 2, 4,
+            dftu_utils_test::span_of<dftracer::utils::dataframe::GroupAgg>(
+                {GroupAgg{Agg::Sum, "v", "sv"}})));
         REQUIRE(g.num_rows() == 3);
         const std::int64_t* start = g.column("t").data<std::int64_t>();
         const std::int64_t* sv = g.column("sv").data<std::int64_t>();
@@ -1371,7 +1498,8 @@ TEST_CASE("DataFrame mask from a compiled query") {
     DataFrame df;
     df.names = dstd::make_shared_strings({"cat", "dur"});
     df.columns.push_back(
-        Series::strings({"POSIX", "STDIO", "POSIX", "MPI", "POSIX"}));
+        Series::strings(dftu_utils_test::span_of<dstd::StringView>(
+            {"POSIX", "STDIO", "POSIX", "MPI", "POSIX"})));
     df.columns.push_back(i64({10, 20, 30, 40, 50}));
 
     auto q = dftu_utils_test::ok(
@@ -1397,7 +1525,8 @@ TEST_CASE("DataFrame mask from a compiled query") {
 TEST_CASE("DataFrame mask on a missing column selects no row") {
     DataFrame df;
     df.names = dstd::make_shared_strings({"cat"});
-    df.columns.push_back(Series::strings({"POSIX", "STDIO"}));
+    df.columns.push_back(Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"POSIX", "STDIO"})));
     Series m = dftu_utils_test::ok(df.mask(dftu_utils_test::ok(
         dftracer::utils::duql::Query::from_string("dur > 5"))));
     REQUIRE(m.length() == 2);
@@ -1408,7 +1537,8 @@ TEST_CASE("DataFrame mask on a missing column selects no row") {
 TEST_CASE("DataFrame mask gives an error when a predicate cannot be lowered") {
     DataFrame df;
     df.names = dstd::make_shared_strings({"cat"});
-    df.columns.push_back(Series::strings({"POSIX", "STDIO"}));
+    df.columns.push_back(Series::strings(
+        dftu_utils_test::span_of<dstd::StringView>({"POSIX", "STDIO"})));
     auto q = dftu_utils_test::ok(
         dftracer::utils::duql::Query::from_string("any(cat) == \"P\""));
     const auto refused_mask = df.mask(q);
@@ -1424,7 +1554,7 @@ TEST_CASE("Bool column take / filter / reverse gather bits, not bytes") {
         return ((s.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1) != 0;
     };
 
-    Series t = b.take({9, 1, 6, 11});
+    Series t = b.take(dftu_utils_test::span_of<std::int64_t>({9, 1, 6, 11}));
     REQUIRE(t.valid());
     REQUIRE(t.type() == TypeId::Bool);
     REQUIRE(t.length() == 4);
@@ -1438,7 +1568,7 @@ TEST_CASE("Bool column take / filter / reverse gather bits, not bytes") {
     for (std::int64_t i = 0; i < 12; ++i)
         CHECK(bit_at(r, i) == ((11 - i) % 3 == 0));
 
-    Series n = b.take({-1, 3, -1});
+    Series n = b.take(dftu_utils_test::span_of<std::int64_t>({-1, 3, -1}));
     REQUIRE(n.valid());
     CHECK(n.is_null(0));
     CHECK_FALSE(n.is_null(1));

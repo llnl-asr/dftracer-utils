@@ -38,6 +38,10 @@ set(ALLOWED
   "index/extensions/bloom_fold.h|index/schemas/dft/bloom_core.h"
   "index/extensions/bloom_fold.h|trace/views/fold.h"
   "index/extensions/catalog_fold.h|trace/views/fold.h"
+  "index/extensions/json_feeder.cpp|trace/views/fold_event.h"
+  "index/extensions/plugin_columns.cpp|trace/views/fold_event.h"
+  "index/extensions/json_feeder.h|index/schemas/dft/bloom_core.h"
+  "index/extensions/json_feeder.h|trace/views/fold.h"
   "index/extensions/rowset_fold.cpp|trace/views/event_source.h"
   "index/extensions/rowset_fold.h|trace/views/fold.h"
   "index/gzip/gzip_indexer.cpp|index/build/index_visitor.h"
@@ -46,6 +50,8 @@ set(ALLOWED
   "index/schemas/dft/bloom_core.h|index/build/chunk_indexer.h"
   # the query caches keep their entries on the key-value store
   "index/cache/cache_store.h|store/store.h"
+  # the build lock is keyed as the store keys a directory
+  "index/build/index_write_lock.cpp|store/directory_key.h"
   "index/store/internal/index_decoding.h|index/gzip/gzip_member_record.h"
   "index/store/internal/index_decoding.h|index/schemas/dft/chunk_statistics.h"
   "index/store/internal/index_encoding.h|index/gzip/gzip_member_record.h"

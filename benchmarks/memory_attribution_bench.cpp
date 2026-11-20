@@ -29,6 +29,7 @@
 #include <dftracer/utils/domains/workload/genesis/genesis.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -209,7 +210,7 @@ class Sampler {
             std::max(result_.peak_group_reserved, group_reserved);
     }
 
-    bool parent_in_group(const std::vector<memory::detail::PoolStats>& pools,
+    bool parent_in_group(dstd::Span<const memory::detail::PoolStats> pools,
                          const memory::detail::PoolStats& p) const {
         std::uint16_t id = p.parent;
         for (std::size_t depth = 0; depth < pools.size(); ++depth) {
@@ -310,7 +311,7 @@ dstd::String trace_text(std::int64_t lines) {
     static const char* const NAMES[] = {"read", "write", "open", "close"};
     dstd::String out;
     for (std::int64_t i = 0; i < lines; ++i) {
-        out += R"({"ph":"X","name":")";
+        out += R"({"ph":1,"name":")";
         out += NAMES[i % 4];
         out += R"(","cat":"POSIX","pid":)" + dstd::to_string(i % 4);
         out += R"(,"tid":1,"ts":)" + dstd::to_string(1000 + i * 10);
@@ -321,13 +322,14 @@ dstd::String trace_text(std::int64_t lines) {
     return out;
 }
 
-Paths prepare(const dstd::String& dir, const Sizes& s) {
+Paths prepare(dstd::StringView dir, const Sizes& s) {
     dstd::fs::remove_all(dir).discard();
     Paths p;
-    p.trace = dir + "/trace/smoke.pfw.gz";
+    p.trace = dstd::String(dir) + "/trace/smoke.pfw.gz";
     write_gz(p.trace, trace_text(s.trace_lines));
-    p.index_dir = dir + "/index";
-    const dstd::String run = dir + "/genesis/app1/sys1/in1/nodes_1/ppn_1";
+    p.index_dir = dstd::String(dir) + "/index";
+    const dstd::String run =
+        dstd::String(dir) + "/genesis/app1/sys1/in1/nodes_1/ppn_1";
     require_ok(dstd::fs::create_directories(run), "create_directories");
     require_ok(
         dstd::fs::write_file(
@@ -337,7 +339,7 @@ Paths prepare(const dstd::String& dir, const Sizes& s) {
                 "\"in1\",\"nodes\":1,\"ppn\":{},\"sets\":[\"set1\"]}">(RANKS)),
         "write summary.json");
     write_gz(run + "/compacted/set1.pfw.gz", genesis_text(s.genesis_calls));
-    p.genesis_root = dir + "/genesis";
+    p.genesis_root = dstd::String(dir) + "/genesis";
     return p;
 }
 

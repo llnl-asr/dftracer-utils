@@ -249,6 +249,8 @@ dstd::String agg_serialize(const AggState& st_in, bool compact) {
         put_bytes(s, sp.out);
         put(s, sp.param);
         put(s, sp.by_col);
+        if (sp.op == AggOp::Quantile)
+            put(s, static_cast<std::int32_t>(sp.interp));
         if (sp.op != AggOp::Udaf) continue;
         put_bytes(s, sp.fn);
         put(s, static_cast<std::uint32_t>(sp.args.size()));
@@ -257,6 +259,16 @@ dstd::String agg_serialize(const AggState& st_in, bool compact) {
     put(s, static_cast<std::uint32_t>(st.nf));
     for (FieldStatDomain d : st.field_domain)
         put(s, static_cast<std::uint8_t>(d));
+    for (std::size_t fj = 0; fj < st.nf; ++fj) {
+        put(s, static_cast<std::uint8_t>(fj < st.field_type.size()
+                                             ? st.field_type[fj]
+                                             : TypeId::Unknown));
+        put(s, static_cast<std::int32_t>(fj < st.field_time_unit.size()
+                                             ? st.field_time_unit[fj]
+                                             : TimeUnit::Micro));
+        put_bytes(s, fj < st.field_timezone.size() ? st.field_timezone[fj]
+                                                   : dstd::String());
+    }
     put(s, static_cast<std::uint8_t>(st.has_fl ? 1 : 0));
     if (st.has_fl)
         for (std::size_t fj = 0; fj < st.nf; ++fj)
@@ -392,12 +404,31 @@ dstd::String agg_serialize(const AggState& st_in, bool compact) {
             }
         }
     }
+    // Which specs have a position slot follows from the specs, so a state
+    // without one keeps its bytes.
+    if (st.has_apos) {
+        for (std::uint64_t b : st.apos_bits) put(s, b);
+        for (std::int64_t k : st.apos_rank) put(s, k);
+        for (std::uint8_t d : st.apos_dom) put(s, d);
+    }
+    // As the position slots, the bitwise slots follow from the specs.
+    if (st.has_bw) {
+        for (TypeId t : st.bw_type) put(s, static_cast<std::uint8_t>(t));
+        for (std::uint64_t b : st.bw_acc) put(s, b);
+        for (std::uint8_t b : st.bw_seen) put(s, b);
+    }
     put(s, static_cast<std::uint8_t>(st.has_bitor ? 1 : 0));
     if (st.has_bitor)
         for (std::uint64_t b : st.bitor_acc) put(s, b);
     put(s, static_cast<std::uint8_t>(st.has_prod ? 1 : 0));
     if (st.has_prod)
         for (double p : st.prod_acc) put(s, p);
+    put(s, static_cast<std::uint8_t>(st.has_qv ? 1 : 0));
+    if (st.has_qv)
+        for (const dstd::Vector<double>& values : st.qv) {
+            put(s, static_cast<std::uint64_t>(values.size()));
+            for (double v : values) put(s, v);
+        }
     put(s, static_cast<std::uint8_t>(st.has_kmv ? 1 : 0));
     if (st.has_kmv) {
         for (const KmvMap& m : st.kmv) {
@@ -477,8 +508,19 @@ dstd::String agg_serialize(const AggState& st_in, bool compact) {
     return s;
 }
 
-dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
-                                          bool compact, const AggState* like) {
+// A unit above Nano is a corrupt blob: the reader goes bad, as for a short
+// read.
+static TimeUnit read_time_unit(Reader& r) {
+    const std::int32_t u = r.get<std::int32_t>();
+    if (u < 0 || u > static_cast<std::int32_t>(TimeUnit::Nano)) {
+        r.fail();
+        return TimeUnit::Micro;
+    }
+    return static_cast<TimeUnit>(u);
+}
+
+dstd::Result<AggStatePtr> agg_deserialize(dstd::StringView blob, bool compact,
+                                          const AggState* like) {
     Reader r{blob.data(), blob.data() + blob.size()};
     const bool marked =
         blob.size() >= sizeof(COMPACT_MAGIC) &&
@@ -519,7 +561,7 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
     if (!r.count(nkeys)) return corrupt_blob();
     st->key_time_unit.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k)
-        st->key_time_unit[k] = static_cast<TimeUnit>(r.get<std::int32_t>());
+        st->key_time_unit[k] = read_time_unit(r);
     if (!r.count(nkeys)) return corrupt_blob();
     st->key_timezone.resize(nkeys);
     for (std::uint32_t k = 0; k < nkeys; ++k)
@@ -540,13 +582,20 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
     st->specs.resize(ns);
     for (std::uint32_t i = 0; i < ns; ++i) {
         const std::int32_t op = r.get<std::int32_t>();
-        if (op < 0 || op > static_cast<std::int32_t>(AggOp::Udaf))
+        if (op < 0 || op > static_cast<std::int32_t>(AGG_OP_LAST))
             return corrupt_blob();
         st->specs[i].op = static_cast<AggOp>(op);
         st->specs[i].value_col = r.get<std::int32_t>();
         st->specs[i].out = r.get_bytes();
         st->specs[i].param = r.get<double>();
         st->specs[i].by_col = r.get<std::int32_t>();
+        if (st->specs[i].op == AggOp::Quantile) {
+            const std::int32_t interp = r.get<std::int32_t>();
+            if (interp < static_cast<std::int32_t>(Interpolation::Linear) ||
+                interp > static_cast<std::int32_t>(Interpolation::Midpoint))
+                return corrupt_blob();
+            st->specs[i].interp = static_cast<Interpolation>(interp);
+        }
         if (st->specs[i].op != AggOp::Udaf) continue;
         st->specs[i].fn = r.get_bytes();
         const std::uint32_t nargs = r.get<std::uint32_t>();
@@ -567,6 +616,17 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
     for (std::uint32_t i = 0; i < nf; ++i)
         st->field_domain[i] =
             static_cast<FieldStatDomain>(r.get<std::uint8_t>());
+    if (!r.count(nf)) return corrupt_blob();
+    st->field_type.resize(nf);
+    st->field_time_unit.resize(nf);
+    st->field_timezone.resize(nf);
+    for (std::uint32_t i = 0; i < nf; ++i) {
+        const std::uint8_t t = r.get<std::uint8_t>();
+        if (t > static_cast<std::uint8_t>(TypeId::Map)) return corrupt_blob();
+        st->field_type[i] = static_cast<TypeId>(t);
+        st->field_time_unit[i] = read_time_unit(r);
+        st->field_timezone[i] = r.get_bytes();
+    }
     if (st->has_fl != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_fl) {
         if (!r.count(nf)) return corrupt_blob();
@@ -724,7 +784,7 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
         st->dyn_specs.resize(nd);
         for (std::uint32_t i = 0; i < nd; ++i) {
             const std::int32_t op = r.get<std::int32_t>();
-            if (op < 0 || op > static_cast<std::int32_t>(AggOp::SketchQuantile))
+            if (op < 0 || op > static_cast<std::int32_t>(AGG_OP_LAST))
                 return corrupt_blob();
             st->dyn_specs[i].op = static_cast<AggOp>(op);
             st->dyn_specs[i].param = r.get<double>();
@@ -840,6 +900,39 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
             }
         }
     }
+    if (st->has_apos) {
+        const std::size_t sz = static_cast<std::size_t>(ng) * st->n_apos;
+        if (!r.count(sz * 17)) return corrupt_blob();
+        st->apos_bits.resize(sz);
+        st->apos_rank.resize(sz);
+        st->apos_dom.resize(sz);
+        for (std::size_t i = 0; i < sz; ++i)
+            st->apos_bits[i] = r.get<std::uint64_t>();
+        for (std::size_t i = 0; i < sz; ++i)
+            st->apos_rank[i] = r.get<std::int64_t>();
+        for (std::size_t i = 0; i < sz; ++i) {
+            st->apos_dom[i] = r.get<std::uint8_t>();
+            if (st->apos_dom[i] > 3) return corrupt_blob();
+        }
+    }
+    if (st->has_bw) {
+        const std::size_t sz = static_cast<std::size_t>(ng) * st->n_bw;
+        if (!r.count(st->n_bw + sz * 9)) return corrupt_blob();
+        for (std::size_t i = 0; i < st->n_bw; ++i) {
+            const std::uint8_t t = r.get<std::uint8_t>();
+            if (t > static_cast<std::uint8_t>(TypeId::Map))
+                return corrupt_blob();
+            st->bw_type[i] = static_cast<TypeId>(t);
+        }
+        st->bw_acc.resize(sz);
+        st->bw_seen.resize(sz);
+        for (std::size_t i = 0; i < sz; ++i)
+            st->bw_acc[i] = r.get<std::uint64_t>();
+        for (std::size_t i = 0; i < sz; ++i) {
+            st->bw_seen[i] = r.get<std::uint8_t>();
+            if (st->bw_seen[i] > 1) return corrupt_blob();
+        }
+    }
     if (st->has_bitor != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_bitor) {
         const std::size_t sz = static_cast<std::size_t>(ng) * st->n_bitor;
@@ -854,6 +947,18 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
         if (!r.count(sz)) return corrupt_blob();
         st->prod_acc.resize(sz);
         for (std::size_t i = 0; i < sz; ++i) st->prod_acc[i] = r.get<double>();
+    }
+    if (st->has_qv != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
+    if (st->has_qv) {
+        const std::size_t sz = static_cast<std::size_t>(ng) * st->n_qv;
+        if (!r.count(sz)) return corrupt_blob();
+        st->qv.resize(sz);
+        for (std::size_t i = 0; i < sz; ++i) {
+            const std::uint64_t cnt = r.get<std::uint64_t>();
+            if (cnt > r.left() / sizeof(double)) return corrupt_blob();
+            st->qv[i].resize(static_cast<std::size_t>(cnt));
+            for (double& v : st->qv[i]) v = r.get<double>();
+        }
     }
     if (st->has_kmv != (r.get<std::uint8_t>() != 0)) return corrupt_blob();
     if (st->has_kmv) {
@@ -957,7 +1062,7 @@ dstd::Result<AggStatePtr> agg_deserialize(const dstd::String& blob,
                 return done.error();
         }
     }
-    if (r.bad) return corrupt_blob();
+    if (r.bad || r.p != r.end) return corrupt_blob();
     st->inited = true;
     return st;
 }

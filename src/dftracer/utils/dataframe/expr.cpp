@@ -276,7 +276,7 @@ dftracer::utils::dstd::SharedPtr<ExprNode> clone(const ExprNode& n) {
 
 dftracer::utils::dstd::SharedPtr<const ExprNode> node_remap(
     const dftracer::utils::dstd::SharedPtr<const ExprNode>& n,
-    const dstd::Vector<std::int32_t>& old_to_new) {
+    dstd::Span<const std::int32_t> old_to_new) {
     if (!n) return nullptr;
     if (n->kind == ExprKind::Col) {
         const bool in_range =
@@ -305,7 +305,7 @@ dftracer::utils::dstd::SharedPtr<const ExprNode> node_remap(
 }
 dftracer::utils::dstd::SharedPtr<const ExprNode> node_rebind(
     const dftracer::utils::dstd::SharedPtr<const ExprNode>& n,
-    const dstd::Vector<Expr>& by) {
+    dstd::Span<const Expr> by) {
     if (!n) return nullptr;
     if (n->kind == ExprKind::Col) {
         const bool in_range =
@@ -393,12 +393,11 @@ void canonical_node(dstd::String& out, const ExprNode* n) {
 
 }  // namespace
 
-Expr expr_remap_cols(const Expr& e,
-                     const dstd::Vector<std::int32_t>& old_to_new) {
+Expr expr_remap_cols(const Expr& e, dstd::Span<const std::int32_t> old_to_new) {
     return Expr{node_remap(e.node(), old_to_new)};
 }
 
-Expr expr_rebind_cols(const Expr& e, const dstd::Vector<Expr>& by_index) {
+Expr expr_rebind_cols(const Expr& e, dstd::Span<const Expr> by_index) {
     return Expr{node_rebind(e.node(), by_index)};
 }
 
@@ -597,8 +596,8 @@ Expr expr_cmp_expr(CmpOp cmp, const Expr& a, const Expr& b) {
 namespace {
 // An n-ary node as a right fold of binary nodes; every n-ary form here is
 // associative.
-Expr fold_args(ExprKind k, std::int32_t i, const dstd::Vector<Expr>& args,
-               const char* who) {
+Expr fold_args(ExprKind k, std::int32_t i, dstd::Span<const Expr> args,
+               dstd::StringView who) {
     if (args.empty())
         dstd::fatal("expr: an n-ary expression needs at least one operand",
                     who);
@@ -610,7 +609,7 @@ Expr fold_args(ExprKind k, std::int32_t i, const dstd::Vector<Expr>& args,
 }  // namespace
 
 Expr udf_call_expr(dstd::SharedPtr<const UdfRecord> udf,
-                   const dstd::Vector<Expr>& args) {
+                   dstd::Span<const Expr> args) {
     auto n = dstd::make_shared<ExprNode>();
     n->kind = ExprKind::Udf;
     n->text = dstd::String(udf->name());
@@ -623,7 +622,7 @@ Expr udf_call_expr(dstd::SharedPtr<const UdfRecord> udf,
 }
 
 dstd::Result<Expr> expr_udf(dstd::StringView name,
-                            const dstd::Vector<Expr>& args) {
+                            dstd::Span<const Expr> args) {
     auto udf = find_udf(name);
     if (!udf)
         return common::make_error<"no udf named '{}'">(
@@ -631,14 +630,14 @@ dstd::Result<Expr> expr_udf(dstd::StringView name,
     return udf_call_expr(std::move(udf), args);
 }
 
-Expr expr_coalesce(const dstd::Vector<Expr>& args) {
+Expr expr_coalesce(dstd::Span<const Expr> args) {
     return fold_args(ExprKind::Coalesce, 0, args, "coalesce");
 }
-Expr expr_extreme(const dstd::Vector<Expr>& args, bool least) {
+Expr expr_extreme(dstd::Span<const Expr> args, bool least) {
     return fold_args(ExprKind::Extreme, least ? 1 : 0, args,
                      least ? "least" : "greatest");
 }
-Expr expr_concat(const dstd::Vector<Expr>& args) {
+Expr expr_concat(dstd::Span<const Expr> args) {
     if (args.size() == 1)
         return make(ExprKind::Concat, 0, {}, args.front().node(),
                     expr_lit_str("").node());
@@ -792,6 +791,16 @@ bool expr_as_col_is_in(const Expr& e, std::int32_t* col, Series* values) {
         return false;
     *col = n->a->i;
     *values = n->values.share();
+    return true;
+}
+
+bool expr_as_col_is_null(const Expr& e, std::int32_t* col, bool* null) {
+    const auto& n = e.node();
+    if (!n || n->kind != ExprKind::IsNull || !n->a ||
+        n->a->kind != ExprKind::Col)
+        return false;
+    *col = n->a->i;
+    *null = n->i != 0;
     return true;
 }
 
@@ -1026,7 +1035,7 @@ TypeId arith_type(std::int32_t op, TypeId a, TypeId b) {
 // with no data) and the two can never disagree.
 class Compiler {
    public:
-    explicit Compiler(const dstd::Vector<DataType>& input_types)
+    explicit Compiler(dstd::Span<const DataType> input_types)
         : input_types_(input_types) {}
 
     // A root that folded to a scalar, as a column of that value in every row.
@@ -1093,6 +1102,8 @@ class Compiler {
                     case UnaryOp::Log:
                     case UnaryOp::Sqrt:
                     case UnaryOp::Exp:
+                    case UnaryOp::Log1p:
+                    case UnaryOp::Expm1:
                         t = TypeId::Float64;
                         break;
                     default:
@@ -1509,7 +1520,7 @@ class Compiler {
 
     // A numeric operand as Int64, Uint64 or Float64, the three types the
     // duql kernels read; a literal broadcasts.
-    Val num(Val v, const char* who) {
+    Val num(Val v, dstd::StringView who) {
         if (v.is_scalar)
             return broadcast(v.scalar, v.scalar.kind == DFTU_SCALAR_TAG_F64
                                            ? TypeId::Float64
@@ -1527,12 +1538,12 @@ class Compiler {
 
     // An operand of a comparison-like node: numeric ones as num() makes
     // them, the rest as they are.
-    Val operand(Val v, const char* who) {
+    Val operand(Val v, dstd::StringView who) {
         if (v.is_scalar || is_num_type(v.type)) return num(v, who);
         return v;
     }
 
-    void same_domain(const Val& a, const Val& b, const char* who) {
+    void same_domain(const Val& a, const Val& b, dstd::StringView who) {
         const bool ok = (is_num_type(a.type) && is_num_type(b.type)) ||
                         (is_text_type(a.type) && is_text_type(b.type)) ||
                         (a.type == TypeId::Bool && b.type == TypeId::Bool);
@@ -1541,7 +1552,7 @@ class Compiler {
                 who, type_name(a.type), type_name(b.type)));
     }
 
-    TypeId common_type(const Val& a, const Val& b, const char* who) {
+    TypeId common_type(const Val& a, const Val& b, dstd::StringView who) {
         if (is_num_type(a.type) && is_num_type(b.type))
             return promote(a.type, b.type);
         if (a.type != b.type) {
@@ -1560,7 +1571,7 @@ class Compiler {
     }
 
     // The element type of a List operand, which must be known.
-    DataType as_list(const Val& v, const char* who) {
+    DataType as_list(const Val& v, dstd::StringView who) {
         if (v.is_scalar || v.type != TypeId::List ||
             v.full.fields.size() != 1) {
             fail(dstd::fmt<"expr: {} needs a List column with a known element "
@@ -1743,7 +1754,7 @@ class Compiler {
         dstd::fatal("expr: unknown string method");
     }
 
-    Val as_col(Val v, const char* who) {
+    Val as_col(Val v, dstd::StringView who) {
         if (v.is_scalar)
             return fail(dstd::fmt<"expr: {} needs a column operand">(who));
         return v;
@@ -1751,7 +1762,7 @@ class Compiler {
 
     // A string operand: String always; Binary too when `binary_ok` (the
     // predicate / length / find kernels read bytes, the maps produce text).
-    Val as_str(Val v, const char* who, bool binary_ok) {
+    Val as_str(Val v, dstd::StringView who, bool binary_ok) {
         Val a = as_col(v, who);
         const bool ok =
             a.type == TypeId::String || (binary_ok && a.type == TypeId::Binary);
@@ -2019,7 +2030,7 @@ class Compiler {
         return unknown_val();
     }
 
-    const dstd::Vector<DataType>& input_types_;
+    dstd::Span<const DataType> input_types_;
     dstd::String error_;
     dstd::Map<dftracer::utils::dstd::Tuple<
                   int, int, int, int, int, int, std::int64_t, std::int64_t,
@@ -2922,9 +2933,7 @@ Series str_pred_col_kernel(const Series& sa, const Series& sb,
         else if (op == StrPredOp::EndsWith)
             hit = s.ends_with(n);
         else
-            hit = duql::detail::substr_find(
-                      s.data(), static_cast<std::int64_t>(s.size()), n.data(),
-                      static_cast<std::int64_t>(n.size())) >= 0;
+            hit = duql::detail::substr_find(s, n) >= 0;
         c.set(i, hit);
     }
     return c.finish();
@@ -3111,11 +3120,9 @@ dftracer::utils::dstd::Optional<V> parse_number(
     V out{};
     std::from_chars_result res{};
     if constexpr (std::is_same_v<V, double>)
-        res = dftracer::utils::dstd::from_chars_double(
-            s.data(), s.data() + s.size(), out);
+        res = dftracer::utils::dstd::from_chars_double(s, out);
     else
-        res = dftracer::utils::dstd::from_chars(s.data(), s.data() + s.size(),
-                                                out);
+        res = dftracer::utils::dstd::from_chars(s, out);
     if (res.ec != std::errc{} || res.ptr != s.data() + s.size())
         return dftracer::utils::dstd::nullopt;
     return out;
@@ -3498,9 +3505,9 @@ Series str_fn_eval(const SlotOp& op, const Series& a, const Series* b,
 // Evaluate the slot program over rows [offset, offset+len) and extract one
 // column per requested final slot (shared, so distinct outputs that resolved to
 // the same slot alias the one buffer).
-dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
-                                const dstd::Vector<Series>& inputs,
-                                const dstd::Vector<int>& finals,
+dstd::Vector<Series> eval_chunk(dstd::Span<const SlotOp> prog,
+                                dstd::Span<const Series> inputs,
+                                dstd::Span<const int> finals,
                                 std::int64_t offset, std::int64_t len,
                                 EvalError& error) {
     dstd::Vector<Series> s(prog.size());
@@ -3587,6 +3594,12 @@ dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
                         break;
                     case UnaryOp::Exp:
                         r = dftu_series_exp(A());
+                        break;
+                    case UnaryOp::Log1p:
+                        r = dftu_series_log1p(A());
+                        break;
+                    case UnaryOp::Expm1:
+                        r = dftu_series_expm1(A());
                         break;
                     case UnaryOp::Sign:
                         r = dftu_series_sign(A());
@@ -3829,7 +3842,7 @@ dstd::Vector<Series> eval_chunk(const dstd::Vector<SlotOp>& prog,
 // eval_chunk returns no columns when a kernel does not take its input type;
 // reported here, on the calling thread, since the parallel workers cannot
 // return an error.
-dstd::Result<void> require_evaluated(const dstd::Vector<Series>& outs,
+dstd::Result<void> require_evaluated(dstd::Span<const Series> outs,
                                      EvalError& error) {
     if (outs.empty()) {
         dstd::String message;
@@ -3853,8 +3866,7 @@ constexpr std::int64_t GRAIN = 1 << 16;
 }  // namespace
 
 dstd::Result<dstd::Vector<Series>> eval_many(
-    const dstd::Vector<Expr>& roots,
-    const dstd::Vector<const Series*>& inputs) {
+    dstd::Span<const Expr> roots, dstd::Span<const Series* const> inputs) {
     if (roots.empty())
         return common::make_error(common::ErrorCode::InvalidArgument,
                                   "expr: needs at least one expression");
@@ -3981,17 +3993,18 @@ dstd::Result<dstd::Vector<Series>> eval_many(
 }
 
 dstd::Result<Series> eval(const Expr& root,
-                          const dstd::Vector<const Series*>& inputs) {
+                          dstd::Span<const Series* const> inputs) {
     if (!root.valid())
         return common::make_error(common::ErrorCode::InvalidArgument,
                                   "expr: null expression");
-    dstd::Result<dstd::Vector<Series>> outs = eval_many({root}, inputs);
+    dstd::Result<dstd::Vector<Series>> outs =
+        eval_many(dstd::Span<const Expr>(&root, 1), inputs);
     if (!outs) return outs.error();
     return std::move(outs->front());
 }
 
 dstd::Result<DataType> infer_type(const Expr& root,
-                                  const dstd::Vector<DataType>& input_types) {
+                                  dstd::Span<const DataType> input_types) {
     if (!root.valid())
         return common::make_error(common::ErrorCode::InvalidArgument,
                                   "expr: null expression");
@@ -4021,79 +4034,80 @@ dftu_expr* wrap(dataframe::Expr e) { return new dftu_expr{{}, std::move(e)}; }
 const dataframe::Expr& unwrap(const dftu_expr* e) { return e->e; }
 }  // namespace
 
-dftu_expr* dftu_expr_col(int32_t index) {
+dftu_expr* dftu_expr_col(std::int32_t index) {
     return wrap(dataframe::expr_col(index));
 }
-dftu_expr* dftu_expr_lit_i64(int64_t value) {
+dftu_expr* dftu_expr_lit_i64(std::int64_t value) {
     return wrap(dataframe::expr_lit(static_cast<std::int64_t>(value)));
 }
 dftu_expr* dftu_expr_lit_f64(double value) {
     return wrap(dataframe::expr_lit(value));
 }
-dftu_expr* dftu_expr_binary(int32_t op, const dftu_expr* a,
+dftu_expr* dftu_expr_binary(std::int32_t op, const dftu_expr* a,
                             const dftu_expr* b) {
     return wrap(dataframe::expr_binary(static_cast<dataframe::BinaryOp>(op),
                                        unwrap(a), unwrap(b)));
 }
-dftu_expr* dftu_expr_prim(int32_t prim, const dftu_expr* a) {
+dftu_expr* dftu_expr_prim(std::int32_t prim, const dftu_expr* a) {
     return wrap(
         dataframe::expr_prim(static_cast<dataframe::PrimOp>(prim), unwrap(a)));
 }
-dftu_expr* dftu_expr_unary(int32_t op, const dftu_expr* a) {
+dftu_expr* dftu_expr_unary(std::int32_t op, const dftu_expr* a) {
     return wrap(
         dataframe::expr_unary(static_cast<dataframe::UnaryOp>(op), unwrap(a)));
 }
 dftu_expr* dftu_expr_clip(const dftu_expr* a, dftu_scalar lo, dftu_scalar hi) {
     return wrap(dataframe::expr_clip(unwrap(a), lo, hi));
 }
-int32_t dftu_expr_col_index(const dftu_expr* e) {
+std::int32_t dftu_expr_col_index(const dftu_expr* e) {
     return e ? dataframe::expr_col_index(unwrap(e)) : -1;
 }
-int32_t dftu_expr_as_col_cmp(const dftu_expr* e, int32_t* col, int32_t* cmp,
-                             dftu_scalar* rhs) {
+std::int32_t dftu_expr_as_col_cmp(const dftu_expr* e, std::int32_t* col,
+                                  std::int32_t* cmp, dftu_scalar* rhs) {
     if (!e || !col || !cmp || !rhs) return 0;
     std::int32_t c = -1;
     dataframe::CmpOp op{};
     dataframe::Scalar r;
     if (!dataframe::expr_as_col_cmp(unwrap(e), &c, &op, &r)) return 0;
     *col = c;
-    *cmp = static_cast<int32_t>(op);
+    *cmp = static_cast<std::int32_t>(op);
     *rhs = r;
     return 1;
 }
-int32_t dftu_expr_as_logical(const dftu_expr* e, int32_t* op, dftu_expr** a,
-                             dftu_expr** b) {
+std::int32_t dftu_expr_as_logical(const dftu_expr* e, std::int32_t* op,
+                                  dftu_expr** a, dftu_expr** b) {
     if (!e || !op || !a || !b) return 0;
     dataframe::LogicalOp lop{};
     dataframe::Expr lhs, rhs;
     if (!dataframe::expr_as_logical(unwrap(e), &lop, &lhs, &rhs)) return 0;
-    *op = static_cast<int32_t>(lop);
+    *op = static_cast<std::int32_t>(lop);
     *a = wrap(std::move(lhs));
     *b = wrap(std::move(rhs));
     return 1;
 }
-int32_t dftu_expr_as_not(const dftu_expr* e, dftu_expr** a) {
+std::int32_t dftu_expr_as_not(const dftu_expr* e, dftu_expr** a) {
     if (!e || !a) return 0;
     dataframe::Expr inner;
     if (!dataframe::expr_as_not(unwrap(e), &inner)) return 0;
     *a = wrap(std::move(inner));
     return 1;
 }
-int32_t dftu_expr_as_col_str_pred(const dftu_expr* e, int32_t* col, int32_t* op,
-                                  const char** pattern, int32_t* pattern_size) {
+std::int32_t dftu_expr_as_col_str_pred(const dftu_expr* e, std::int32_t* col,
+                                       std::int32_t* op, const char** pattern,
+                                       std::int32_t* pattern_size) {
     if (!e || !col || !op || !pattern || !pattern_size) return 0;
     std::int32_t c = -1;
     dataframe::StrPredOp sop{};
     dftracer::utils::dstd::StringView pat;
     if (!dataframe::expr_as_col_str_pred(unwrap(e), &c, &sop, &pat)) return 0;
     *col = c;
-    *op = static_cast<int32_t>(sop);
+    *op = static_cast<std::int32_t>(sop);
     *pattern = pat.data();
-    *pattern_size = static_cast<int32_t>(pat.size());
+    *pattern_size = static_cast<std::int32_t>(pat.size());
     return 1;
 }
-int32_t dftu_expr_as_col_is_in(const dftu_expr* e, int32_t* col,
-                               dftu_series** values) {
+std::int32_t dftu_expr_as_col_is_in(const dftu_expr* e, std::int32_t* col,
+                                    dftu_series** values) {
     if (!e || !col || !values) return 0;
     std::int32_t c = -1;
     dataframe::Series v;
@@ -4102,11 +4116,12 @@ int32_t dftu_expr_as_col_is_in(const dftu_expr* e, int32_t* col,
     *values = v.release();
     return 1;
 }
-dftu_expr* dftu_expr_cmp(int32_t cmp, const dftu_expr* a, dftu_scalar rhs) {
+dftu_expr* dftu_expr_cmp(std::int32_t cmp, const dftu_expr* a,
+                         dftu_scalar rhs) {
     return wrap(dataframe::expr_cmp(static_cast<dataframe::CmpOp>(cmp),
                                     unwrap(a), rhs));
 }
-dftu_expr* dftu_expr_logical(int32_t op, const dftu_expr* a,
+dftu_expr* dftu_expr_logical(std::int32_t op, const dftu_expr* a,
                              const dftu_expr* b) {
     return wrap(dataframe::expr_logical(static_cast<dataframe::LogicalOp>(op),
                                         unwrap(a), unwrap(b)));
@@ -4114,27 +4129,27 @@ dftu_expr* dftu_expr_logical(int32_t op, const dftu_expr* a,
 dftu_expr* dftu_expr_not(const dftu_expr* a) {
     return wrap(dataframe::expr_not(unwrap(a)));
 }
-dftu_expr* dftu_expr_cast(int32_t type, const dftu_expr* a) {
+dftu_expr* dftu_expr_cast(std::int32_t type, const dftu_expr* a) {
     return wrap(
         dataframe::expr_cast(static_cast<dataframe::TypeId>(type), unwrap(a)));
 }
 dftu_expr* dftu_expr_lower(const dftu_expr* a) {
     return wrap(dataframe::expr_lower(unwrap(a)));
 }
-dftu_expr* dftu_expr_str_pred(int32_t op, const dftu_expr* a,
-                              const char* pattern, int32_t pattern_size) {
+dftu_expr* dftu_expr_str_pred(std::int32_t op, const dftu_expr* a,
+                              const char* pattern, std::int32_t pattern_size) {
     if (!a || (pattern_size > 0 && !pattern)) return nullptr;
     return wrap(dataframe::expr_str_pred(
         static_cast<dataframe::StrPredOp>(op), unwrap(a),
         dftracer::utils::dstd::StringView(
             pattern ? pattern : "", static_cast<std::size_t>(pattern_size))));
 }
-dftu_expr* dftu_expr_str_pred_col(int32_t op, const dftu_expr* a,
+dftu_expr* dftu_expr_str_pred_col(std::int32_t op, const dftu_expr* a,
                                   const dftu_expr* needle) {
     if (!a || !needle) return nullptr;
-    if (op != static_cast<int32_t>(dataframe::StrPredOp::Contains) &&
-        op != static_cast<int32_t>(dataframe::StrPredOp::StartsWith) &&
-        op != static_cast<int32_t>(dataframe::StrPredOp::EndsWith))
+    if (op != static_cast<std::int32_t>(dataframe::StrPredOp::Contains) &&
+        op != static_cast<std::int32_t>(dataframe::StrPredOp::StartsWith) &&
+        op != static_cast<std::int32_t>(dataframe::StrPredOp::EndsWith))
         return nullptr;
     auto e = dataframe::expr_str_pred_col(static_cast<dataframe::StrPredOp>(op),
                                           unwrap(a), unwrap(needle));
@@ -4157,15 +4172,16 @@ dftu_expr* dftu_expr_round_col(const dftu_expr* a, const dftu_expr* digits) {
     if (!a || !digits) return nullptr;
     return wrap(dataframe::expr_round_col(unwrap(a), unwrap(digits)));
 }
-dftu_expr* dftu_expr_str_map(int32_t op, const dftu_expr* a) {
+dftu_expr* dftu_expr_str_map(std::int32_t op, const dftu_expr* a) {
     if (!a) return nullptr;
     return wrap(dataframe::expr_str_map(static_cast<dataframe::StrMapOp>(op),
                                         unwrap(a)));
 }
-dftu_expr* dftu_expr_str_fn(int32_t fn, const dftu_expr* a, const dftu_expr* b,
-                            const char* text, int32_t text_size,
-                            const char* text2, int32_t text2_size, int64_t i0,
-                            int64_t i1) {
+dftu_expr* dftu_expr_str_fn(std::int32_t fn, const dftu_expr* a,
+                            const dftu_expr* b, const char* text,
+                            std::int32_t text_size, const char* text2,
+                            std::int32_t text2_size, std::int64_t i0,
+                            std::int64_t i1) {
     if (!a || fn < 0 || fn > DFTU_STR_FN_WRAP || (text_size > 0 && !text) ||
         (text2_size > 0 && !text2))
         return nullptr;
@@ -4178,12 +4194,12 @@ dftu_expr* dftu_expr_str_fn(int32_t fn, const dftu_expr* a, const dftu_expr* b,
                                           static_cast<std::size_t>(text2_size)),
         i0, i1));
 }
-dftu_expr* dftu_expr_str_len(const dftu_expr* a, int32_t chars) {
+dftu_expr* dftu_expr_str_len(const dftu_expr* a, std::int32_t chars) {
     if (!a) return nullptr;
     return wrap(dataframe::expr_str_size(unwrap(a), chars != 0));
 }
 dftu_expr* dftu_expr_str_find(const dftu_expr* a, const char* needle,
-                              int32_t needle_size) {
+                              std::int32_t needle_size) {
     if (!a || (needle_size > 0 && !needle)) return nullptr;
     return wrap(dataframe::expr_str_find(
         unwrap(a),
@@ -4191,8 +4207,8 @@ dftu_expr* dftu_expr_str_find(const dftu_expr* a, const char* needle,
             needle ? needle : "", static_cast<std::size_t>(needle_size))));
 }
 dftu_expr* dftu_expr_str_replace(const dftu_expr* a, const char* from,
-                                 int32_t from_size, const char* to,
-                                 int32_t to_size, int32_t all) {
+                                 std::int32_t from_size, const char* to,
+                                 std::int32_t to_size, std::int32_t all) {
     if (!a || (from_size > 0 && !from) || (to_size > 0 && !to)) return nullptr;
     return wrap(dataframe::expr_str_replace(
         unwrap(a),
@@ -4202,8 +4218,8 @@ dftu_expr* dftu_expr_str_replace(const dftu_expr* a, const char* from,
                                           static_cast<std::size_t>(to_size)),
         all != 0));
 }
-dftu_expr* dftu_expr_date_part(const dftu_expr* a, int32_t part,
-                               int64_t ns_per_unit) {
+dftu_expr* dftu_expr_date_part(const dftu_expr* a, std::int32_t part,
+                               std::int64_t ns_per_unit) {
     if (!a || !dftracer::utils::common::is_date_part_code(part) ||
         ns_per_unit <= 0)
         return nullptr;
@@ -4211,7 +4227,8 @@ dftu_expr* dftu_expr_date_part(const dftu_expr* a, int32_t part,
     return e ? wrap(std::move(*e)) : nullptr;
 }
 dftu_expr* dftu_expr_format_time(const dftu_expr* a, const char* fmt,
-                                 int32_t fmt_size, int64_t ns_per_unit) {
+                                 std::int32_t fmt_size,
+                                 std::int64_t ns_per_unit) {
     if (!a || fmt_size < 0 || (fmt_size > 0 && !fmt) || ns_per_unit <= 0)
         return nullptr;
     const dftracer::utils::dstd::StringView f(
@@ -4221,7 +4238,8 @@ dftu_expr* dftu_expr_format_time(const dftu_expr* a, const char* fmt,
     auto e = dataframe::expr_format_time(unwrap(a), f, ns_per_unit);
     return e ? wrap(std::move(*e)) : nullptr;
 }
-dftu_expr* dftu_expr_str_slice(const dftu_expr* a, int64_t start, int64_t len) {
+dftu_expr* dftu_expr_str_slice(const dftu_expr* a, std::int64_t start,
+                               std::int64_t len) {
     if (!a) return nullptr;
     return wrap(dataframe::expr_str_slice(unwrap(a), start, len));
 }
@@ -4235,22 +4253,23 @@ dftu_expr* dftu_expr_select(const dftu_expr* cond, const dftu_expr* a,
     if (!cond || !a || !b) return nullptr;
     return wrap(dataframe::expr_select(unwrap(cond), unwrap(a), unwrap(b)));
 }
-dftu_expr* dftu_expr_is_null(const dftu_expr* a, int32_t null) {
+dftu_expr* dftu_expr_is_null(const dftu_expr* a, std::int32_t null) {
     if (!a) return nullptr;
     return wrap(dataframe::expr_is_null(unwrap(a), null != 0));
 }
-dftu_expr* dftu_expr_lit_str(const char* value, int32_t len) {
+dftu_expr* dftu_expr_lit_str(const char* value, std::int32_t len) {
     if (len < 0 || (len > 0 && !value)) return nullptr;
     return wrap(dataframe::expr_lit_str(dftracer::utils::dstd::StringView(
         value ? value : "", static_cast<std::size_t>(len))));
 }
-dftu_expr* dftu_expr_lit_bool(int32_t value) {
+dftu_expr* dftu_expr_lit_bool(std::int32_t value) {
     return wrap(dataframe::expr_lit_bool(value != 0));
 }
-dftu_expr* dftu_expr_lit_null(int32_t type) {
+dftu_expr* dftu_expr_lit_null(std::int32_t type) {
     return wrap(dataframe::expr_lit_null(static_cast<dataframe::TypeId>(type)));
 }
-dftu_expr* dftu_expr_arith(int32_t op, const dftu_expr* a, const dftu_expr* b) {
+dftu_expr* dftu_expr_arith(std::int32_t op, const dftu_expr* a,
+                           const dftu_expr* b) {
     if (!a || !b) return nullptr;
     return wrap(dataframe::expr_arith(static_cast<dataframe::ArithOp>(op),
                                       unwrap(a), unwrap(b)));
@@ -4259,41 +4278,41 @@ dftu_expr* dftu_expr_neg(const dftu_expr* a) {
     if (!a) return nullptr;
     return wrap(dataframe::expr_neg(unwrap(a)));
 }
-dftu_expr* dftu_expr_cmp_expr(int32_t cmp, const dftu_expr* a,
+dftu_expr* dftu_expr_cmp_expr(std::int32_t cmp, const dftu_expr* a,
                               const dftu_expr* b) {
     if (!a || !b) return nullptr;
     return wrap(dataframe::expr_cmp_expr(static_cast<dataframe::CmpOp>(cmp),
                                          unwrap(a), unwrap(b)));
 }
 namespace {
-bool expr_args(const dftu_expr* const* args, int32_t n,
+bool expr_args(const dftu_expr* const* args, std::int32_t n,
                dftracer::utils::dstd::Vector<dataframe::Expr>& out) {
     if (!args || n <= 0) return false;
     out.reserve(static_cast<std::size_t>(n));
-    for (int32_t i = 0; i < n; ++i) {
+    for (std::int32_t i = 0; i < n; ++i) {
         if (!args[i]) return false;
         out.push_back(unwrap(args[i]));
     }
     return true;
 }
 }  // namespace
-dftu_expr* dftu_expr_coalesce(const dftu_expr* const* args, int32_t n) {
+dftu_expr* dftu_expr_coalesce(const dftu_expr* const* args, std::int32_t n) {
     dftracer::utils::dstd::Vector<dataframe::Expr> v;
     if (!expr_args(args, n, v)) return nullptr;
     return wrap(dataframe::expr_coalesce(v));
 }
-dftu_expr* dftu_expr_extreme(const dftu_expr* const* args, int32_t n,
-                             int32_t least) {
+dftu_expr* dftu_expr_extreme(const dftu_expr* const* args, std::int32_t n,
+                             std::int32_t least) {
     dftracer::utils::dstd::Vector<dataframe::Expr> v;
     if (!expr_args(args, n, v)) return nullptr;
     return wrap(dataframe::expr_extreme(v, least != 0));
 }
-dftu_expr* dftu_expr_concat(const dftu_expr* const* args, int32_t n) {
+dftu_expr* dftu_expr_concat(const dftu_expr* const* args, std::int32_t n) {
     dftracer::utils::dstd::Vector<dataframe::Expr> v;
     if (!expr_args(args, n, v)) return nullptr;
     return wrap(dataframe::expr_concat(v));
 }
-dftu_expr* dftu_expr_round(const dftu_expr* a, int64_t digits) {
+dftu_expr* dftu_expr_round(const dftu_expr* a, std::int64_t digits) {
     if (!a) return nullptr;
     return wrap(dataframe::expr_round(unwrap(a), digits));
 }
@@ -4305,12 +4324,12 @@ dftu_expr* dftu_expr_pow(const dftu_expr* a, const dftu_expr* b) {
     if (!a || !b) return nullptr;
     return wrap(dataframe::expr_pow(unwrap(a), unwrap(b)));
 }
-dftu_expr* dftu_expr_str_substr(const dftu_expr* a, int64_t start,
-                                int64_t len) {
+dftu_expr* dftu_expr_str_substr(const dftu_expr* a, std::int64_t start,
+                                std::int64_t len) {
     if (!a) return nullptr;
     return wrap(dataframe::expr_str_substr(unwrap(a), start, len));
 }
-dftu_expr* dftu_expr_convert(int32_t op, const dftu_expr* a) {
+dftu_expr* dftu_expr_convert(std::int32_t op, const dftu_expr* a) {
     if (!a) return nullptr;
     return wrap(dataframe::expr_convert(static_cast<dataframe::ConvertOp>(op),
                                         unwrap(a)));
@@ -4319,7 +4338,7 @@ dftu_expr* dftu_expr_list_len(const dftu_expr* a) {
     if (!a) return nullptr;
     return wrap(dataframe::expr_list_size(unwrap(a)));
 }
-dftu_expr* dftu_expr_list_get(const dftu_expr* a, int64_t index) {
+dftu_expr* dftu_expr_list_get(const dftu_expr* a, std::int64_t index) {
     if (!a) return nullptr;
     return wrap(dataframe::expr_list_get(unwrap(a), index));
 }
@@ -4337,13 +4356,13 @@ void dftu_expr_free(dftu_expr* e) { delete e; }
 
 dftu_series* dftu_expr_eval(const dftu_expr* root,
                             const dftu_series* const* inputs,
-                            int32_t n_inputs) {
+                            std::int32_t n_inputs) {
     if (!root) return nullptr;
     dftracer::utils::dstd::Vector<dataframe::Series> owned;
     dftracer::utils::dstd::Vector<const dataframe::Series*> cols;
     owned.reserve(static_cast<std::size_t>(n_inputs));
     cols.reserve(static_cast<std::size_t>(n_inputs));
-    for (int32_t i = 0; i < n_inputs; ++i) {
+    for (std::int32_t i = 0; i < n_inputs; ++i) {
         owned.emplace_back(const_cast<dftu_series*>(inputs[i]));
         cols.push_back(&owned.back());
     }
@@ -4354,13 +4373,14 @@ dftu_series* dftu_expr_eval(const dftu_expr* root,
     return out;
 }
 
-int32_t dftu_expr_eval_many(const dftu_expr* const* roots, int32_t n_roots,
-                            const dftu_series* const* inputs, int32_t n_inputs,
-                            dftu_series** out) {
+std::int32_t dftu_expr_eval_many(const dftu_expr* const* roots,
+                                 std::int32_t n_roots,
+                                 const dftu_series* const* inputs,
+                                 std::int32_t n_inputs, dftu_series** out) {
     if (!roots || n_roots <= 0) return -1;
     dftracer::utils::dstd::Vector<dataframe::Expr> exprs;
     exprs.reserve(static_cast<std::size_t>(n_roots));
-    for (int32_t i = 0; i < n_roots; ++i) {
+    for (std::int32_t i = 0; i < n_roots; ++i) {
         if (!roots[i]) return -1;
         exprs.push_back(unwrap(roots[i]));
     }
@@ -4368,15 +4388,15 @@ int32_t dftu_expr_eval_many(const dftu_expr* const* roots, int32_t n_roots,
     dftracer::utils::dstd::Vector<const dataframe::Series*> cols;
     owned.reserve(static_cast<std::size_t>(n_inputs));
     cols.reserve(static_cast<std::size_t>(n_inputs));
-    for (int32_t i = 0; i < n_inputs; ++i) {
+    for (std::int32_t i = 0; i < n_inputs; ++i) {
         owned.emplace_back(const_cast<dftu_series*>(inputs[i]));
         cols.push_back(&owned.back());
     }
-    int32_t written = -1;
+    std::int32_t written = -1;
     if (auto res = dataframe::eval_many(exprs, cols)) {
         for (std::size_t i = 0; i < res->size(); ++i)
             out[i] = (*res)[i].release();
-        written = static_cast<int32_t>(res->size());
+        written = static_cast<std::int32_t>(res->size());
     }
     for (dataframe::Series& c : owned)
         c.release();  // borrowed inputs, do not free

@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -48,10 +49,9 @@ dstd::String big_trace_text() {
     for (int i = 0; i < BIG_EVENTS; ++i) {
         out << R"({"id":)" << i << R"(,"name":"op)" << i % 40
             << R"(","cat":"POSIX","pid":)" << 1 + i % 7 << R"(,"tid":)"
-            << 10 + i % 5 << R"(,"ph":"X","ts":)" << 1000 + i * 10
-            << R"(,"dur":)" << 3 + i % 50 << R"(,"args":{"fname":"/data/d)"
-            << i % 9 << "/f" << (i * 31) % 700 << R"(","size":)"
-            << (i * 17) % 4096;
+            << 10 + i % 5 << R"(,"ph":1,"ts":)" << 1000 + i * 10 << R"(,"dur":)"
+            << 3 + i % 50 << R"(,"args":{"fname":"/data/d)" << i % 9 << "/f"
+            << (i * 31) % 700 << R"(","size":)" << (i * 17) % 4096;
         out << R"(,"note":")" << note << R"("}})" << "\n";
     }
     out << "]\n";
@@ -60,11 +60,11 @@ dstd::String big_trace_text() {
 
 // Every file has the same text, so a run spends its time in the bootstrap and
 // not in making the input.
-dstd::String write_big_trace(const dstd::String& dir, int n) {
+dstd::String write_big_trace(dstd::CStringView dir, int n) {
     static const dstd::String text = big_trace_text();
     char name[32];
     std::snprintf(name, sizeof(name), "/b%04d.pfw.gz", n);
-    return dftu_utils_test::write_gz_trace(dir + name, text);
+    return dftu_utils_test::write_gz_trace(dstd::String(dir) + name, text);
 }
 
 // The most live bytes above the start that the memory manager reports each

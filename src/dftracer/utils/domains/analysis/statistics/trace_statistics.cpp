@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/domains/analysis/statistics/trace_statistics.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
@@ -43,22 +44,19 @@ std::size_t TraceStatistics::pid_tid_count() const {
 
 namespace {
 template <typename Map>
-void add_counts_object(dstd::String& ss, const char* key, const Map& m,
+void add_counts_object(dstd::String& ss, dstd::StringView key, const Map& m,
                        bool& first_field) {
     if (!first_field) ss += ',';
     first_field = false;
     ss += '"';
     trace::internal::append_value(ss, key);
     ss += "\":{";
-    bool first = true;
-    for (const auto& [k, v] : m) {
-        if (!first) ss += ',';
-        first = false;
-        ss += '"';
-        trace::internal::append_value(ss, k);
-        ss += "\":";
-        trace::internal::append_value(ss, v);
-    }
+    dstd::fmt_append_join<",">(ss, m, [](dstd::String& o, const auto& kv) {
+        o += '"';
+        trace::internal::append_value(o, kv.first);
+        o += "\":";
+        trace::internal::append_value(o, kv.second);
+    });
     ss += '}';
 }
 }  // namespace
@@ -70,7 +68,7 @@ dstd::String TraceStatistics::to_json() const {
     ss += "\"file_path\":\"";
     trace::internal::append_value(ss, file_path);
     ss += '"';
-    ss += ",\"index_path\":\"";
+    ss += ",\"index_dir\":\"";
     trace::internal::append_value(ss, index_path);
     ss += '"';
     ss += ",\"success\":";

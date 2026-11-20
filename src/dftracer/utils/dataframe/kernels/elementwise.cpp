@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -51,25 +52,69 @@ void AbsImpl(const void* av, void* ov, std::size_t n) {
     }
 }
 
+// A clip bound read as `T`. On an integer column an infinite, NaN or
+// out-of-range bound saturates (a NaN bound clips nothing) where a plain cast
+// would be undefined.
+template <class T>
+T clip_bound(dftu_scalar s, bool upper) {
+    if constexpr (std::is_integral_v<T>) {
+        constexpr T LOW = std::numeric_limits<T>::lowest();
+        constexpr T HIGH = std::numeric_limits<T>::max();
+        switch (s.kind) {
+            case DFTU_SCALAR_TAG_I64:
+                if (s.value.i < 0 && std::is_unsigned_v<T>) return LOW;
+                if (s.value.i >= 0 && static_cast<std::uint64_t>(s.value.i) >
+                                          static_cast<std::uint64_t>(HIGH))
+                    return HIGH;
+                if (s.value.i < 0 && std::is_signed_v<T> &&
+                    s.value.i < static_cast<std::int64_t>(LOW))
+                    return LOW;
+                return static_cast<T>(s.value.i);
+            case DFTU_SCALAR_TAG_U64:
+                return s.value.u > static_cast<std::uint64_t>(HIGH)
+                           ? HIGH
+                           : static_cast<T>(s.value.u);
+            case DFTU_SCALAR_TAG_STR:
+            case DFTU_SCALAR_TAG_ERR:
+                return upper ? HIGH : LOW;
+            default: {
+                const double d = s.value.d;
+                if (d != d) return upper ? HIGH : LOW;
+                if (d >= static_cast<double>(HIGH)) return HIGH;
+                if (d <= static_cast<double>(LOW)) return LOW;
+                return static_cast<T>(d);
+            }
+        }
+    } else {
+        return scalar_value<T>(s);
+    }
+}
+
 template <class T>
 void ClipImpl(const void* av, dftu_scalar lo, dftu_scalar hi, void* ov,
               std::size_t n) {
     const T* a = static_cast<const T*>(av);
     T* out = static_cast<T*>(ov);
-    const T l = scalar_value<T>(lo);
-    const T h = scalar_value<T>(hi);
+    T l = clip_bound<T>(lo, false);
+    T h = clip_bound<T>(hi, true);
+    // A NaN bound clips nothing and a NaN value stays NaN (Polars, pandas).
+    if constexpr (std::is_floating_point_v<T>) {
+        if (l != l) l = -std::numeric_limits<T>::infinity();
+        if (h != h) h = std::numeric_limits<T>::infinity();
+    }
     const hwy::HWY_NAMESPACE::ScalableTag<T> d;
     const auto vl = hwy::HWY_NAMESPACE::Set(d, l);
     const auto vh = hwy::HWY_NAMESPACE::Set(d, h);
     const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
     std::size_t i = 0;
-    for (; i + lanes <= n; i += lanes)
-        hwy::HWY_NAMESPACE::StoreU(
-            hwy::HWY_NAMESPACE::Min(
-                hwy::HWY_NAMESPACE::Max(hwy::HWY_NAMESPACE::LoadU(d, a + i),
-                                        vl),
-                vh),
-            d, out + i);
+    for (; i + lanes <= n; i += lanes) {
+        const auto v = hwy::HWY_NAMESPACE::LoadU(d, a + i);
+        auto r = hwy::HWY_NAMESPACE::Min(hwy::HWY_NAMESPACE::Max(v, vl), vh);
+        if constexpr (std::is_floating_point_v<T>)
+            r = hwy::HWY_NAMESPACE::IfThenElse(hwy::HWY_NAMESPACE::IsNaN(v), v,
+                                               r);
+        hwy::HWY_NAMESPACE::StoreU(r, d, out + i);
+    }
     for (; i < n; ++i) out[i] = a[i] < l ? l : (a[i] > h ? h : a[i]);
 }
 
@@ -145,11 +190,18 @@ void SignImpl(const void* av, void* ov, std::size_t n) {
             r = hwy::HWY_NAMESPACE::Sub(
                 r, hwy::HWY_NAMESPACE::IfThenElseZero(
                        hwy::HWY_NAMESPACE::Lt(v, zero), one));
+        if constexpr (std::is_floating_point_v<T>)
+            r = hwy::HWY_NAMESPACE::IfThenElse(hwy::HWY_NAMESPACE::IsNaN(v), v,
+                                               r);
         hwy::HWY_NAMESPACE::StoreU(r, d, out + i);
     }
     for (; i < n; ++i) {
         if constexpr (std::is_unsigned_v<T>)
             out[i] = a[i] > 0 ? T{1} : T{0};
+        else if constexpr (std::is_floating_point_v<T>)
+            out[i] = a[i] != a[i]
+                         ? a[i]
+                         : (a[i] > 0 ? T{1} : (a[i] < 0 ? T{-1} : T{0}));
         else
             out[i] = a[i] > 0 ? T{1} : (a[i] < 0 ? static_cast<T>(-1) : T{0});
     }
@@ -187,26 +239,114 @@ void SqrtF64Impl(double* p, std::size_t n) {
 }
 
 // In-place SIMD exp/log over a Float64 buffer (input already widened to
-// double). Highway's Exp/Log are accurate to <= 4 ULP versus libm.
+// double). Highway's Exp/Log are accurate to <= 4 ULP versus libm, but only
+// on their valid range (exp: [-DBL_MAX, 706], log: (0, DBL_MAX]); outside it,
+// and on NaN, they return garbage. A vector with any lane outside a range that
+// is safe for both is computed with libm, so 0, negatives, infinities, NaN and
+// overflow follow IEEE.
 void ExpF64Impl(double* p, std::size_t n) {
     const hwy::HWY_NAMESPACE::ScalableTag<double> d;
     const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const auto lo = hwy::HWY_NAMESPACE::Set(d, -700.0);
+    const auto hi = hwy::HWY_NAMESPACE::Set(d, 700.0);
+    // Four vectors share one all-lanes test, so the horizontal reduction runs
+    // a quarter as often.
     std::size_t i = 0;
-    for (; i + lanes <= n; i += lanes)
-        hwy::HWY_NAMESPACE::StoreU(
-            hwy::HWY_NAMESPACE::Exp(d, hwy::HWY_NAMESPACE::LoadU(d, p + i)), d,
-            p + i);
+    for (; i + 4 * lanes <= n; i += 4 * lanes) {
+        const auto x0 = hwy::HWY_NAMESPACE::LoadU(d, p + i);
+        const auto x1 = hwy::HWY_NAMESPACE::LoadU(d, p + i + lanes);
+        const auto x2 = hwy::HWY_NAMESPACE::LoadU(d, p + i + 2 * lanes);
+        const auto x3 = hwy::HWY_NAMESPACE::LoadU(d, p + i + 3 * lanes);
+        const auto ok = hwy::HWY_NAMESPACE::And(
+            hwy::HWY_NAMESPACE::And(
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Ge(x0, lo),
+                                        hwy::HWY_NAMESPACE::Le(x0, hi)),
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Ge(x1, lo),
+                                        hwy::HWY_NAMESPACE::Le(x1, hi))),
+            hwy::HWY_NAMESPACE::And(
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Ge(x2, lo),
+                                        hwy::HWY_NAMESPACE::Le(x2, hi)),
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Ge(x3, lo),
+                                        hwy::HWY_NAMESPACE::Le(x3, hi))));
+        if (hwy::HWY_NAMESPACE::AllTrue(d, ok)) {
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Exp(d, x0), d,
+                                       p + i);
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Exp(d, x1), d,
+                                       p + i + lanes);
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Exp(d, x2), d,
+                                       p + i + 2 * lanes);
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Exp(d, x3), d,
+                                       p + i + 3 * lanes);
+        } else {
+            // A bad value spoils only its own vector.
+            for (std::size_t v = 0; v < 4; ++v) {
+                const std::size_t at = i + v * lanes;
+                const auto x = hwy::HWY_NAMESPACE::LoadU(d, p + at);
+                if (hwy::HWY_NAMESPACE::AllTrue(
+                        d, hwy::HWY_NAMESPACE::And(
+                               hwy::HWY_NAMESPACE::Ge(x, lo),
+                               hwy::HWY_NAMESPACE::Le(x, hi)))) {
+                    hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Exp(d, x), d,
+                                               p + at);
+                } else {
+                    for (std::size_t j = at; j < at + lanes; ++j)
+                        p[j] = std::exp(p[j]);
+                }
+            }
+        }
+    }
     for (; i < n; ++i) p[i] = std::exp(p[i]);
 }
 
 void LogF64Impl(double* p, std::size_t n) {
     const hwy::HWY_NAMESPACE::ScalableTag<double> d;
     const std::size_t lanes = hwy::HWY_NAMESPACE::Lanes(d);
+    const auto zero = hwy::HWY_NAMESPACE::Zero(d);
+    const auto max =
+        hwy::HWY_NAMESPACE::Set(d, std::numeric_limits<double>::max());
     std::size_t i = 0;
-    for (; i + lanes <= n; i += lanes)
-        hwy::HWY_NAMESPACE::StoreU(
-            hwy::HWY_NAMESPACE::Log(d, hwy::HWY_NAMESPACE::LoadU(d, p + i)), d,
-            p + i);
+    for (; i + 4 * lanes <= n; i += 4 * lanes) {
+        const auto x0 = hwy::HWY_NAMESPACE::LoadU(d, p + i);
+        const auto x1 = hwy::HWY_NAMESPACE::LoadU(d, p + i + lanes);
+        const auto x2 = hwy::HWY_NAMESPACE::LoadU(d, p + i + 2 * lanes);
+        const auto x3 = hwy::HWY_NAMESPACE::LoadU(d, p + i + 3 * lanes);
+        const auto ok = hwy::HWY_NAMESPACE::And(
+            hwy::HWY_NAMESPACE::And(
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Gt(x0, zero),
+                                        hwy::HWY_NAMESPACE::Le(x0, max)),
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Gt(x1, zero),
+                                        hwy::HWY_NAMESPACE::Le(x1, max))),
+            hwy::HWY_NAMESPACE::And(
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Gt(x2, zero),
+                                        hwy::HWY_NAMESPACE::Le(x2, max)),
+                hwy::HWY_NAMESPACE::And(hwy::HWY_NAMESPACE::Gt(x3, zero),
+                                        hwy::HWY_NAMESPACE::Le(x3, max))));
+        if (hwy::HWY_NAMESPACE::AllTrue(d, ok)) {
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Log(d, x0), d,
+                                       p + i);
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Log(d, x1), d,
+                                       p + i + lanes);
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Log(d, x2), d,
+                                       p + i + 2 * lanes);
+            hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Log(d, x3), d,
+                                       p + i + 3 * lanes);
+        } else {
+            for (std::size_t v = 0; v < 4; ++v) {
+                const std::size_t at = i + v * lanes;
+                const auto x = hwy::HWY_NAMESPACE::LoadU(d, p + at);
+                if (hwy::HWY_NAMESPACE::AllTrue(
+                        d, hwy::HWY_NAMESPACE::And(
+                               hwy::HWY_NAMESPACE::Gt(x, zero),
+                               hwy::HWY_NAMESPACE::Le(x, max)))) {
+                    hwy::HWY_NAMESPACE::StoreU(hwy::HWY_NAMESPACE::Log(d, x), d,
+                                               p + at);
+                } else {
+                    for (std::size_t j = at; j < at + lanes; ++j)
+                        p[j] = std::log(p[j]);
+                }
+            }
+        }
+    }
     for (; i < n; ++i) p[i] = std::log(p[i]);
 }
 
@@ -821,6 +961,8 @@ Series pct_change(const Series& v) {
 Series sqrt(const Series& v) { return Series{dftu_series_sqrt(v.handle())}; }
 Series exp(const Series& v) { return Series{dftu_series_exp(v.handle())}; }
 Series log(const Series& v) { return Series{dftu_series_log(v.handle())}; }
+Series log1p(const Series& v) { return Series{dftu_series_log1p(v.handle())}; }
+Series expm1(const Series& v) { return Series{dftu_series_expm1(v.handle())}; }
 
 }  // namespace dftracer::utils::dataframe
 
@@ -1152,6 +1294,300 @@ dftu_series* dftu_series_log(const dftu_series* a) {
     (reinterpret_cast<double*>(writable(out->data)),
      static_cast<std::size_t>(a->length));
     return out;
+}
+
+// log1p and expm1 stay precise for a tiny x, where log(1 + x) and exp(x) - 1
+// lose every digit; libm gives them, one value at a time.
+dftu_series* dftu_series_log1p(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_log1p(flat_a));
+
+    using namespace dftracer::utils::dataframe;
+    if (a->encoding != Encoding::Flat || !is_numeric(a->type) ||
+        a->type == TypeId::Bool)
+        return nullptr;
+    dftu_series* out = widen_to_f64(a);
+    double* p = reinterpret_cast<double*>(writable(out->data));
+    for (std::int64_t i = 0; i < a->length; ++i) p[i] = std::log1p(p[i]);
+    return out;
+}
+
+dftu_series* dftu_series_expm1(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_expm1(flat_a));
+
+    using namespace dftracer::utils::dataframe;
+    if (a->encoding != Encoding::Flat || !is_numeric(a->type) ||
+        a->type == TypeId::Bool)
+        return nullptr;
+    dftu_series* out = widen_to_f64(a);
+    double* p = reinterpret_cast<double*>(writable(out->data));
+    for (std::int64_t i = 0; i < a->length; ++i) p[i] = std::expm1(p[i]);
+    return out;
+}
+
+namespace {
+
+// A float column of the same length and validity as `a`: Float32 for a Float32
+// input, else Float64 (the values widened).
+template <class F>
+dftu_series* math_unary(const dftu_series* a, F f) {
+    using namespace dftracer::utils::dataframe;
+    if (a->encoding != Encoding::Flat || !is_numeric_dispatchable(a->type))
+        return nullptr;
+    if (a->type == TypeId::Float32) {
+        auto* out = new dftu_series();
+        out->type = TypeId::Float32;
+        out->encoding = Encoding::Flat;
+        out->length = a->length;
+        out->null_count = a->null_count;
+        out->validity = a->validity;
+        out->data = new_buffer(buffer_bytes(TypeId::Float32, a->length));
+        const auto* in = reinterpret_cast<const float*>(a->data.data());
+        auto* o = reinterpret_cast<float*>(writable(out->data));
+        for (std::int64_t i = 0; i < a->length; ++i) o[i] = f(in[i]);
+        return out;
+    }
+    dftu_series* out = widen_to_f64(a);
+    auto* p = reinterpret_cast<double*>(writable(out->data));
+    for (std::int64_t i = 0; i < a->length; ++i) p[i] = f(p[i]);
+    return out;
+}
+
+}  // namespace
+
+dftu_series* dftu_series_sin(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_sin(flat_a));
+    return math_unary(a, [](auto x) { return std::sin(x); });
+}
+
+dftu_series* dftu_series_cos(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_cos(flat_a));
+    return math_unary(a, [](auto x) { return std::cos(x); });
+}
+
+dftu_series* dftu_series_tan(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_tan(flat_a));
+    return math_unary(a, [](auto x) { return std::tan(x); });
+}
+
+dftu_series* dftu_series_cot(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_cot(flat_a));
+    return math_unary(
+        a, [](auto x) { return static_cast<decltype(x)>(1) / std::tan(x); });
+}
+
+dftu_series* dftu_series_arcsin(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arcsin(flat_a));
+    return math_unary(a, [](auto x) { return std::asin(x); });
+}
+
+dftu_series* dftu_series_arccos(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arccos(flat_a));
+    return math_unary(a, [](auto x) { return std::acos(x); });
+}
+
+dftu_series* dftu_series_arctan(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arctan(flat_a));
+    return math_unary(a, [](auto x) { return std::atan(x); });
+}
+
+dftu_series* dftu_series_sinh(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_sinh(flat_a));
+    return math_unary(a, [](auto x) { return std::sinh(x); });
+}
+
+dftu_series* dftu_series_cosh(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_cosh(flat_a));
+    return math_unary(a, [](auto x) { return std::cosh(x); });
+}
+
+dftu_series* dftu_series_tanh(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_tanh(flat_a));
+    return math_unary(a, [](auto x) { return std::tanh(x); });
+}
+
+dftu_series* dftu_series_arcsinh(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arcsinh(flat_a));
+    return math_unary(a, [](auto x) { return std::asinh(x); });
+}
+
+dftu_series* dftu_series_arccosh(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arccosh(flat_a));
+    return math_unary(a, [](auto x) { return std::acosh(x); });
+}
+
+dftu_series* dftu_series_arctanh(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arctanh(flat_a));
+    return math_unary(a, [](auto x) { return std::atanh(x); });
+}
+
+dftu_series* dftu_series_cbrt(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_cbrt(flat_a));
+    return math_unary(a, [](auto x) { return std::cbrt(x); });
+}
+
+dftu_series* dftu_series_log10(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_log10(flat_a));
+    return math_unary(a, [](auto x) { return std::log10(x); });
+}
+
+dftu_series* dftu_series_erf(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_erf(flat_a));
+    return math_unary(a, [](auto x) { return std::erf(x); });
+}
+
+dftu_series* dftu_series_erfc(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_erfc(flat_a));
+    return math_unary(a, [](auto x) { return std::erfc(x); });
+}
+
+namespace {
+
+enum class BitCount {
+    Ones,
+    Zeros,
+    LeadingOnes,
+    LeadingZeros,
+    TrailingOnes,
+    TrailingZeros
+};
+
+// One run over an integer column of type T; the unsigned twin of T gives the
+// width and the two's complement bits of a signed value.
+template <class T>
+void bit_count_run(BitCount k, const T* in, std::uint32_t* out,
+                   std::int64_t n) {
+    using U = std::make_unsigned_t<T>;
+    constexpr auto WIDTH = static_cast<std::uint32_t>(sizeof(U) * 8);
+    auto run = [&](auto f) {
+        for (std::int64_t i = 0; i < n; ++i)
+            out[i] = static_cast<std::uint32_t>(f(static_cast<U>(in[i])));
+    };
+    switch (k) {
+        case BitCount::Ones:
+            run([](U u) { return std::popcount(u); });
+            break;
+        case BitCount::Zeros:
+            run([](U u) { return WIDTH - std::popcount(u); });
+            break;
+        case BitCount::LeadingOnes:
+            run([](U u) { return std::countl_one(u); });
+            break;
+        case BitCount::LeadingZeros:
+            run([](U u) { return std::countl_zero(u); });
+            break;
+        case BitCount::TrailingOnes:
+            run([](U u) { return std::countr_one(u); });
+            break;
+        case BitCount::TrailingZeros:
+            run([](U u) { return std::countr_zero(u); });
+            break;
+    }
+}
+
+// A Bool is one bit: a count is the bit or its complement, and a run of one
+// bit is the same count.
+void bit_count_bool(BitCount k, const std::uint8_t* bits, std::uint32_t* out,
+                    std::int64_t n) {
+    const bool want_set = k == BitCount::Ones || k == BitCount::LeadingOnes ||
+                          k == BitCount::TrailingOnes;
+    for (std::int64_t i = 0; i < n; ++i) {
+        const bool bit = ((bits[i >> 3] >> (i & 7)) & 1) != 0;
+        out[i] = bit == want_set ? 1 : 0;
+    }
+}
+
+bool is_bit_count_type(dftracer::utils::dataframe::TypeId t) {
+    using dftracer::utils::dataframe::TypeId;
+    return t == TypeId::Bool ||
+           (dftracer::utils::dataframe::is_numeric_dispatchable(t) &&
+            t != TypeId::Float32 && t != TypeId::Float64);
+}
+
+dftu_series* bit_count_series(const dftu_series* a, BitCount k) {
+    using namespace dftracer::utils::dataframe;
+    if (a->encoding != Encoding::Flat || !is_bit_count_type(a->type))
+        return nullptr;
+    auto* out = new dftu_series();
+    out->type = TypeId::Uint32;
+    out->encoding = Encoding::Flat;
+    out->length = a->length;
+    out->null_count = a->null_count;
+    out->validity = a->validity;
+    out->data = new_buffer(buffer_bytes(TypeId::Uint32, a->length));
+    auto* o = reinterpret_cast<std::uint32_t*>(writable(out->data));
+    const void* in = a->data.data();
+    switch (a->type) {
+        case TypeId::Bool:
+            bit_count_bool(k, static_cast<const std::uint8_t*>(in), o,
+                           a->length);
+            break;
+        case TypeId::Int8:
+            bit_count_run(k, static_cast<const std::int8_t*>(in), o, a->length);
+            break;
+        case TypeId::Int16:
+            bit_count_run(k, static_cast<const std::int16_t*>(in), o,
+                          a->length);
+            break;
+        case TypeId::Int32:
+            bit_count_run(k, static_cast<const std::int32_t*>(in), o,
+                          a->length);
+            break;
+        case TypeId::Int64:
+            bit_count_run(k, static_cast<const std::int64_t*>(in), o,
+                          a->length);
+            break;
+        case TypeId::Uint8:
+            bit_count_run(k, static_cast<const std::uint8_t*>(in), o,
+                          a->length);
+            break;
+        case TypeId::Uint16:
+            bit_count_run(k, static_cast<const std::uint16_t*>(in), o,
+                          a->length);
+            break;
+        case TypeId::Uint32:
+            bit_count_run(k, static_cast<const std::uint32_t*>(in), o,
+                          a->length);
+            break;
+        case TypeId::Uint64:
+            bit_count_run(k, static_cast<const std::uint64_t*>(in), o,
+                          a->length);
+            break;
+        default:
+            break;
+    }
+    return out;
+}
+
+}  // namespace
+
+dftu_series* dftu_series_bitwise_count_ones(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_bitwise_count_ones(flat_a));
+    return bit_count_series(a, BitCount::Ones);
+}
+
+dftu_series* dftu_series_bitwise_count_zeros(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_bitwise_count_zeros(flat_a));
+    return bit_count_series(a, BitCount::Zeros);
+}
+
+dftu_series* dftu_series_bitwise_leading_ones(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_bitwise_leading_ones(flat_a));
+    return bit_count_series(a, BitCount::LeadingOnes);
+}
+
+dftu_series* dftu_series_bitwise_leading_zeros(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_bitwise_leading_zeros(flat_a));
+    return bit_count_series(a, BitCount::LeadingZeros);
+}
+
+dftu_series* dftu_series_bitwise_trailing_ones(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_bitwise_trailing_ones(flat_a));
+    return bit_count_series(a, BitCount::TrailingOnes);
+}
+
+dftu_series* dftu_series_bitwise_trailing_zeros(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_bitwise_trailing_zeros(flat_a));
+    return bit_count_series(a, BitCount::TrailingZeros);
 }
 
 #endif  // HWY_ONCE

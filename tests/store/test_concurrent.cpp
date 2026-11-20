@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -43,7 +44,7 @@ namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
     static void reopen_read_only(DataFileWriter& writer,
-                                 const dstd::String& path) {
+                                 dstd::StringView path) {
         auto file = dstd::File::open(dstd::PathView(path), {});
         if (file) writer.fd_ = std::move(*file);
     }
@@ -74,7 +75,7 @@ constexpr bool SANITIZED = false;
 constexpr bool SANITIZED = false;
 #endif
 
-dstd::ByteView view_of(const dstd::String& bytes) {
+dstd::ByteView view_of(dstd::StringView bytes) {
     return {bytes.data(), bytes.size()};
 }
 
@@ -96,7 +97,7 @@ std::int64_t read_i64(dstd::ByteView bytes) {
         dstd::read_u64_le(reinterpret_cast<const std::uint8_t*>(bytes.data())));
 }
 
-NamespaceSpec put_spec(const dstd::String& name, std::uint32_t version = 0) {
+NamespaceSpec put_spec(dstd::StringView name, std::uint32_t version = 0) {
     NamespaceSpec spec;
     spec.name = dstd::String(name);
     spec.format_version = version;
@@ -104,7 +105,7 @@ NamespaceSpec put_spec(const dstd::String& name, std::uint32_t version = 0) {
     return spec;
 }
 
-NamespaceSpec fold_spec(const dstd::String& name, FoldKind kind) {
+NamespaceSpec fold_spec(dstd::StringView name, FoldKind kind) {
     NamespaceSpec spec;
     spec.name = dstd::String(name);
     spec.format_version = 0;
@@ -112,7 +113,7 @@ NamespaceSpec fold_spec(const dstd::String& name, FoldKind kind) {
     return spec;
 }
 
-NamespaceSpec durable_spec(const dstd::String& name, bool durable) {
+NamespaceSpec durable_spec(dstd::StringView name, bool durable) {
     NamespaceSpec spec;
     spec.name = dstd::String(name);
     spec.format_version = 0;
@@ -121,7 +122,7 @@ NamespaceSpec durable_spec(const dstd::String& name, bool durable) {
     return spec;
 }
 
-ScopeKey file_scope(const dstd::String& path) {
+ScopeKey file_scope(dstd::StringView path) {
     return ScopeKey::file(dstd::String(path));
 }
 
@@ -183,14 +184,14 @@ dstd::Expected<void, dstd::Error> commit_waiting(engine::Writer& writer,
     }
 }
 
-dstd::Vector<std::uint8_t> read_file(const dstd::String& path) {
+dstd::Vector<std::uint8_t> read_file(dstd::StringView path) {
     const dstd::String text = dftu_utils_test::read_text(path);
     return dstd::Vector<std::uint8_t>(text.begin(), text.end());
 }
 
-dstd::String copy_out(const dstd::String& source,
+dstd::String copy_out(dstd::StringView source,
                       const dftu_utils_test::ScopedTestDir& target,
-                      const dstd::String& name) {
+                      dstd::StringView name) {
     const dstd::Vector<std::uint8_t> bytes = read_file(source);
     dftu_utils_test::FileOut output(target.file(name));
     output.write(reinterpret_cast<const char*>(bytes.data()),
@@ -199,7 +200,7 @@ dstd::String copy_out(const dstd::String& source,
     return target.str();
 }
 
-std::size_t record_count(const dstd::String& path) {
+std::size_t record_count(dstd::StringView path) {
     auto reader = engine::DataFileReader::open(dstd::String(path));
     if (!reader) return 0;
     return reader->records_read();
@@ -207,7 +208,7 @@ std::size_t record_count(const dstd::String& path) {
 
 /// Every extent ref a file holds names a copy the same file announces, so a
 /// byte copy of it never holds an extent whose items are still to come.
-void check_extent_refs_announced(const dstd::String& path) {
+void check_extent_refs_announced(dstd::StringView path) {
     auto reader = engine::DataFileReader::open(dstd::String(path));
     REQUIRE(reader.has_value());
     dstd::Vector<std::uint32_t> copies;
@@ -224,7 +225,7 @@ void check_extent_refs_announced(const dstd::String& path) {
     }
 }
 
-dstd::Vector<std::uint64_t> copy_generations(const dstd::String& path) {
+dstd::Vector<std::uint64_t> copy_generations(dstd::StringView path) {
     auto reader = engine::DataFileReader::open(dstd::String(path));
     REQUIRE(reader.has_value());
     dstd::Vector<std::uint64_t> out;
@@ -234,7 +235,7 @@ dstd::Vector<std::uint64_t> copy_generations(const dstd::String& path) {
     return out;
 }
 
-dstd::Vector<std::uint64_t> drop_generations(const dstd::String& path) {
+dstd::Vector<std::uint64_t> drop_generations(dstd::StringView path) {
     auto reader = engine::DataFileReader::open(dstd::String(path));
     REQUIRE(reader.has_value());
     dstd::Vector<std::uint64_t> out;
@@ -266,7 +267,7 @@ dstd::Vector<Row> collect(store::engine::ScanCursor& cursor) {
 using RowsByScope =
     dstd::Map<dstd::Pair<dstd::String, dstd::String>, dstd::String>;
 
-RowsByScope index_rows(const dstd::Vector<Row>& rows) {
+RowsByScope index_rows(dstd::Span<const Row> rows) {
     RowsByScope out;
     for (const Row& row : rows) out[{row.scope, row.key}] = row.value;
     return out;
@@ -306,7 +307,7 @@ TEST_CASE("many threads commit and one close keeps every key and every sum") {
     const auto key_of = [](int thread, int batch, int key) {
         return dstd::fmt<"t{}-b{}-k{}">(thread, batch, key);
     };
-    const auto value_of = [](const dstd::String& tag, int thread, int batch,
+    const auto value_of = [](dstd::StringView tag, int thread, int batch,
                              int key) {
         return dstd::fmt<"{}-{}-{}-{}">(tag, thread, batch, key);
     };
@@ -526,7 +527,7 @@ TEST_CASE("flush makes a committed batch visible in a byte copy") {
     REQUIRE(closed.has_value());
 }
 
-static dstd::Vector<std::uint8_t> read_range(const dstd::String& path,
+static dstd::Vector<std::uint8_t> read_range(dstd::StringView path,
                                              std::uint64_t offset,
                                              std::size_t length) {
     const dstd::String text = dftu_utils_test::read_text(path);
@@ -541,7 +542,7 @@ static dstd::Vector<std::uint8_t> read_range(const dstd::String& path,
 /// True when the record the file's header names as its tail holds an extent ref
 /// with a segment whose key range is exactly `key`. Reading the tail record
 /// alone keeps the check off the rest of the file, which grows while it runs.
-static bool marker_recorded(const dstd::String& path, const dstd::String& key) {
+static bool marker_recorded(dstd::StringView path, dstd::StringView key) {
     const dstd::Vector<std::uint8_t> header =
         read_range(path, 0, store::engine::FILE_HEADER_BYTES);
     if (header.size() < store::engine::FILE_HEADER_BYTES) return false;
@@ -801,8 +802,7 @@ TEST_CASE(
     const engine::NamespaceId volatile_space = *created;
     const ScopeKey scope = file_scope("/data/durable.dft");
 
-    const auto commit = [&](engine::NamespaceId space,
-                            const dstd::String& key) {
+    const auto commit = [&](engine::NamespaceId space, dstd::StringView key) {
         Batch entries = writer->batch(space, scope, 0);
         entries.put(view_of(key), view_of(dstd::String("value")));
         REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
@@ -1163,7 +1163,7 @@ TEST_CASE("a failed record write latches for commit, flush and close") {
     const engine::NamespaceId space = *created;
     const ScopeKey scope = file_scope("/data/latched.dft");
 
-    const auto commit_one = [&](const dstd::String& key) {
+    const auto commit_one = [&](dstd::StringView key) {
         Batch entries = writer->batch(space, scope, 0);
         entries.put(view_of(key), view_of(dstd::String("value")));
         return commit_waiting(*writer, std::move(entries));

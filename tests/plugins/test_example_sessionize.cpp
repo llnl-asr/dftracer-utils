@@ -33,9 +33,9 @@ dstd::Result<plugins::host::Plugins> load() {
 }
 
 dstd::Vector<std::int64_t> i64_column(const dftu_dataframe* df,
-                                      const char* name) {
+                                      dstd::CStringView name) {
     dstd::Vector<std::int64_t> out;
-    dftu_series* column = dftu_dataframe_column(df, name);
+    dftu_series* column = dftu_dataframe_column(df, name.c_str());
     REQUIRE(column);
     const auto* data =
         static_cast<const std::int64_t*>(dftu_series_data(column));

@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dataframe/internal/file_format_registry.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -340,9 +341,9 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
 // branch's query cannot be built.
 bool ViewSession::add_containment_branch(
     const dstd::SharedPtr<const detail::ViewPlan>& branch,
-    const dstd::Vector<dstd::String>& partition, const dstd::String& ts,
-    const dstd::String& dur, const dstd::String& name,
-    const dstd::Vector<dstd::String>& group,
+    dstd::Span<const dstd::String> partition, dstd::StringView ts,
+    dstd::StringView dur, dstd::StringView name,
+    dstd::Span<const dstd::String> group,
     dstd::SharedPtr<dataframe::DataFrame> out_ct,
     dstd::SharedPtr<dataframe::DataFrame> out_fg,
     dstd::SharedPtr<dstd::String> out_partial) {
@@ -469,7 +470,7 @@ coro::CoroTask<dstd::Result<ExportStats>> ViewSession::execute() {
     co_return stats;
 }
 
-void TraceSession::add(const dstd::Vector<dataframe::LazyFrame>& plans,
+void TraceSession::add(dstd::Span<const dataframe::LazyFrame> plans,
                        Resolve resolve) {
     if (*executed_) dstd::fatal("TraceSession::collect after execute()");
     plans_.insert(plans_.end(), plans.begin(), plans.end());
@@ -517,7 +518,7 @@ namespace {
 // The scan plan the source under a view's engine ops reads.
 detail::scan::ScanPlan scanned_plan(const dataframe::LazyFrame& lf) {
     return static_cast<const ViewSource&>(*dataframe::detail::plan_source(lf))
-        .plan();
+        .scan_plan();
 }
 
 }  // namespace
@@ -530,6 +531,16 @@ View::View(detail::ScanPlan plan) : plan_(), lf_(detail::scan::collect(plan)) {
 
 View::View(detail::ScanPlan plan, dataframe::LazyFrame lf)
     : plan_(std::move(plan)), lf_(std::move(lf)) {}
+
+void register_trace_reader() {
+    dataframe::set_trace_open(
+        [](dstd::StringView path, dstd::StringView index_dir) {
+            const dstd::String file(path);
+            return View::from_file(
+                       file, internal::determine_index_path(file, index_dir))
+                .lazy();
+        });
+}
 
 View View::from_file(dstd::String file_path, dstd::String index_path) {
     dstd::Vector<ViewFile> files;
@@ -544,9 +555,10 @@ View View::from_files(dstd::Vector<ViewFile> files) {
 }
 
 coro::CoroTask<View> View::from_directory(dstd::String dir,
-                                          dstd::String index_path) {
-    auto listing =
-        detail::scan::from_directory(std::move(dir), std::move(index_path));
+                                          dstd::String index_dir,
+                                          dstd::String format) {
+    auto listing = detail::scan::from_directory(
+        std::move(dir), std::move(index_dir), std::move(format));
     detail::ScanPlan plan = co_await std::move(listing);
     if (plan->error) co_return View().failed(*plan->error);
     co_return View(std::move(plan));
@@ -563,11 +575,11 @@ View View::with_lazy(dataframe::LazyFrame lf) const {
 }
 
 View View::reshape(
-    const char* builder,
+    dstd::StringView builder,
     const dstd::Function<detail::scan::ScanPlan(const detail::scan::ScanPlan&)>&
         step) const {
     if (!lf_.status()) return *this;
-    auto refuse = [&](const dstd::String& why) {
+    auto refuse = [&](dstd::StringView why) {
         return failed(dstd::Error::from_format<"View::{} {}">(
             common::ErrorCode::InvalidArgument, builder, why));
     };
@@ -589,7 +601,7 @@ View View::reshape(
     if (!residual) {
         const auto& src = static_cast<const ViewSource&>(
             *dataframe::detail::plan_source(planned));
-        detail::ScanPlan next = step(src.plan());
+        detail::ScanPlan next = step(src.scan_plan());
         if (next->error) return failed(*next->error);
         dataframe::LazyFrame lf = dataframe::detail::rebase(
             planned, dstd::make_shared<ViewSource>(next));
@@ -614,13 +626,13 @@ bool View::aggregates() const {
         dataframe::detail::plan_source(dataframe::detail::optimize_plan(lf_))
             .get());
     return src && src->output() == TraceOutput::Events &&
-           !detail::is_row_query(*src->plan());
+           !detail::is_row_query(*src->scan_plan());
 }
 
-dstd::Result<detail::scan::ScanPlan> View::absorbed(const char* method,
+dstd::Result<detail::scan::ScanPlan> View::absorbed(dstd::StringView method,
                                                     Need need) const {
     if (auto kept = lf_.status(); !kept) return kept.error();
-    auto fail = [&](const dstd::String& why) {
+    auto fail = [&](dstd::StringView why) {
         return common::make_error<"View::{} {}">(
             common::ErrorCode::InvalidArgument, method, why);
     };
@@ -635,7 +647,7 @@ dstd::Result<detail::scan::ScanPlan> View::absorbed(const char* method,
         dataframe::detail::plan_source(planned).get());
     if (!src || src->output() != TraceOutput::Events)
         return fail("needs a trace scan");
-    detail::scan::ScanPlan v = src->plan();
+    detail::scan::ScanPlan v = src->scan_plan();
     const bool events = need == Need::Events || need == Need::EventsHead ||
                         need == Need::EventsWindow;
     if (window && need == Need::EventsHead && window->first != 0)
@@ -707,13 +719,13 @@ dstd::Result<detail::scan::ScanPlan> timed_plan(
     return detail::scan::timed(*v);
 }
 
-coro::CoroTask<dstd::Result<TypedResult>> run_typed(
+coro::CoroTask<dstd::Result<IndexRecords>> run_index_records(
     detail::scan::ScanPlan v, int shard_begin, int shard_end,
     dstd::SharedPtr<ProgressFn> progress) {
-    auto typed = detail::scan::collect_typed(
+    auto records = detail::scan::collect_index_records(
         v, shard_begin, shard_end,
         progress && *progress ? progress.get() : nullptr);
-    co_return co_await std::move(typed);
+    co_return co_await std::move(records);
 }
 
 coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
@@ -725,13 +737,14 @@ coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
 
 coro::CoroTask<dstd::Result<void>> materialize_from_partials(
     detail::scan::ScanPlan v, dstd::Vector<dstd::StringView> partials) {
-    auto materialized = detail::run_materialize_partials(*v, partials);
+    auto materialized =
+        detail::run_materialize_partials(*v, std::move(partials));
     co_return co_await std::move(materialized);
 }
 
 coro::CoroTask<dstd::Result<ExportStats>> scan_batches(
     detail::scan::ScanPlan v,
-    dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
+    dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>
         on_batch,
     std::size_t slot_count, std::uint64_t limit) {
     const std::uint64_t cap = v->limit;
@@ -820,35 +833,36 @@ dataframe::LazyResult<dstd::String> View::aggregate_partial() const {
 }
 
 dataframe::DataFrame View::merge_flamegraph_partials(
-    const dstd::Vector<dstd::StringView>& partials) {
+    dstd::Span<const dstd::StringView> partials) {
     return detail::scan::merge_flamegraph_partials(partials);
 }
 
 dstd::Result<dataframe::DataFrame> View::merge_partials(
-    const dstd::Vector<dstd::StringView>& partials) const {
+    dstd::Span<const dstd::StringView> partials) const {
     auto v = absorbed("merge_partials", Need::Aggregate);
     if (!v) return v.error();
     return detail::scan::merge_partials_to_table(*v, partials);
 }
 
-dataframe::LazyResult<TypedResult> View::typed(int shard_begin, int shard_end,
-                                               ProgressFn progress) const {
-    auto v = absorbed("typed", Need::Any);
-    if (!v) return failed_result<TypedResult>(lf_, v.error());
+dataframe::LazyResult<IndexRecords> View::index_records(
+    int shard_begin, int shard_end, ProgressFn progress) const {
+    auto v = absorbed("index_records", Need::Any);
+    if (!v) return failed_result<IndexRecords>(lf_, v.error());
     return {{},
             [v = std::move(*v), shard_begin, shard_end,
              progress = dstd::make_shared<ProgressFn>(std::move(progress))](
                 dstd::Vector<dataframe::DataFrame>) {
-                return run_typed(v, shard_begin, shard_end, progress);
+                return run_index_records(v, shard_begin, shard_end, progress);
             }};
 }
 
-coro::CoroTask<dstd::Result<TypedResult>> View::collect_typed(
+coro::CoroTask<dstd::Result<IndexRecords>> View::collect_index_records(
     int shard_begin, int shard_end, ProgressFn progress) const {
-    auto v = absorbed("collect_typed", Need::Any);
-    if (!v) return failed_task<TypedResult>(v.error());
-    return run_typed(std::move(*v), shard_begin, shard_end,
-                     dstd::make_shared<ProgressFn>(std::move(progress)));
+    auto v = absorbed("collect_index_records", Need::Any);
+    if (!v) return failed_task<IndexRecords>(v.error());
+    return run_index_records(
+        std::move(*v), shard_begin, shard_end,
+        dstd::make_shared<ProgressFn>(std::move(progress)));
 }
 
 coro::CoroTask<dstd::Result<ExportStats>> View::sink_json(
@@ -910,7 +924,7 @@ dataframe::LazyFrame View::compare(const View& variant) const {
 }
 
 coro::CoroTask<dstd::Result<ExportStats>> View::for_each_batch(
-    dstd::Function<void(std::size_t, const dstd::Vector<dstd::StringView>&)>
+    dstd::Function<void(std::size_t, dstd::Span<const dstd::StringView>)>
         on_batch,
     std::size_t slot_count, std::uint64_t limit) const {
     auto v = absorbed("for_each_batch", Need::EventsHead);
@@ -957,9 +971,9 @@ dstd::Result<dstd::Vector<SchemaLeaf>> detail::catalog_leaves(const View& v) {
     return detail::scan::catalog_tree(v.plan_);
 }
 
-dstd::String schema_tree_json(const dstd::Vector<SchemaLeaf>& leaves) {
+dstd::String schema_tree_json(dstd::Span<const SchemaLeaf> leaves) {
     dstd::String out = "[";
-    auto text = [&](const dstd::String& s) {
+    auto text = [&](dstd::StringView s) {
         if (s.empty()) {
             out += "null";
             return;
@@ -1011,7 +1025,7 @@ dstd::Result<bool> View::collect_would_bootstrap() const {
 }
 
 dstd::Result<ExportStats> View::merge_counter_partials(
-    const dstd::Vector<dstd::StringView>& partials, ExportSink& sink) const {
+    dstd::Span<const dstd::StringView> partials, ExportSink& sink) const {
     auto v = absorbed("merge_counter_partials", Need::Aggregate);
     if (!v) return v.error();
     return detail::scan::merge_counter_partials(*v, partials, sink);
@@ -1027,10 +1041,10 @@ dataframe::LazyFrame View::branch(SessionBranch attach) const {
 }
 
 coro::CoroTask<dstd::Result<void>> View::materialize_partials(
-    const dstd::Vector<dstd::StringView>& partials) const {
+    dstd::Vector<dstd::StringView> partials) const {
     auto v = absorbed("materialize_partials", Need::Aggregate);
     if (!v) return failed_task<void>(v.error());
-    return materialize_from_partials(std::move(*v), partials);
+    return materialize_from_partials(std::move(*v), std::move(partials));
 }
 
 dstd::Result<dstd::Optional<dataframe::DataFrame>> View::reconstruct_if_cached()
@@ -1077,7 +1091,7 @@ dstd::Result<dstd::String> View::materialize_dir() const {
     return detail::scan::materialize_dir(*v);
 }
 
-dstd::Result<void> View::register_materialized(const dstd::String& dir) const {
+dstd::Result<void> View::register_materialized(dstd::StringView dir) const {
     auto v = absorbed("register_materialized", Need::Any);
     if (!v) return v.error();
     return detail::scan::register_materialized(*v, dir);

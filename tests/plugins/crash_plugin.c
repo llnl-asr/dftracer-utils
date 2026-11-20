@@ -75,6 +75,10 @@ static const dftu_file_format_vt CRASH_FORMAT = {sizeof(dftu_file_format_vt),
                                                  NULL,
                                                  crash_scan,
                                                  crash_close,
+                                                 NULL,
+                                                 NULL,
+                                                 NULL,
+                                                 NULL,
                                                  NULL};
 
 DFTU_PLUGIN_INFO("crash", "1.0")

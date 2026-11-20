@@ -76,13 +76,13 @@ struct FirstError {
 }  // namespace
 
 dstd::Result<AggStatePtr> group_agg_state(
-    const dstd::Vector<const Series*>& in_keys,
-    const dstd::Vector<const Series*>& in_values, dstd::Vector<AggSpec> specs) {
+    dstd::Span<const Series* const> in_keys,
+    dstd::Span<const Series* const> in_values, dstd::Vector<AggSpec> specs) {
     // The accumulator reads FLAT columns; a view (a filter's selection, a
     // dictionary) is materialized once here, for every caller.
     dstd::Vector<Series> owned;
     owned.reserve(in_keys.size() + in_values.size());
-    auto flat = [&](const dstd::Vector<const Series*>& cols) {
+    auto flat = [&](dstd::Span<const Series* const> cols) {
         dstd::Vector<const Series*> out;
         out.reserve(cols.size());
         for (const Series* c : cols) {
@@ -259,8 +259,8 @@ KeyKind key_kind(const AggState& st, std::size_t k) {
 // states untouched, for a shape it does not write: a key that is not a string
 // or a plain integer, a column that is not a flat number, dynamic columns.
 dstd::Optional<DataFrame> finalize_in_place(
-    dstd::Vector<AggStatePtr>& states,
-    const dstd::Vector<dstd::String>& key_names, std::size_t drop_keys) {
+    dstd::Vector<AggStatePtr>& states, dstd::Span<const dstd::String> key_names,
+    std::size_t drop_keys) {
     if constexpr (std::endian::native != std::endian::little)
         return dstd::nullopt;  // the validity words are written as words
     if (common::Env::get("DFTRACER_UTILS_GROUPBY_STITCH"))
@@ -527,8 +527,8 @@ dstd::Optional<DataFrame> finalize_in_place(
 // min, max and an integer sum. The packed driver's pages arrive in no fixed
 // order, so it takes only these; a float sum or a mean goes to the by-key
 // driver, which folds a group's rows in row order.
-bool order_free(const dstd::Vector<AggSpec>& specs,
-                const dstd::Vector<const Series*>& values) {
+bool order_free(dstd::Span<const AggSpec> specs,
+                dstd::Span<const Series* const> values) {
     for (const AggSpec& sp : specs) {
         switch (sp.op) {
             case AggOp::Count:
@@ -569,10 +569,9 @@ bool order_free(const dstd::Vector<AggSpec>& specs,
 // first-seen order. Nullopt when the shape does not pack or the groups
 // are few, where the chunked partials are cheaper than the scatter.
 dstd::Optional<DataFrame> group_agg_partitioned(
-    const dstd::Vector<const Series*>& in_keys,
-    const dstd::Vector<const Series*>& in_values,
-    const dstd::Vector<AggSpec>& specs,
-    const dstd::Vector<dstd::String>& key_names, std::size_t drop_keys = 0) {
+    dstd::Span<const Series* const> in_keys,
+    dstd::Span<const Series* const> in_values, dstd::Span<const AggSpec> specs,
+    dstd::Span<const dstd::String> key_names, std::size_t drop_keys = 0) {
     // Four partitions per thread: tables small enough for the first-level
     // cache, and the final drain's rounds divide the thread count.
     const auto threads = static_cast<std::int64_t>(std::max<std::size_t>(
@@ -595,7 +594,7 @@ dstd::Optional<DataFrame> group_agg_partitioned(
         return dstd::nullopt;
     dstd::Vector<Series> owned;
     owned.reserve(in_keys.size() + in_values.size());
-    auto flat = [&](const dstd::Vector<const Series*>& cols, bool key) {
+    auto flat = [&](dstd::Span<const Series* const> cols, bool key) {
         dstd::Vector<const Series*> out;
         for (const Series* c : cols) {
             owned.push_back(flat_or_ref(*c, key));
@@ -606,7 +605,8 @@ dstd::Optional<DataFrame> group_agg_partitioned(
     const dstd::Vector<const Series*> keys = flat(in_keys, true);
     const dstd::Vector<const Series*> values = flat(in_values, false);
     AggPacked shape;
-    AggStatePtr probe = agg_new(specs);
+    AggStatePtr probe =
+        agg_new(dstd::Vector<AggSpec>(specs.begin(), specs.end()));
     // Integer keys have the direct table, which the scatter cannot beat.
     if (!agg_pack_shape(*probe, keys, values, shape) || !shape.strings)
         return dstd::nullopt;
@@ -626,7 +626,8 @@ dstd::Optional<DataFrame> group_agg_partitioned(
         AggStatePtr state;
     };
     dstd::Vector<Partition> partitions(PARTITIONS);
-    for (Partition& part : partitions) part.state = agg_new(specs);
+    for (Partition& part : partitions)
+        part.state = agg_new(dstd::Vector<AggSpec>(specs.begin(), specs.end()));
     const std::size_t per_page = AggPages::PAGE_WORDS / shape.stride;
     auto drain = [&](std::size_t p) {
         Partition& part = partitions[p];
@@ -719,10 +720,9 @@ dstd::Optional<DataFrame> group_agg_partitioned(
 // that depends on the order of rows (arg_max, top-k, space-saving), a small
 // frame or few groups, where the per-thread partials are cheaper.
 dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
-    const dstd::Vector<const Series*>& in_keys,
-    const dstd::Vector<const Series*>& in_values,
-    const dstd::Vector<AggSpec>& specs,
-    const dstd::Vector<dstd::String>& key_names, std::size_t drop_keys = 0) {
+    dstd::Span<const Series* const> in_keys,
+    dstd::Span<const Series* const> in_values, dstd::Span<const AggSpec> specs,
+    dstd::Span<const dstd::String> key_names, std::size_t drop_keys = 0) {
     using Maybe = dstd::Result<dstd::Optional<DataFrame>>;
     auto none = [] { return Maybe(dstd::Optional<DataFrame>()); };
     // Threshold set from benchmarks/groupby_analyzer_bench.py; below it the
@@ -749,12 +749,15 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
     {
         // Order-dependent state (a tie, a bounded counter) would change with
         // the order the morsels reach a partition.
-        AggStatePtr probe = agg_new(specs);
-        if (probe->has_arg || probe->has_lst || probe->has_ss) return none();
+        AggStatePtr probe =
+            agg_new(dstd::Vector<AggSpec>(specs.begin(), specs.end()));
+        if (probe->has_arg || probe->has_apos || probe->has_lst ||
+            probe->has_ss)
+            return none();
     }
     dstd::Vector<Series> owned;
     owned.reserve(in_keys.size() + in_values.size());
-    auto flat = [&](const dstd::Vector<const Series*>& cols, bool key) {
+    auto flat = [&](dstd::Span<const Series* const> cols, bool key) {
         dstd::Vector<const Series*> out;
         for (const Series* c : cols) {
             owned.push_back(flat_or_ref(*c, key));
@@ -766,7 +769,8 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
     const dstd::Vector<const Series*> values = flat(in_values, false);
     std::size_t groups_hint = 0;
     {
-        AggStatePtr probe = agg_new(specs);
+        AggStatePtr probe =
+            agg_new(dstd::Vector<AggSpec>(specs.begin(), specs.end()));
         // A rejected layout is reported by the state driver, which runs next.
         if (!agg_accumulate(*probe, keys, values, 0, AGG_GRAIN / 4))
             return none();
@@ -805,7 +809,7 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
     }
     dstd::Vector<AggStatePtr> states(PARTITIONS);
     for (AggStatePtr& st : states) {
-        st = agg_new(specs);
+        st = agg_new(dstd::Vector<AggSpec>(specs.begin(), specs.end()));
         // An equal share, and a fifth over for the partitions a hash makes
         // larger than the mean.
         st->groups_hint = groups_hint / PARTITIONS * 6 / 5 + 16;
@@ -927,9 +931,9 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
 // `drop_keys` leaves the first columns (the keys) out of the result: a column
 // batch after the first has them already.
 dstd::Result<DataFrame> group_agg_whole(
-    const dstd::Vector<const Series*>& keys,
-    const dstd::Vector<const Series*>& values, dstd::Vector<AggSpec> specs,
-    const dstd::Vector<dstd::String>& key_names, std::size_t drop_keys = 0) {
+    dstd::Span<const Series* const> keys,
+    dstd::Span<const Series* const> values, dstd::Vector<AggSpec> specs,
+    dstd::Span<const dstd::String> key_names, std::size_t drop_keys = 0) {
     if (dstd::Optional<DataFrame> out =
             group_agg_partitioned(keys, values, specs, key_names, drop_keys))
         return std::move(*out);
@@ -967,6 +971,8 @@ bool one_column_state(AggOp op) {
         case AggOp::Std:
         case AggOp::Skew:
         case AggOp::Kurt:
+        case AggOp::SkewUnbiased:
+        case AggOp::KurtUnbiased:
         case AggOp::SumSq:
             return true;
         default:
@@ -978,7 +984,7 @@ bool one_column_state(AggOp op) {
 // light row's words (count, then sum, min, max as asked, and the three moment
 // words of a variance or standard deviation), or a whole FieldStat when a
 // skew, a kurtosis or a sum of squares needs its higher moments.
-std::int64_t cell_bytes(const dstd::Vector<AggSpec>& specs, std::int32_t col) {
+std::int64_t cell_bytes(dstd::Span<const AggSpec> specs, std::int32_t col) {
     bool sum = false, min = false, max = false, mom = false;
     for (const AggSpec& sp : specs) {
         if (sp.value_col != col) continue;
@@ -1016,10 +1022,9 @@ std::int64_t cell_bytes(const dstd::Vector<AggSpec>& specs, std::int32_t col) {
 // the batch, and the groups come out in first-seen order in every pass.
 // Nullopt when the aggregates, or the number of groups, do not call for it.
 dstd::Result<dstd::Optional<DataFrame>> group_agg_in_batches(
-    const dstd::Vector<const Series*>& keys,
-    const dstd::Vector<const Series*>& values,
-    const dstd::Vector<AggSpec>& specs,
-    const dstd::Vector<dstd::String>& key_names) {
+    dstd::Span<const Series* const> keys,
+    dstd::Span<const Series* const> values, dstd::Span<const AggSpec> specs,
+    dstd::Span<const dstd::String> key_names) {
     using Maybe = dstd::Result<dstd::Optional<DataFrame>>;
     auto none = [] { return Maybe(dstd::Optional<DataFrame>()); };
     // The state one batch may hold. The passes over the keys grow as columns /
@@ -1057,7 +1062,8 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_in_batches(
             owned_values.push_back(flat_or_ref(*c, false));
             vs.push_back(&owned_values.back());
         }
-        AggStatePtr probe = agg_new(specs);
+        AggStatePtr probe =
+            agg_new(dstd::Vector<AggSpec>(specs.begin(), specs.end()));
         // A rejected layout is reported by the whole-frame driver, which runs
         // next.
         if (!agg_accumulate(*probe, ks, vs, 0, AGG_GRAIN / 4)) return none();
@@ -1139,13 +1145,13 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_in_batches(
 
 }  // namespace
 
-dstd::Result<DataFrame> group_agg(const dstd::Vector<const Series*>& keys,
-                                  const dstd::Vector<const Series*>& values,
+dstd::Result<DataFrame> group_agg(dstd::Span<const Series* const> keys,
+                                  dstd::Span<const Series* const> values,
                                   dstd::Vector<AggSpec> specs,
-                                  const dstd::Vector<dstd::String>& key_names) {
+                                  dstd::Span<const dstd::String> key_names) {
     dstd::Vector<Series> joined;
     joined.reserve(keys.size() + values.size());
-    auto flat = [&](const dstd::Vector<const Series*>& in)
+    auto flat = [&](dstd::Span<const Series* const> in)
         -> dstd::Result<dstd::Vector<const Series*>> {
         dstd::Vector<const Series*> out;
         out.reserve(in.size());
@@ -1174,12 +1180,14 @@ dstd::Result<DataFrame> group_agg(const dstd::Vector<const Series*>& keys,
 }
 
 dstd::Result<DataFrame> group_agg(const Series& key,
-                                  const dstd::Vector<const Series*>& values,
+                                  dstd::Span<const Series* const> values,
                                   dstd::Vector<AggSpec> specs,
-                                  const dstd::String& key_name) {
-    const dstd::Vector<const Series*> keys{&key};
-    return group_agg(keys, values, std::move(specs),
-                     dstd::Vector<dstd::String>{key_name});
+                                  dstd::StringView key_name) {
+    const Series* const key_ptr = &key;
+    const dstd::String name(key_name);
+    return group_agg(dstd::Span<const Series* const>(&key_ptr, 1), values,
+                     std::move(specs),
+                     dstd::Span<const dstd::String>(&name, 1));
 }
 
 }  // namespace dftracer::utils::dataframe

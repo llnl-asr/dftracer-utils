@@ -326,6 +326,29 @@ class Store {
     /// thread is inside this call can leave a later call in the child waiting.
     static dstd::Expected<Store, dstd::Error> open(dstd::StringView dir);
 
+    /// False once the directory this handle opened was deleted, or deleted and
+    /// created again: @ref Store::open of that path then returns a new store,
+    /// and this handle keeps the old files. A handle that is not current
+    /// refuses to open a writer or a snapshot, so it never writes into the new
+    /// directory. Drop it. Always false in a fork child for a handle the child
+    /// inherited.
+    ///
+    /// The directory holds an id in `store.id` and an empty marker file named
+    /// by it, and no process removes them. A handle is current while its
+    /// marker exists. When only the marker is gone and `store.id` still holds
+    /// the handle's id, the marker is made again and the handle stays current.
+    /// A handle is replaced only when `store.id` is gone or holds another id,
+    /// so a copy of the directory put over a deleted one, which keeps its id,
+    /// is not detected. A failure of the check other than "not found", such as
+    /// ESTALE or a timeout, leaves the handle current. A store with no id,
+    /// made by an older version and not yet written by this one, is checked by
+    /// the device and inode of its directory.
+    bool is_current() const;
+
+    /// Unique in this process for each store that @ref Store::open made, so
+    /// two stores of one path, before and after a delete, differ.
+    std::uint64_t generation() const;
+
     /// Registers the namespace with this process's writer. The same spec
     /// twice returns the same handle.
     dstd::Expected<Namespace, dstd::Error> ns(const NamespaceSpec& spec);

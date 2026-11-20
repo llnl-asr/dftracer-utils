@@ -6,13 +6,16 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/common/worker_share.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/memory/config.h>
 #include <dftracer/utils/memory/detail/manager.h>
 #include <dftracer/utils/plugins/abi_version.h>
+#include <dftracer/utils/python/core/arrow_batch_capsule.h>
 #include <dftracer/utils/python/core/arrow_stream_capsule.h>
+#include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/errors.h>
-#include <dftracer/utils/python/core/memoryview_batch.h>
 #include <dftracer/utils/python/core/method.h>
 #include <dftracer/utils/python/frame/columnar_eval.h>
 #include <dftracer/utils/python/frame/dataframe.h>
@@ -20,6 +23,7 @@
 #include <dftracer/utils/python/frame/op_runner.h>
 #include <dftracer/utils/python/frame/ops.h>
 #include <dftracer/utils/python/frame/series.h>
+#include <dftracer/utils/python/frame/udf_python.h>
 #include <dftracer/utils/python/index/batch_indexer.h>
 #include <dftracer/utils/python/index/index.h>
 #include <dftracer/utils/python/index/indexer.h>
@@ -27,10 +31,8 @@
 #include <dftracer/utils/python/runtime/runtime.h>
 #include <dftracer/utils/python/runtime/task_handle.h>
 #include <dftracer/utils/python/store/store.h>
-#include <dftracer/utils/python/trace/arrow_parallel_reader.h>
 #include <dftracer/utils/python/trace/distribution.h>
 #include <dftracer/utils/python/trace/streaming_iterator.h>
-#include <dftracer/utils/python/trace/trace_reader_iterator.h>
 #include <dftracer/utils/python/trace/trace_viewer.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/system_metrics.h>
 
@@ -75,11 +77,9 @@ PyObject* py_set_log_color(PyObject*, PyObject* args) {
 
 PyObject* py_memory_budget_advice(PyObject*, PyObject* args, PyObject* kwds) {
     unsigned long long required = 0, available = 0;
-    static const char* kwlist[] = {"required_bytes", "available_bytes",
-                                   nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "K|K",
-                                     const_cast<char**>(kwlist), &required,
-                                     &available))
+    if (!dftracer::utils::python::core::parse_kw<"K|K:_memory_budget_advice">(
+            args, kwds, {"required_bytes", "available_bytes"}, &required,
+            &available))
         return nullptr;
     const auto a = dftracer::utils::common::memory_budget_advice(
         static_cast<std::size_t>(required),
@@ -87,39 +87,161 @@ PyObject* py_memory_budget_advice(PyObject*, PyObject* args, PyObject* kwds) {
     const dftracer::utils::dstd::String warning =
         dftracer::utils::common::format_memory_budget_warning(a);
     return Py_BuildValue(
-        "{s:O,s:K,s:K,s:K,s:K,s:s}", "fits", a.fits ? Py_True : Py_False,
-        "required_bytes", (unsigned long long)a.required_bytes, "peak_bytes",
-        (unsigned long long)a.peak_bytes, "available_bytes",
-        (unsigned long long)a.available_bytes, "suggested_nodes",
-        (unsigned long long)a.suggested_nodes, "warning", warning.c_str());
+        "(OKKKKs)", a.fits ? Py_True : Py_False,
+        (unsigned long long)a.required_bytes, (unsigned long long)a.peak_bytes,
+        (unsigned long long)a.available_bytes,
+        (unsigned long long)a.suggested_nodes, warning.c_str());
 }
 
-// scan_file(path) -> _LazyFrame: a deferred scan over `path`, planned by the
-// plugin file format that claims it. A file no format claims, a tie between
-// two, or a beta feature the host does not support is an error the plan keeps
-// and collect() returns.
+// _worker_share(workers, pin=False) -> (threads, io_threads, memory_budget)
+PyObject* py_worker_share(PyObject*, PyObject* args) {
+    unsigned long long workers = 0;
+    int pin = 0;
+    if (!PyArg_ParseTuple(args, "K|p:_worker_share", &workers, &pin))
+        return nullptr;
+    const auto share = dftracer::utils::common::worker_share(
+        static_cast<std::size_t>(workers), pin != 0);
+    if (!share) {
+        dftracer::utils::python::core::set_py_error(share.error());
+        return nullptr;
+    }
+    return Py_BuildValue("(KKK)", (unsigned long long)share->threads,
+                         (unsigned long long)share->io_threads,
+                         (unsigned long long)share->memory_budget);
+}
+
+// _apply_worker_share(threads, io_threads, memory_budget) -> None: the memory
+// budget takes `memory_budget`, and the process runtime, when it exists, takes
+// the thread counts (a runtime made later reads the environment).
+PyObject* py_apply_worker_share(PyObject*, PyObject* args) {
+    unsigned long long threads = 0, io_threads = 0, memory_budget = 0;
+    if (!PyArg_ParseTuple(args, "KKK:_apply_worker_share", &threads,
+                          &io_threads, &memory_budget))
+        return nullptr;
+    auto config = dftracer::utils::common::memory_config_from_env();
+    if (!config) {
+        dftracer::utils::python::core::set_py_error(config.error());
+        return nullptr;
+    }
+    config->budget = static_cast<std::size_t>(memory_budget);
+    dftracer::utils::memory::configure(*config);
+    if (auto rt = dftracer::utils::peek_default_runtime()) {
+        dftracer::utils::RuntimeSettings settings;
+        settings.threads = static_cast<std::size_t>(threads);
+        settings.io_threads = static_cast<std::size_t>(io_threads);
+        rt->configure(settings);
+    }
+    Py_RETURN_NONE;
+}
+
+// _process_memory_budget() -> int: the memory budget now in effect, in bytes.
+PyObject* py_process_memory_budget(PyObject*, PyObject*) {
+    return PyLong_FromSize_t(dftracer::utils::memory::config().budget);
+}
+
+// scan_file(path, index_dir="", format="") -> LazyFrame: a deferred scan over
+// `path`, planned by the reader that claims it, or by the one `format` names.
+// `index_dir` names the index directory that lets the scan skip chunks; empty
+// means the index beside the file. A file no reader claims, a tie between two,
+// or an unknown format is an error the plan keeps and collect() returns.
 PyObject* py_scan_file(PyObject*, PyObject* args) {
     const char* path = nullptr;
-    if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
+    const char* index_dir = "";
+    const char* format = "";
+    if (!PyArg_ParseTuple(args, "s|ss", &path, &index_dir, &format))
+        return nullptr;
+    if (!dftracer::utils::python::core::ensure_plugins()) return nullptr;
     return dftracer::utils::python::frame::wrap_lazyframe(
         dftracer::utils::dataframe::LazyFrame::scan_file(
-            dftracer::utils::dstd::StringView(path)));
+            dftracer::utils::dstd::StringView(path),
+            dftracer::utils::dstd::StringView(index_dir),
+            dftracer::utils::dstd::StringView(format)));
+}
+
+// _load_plugin(path) / _unload_plugin(path): the process-wide plugin set of
+// dftracer.utils.load_plugin. An error of either names the path.
+PyObject* py_load_plugin(PyObject*, PyObject* args) {
+    const char* path = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
+    if (!dftracer::utils::python::core::ensure_plugins()) return nullptr;
+    return dftracer::utils::python::core::guard([&]() -> PyObject* {
+        dftracer::utils::python::core::py_unwrap(
+            dftracer::utils::plugins::host::load_plugin(path));
+        Py_RETURN_NONE;
+    });
+}
+
+PyObject* py_unload_plugin(PyObject*, PyObject* args) {
+    const char* path = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
+    return dftracer::utils::python::core::guard([&]() -> PyObject* {
+        dftracer::utils::python::core::py_unwrap(
+            dftracer::utils::plugins::host::unload_plugin(path));
+        Py_RETURN_NONE;
+    });
+}
+
+// _bind_types(*, Series=None, DataFrame=None, LazyFrame=None,
+// TraceViewer=None): the Python classes the native factories build. Each is
+// checked to derive from its native type; one that is not given keeps the
+// native type.
+PyObject* py_bind_types(PyObject*, PyObject* args, PyObject* kwds) {
+    PyObject* given[4] = {};
+    if (!dftracer::utils::python::core::parse_kw<"|$OOOO">(
+            args, kwds, {"Series", "DataFrame", "LazyFrame", "TraceViewer"},
+            &given[0], &given[1], &given[2], &given[3]))
+        return nullptr;
+    const TypeBinding bindings[4] = {
+        dftracer::utils::python::frame::series_binding(),
+        dftracer::utils::python::frame::dataframe_binding(),
+        dftracer::utils::python::frame::lazyframe_binding(),
+        dftracer::utils::python::trace::trace_viewer_binding()};
+    for (int i = 0; i < 4; ++i)
+        if (given[i] && !check_binding(bindings[i], given[i])) return nullptr;
+    for (int i = 0; i < 4; ++i)
+        if (given[i]) bind_type(bindings[i], given[i]);
+    Py_RETURN_NONE;
 }
 
 PyMethodDef dftracer_utils_methods[] = {
-    {"scan_file", py_scan_file, METH_VARARGS,
-     "scan_file(path: str) -> _LazyFrame\n\n"
-     "A deferred scan over `path`, decompressed and parsed by the plugin file\n"
-     "format that claims it. Nothing runs until collect(), which returns the\n"
-     "error of a file no format claims."},
-    {"memory_budget_advice", DFTU_PYCFUNCTION(py_memory_budget_advice),
+    {"_bind_types", DFTU_PYCFUNCTION(py_bind_types),
      METH_VARARGS | METH_KEYWORDS,
-     "memory_budget_advice(required_bytes, available_bytes=0) -> dict\n\n"
-     "Whether an aggregated workload of `required_bytes` fits in process, and\n"
-     "advice if not. `available_bytes=0` detects it (cgroup-aware). Returns\n"
-     "{fits, required_bytes, peak_bytes, available_bytes, suggested_nodes,\n"
-     "warning}: peak is PEAK_MEMORY_FACTOR x required; `warning` is a ready\n"
-     "message (empty when it fits)."},
+     "_bind_types(*, Series=None, DataFrame=None, LazyFrame=None, "
+     "TraceViewer=None) -> None\n\n"
+     "Make the native factories build these Python subclasses of the native\n"
+     "types, so a native method returns the public class."},
+    {"_load_plugin", py_load_plugin, METH_VARARGS,
+     "_load_plugin(path: str) -> None\n\n"
+     "Load the plugin at `path` into the process, or join it if loaded."},
+    {"_unload_plugin", py_unload_plugin, METH_VARARGS,
+     "_unload_plugin(path: str) -> None\n\n"
+     "End one _load_plugin of `path`; an error while a scan through one of "
+     "its\n"
+     "formats is open."},
+    {"scan_file", py_scan_file, METH_VARARGS,
+     "scan_file(path: str, index_dir: str = '', format: str = '') -> "
+     "LazyFrame\n\n"
+     "A deferred scan over `path`, read by the reader that claims it (a "
+     "plugin\n"
+     "file format, or the built-in trace reader) or by the one `format` "
+     "names.\n"
+     "Nothing runs until collect(), which returns the error of a file no\n"
+     "format claims."},
+    {"_memory_budget_advice", DFTU_PYCFUNCTION(py_memory_budget_advice),
+     METH_VARARGS | METH_KEYWORDS,
+     "_memory_budget_advice(required_bytes, available_bytes=0) -> tuple\n\n"
+     "(fits, required_bytes, peak_bytes, available_bytes, suggested_nodes,\n"
+     "warning); dftracer.utils.memory_budget_advice wraps it."},
+    {"_worker_share", py_worker_share, METH_VARARGS,
+     "_worker_share(workers: int, pin: bool = False) -> tuple[int, int, "
+     "int]\n\n"
+     "(threads, io_threads, memory_budget) of one of `workers` processes."},
+    {"_apply_worker_share", py_apply_worker_share, METH_VARARGS,
+     "_apply_worker_share(threads: int, io_threads: int, memory_budget: int) "
+     "-> None\n\n"
+     "Set the memory budget and the process runtime's thread counts."},
+    {"_process_memory_budget", py_process_memory_budget, METH_NOARGS,
+     "_process_memory_budget() -> int\n\nThe memory budget in effect, bytes."},
     {"set_log_level", py_set_log_level, METH_VARARGS,
      "set_log_level(level: str) -> None\n\n"
      "Set the C++ logger level (trace|debug|info|warn|error|off)."},
@@ -201,15 +323,11 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (dftracer::utils::python::runtime::init_task_handle(m) < 0) return NULL;
     if (dftracer::utils::python::runtime::init_runtime(m) < 0) return NULL;
     if (dftracer::utils::python::store::init_store(m) < 0) return NULL;
-    if (dftracer::utils::python::core::init_memoryview_batch(m) < 0)
-        return NULL;
-    if (dftracer::utils::python::trace::init_trace_reader_iterator(m) < 0)
+    if (dftracer::utils::python::core::init_arrow_batch_capsule(m) < 0)
         return NULL;
     if (dftracer::utils::python::trace::init_arrow_streaming_iterator(m) < 0)
         return NULL;
     if (dftracer::utils::python::core::init_arrow_batch_stream(m) < 0)
-        return NULL;
-    if (dftracer::utils::python::trace::init_arrow_parallel_reader(m) < 0)
         return NULL;
     if (dftracer::utils::python::trace::init_trace_viewer(m) < 0) return NULL;
     if (dftracer::utils::python::plugins::init_plugin_host(m) < 0) return NULL;
@@ -221,5 +339,6 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (dftracer::utils::python::frame::init_dataframe(m) < 0) return NULL;
     if (dftracer::utils::python::frame::init_lazyframe(m) < 0) return NULL;
     if (dftracer::utils::python::frame::init_columnar_eval(m) < 0) return NULL;
+    if (dftracer::utils::python::frame::init_udf_python(m) < 0) return NULL;
     return m;
 }

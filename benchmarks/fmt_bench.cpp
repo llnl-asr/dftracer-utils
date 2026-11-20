@@ -18,7 +18,9 @@
 #define DFTRACER_UTILS_BENCH_COUNT_NEW
 #include <bench_counters.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -43,7 +45,7 @@ template <class T>
 inline void keep(T& v) {
     asm volatile("" : "+r"(v) : : "memory");
 }
-inline void sink(const dstd::String& s) {
+inline void sink(dstd::StringView s) {
     const char* p = s.data();
     asm volatile("" : : "r"(p) : "memory");
 }
@@ -113,7 +115,7 @@ Inputs make_inputs() {
 
 dstd::Vector<std::string> g_mismatch;
 
-void same(const char* what, const dstd::String& a, const dstd::String& b) {
+void same(dstd::StringView what, dstd::StringView a, dstd::StringView b) {
     if (a != b) {
         g_mismatch.push_back(std::string(what) + ": '" +
                              std::string(a.data(), a.size()) + "' vs '" +
@@ -122,11 +124,11 @@ void same(const char* what, const dstd::String& a, const dstd::String& b) {
 }
 
 template <class MakeFmt, class MakeSnprintf, class MakeChain, class CountChain>
-Row run_row(const char* name, std::size_t iterations, MakeFmt&& make_fmt,
+Row run_row(dstd::CStringView name, std::size_t iterations, MakeFmt&& make_fmt,
             MakeSnprintf&& make_snprintf, MakeChain&& make_chain,
             CountChain&& count_chain, bool compare_text) {
     Row row{};
-    row.name = name;
+    row.name = name.c_str();
     const auto form_b = [&] { sink(make_fmt(std::true_type{})); };
     const auto form_c = [&] { sink(make_fmt(std::false_type{})); };
     row.fmt_b = measure(iterations, form_b);
@@ -167,7 +169,7 @@ dstd::String via_snprintf(F&& f) {
     return dstd::String(buf, static_cast<std::size_t>(n));
 }
 
-void print(const dstd::Vector<Row>& rows) {
+void print(dstd::Span<const Row> rows) {
     std::printf("%-26s | %-13s | %-13s | %-13s | %-13s\n", "format (instr, ns)",
                 "fmt<S>", "fmt(_f)", "snprintf", "chain");
     for (const Row& r : rows) {

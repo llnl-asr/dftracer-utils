@@ -20,8 +20,8 @@ vs ``View`` vs a plugin vs the C ABI yet - this page assumes the
 -----------------------------------
 
 A ``TraceViewer``/``View`` accepts a directory, a single file, or a list of
-files. A directory is scanned recursively for ``.pfw``, ``.jsonl``
-and ``.ndjson`` files; a plain (not gzip) one is an error, since
+files. A directory is scanned recursively for ``*.gz`` files; a plain
+(not gzip) file is not listed, and passed by name it is an error, since
 an index reads gzip only (see :doc:`troubleshooting`).
 
 .. tab-set::
@@ -64,7 +64,7 @@ last indexed, so explicit indexing only warms it.
          from dftracer.utils import Indexer
 
          with Indexer("traces/") as ix:
-             ix.ensure_indexed()   # no-op if already built
+             ix.ensure()   # no-op if already built
 
    .. tab-item:: C++
 

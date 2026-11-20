@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_PYTHON_CORE_LIST_HELPERS_H
 
 #include <Python.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -38,7 +39,7 @@ inline bool parse_str_list(
 // New Python list from a vector of strings. NULL with the error set on
 // failure. Each element reference is stolen into the list, so nothing leaks.
 inline PyObject *str_list_from(
-    const dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> &v) {
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> v) {
     PyObject *list = PyList_New(static_cast<Py_ssize_t>(v.size()));
     if (!list) return nullptr;
     for (std::size_t i = 0; i < v.size(); ++i) {

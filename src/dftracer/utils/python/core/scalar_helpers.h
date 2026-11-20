@@ -16,7 +16,7 @@ inline bool py_to_scalar(PyObject* o, dftu_scalar* s) {
         if (!text) return false;
         s->kind = DFTU_SCALAR_TAG_STR;
         s->value.s = text;
-        s->len = static_cast<uint32_t>(len);
+        s->len = static_cast<std::uint32_t>(len);
         return true;
     }
     if (PyFloat_Check(o)) {

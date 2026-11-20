@@ -50,9 +50,11 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -146,9 +148,9 @@ constexpr Scale FULL_SCALE{.big_rows = 10000000,
                            .unique_reps = 35,
                            .join_reps = 50};
 
-void check(bool ok, const char* what) {
+void check(bool ok, dftracer::utils::dstd::CStringView what) {
     if (ok) return;
-    std::fprintf(stderr, "check failed: %s\n", what);
+    std::fprintf(stderr, "check failed: %s\n", what.c_str());
     std::exit(1);
 }
 
@@ -218,7 +220,7 @@ dftracer::utils::dstd::Vector<std::int64_t> offsets(std::int64_t rows,
 }
 
 double slice_loop(const Series& col,
-                  const dftracer::utils::dstd::Vector<std::int64_t>& at,
+                  dftracer::utils::dstd::Span<const std::int64_t> at,
                   std::int64_t len, std::size_t ops) {
     std::int64_t rows = 0;
     auto start = dstd::steady_now();
@@ -427,8 +429,9 @@ double group_by_sum(const Scale& s) {
 
 double unique_rows(const Scale& s) {
     DataFrame frame = key_frame(s.op_rows, s.op_rows / 4);
+    const dstd::String keys[] = {"g"};
     return repeat_op(s.unique_reps, [&] {
-        DataFrame out = dftu::bench::ok(frame.unique({"g"}));
+        DataFrame out = dftu::bench::ok(frame.unique(keys));
         check(out.num_rows() > 0 && out.num_rows() <= s.op_rows / 4,
               "unique rows");
     });
@@ -496,8 +499,8 @@ struct ChildResult {
 };
 
 dftracer::utils::dstd::Optional<ChildResult> run_child(
-    const dftracer::utils::dstd::String& binary,
-    const dftracer::utils::dstd::String& name) {
+    dftracer::utils::dstd::CStringView binary,
+    dftracer::utils::dstd::CStringView name) {
     int fds[2];
     if (::pipe(fds) != 0) return dftracer::utils::dstd::nullopt;
     pid_t pid = ::fork();
@@ -533,13 +536,13 @@ dftracer::utils::dstd::Optional<ChildResult> run_child(
     return ChildResult{ns, rss_bytes / static_cast<double>(MIB)};
 }
 
-int drive(const dftracer::utils::dstd::String& self,
-          const dftracer::utils::dstd::String& against, int rounds,
-          const dftracer::utils::dstd::String& label) {
+int drive(dftracer::utils::dstd::CStringView self,
+          dftracer::utils::dstd::CStringView against, int rounds,
+          dftracer::utils::dstd::CStringView label) {
     dftracer::utils::dstd::Vector<Case> cases = make_cases();
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> sides;
-    if (!against.empty()) sides.push_back(against);
-    sides.push_back(self);
+    if (!against.empty()) sides.emplace_back(against.view());
+    sides.emplace_back(self.view());
     dftracer::utils::dstd::Vector<
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::Vector<double>>>
         ns(sides.size(),
@@ -602,9 +605,9 @@ int smoke() {
     return failures == 0 ? 0 : 1;
 }
 
-int run_one(const dftracer::utils::dstd::String& name) {
+int run_one(dftracer::utils::dstd::CStringView name) {
     for (const Case& c : make_cases()) {
-        if (c.name != name) continue;
+        if (c.name != name.view()) continue;
         std::printf("RESULT %.3f\n", c.run(FULL_SCALE));
         return 0;
     }
@@ -626,8 +629,8 @@ int main(int argc, char** argv) {
     if (first == "--smoke" && argc == 2) return smoke();
     if (first == "--case" && argc == 3) return run_one(argv[2]);
     int rounds = DEFAULT_ROUNDS;
-    dftracer::utils::dstd::String label;
-    dftracer::utils::dstd::String against;
+    dftracer::utils::dstd::CStringView label;
+    dftracer::utils::dstd::CStringView against;
     for (int i = 1; i < argc; i += 2) {
         dftracer::utils::dstd::StringView flag = argv[i];
         if (i + 1 >= argc) return usage();

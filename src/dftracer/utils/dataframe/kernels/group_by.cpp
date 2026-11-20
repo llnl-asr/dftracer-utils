@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/float_key.h>
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/group_by.h>
@@ -52,7 +53,7 @@ constexpr TypeId typeid_of() {
 }
 
 template <class X>
-dftu_series* flat_from(const dftracer::utils::dstd::Vector<X>& vals) {
+dftu_series* flat_from(dftracer::utils::dstd::Span<const X> vals) {
     return dftu_series_new_flat(
         static_cast<dftu_dtype>(typeid_of<X>()), vals.data(),
         static_cast<std::int64_t>(vals.size()), nullptr);
@@ -118,9 +119,21 @@ Groups build_groups(const dftu_series* keys_in) {
                                        std::int32_t>
             idx;
         const char* data = reinterpret_cast<const char*>(k->data.data());
+        // A float keys as pandas and Polars key it: -0.0 is 0.0 and every NaN
+        // is one value, so the key bytes are the canonical bits.
+        const bool is_float = k->type == TypeId::Float16 ||
+                              k->type == TypeId::Float32 ||
+                              k->type == TypeId::Float64;
         for (std::int64_t i = 0; i < k->length; ++i) {
             dftracer::utils::dstd::String key(
                 data + static_cast<std::size_t>(i) * width, width);
+            if (is_float) {
+                std::uint64_t bits = 0;
+                std::memcpy(&bits, key.data(), width);
+                bits = dftracer::utils::dataframe::canonical_float_bits(
+                    bits, static_cast<unsigned>(width));
+                std::memcpy(key.data(), &bits, width);
+            }
             auto [it, ins] = idx.try_emplace(
                 std::move(key), static_cast<std::int32_t>(distinct.size()));
             if (ins) distinct.push_back(it->first);
@@ -177,7 +190,7 @@ Groups build_groups(const dftu_series* keys_in) {
 // set flag in flag order (sum, min, max, count, mean).
 template <class T>
 void aggregate(const dftu_series& v,
-               const dftracer::utils::dstd::Vector<std::int32_t>& group_of,
+               dftracer::utils::dstd::Span<const std::int32_t> group_of,
                std::int32_t ng, std::int32_t op_mask, dftu_series** out,
                std::int32_t max_values, std::int32_t& out_n) {
     using W = std::conditional_t<
@@ -207,32 +220,34 @@ void aggregate(const dftu_series& v,
     auto emit = [&](dftu_series* c) {
         if (out_n < max_values) out[out_n++] = c;
     };
-    if (op_mask & DFTU_REDUCE_SUM) emit(flat_from(sums));
-    if (op_mask & DFTU_REDUCE_MIN) emit(flat_from(mins));
-    if (op_mask & DFTU_REDUCE_MAX) emit(flat_from(maxs));
-    if (op_mask & DFTU_REDUCE_COUNT) emit(flat_from(cnts));
+    if (op_mask & DFTU_REDUCE_SUM) emit(flat_from<W>(sums));
+    if (op_mask & DFTU_REDUCE_MIN) emit(flat_from<T>(mins));
+    if (op_mask & DFTU_REDUCE_MAX) emit(flat_from<T>(maxs));
+    if (op_mask & DFTU_REDUCE_COUNT) emit(flat_from<std::int64_t>(cnts));
     if (op_mask & DFTU_REDUCE_MEAN) {
         dftracer::utils::dstd::Vector<double> means(g_count, 0.0);
         for (std::size_t g = 0; g < g_count; ++g)
             means[g] = cnts[g] ? static_cast<double>(sums[g]) /
                                      static_cast<double>(cnts[g])
                                : 0.0;
-        emit(flat_from(means));
+        emit(flat_from<double>(means));
     }
 }
 
 }  // namespace
 
-int32_t dftu_series_group_by(const dftu_series* keys, const dftu_series* values,
-                             int32_t op_mask, dftu_series** out_keys,
-                             dftu_series** out_values, int32_t max_values) {
+std::int32_t dftu_series_group_by(const dftu_series* keys,
+                                  const dftu_series* values,
+                                  std::int32_t op_mask, dftu_series** out_keys,
+                                  dftu_series** out_values,
+                                  std::int32_t max_values) {
     *out_keys = nullptr;
     if (keys->length != values->length) return 0;
     if (values->encoding != Encoding::Flat) {
         dftu_series* flat = dftu_series_materialize(values);
         if (!flat) return 0;
-        const int32_t n = dftu_series_group_by(keys, flat, op_mask, out_keys,
-                                               out_values, max_values);
+        const std::int32_t n = dftu_series_group_by(
+            keys, flat, op_mask, out_keys, out_values, max_values);
         dftu_series_free(flat);
         return n;
     }

@@ -11,6 +11,7 @@
 #include <dftracer/utils/duql/parser.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <valgrind_quirks.h>
 
 #include <charconv>
 #include <cstdint>
@@ -29,8 +30,8 @@ struct JsonDoc {
     simdjson::dom::element elem;
     bool valid = false;
 
-    JsonDoc(const char* json) {
-        auto result = parser.parse(json, std::strlen(json));
+    JsonDoc(dstd::StringView json) {
+        auto result = parser.parse(json.data(), json.size());
         if (!result.error()) {
             elem = result.value_unsafe();
             valid = true;
@@ -41,7 +42,7 @@ struct JsonDoc {
     }
 };
 
-bool eval(const char* query_str, const char* json_str) {
+bool eval(dstd::StringView query_str, dstd::StringView json_str) {
     auto ast = parse(query_str);
     REQUIRE(ast.has_value());
     JsonDoc doc(json_str);
@@ -49,7 +50,7 @@ bool eval(const char* query_str, const char* json_str) {
     return evaluate(**ast, doc.root());
 }
 
-Truth truth(const char* query_str, const char* json_str) {
+Truth truth(dstd::StringView query_str, dstd::StringView json_str) {
     auto ast = parse(query_str);
     REQUIRE(ast.has_value());
     JsonDoc doc(json_str);
@@ -57,13 +58,13 @@ Truth truth(const char* query_str, const char* json_str) {
     return evaluate_truth(**ast, doc.root());
 }
 
-Truth truth(const char* query_str, const ValueMap& fields) {
+Truth truth(dstd::StringView query_str, const ValueMap& fields) {
     auto ast = parse(query_str);
     REQUIRE(ast.has_value());
     return evaluate_truth(**ast, fields);
 }
 
-bool eval(const char* query_str, const ValueMap& fields) {
+bool eval(dstd::StringView query_str, const ValueMap& fields) {
     return truth(query_str, fields) == Truth::Yes;
 }
 
@@ -330,7 +331,8 @@ TEST_CASE("spec - in and not in") {
 namespace {
 
 // Keeps the records `query` selects, as their indexes in `records`.
-dstd::Vector<int> kept(const char* query, dstd::Vector<const char*> records) {
+dstd::Vector<int> kept(dstd::StringView query,
+                       dstd::Vector<const char*> records) {
     auto ast = parse(query);
     REQUIRE_MESSAGE(ast.has_value(), query);
     dstd::Vector<int> out;
@@ -342,7 +344,7 @@ dstd::Vector<int> kept(const char* query, dstd::Vector<const char*> records) {
     return out;
 }
 
-dstd::String compile_error(const char* query) {
+dstd::String compile_error(dstd::StringView query) {
     auto ast = parse(query);
     REQUIRE_FALSE(ast.has_value());
     return ast.error().message;
@@ -485,7 +487,7 @@ TEST_CASE("expressions - array index parameters fold to a literal step") {
     p.emplace("m", LiteralValue{std::int64_t{-1}});
     p.emplace("big", LiteralValue{std::uint64_t{1}});
     const char* r = R"({"xs":["a","b","c"],"o":[{"k":7}]})";
-    auto at = [&](const char* q) {
+    auto at = [&](dstd::StringView q) {
         auto ast = parse(q, p);
         REQUIRE_MESSAGE(ast.has_value(), q);
         JsonDoc doc(r);
@@ -610,7 +612,9 @@ TEST_CASE("expressions - number functions") {
     const char* r = R"({"x":-2.5,"i":-3})";
     CHECK(eval("abs(x) == 2.5 and abs(i) == 3", r));
     CHECK(eval("floor(x) == -3 and ceil(x) == -2", r));
-    CHECK(eval("round(x) == -3 and round(2.345, 2) == 2.35", r));
+    if (!dftu_utils_test::VALGRIND_ROUNDS_TIES_TO_EVEN)
+        CHECK(eval("round(x) == -3", r));
+    CHECK(eval("round(2.345, 2) == 2.35", r));
     CHECK(eval("min(x, i) == -3 and max(x, i, 0) == 0", r));
     CHECK(eval("pow(2, 10) == 1024 and exp(0) == 1 and log(1) == 0", r));
     CHECK(truth("log(i) > 0", r) == Truth::Unknown);
@@ -742,13 +746,12 @@ TEST_CASE("evaluate - regex_replace") {
 namespace {
 
 dstd::Optional<Number> parse_number_with_strtod_only(dstd::StringView text) {
-    const char* first = text.data();
-    const char* last = first + text.size();
+    const char* last = text.data() + text.size();
     if (std::int64_t i = 0;
-        dstd::from_chars(first, last, i).ptr == last && !text.empty())
+        dstd::from_chars(text, i).ptr == last && !text.empty())
         return Number{i};
     if (std::uint64_t u = 0;
-        dstd::from_chars(first, last, u).ptr == last && !text.empty())
+        dstd::from_chars(text, u).ptr == last && !text.empty())
         return Number{u};
     const dstd::String copy(text);
     char* end = nullptr;

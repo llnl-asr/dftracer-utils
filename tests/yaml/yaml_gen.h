@@ -213,7 +213,7 @@ class Gen {
         }
     }
 
-    static bool is_null_like(const dftracer::utils::dstd::String& s) {
+    static bool is_null_like(dftracer::utils::dstd::StringView s) {
         return s.empty() || s == "~" || s == "null" || s == "Null" ||
                s == "NULL";
     }
@@ -222,7 +222,7 @@ class Gen {
     // and read back as the same string: no indicator starts it, except `-`, `?`
     // and `:` before a character that is no space, and no `: ` or ` #` is in
     // it. In a flow collection `,[]{}` are no part of it either.
-    static bool is_plain_safe(const dftracer::utils::dstd::String& s,
+    static bool is_plain_safe(dftracer::utils::dstd::StringView s,
                               bool in_flow = false) {
         if (s.empty() || is_null_like(s)) return false;
         const auto is_flow_indicator = [](char c) {
@@ -281,7 +281,7 @@ class Gen {
     }
 
     dftracer::utils::dstd::String single_quoted(
-        const dftracer::utils::dstd::String& s) {
+        dftracer::utils::dstd::StringView s) {
         dftracer::utils::dstd::String out = "'";
         for (char c : s) {
             out += c;
@@ -293,7 +293,7 @@ class Gen {
     // A double quoted scalar. When `fold` is a column, some spaces become a
     // line break and that many spaces of indentation.
     dftracer::utils::dstd::String double_quoted(
-        const dftracer::utils::dstd::String& s, int fold) {
+        dftracer::utils::dstd::StringView s, int fold) {
         dftracer::utils::dstd::String out = "\"";
         for (std::size_t i = 0; i < s.size(); ++i) {
             const char c = s[i];
@@ -330,9 +330,9 @@ class Gen {
     // A scalar on one line or across lines (`fold` the continuation indent,
     // or -1 for one line) that reads back as `s`.
     dftracer::utils::dstd::String scalar_text(
-        const dftracer::utils::dstd::String& s, int fold, bool in_flow) {
+        dftracer::utils::dstd::StringView s, int fold, bool in_flow) {
         if (is_plain_safe(s, in_flow) && rng_.chance(60)) {
-            dftracer::utils::dstd::String out = s;
+            dftracer::utils::dstd::String out(s);
             if (fold >= 0 && !in_flow && rng_.chance(20)) {
                 for (char& c : out)
                     if (c == ' ' && rng_.chance(40)) c = '\n';
@@ -398,7 +398,7 @@ class Gen {
     }
 
     void root_scalar(const Tree& t) {
-        const dftracer::utils::dstd::String& s = t.text;
+        dftracer::utils::dstd::StringView s = t.text;
         if (block_scalar_ok(s) && rng_.chance(30)) {
             block_scalar(s, -1, true);
             return;
@@ -408,7 +408,7 @@ class Gen {
     }
 
     // A literal block scalar needs lines of text that start with no space.
-    static bool block_scalar_ok(const dftracer::utils::dstd::String& s) {
+    static bool block_scalar_ok(dftracer::utils::dstd::StringView s) {
         if (s.empty() || s.front() == ' ' || s.front() == '\n') return false;
         bool line_start = true;
         for (char c : s) {
@@ -423,12 +423,12 @@ class Gen {
 
     // Writes a literal block scalar for `s`, after a header on the current
     // line; `parent` is the indent of its parent, -1 at the root.
-    void block_scalar(const dftracer::utils::dstd::String& s, int parent,
+    void block_scalar(dftracer::utils::dstd::StringView s, int parent,
                       bool at_root) {
         std::size_t trailing = 0;
         while (trailing < s.size() && s[s.size() - 1 - trailing] == '\n')
             ++trailing;
-        const dftracer::utils::dstd::String body =
+        const dftracer::utils::dstd::StringView body =
             s.substr(0, s.size() - trailing);
         ++stats_.block_scalars;
         out_ += at_root ? "" : " ";
@@ -454,7 +454,7 @@ class Gen {
         block_end_ = out_.size();
     }
 
-    void key_text(const dftracer::utils::dstd::String& key) {
+    void key_text(dftracer::utils::dstd::StringView key) {
         if (is_plain_safe(key, false) && rng_.chance(70)) {
             out_ += key;
         } else {
@@ -641,11 +641,11 @@ class Gen {
         }
     }
 
-    bool is_plain_key(const dftracer::utils::dstd::String& key) {
+    bool is_plain_key(dftracer::utils::dstd::StringView key) {
         return is_plain_safe(key, true);
     }
 
-    void key_text_flow(const dftracer::utils::dstd::String& key) {
+    void key_text_flow(dftracer::utils::dstd::StringView key) {
         if (is_plain_safe(key, true) && rng_.chance(60)) {
             out_ += key;
             return;

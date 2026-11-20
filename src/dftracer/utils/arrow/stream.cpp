@@ -16,6 +16,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -98,7 +99,7 @@ class PartsBody final : public StreamBody {
             if (parts_.empty()) {
                 detail::column_schema(Series{}, built.get());
             } else {
-                detail::column_schema(column_of(parts_.front()), built.get());
+                column_schema_of(parts_.front(), built.get());
             }
             schema_ = std::move(built);
             have_schema_ = true;
@@ -117,6 +118,14 @@ class PartsBody final : public StreamBody {
     }
 
    private:
+    static void column_schema_of(const Part& part, ArrowSchema* schema) {
+        if constexpr (std::is_same_v<Part, DataFrame>) {
+            detail::frame_schema(part, schema);
+        } else {
+            detail::column_schema(part.share(), schema);
+        }
+    }
+
     static Series column_of(const Part& part) {
         if constexpr (std::is_same_v<Part, DataFrame>) {
             return detail::struct_column(part);
@@ -265,7 +274,7 @@ int LazyBody::prepare() {
     if (step == Step::Error) return fail(message_, EIO);
     if (!open_) {
         if (step == Step::Frame) {
-            detail::column_schema(detail::struct_column(first), fixed_.get());
+            detail::frame_schema(first, fixed_.get());
             pending_.emplace(std::move(first));
         } else {
             DataFrame empty;
@@ -359,7 +368,7 @@ coro::CoroTask<void> drain_query(
 dstd::Vector<DataFrame> frame_parts(const DataFrame& frame) {
     const std::size_t ncolumns = frame.columns.size();
     dstd::Vector<DataFrame> parts;
-    const int32_t chunks =
+    const std::int32_t chunks =
         ncolumns == 0 ? 1 : dftu_series_chunk_count(frame.columns[0].handle());
     bool per_chunk = ncolumns > 0 && chunks > 1;
     for (std::size_t i = 1; per_chunk && i < ncolumns; ++i)
@@ -367,9 +376,12 @@ dstd::Vector<DataFrame> frame_parts(const DataFrame& frame) {
             dftu_series_chunk_count(frame.columns[i].handle()) == chunks;
     if (per_chunk) {
         parts.reserve(static_cast<std::size_t>(chunks));
-        for (int32_t k = 0; per_chunk && k < chunks; ++k) {
+        for (std::int32_t k = 0; per_chunk && k < chunks; ++k) {
             DataFrame part;
             part.names = frame.names;
+            if (frame.row_index)
+                part.row_index =
+                    dstd::make_unique<dataframe::RowIndex>(*frame.row_index);
             part.columns.reserve(ncolumns);
             for (std::size_t i = 0; per_chunk && i < ncolumns; ++i) {
                 part.columns.emplace_back(
@@ -447,7 +459,7 @@ dstd::Unexpected<dstd::Error> stream_error(ArrowArrayStream* in,
 
 /// The indexes of the columns `projection` names, in its order.
 dstd::Result<dstd::Vector<std::int64_t>> projection_of(
-    const Schema& schema, const dstd::Vector<dstd::String>& projection) {
+    const Schema& schema, dstd::Span<const dstd::String> projection) {
     dstd::Vector<std::int64_t> pick;
     pick.reserve(projection.size());
     for (const dstd::String& name : projection) {
@@ -691,11 +703,11 @@ dstd::Result<void> to_arrow_stream(const Series& col, ArrowArrayStream* out) {
     if (!col.valid())
         return common::make_error<"to_arrow_stream: a column with no buffers">(
             common::ErrorCode::InvalidArgument);
-    const int32_t count = dftu_series_chunk_count(col.handle());
+    const std::int32_t count = dftu_series_chunk_count(col.handle());
     dstd::Vector<Series> chunks;
     chunks.reserve(static_cast<std::size_t>(count));
     bool same_encoding = true;
-    for (int32_t i = 0; i < count; ++i) {
+    for (std::int32_t i = 0; i < count; ++i) {
         chunks.emplace_back(dftu_series_chunk(col.handle(), i));
         same_encoding = same_encoding &&
                         chunks.back().encoding() == chunks.front().encoding();
@@ -821,6 +833,7 @@ dstd::Result<DataFrame> dataframe_from_arrow_stream(ArrowArrayStream* in) {
         if (!column) return dstd::Unexpected<dstd::Error>(column.error());
         out.columns.push_back(std::move(*column));
     }
+    out.row_index = std::move(parts.front().row_index);
     return out;
 }
 

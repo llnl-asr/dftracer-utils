@@ -24,12 +24,16 @@ Example::
 from __future__ import annotations
 
 import ast
-import inspect
-import textwrap
-from typing import TYPE_CHECKING, Callable, List, Optional, Sequence, Tuple, TypedDict, Union, cast
+import struct
+from typing import TYPE_CHECKING, Callable, List, Optional, Sequence, TypedDict, Union, cast
 
-from . import _plugin_build
+from . import _build
+from ._c_text import c_str_literal as _c_str_literal
+from ._eval import ARITH_CODE, ARITH_SYMBOL, COMPARE_SYMBOL
+from ._jit_errors import JitError, Source
+from .dftracer_utils_ext import jit_run_op, vec_eval
 from .enums import DType
+from .series import Series
 
 if TYPE_CHECKING:
     from typing_extensions import TypeGuard
@@ -80,37 +84,24 @@ _SIZE = {
 }
 _FLOAT = {"DFTU_T_F64", "DFTU_T_F32"}
 _STR = "DFTU_T_STR"
-_ARITH = {
-    ast.Add: "+",
-    ast.Sub: "-",
-    ast.Mult: "*",
-    ast.Div: "/",
-    ast.Mod: "%",
-}
-_CMP = {
-    ast.Eq: "==",
-    ast.NotEq: "!=",
-    ast.Lt: "<",
-    ast.Gt: ">",
-    ast.LtE: "<=",
-    ast.GtE: ">=",
-}
 # The only comparators an interned id supports; equality is id equality
 # (equal iff the underlying strings are), never an ordering.
-_STR_CMP = {ast.Eq: "==", ast.NotEq: "!="}
+_STR_CMP = {node: COMPARE_SYMBOL[node] for node in (ast.Eq, ast.NotEq)}
 
-# columnar.py's post-order AST opcodes for _ext.vec_eval (mirror columnar_eval.cpp).
+# expr.py's post-order AST opcodes for _ext.vec_eval (mirror columnar_eval.cpp).
 _AST_COL, _AST_LIT_I, _AST_LIT_F, _AST_BIN = 0, 1, 2, 3
 _AST_CAST, _AST_UNARY = 8, 9
-_EXPR_BIN = {ast.Add: 0, ast.Sub: 1, ast.Mult: 2, ast.Div: 3}  # no Mod
 _UNARY_ABS, _UNARY_NEGATE = 0, 8
 _NONCOMMUTATIVE = {ast.Sub, ast.Div}
 # Op value types the Expr engine can target today (dataframe::TypeId ordinals).
 _FUSABLE_TYPE_ID = {"DFTU_T_I64": int(DType.INT64), "DFTU_T_F64": int(DType.FLOAT64)}
 
 
-class JitOpError(Exception):
-    """A compose-op body outside the supported subset (arithmetic on the input)."""
+class JitOpError(JitError):
+    """A compose-op body outside the supported subset (arithmetic on the input).
+
+    A :class:`~dftracer.utils.jit.JitError`: it names the file, line and column
+    of the offending node of the op body."""
 
 
 # One leaf stage of an Op: the string fields feed the C emitter, `node` is the
@@ -132,7 +123,7 @@ Stage = TypedDict(
 class Op:
     """A composable value transform, one or more leaf stages piped in order."""
 
-    def __init__(self, stages: List[Stage]):
+    def __init__(self, stages: list[Stage]) -> None:
         self.stages = stages
 
     @property
@@ -143,7 +134,7 @@ class Op:
     def out_type(self) -> str:
         return self.stages[-1]["out"]
 
-    def __or__(self, other: "Op") -> "Op":
+    def __or__(self, other: Op) -> Op:
         if not isinstance(other, Op):
             return NotImplemented
         if self.out_type != other.in_type:
@@ -152,7 +143,7 @@ class Op:
             )
         return Op(self.stages + other.stages)
 
-    def __call__(self, value: Union[int, float]) -> Union[int, float]:
+    def __call__(self, value: int | float) -> int | float:
         """Run this op over `value` in plain Python: JIT-compile it and drive the
         graph on a standalone compose host, returning the output value.
 
@@ -165,20 +156,29 @@ class Op:
 # Python's own numeric annotations, for an op that does not need a specific
 # width. float is an IEEE double, so f64 is exact rather than a guess; int is
 # arbitrary precision, and i64 is the width numpy and pandas also choose for it.
-_BUILTIN_TYPE = {float: "DFTU_T_F64", int: "DFTU_T_I64"}
+_BUILTIN_TYPE: dict[object, str] = {float: "DFTU_T_F64", int: "DFTU_T_I64"}
 
 
 def _type_of(t: object) -> str:
-    dft = getattr(t, "dft", None) or _BUILTIN_TYPE.get(t)  # type: ignore[arg-type]
+    dft = getattr(t, "dft", None) or _BUILTIN_TYPE.get(t)
     if dft not in _CTYPE:
         raise JitOpError(
             f"unsupported op value type {t!r}; use float, int, or a width from "
             "jit.i64/i32/u64/f64/..."
         )
-    return dft
+    return cast("str", dft)
 
 
-def _lower(node: ast.expr, var: str, in_type: str, literals: List[str]) -> str:
+def _lower(node: ast.expr, var: str, in_type: str, literals: list[str]) -> str:
+    try:
+        return _lower_node(node, var, in_type, literals)
+    except JitOpError as exc:
+        if exc.node is None:
+            exc.node = node
+        raise
+
+
+def _lower_node(node: ast.expr, var: str, in_type: str, literals: list[str]) -> str:
     """Lower an op body expression on the single input `var` to C, with the
     input bound to the local `x`. `literals` collects the string constants a
     DFTU_T_STR comparison references, as placeholders `__LIT<n>__` the
@@ -187,7 +187,7 @@ def _lower(node: ast.expr, var: str, in_type: str, literals: List[str]) -> str:
         if len(node.ops) != 1 or len(node.comparators) != 1:
             raise JitOpError("only a single comparison is allowed in an op body")
         cmp_op = node.ops[0]
-        sym = _CMP.get(type(cmp_op), type(cmp_op).__name__)
+        sym = COMPARE_SYMBOL.get(type(cmp_op), type(cmp_op).__name__)
         if in_type != _STR or type(cmp_op) not in _STR_CMP:
             raise JitOpError(
                 f"operator {sym!r} is not supported on {in_type}; DFTU_T_STR "
@@ -204,11 +204,11 @@ def _lower(node: ast.expr, var: str, in_type: str, literals: List[str]) -> str:
             return "x"
         raise JitOpError(_str_op_error(_op_name(node)))
     if isinstance(node, ast.BinOp):
-        sym = _ARITH.get(type(node.op))
-        if sym is None:
+        arith = ARITH_SYMBOL.get(type(node.op))
+        if arith is None:
             raise JitOpError("only + - * / % are allowed in an op body")
         return (
-            f"({_lower(node.left, var, in_type, literals)} {sym} "
+            f"({_lower(node.left, var, in_type, literals)} {arith} "
             f"{_lower(node.right, var, in_type, literals)})"
         )
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
@@ -231,7 +231,7 @@ def _lower(node: ast.expr, var: str, in_type: str, literals: List[str]) -> str:
 
 def _op_name(node: ast.expr) -> str:
     if isinstance(node, ast.BinOp):
-        return _ARITH.get(type(node.op), type(node.op).__name__)
+        return ARITH_SYMBOL.get(type(node.op), type(node.op).__name__)
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         return "-"
     if _is_abs_call(node):
@@ -247,7 +247,7 @@ def _str_op_error(sym: str) -> str:
     )
 
 
-def _str_literal_operand(left: ast.expr, right: ast.expr, var: str) -> Tuple[str, ast.expr]:
+def _str_literal_operand(left: ast.expr, right: ast.expr, var: str) -> tuple[str, ast.expr]:
     if isinstance(left, ast.Name) and left.id == var:
         lit = _str_const_value(right)
         if lit is not None:
@@ -261,7 +261,7 @@ def _str_literal_operand(left: ast.expr, right: ast.expr, var: str) -> Tuple[str
     )
 
 
-def _str_const_value(node: ast.expr) -> Optional[str]:
+def _str_const_value(node: ast.expr) -> str | None:
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
 
@@ -276,15 +276,15 @@ def _is_abs_call(node: ast.expr) -> TypeGuard[ast.Call]:
 
 
 def _lower_expr(
-    node: ast.expr, var: str, leaf: List[tuple], var_is_float: bool
-) -> Optional[Tuple[List[tuple], bool, bool]]:
+    node: ast.expr, var: str, leaf: list[tuple[object, ...]], var_is_float: bool
+) -> tuple[list[tuple[object, ...]], bool, bool] | None:
     """Lower `node` to a columnar Expr AST, splicing `leaf` in for each
     reference to `var`. Returns `(tokens, is_float, is_scalar)` or None if
     there is no Expr equivalent - refusing an integer `/` (C truncates; Expr's
     Div always promotes to Float64 first) and `scalar - column` / `scalar /
     column` (no such kernel; Add/Mul commute instead of needing one)."""
     if isinstance(node, ast.BinOp):
-        code = _EXPR_BIN.get(type(node.op))
+        code = ARITH_CODE.get(type(node.op))
         if code is None:
             return None
         left = _lower_expr(node.left, var, leaf, var_is_float)
@@ -333,8 +333,16 @@ def op(fn: Callable[..., object]) -> Op:
     The body must be a single ``return <arithmetic on the argument>``; anything
     else raises :class:`JitOpError` at decoration time.
     """
+    source = Source(fn)
+    try:
+        return _op_from(fn, source)
+    except JitOpError as exc:
+        raise source.relocate(exc, ast.parse(source.text).body[0]) from None
+
+
+def _op_from(fn: Callable[..., object], source: Source) -> Op:
     ann = getattr(fn, "__annotations__", {})
-    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    tree = ast.parse(source.text)
     func = tree.body[0]
     if not isinstance(func, ast.FunctionDef) or len(func.args.args) != 1:
         raise JitOpError("@op needs a function of exactly one typed argument")
@@ -347,7 +355,7 @@ def op(fn: Callable[..., object]) -> Op:
     body = [s for s in func.body if not isinstance(s, ast.Expr)]
     if len(body) != 1 or not isinstance(body[0], ast.Return) or body[0].value is None:
         raise JitOpError("@op body must be a single `return <expr>`")
-    literals: List[str] = []
+    literals: list[str] = []
     expr = _lower(body[0].value, var, in_type, literals)
     if literals and (out_type in _FLOAT or out_type in (_STR, "DFTU_T_BYTES")):
         raise JitOpError(
@@ -371,7 +379,7 @@ def _emit(op_obj: Op) -> str:
     """Emit a .so that builds `op_obj` as a dftu_op graph on a caller-provided
     host. The standalone runner (native OpRunner binding) supplies the host and
     drives the run; there is no plugin/scan here."""
-    lines: List[str] = [
+    lines: list[str] = [
         "#include <dftracer/utils/plugins/abi.h>",
         "#include <stdint.h>",
         "",
@@ -379,7 +387,7 @@ def _emit(op_obj: Op) -> str:
     for i, st in enumerate(op_obj.stages):
         ict = _CTYPE[st["in"]]
         oct_ = _CTYPE[st["out"]]
-        literals: List[str] = st["literals"]
+        literals: list[str] = st["literals"]
         for j in range(len(literals)):
             lines.append(f"static dftu_str leaf_{i}_lit_{j};")
         expr = st["expr"]
@@ -437,10 +445,6 @@ def _emit(op_obj: Op) -> str:
     return "\n".join(lines)
 
 
-def _c_str_literal(s: str) -> str:
-    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
 def emit_inline(op_obj: Op, c_name: str) -> str:
     """Emit `op_obj` as scalar static C functions callable as ``c_name(x)``.
 
@@ -455,7 +459,7 @@ def emit_inline(op_obj: Op, c_name: str) -> str:
                 "intern, which inlining does not thread through); call it "
                 "standalone instead"
             )
-    lines: List[str] = []
+    lines: list[str] = []
     for i, st in enumerate(op_obj.stages):
         ict = _CTYPE[st["in"]]
         oct_ = _CTYPE[st["out"]]
@@ -470,16 +474,16 @@ def emit_inline(op_obj: Op, c_name: str) -> str:
     return "\n".join(lines)
 
 
-def lower_to_expr(op_obj: Op) -> Optional[List[tuple]]:
+def lower_to_expr(op_obj: Op) -> list[tuple[object, ...]] | None:
     """Try to lower every stage of `op_obj` to one columnar Expr AST (the post-
-    order form columnar.py serializes for ``_ext.vec_eval``), casting between
+    order form expr.py serializes for ``_ext.vec_eval``), casting between
     stages where the scalar leaf would cast too. None if a stage's type is
     outside ``_FUSABLE_TYPE_ID`` or has no Expr equivalent (see
     :func:`_lower_expr`); the caller then falls back. See :func:`can_fuse`
     for the yes/no-only form."""
     if op_obj.in_type not in _FUSABLE_TYPE_ID:
         return None
-    ast_tokens: List[tuple] = [(_AST_COL, 0)]
+    ast_tokens: list[tuple[object, ...]] = [(_AST_COL, 0)]
     for st in op_obj.stages:
         if st["out"] not in _FUSABLE_TYPE_ID:
             return None
@@ -511,30 +515,18 @@ def compile_op(op_obj: Op, *, name: str = "op") -> str:
     """Emit and build a .so exposing ``dftracer_build_op(host)`` for `op_obj`.
     Returns the cached ``.so`` path (run it via :func:`run_op`)."""
     source = _emit(op_obj)
-    include = _plugin_build.include_dir()
-    cxx = _plugin_build.compiler()
-    digest = _plugin_build.source_digest(source, include, cxx)
-    out = _plugin_build.cache_dir() / f"{name}.{digest}.so"
-    if not out.is_file():
-        src = out.with_suffix(".cpp")
-        src.write_text(source, encoding="utf-8")
-        _plugin_build.build_shared(str(src), out=str(out), name=name)
-    return str(out)
+    return _build.compile_source(source, name, group="op")
 
 
-def run_op(op_obj: Op, value: Union[int, float]) -> Union[int, float]:
+def run_op(op_obj: Op, value: int | float) -> int | float:
     """Compile `op_obj`, then build and run its dftu_op graph over `value` on a
     standalone compose host (no plugin, no scan), returning the output value."""
-    import struct
-
-    from .dftracer_utils_ext import jit_run_op  # native standalone runner
-
     so = compile_op(op_obj)
     in_fmt = _STRUCT[op_obj.in_type]
     out_fmt = _STRUCT[op_obj.out_type]
     in_bytes = struct.pack("=" + in_fmt, value)
     out_bytes = jit_run_op(so, in_bytes, _SIZE[op_obj.out_type])
-    return struct.unpack("=" + out_fmt, out_bytes)[0]
+    return cast("int | float", struct.unpack("=" + out_fmt, out_bytes)[0])
 
 
 _STRUCT = {
@@ -556,7 +548,7 @@ _ArrayValue = Optional[Union[int, float]]
 
 def run_op_array(
     op_obj: Op, values: Sequence[_ArrayValue], *, force_scalar: bool = False
-) -> Tuple[List[_ArrayValue], bool]:
+) -> tuple[list[_ArrayValue], bool]:
     """Run `op_obj` over an array of values (``None`` passes through as null on
     both paths). Runs the Expr engine once over the array when `op_obj` lowers
     to it (:func:`lower_to_expr`); otherwise, or with `force_scalar`, runs the
@@ -569,12 +561,9 @@ def run_op_array(
 
 
 def _run_fused(
-    op_obj: Op, ast_tokens: List[tuple], values: Sequence[_ArrayValue]
-) -> List[_ArrayValue]:
-    from .dftracer_utils_ext import vec_eval
-    from .series import Series, _unwrap
-
+    op_obj: Op, ast_tokens: list[tuple[object, ...]], values: Sequence[_ArrayValue]
+) -> list[_ArrayValue]:
     dtype = DType.FLOAT64 if is_float_type(op_obj.in_type) else DType.INT64
     col = Series.from_list(list(values), dtype=dtype)
-    out = Series(vec_eval(ast_tokens, [_unwrap(col)]))
+    out = vec_eval(ast_tokens, [col])
     return cast(List[_ArrayValue], out.to_list())

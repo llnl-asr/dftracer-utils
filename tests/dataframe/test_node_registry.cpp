@@ -74,9 +74,10 @@ class PassThroughNode final : public NodeImpl {
 
     dstd::Result<dstd::UniquePtr<Cursor>> open(
         dstd::UniquePtr<Cursor> input,
-        const dstd::Vector<dstd::String>& input_names, const OpArgs&,
-        std::uint64_t memory_budget) const override {
-        names_seen = input_names;
+        dstd::Span<const dstd::String> input_names, const OpArgs&,
+        std::uint64_t memory_budget,
+        dstd::SharedPtr<RunCounters>) const override {
+        names_seen.assign(input_names.begin(), input_names.end());
         budget_seen = memory_budget;
         return dstd::UniquePtr<Cursor>(
             dstd::make_unique<CountingCursor>(std::move(input), &morsels));
@@ -95,8 +96,8 @@ class RefusingNode final : public NodeImpl {
     }
 
     dstd::Result<dstd::UniquePtr<Cursor>> open(
-        dstd::UniquePtr<Cursor>, const dstd::Vector<dstd::String>&,
-        const OpArgs&, std::uint64_t) const override {
+        dstd::UniquePtr<Cursor>, dstd::Span<const dstd::String>, const OpArgs&,
+        std::uint64_t, dstd::SharedPtr<RunCounters>) const override {
         return dstd::Error::from_format<"the node will not open">(
             dstd::Condition::InvalidArgument);
     }

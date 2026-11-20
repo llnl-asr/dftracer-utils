@@ -11,6 +11,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
+#include <span_list.h>
 #include <task_result.h>
 
 #include <algorithm>
@@ -22,8 +23,8 @@ using namespace dftracer::utils;
 
 namespace {
 
-dataframe::Series ints(const dstd::Vector<std::int64_t>& v,
-                       const dstd::Vector<std::uint8_t>& valid = {}) {
+dataframe::Series ints(dstd::Vector<std::int64_t> v,
+                       dstd::Vector<std::uint8_t> valid = {}) {
     dstd::Vector<std::uint8_t> bits((v.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < v.size(); ++i)
         if (valid.empty() || valid[i])
@@ -151,9 +152,12 @@ TEST_CASE("every float order in the library is the order of compare_doubles") {
     CHECK(order_of(dftu_utils_test::ok(frame.sort_by("x", false))
                        .column("row")
                        .materialize()) == want);
-    CHECK(order_of(dftu_utils_test::ok(frame.sort_by_multi({"x"}, false))
-                       .column("row")
-                       .materialize()) == want);
+    CHECK(
+        order_of(dftu_utils_test::ok(
+                     frame.sort_by_multi(
+                         dftu_utils_test::span_of<dstd::String>({"x"}), false))
+                     .column("row")
+                     .materialize()) == want);
     dataframe::DataFrame spilled =
         dftu_utils_test::ok(dftracer::utils::default_runtime()
                                 .submit(frame.lazy()
@@ -206,7 +210,10 @@ TEST_CASE(
     CHECK(order_of(dftu_utils_test::ok(frame.sort_by("x", false))
                        .column("row")
                        .materialize()) == want);
-    CHECK(order_of(dftu_utils_test::ok(frame.sort_by_multi({"x", "row"}, false))
+    CHECK(order_of(dftu_utils_test::ok(
+                       frame.sort_by_multi(
+                           dftu_utils_test::span_of<dstd::String>({"x", "row"}),
+                           false))
                        .column("row")
                        .materialize()) == want);
     const dataframe::DataFrame spilled =
@@ -223,7 +230,8 @@ TEST_CASE("a column view of a nested type ends the process" * doctest::skip()) {
     fresh_process::announce_abort();
     dstd::Vector<std::int64_t> leaf{1, 2, 3};
     const dataframe::Series nested = dataframe::Series::list(
-        {0, 1, 3}, dataframe::Series::flat_i64(leaf.data(), 3));
+        dftu_utils_test::span_of<std::int32_t>({0, 1, 3}),
+        dataframe::Series::flat_i64(leaf.data(), 3));
     const dataframe::ColumnReader view(nested);
     (void)view;
 }

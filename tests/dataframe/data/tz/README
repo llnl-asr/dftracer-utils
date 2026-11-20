@@ -1,0 +1,1 @@
+These TZif files are copied unchanged from the Python tzdata package, version 2026.6 (IANA database 2026f). The IANA time zone database is in the public domain. They are slim files: the rules after the last listed transition come from the POSIX footer.

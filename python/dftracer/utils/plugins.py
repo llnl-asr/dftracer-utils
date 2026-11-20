@@ -20,21 +20,26 @@ Example::
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Union, cast
+from typing import TYPE_CHECKING, Dict, List, NamedTuple, Union, cast
 
+from ._jit_errors import check_port_wiring, translate_plan_error, translate_run_error
 from .dataframe import DataFrame
+from .dftracer_utils_ext import DataFrame as _NativeDataFrame
 from .dftracer_utils_ext import Plugins as _NativePlugins
-from .dftracer_utils_ext import _DataFrame
+from .dftracer_utils_ext import _load_plugin, _unload_plugin
 
 if TYPE_CHECKING:
-    import pyarrow as pa  # ty: ignore[import-not-found]
+    from types import TracebackType
+
+    import pyarrow as pa
 
     from .dftracer_utils_ext import PluginRecord
     from .lazyframe import LazyFrame
     from .runtime import Runtime
 
-__all__ = ["Plugins", "PluginInfo", "PluginRun", "unnest"]
+__all__ = ["Plugins", "PluginHandle", "PluginInfo", "PluginRun", "load_plugin", "unnest"]
 
 # A JSON-serializable value tree (config is handed straight to json.dumps).
 JSONValue = Union[str, int, float, bool, None, List["JSONValue"], Dict[str, "JSONValue"]]
@@ -44,10 +49,10 @@ _RunResult = Union[bytes, "DataFrame", "LazyFrame"]
 
 
 def unnest(
-    result: "Union[pa.Table, pa.RecordBatchReader, pa.RecordBatch]",
+    result: pa.Table | pa.RecordBatchReader | pa.RecordBatch,
     column: str,
     keep_empty: bool = False,
-) -> "pa.Table":
+) -> pa.Table:
     """Explode a list-typed ``column`` of a ``run()`` map result into one row per
     element, repeating the other columns; the inverse of the set/list/top-k
     aggregates.
@@ -68,7 +73,7 @@ def unnest(
     return DataFrame.from_arrow(pa.table(result)).unnest(column, keep_empty).to_arrow()
 
 
-def _plugin_key(plugin: Union[str, type]) -> str:
+def _plugin_key(plugin: str | type) -> str:
     """The name a caller's ``config`` mapping keys this plugin by: a compiled
     ``.so``'s stem, or a ``@jit.plugin`` class's name."""
     if isinstance(plugin, str):
@@ -123,7 +128,7 @@ class PluginRun:
 
     __slots__ = ("results", "stats")
 
-    def __init__(self, results: "Dict[str, _RunResult]", stats: Dict[str, int]) -> None:
+    def __init__(self, results: dict[str, _RunResult], stats: dict[str, int]) -> None:
         self.results = results
         self.stats = stats
 
@@ -141,9 +146,9 @@ class Plugins:
 
     def __init__(
         self,
-        plugins: "List[Union[str, type]]",
-        config: "Optional[Dict[str, Dict[str, JSONValue]]]" = None,
-        runtime: "Optional[Runtime]" = None,
+        plugins: list[str | type],
+        config: dict[str, dict[str, JSONValue]] | None = None,
+        runtime: Runtime | None = None,
     ) -> None:
         """Build ``plugins`` (each a compiled ``.so`` path or a ``@jit.plugin``
         class, AST-compiled to a cached native ``.so`` first) into one set bound
@@ -156,21 +161,30 @@ class Plugins:
         DFTUtilsValueError on a bad config.
         """
         config = config or {}
-        result_names: Dict[str, str] = {}
+        result_names: dict[str, str] = {}
         specs = []
         for plugin in plugins:
+            cfg = config.get(_plugin_key(plugin))
             if isinstance(plugin, str):
                 path = plugin
             else:
-                from . import jit
+                from .jit.maps import plugin_config
+                from .jit.package import compile_class, plugin_result_names
 
-                result_names.update(jit.plugin_result_names(plugin))
-                path = jit.compile_class(plugin)
-            cfg = config.get(_plugin_key(plugin))
+                cfg = plugin_config(plugin, cfg)
+                result_names.update(plugin_result_names(plugin))
+                path = compile_class(plugin)
             specs.append((path, json.dumps(cfg) if cfg is not None else None))
-        self._native = _NativePlugins(specs, result_names or None, runtime)
+        check_port_wiring(plugins)
+        try:
+            self._native = _NativePlugins(specs, result_names or None, runtime)
+        except (ImportError, ValueError) as exc:
+            translated = translate_plan_error(plugins, exc)
+            if translated is None:
+                raise
+            raise translated from exc
 
-    def describe(self) -> "List[PluginInfo]":
+    def describe(self) -> list[PluginInfo]:
         """What each plugin in the set is, in the order it was given: its path,
         its ABI version, whether it declares a ``plan_duql`` and whether it
         carries a fold, and the names it registered per kind (ops, udfs,
@@ -179,7 +193,7 @@ class Plugins:
 
         Static: nothing is scanned and no plugin callback runs.
         """
-        raw: "List[PluginRecord]" = self._native.describe()
+        raw: list[PluginRecord] = self._native.describe()
         return [
             PluginInfo(
                 path=info["path"],
@@ -205,8 +219,8 @@ class Plugins:
 
     def run(
         self,
-        traces: Union[str, List[str]],
-        index_dir: Optional[str] = None,
+        traces: str | list[str],
+        index_dir: str | None = None,
         auto_index: bool = True,
     ) -> PluginRun:
         """Fold every plugin in the set over one fused scan of ``traces`` (a
@@ -222,12 +236,23 @@ class Plugins:
           Call ``.to_arrow()`` / ``.to_pandas()`` for other shapes.
         - ``emit_lazyframe`` -> a :class:`~dftracer.utils.LazyFrame`.
         - ``emit_result`` bytes -> ``bytes``.
+
+        A compiled plugin that fails the run with ``raise jit.Fatal(...)`` or
+        ``raise jit.Cancelled()``, or whose call fails (``jit.Error`` and its
+        subclasses), surfaces here as that ``jit`` exception with the message
+        and the location of the raise or the call.
         """
-        raw_results, stats = self._native.run(traces, index_dir, auto_index)
+        try:
+            raw_results, stats = self._native.run(traces, index_dir, auto_index)
+        except Exception as exc:
+            failure = translate_run_error(exc)
+            if failure is None:
+                raise
+            raise failure from exc
         results = {name: self._shape(obj) for name, obj in raw_results.items()}
         return PluginRun(results, stats)
 
-    def _shape(self, obj: object) -> "_RunResult":
+    def _shape(self, obj: object) -> _RunResult:
         """Return one native result in the shape its emit kind implies.
 
         The native layer already hands back one Python type per emit kind and
@@ -236,6 +261,70 @@ class Plugins:
         """
         if isinstance(obj, bytes):
             return obj
-        if isinstance(obj, _DataFrame):
+        if isinstance(obj, _NativeDataFrame):
             return DataFrame(obj)
         return cast("_RunResult", obj)
+
+
+class PluginHandle:
+    """A plugin loaded into the process by :func:`load_plugin`.
+
+    The plugin's file formats and the rest it registers stay available to every
+    reader in the process (:func:`scan_file`, :class:`TraceViewer`,
+    :class:`Indexer`) until :meth:`close` or the end of the ``with`` block.
+    """
+
+    __slots__ = ("_path", "_closed")
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+        self._closed = False
+
+    @property
+    def path(self) -> str:
+        """The path the plugin was loaded from."""
+        return self._path
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def close(self) -> None:
+        """Unload the plugin when no other handle of the same path holds it.
+
+        Raises ``DFTUtilsValueError``, and keeps the plugin loaded, while a
+        :class:`LazyFrame` made by :func:`scan_file` through one of its file
+        formats is alive: drop it first. A second call does nothing. A plugin
+        named by ``DFTRACER_UTILS_PLUGINS`` stays loaded for the process.
+        """
+        if self._closed:
+            return
+        _unload_plugin(self._path)
+        self._closed = True
+
+    def __enter__(self) -> PluginHandle:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        self.close()
+
+
+def load_plugin(path: str | os.PathLike[str]) -> PluginHandle:
+    """Load the compiled plugin at ``path`` into the process and return its
+    handle, which works as a context manager::
+
+        with dft.load_plugin("csv_reader.so"):
+            frame = dft.scan_file("data.csv").collect()
+
+    Loading a path that is already loaded, by the handle of an earlier call or
+    by ``DFTRACER_UTILS_PLUGINS``, loads nothing again. Raises a
+    ``DFTUtilsError`` that names the path when it does not load.
+    """
+    text = os.fspath(path)
+    _load_plugin(text)
+    return PluginHandle(text)

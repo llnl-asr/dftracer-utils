@@ -15,6 +15,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -47,8 +48,8 @@ comm::Communicator start(std::uint32_t ranks, coro::Executor& executor) {
 }
 
 /// The counters of one kind of call of one group, zero when none was made.
-comm::CallStats row(const dstd::Vector<comm::CallStats>& rows,
-                    std::uint64_t group, dstd::StringView kind) {
+comm::CallStats row(dstd::Span<const comm::CallStats> rows, std::uint64_t group,
+                    dstd::StringView kind) {
     comm::CallStats found;
     for (const comm::CallStats& one : rows) {
         if (one.group != group || one.kind != kind) continue;
@@ -62,7 +63,7 @@ comm::CallStats row(const dstd::Vector<comm::CallStats>& rows,
     return found;
 }
 
-std::size_t count_events(const dstd::String& text) {
+std::size_t count_events(dstd::StringView text) {
     std::size_t events = 0;
     dftu_utils_test::LineStream lines(text);
     dstd::String line;
@@ -72,7 +73,7 @@ std::size_t count_events(const dstd::String& text) {
 }
 
 /// The lines of @p text that hold @p needle.
-std::size_t count_lines_with(const dstd::String& text, const char* needle) {
+std::size_t count_lines_with(dstd::StringView text, dstd::StringView needle) {
     std::size_t found = 0;
     dftu_utils_test::LineStream lines(text);
     dstd::String line;
@@ -302,7 +303,7 @@ TEST_SUITE("comm observation") {
             CHECK(count_lines_with(text, R"("name":"barrier")") == 3);
             CHECK(count_lines_with(text, R"("name":"all_gather")") == 1);
             CHECK(count_lines_with(text, R"("cat":"comm")") == 4);
-            CHECK(count_lines_with(text, R"("ph":"X")") == 4);
+            CHECK(count_lines_with(text, R"("ph":1)") == 4);
             CHECK(count_lines_with(text, R"("status":"ok")") == 4);
             CHECK(count_lines_with(text, R"("seq":3,"bytes":24)") == 1);
         }
@@ -311,7 +312,8 @@ TEST_SUITE("comm observation") {
             "DFTRACER_UTILS_EVENT_COUNT_PATH", "dftracer_event_count");
         REQUIRE_FALSE(binary.empty());
         const dstd::String counted = dftu_utils_test::run_process_capture(
-            binary, {"-f", files[0], files[1]});
+            binary,
+            dftu_utils_test::span_of<dstd::String>({"-f", files[0], files[1]}));
         dftu_utils_test::LineStream lines(counted);
         dstd::String line;
         dstd::String last;

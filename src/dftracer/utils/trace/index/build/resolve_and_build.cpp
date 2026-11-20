@@ -17,6 +17,7 @@
 #include <dftracer/utils/trace/index/build/aggregation_run.h>
 #include <dftracer/utils/trace/index/build/batch_builder.h>
 #include <dftracer/utils/trace/index/build/corrupt_index.h>
+#include <dftracer/utils/trace/index/build/index_write_lock.h>
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/index/index.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
@@ -40,7 +41,7 @@ namespace {
 // slower.
 coro::CoroTask<dstd::Result<dstd::Vector<ResolverResult::Failure>>> build_tier(
     dstd::Vector<dstd::String> files, const ResolveAndBuildInput& input,
-    trace::index::store::ExtensionMask tier, const dstd::String& schema,
+    trace::index::store::ExtensionMask tier, dstd::String schema,
     std::size_t parallelism) {
     auto config = dstd::make_shared<IndexBuildBatchConfig>();
     config->file_paths = std::move(files);
@@ -49,7 +50,7 @@ coro::CoroTask<dstd::Result<dstd::Vector<ResolverResult::Failure>>> build_tier(
     config->parallelism = parallelism;
     config->tier_only = true;
     config->memory_budget = input.memory_budget;
-    config->schema = schema;
+    config->schema = std::move(schema);
     config->bloom_config = input.bloom_config;
     config->bloom_config.extensions = tier;
     DFTRACER_UTILS_LOG_INFO("Building the index tier for {} files",
@@ -65,9 +66,8 @@ coro::CoroTask<dstd::Result<dstd::Vector<ResolverResult::Failure>>> build_tier(
 // Aggregates files whose members are current, leaving every other extension.
 coro::CoroTask<dstd::Result<dstd::Vector<ResolverResult::Failure>>>
 build_aggregation(dstd::Vector<dstd::String> files,
-                  const ResolveAndBuildInput& input,
-                  const dstd::String& index_path, const dstd::String& schema,
-                  std::size_t parallelism) {
+                  const ResolveAndBuildInput& input, dstd::String index_path,
+                  dstd::String schema, std::size_t parallelism) {
     auto started = start_aggregation(index_path, input.aggregation_config);
     if (!started) co_return started.error();
     AggRun run = std::move(*started);
@@ -79,7 +79,7 @@ build_aggregation(dstd::Vector<dstd::String> files,
     config->tier_only = true;
     config->build_bloom = false;
     config->memory_budget = input.memory_budget;
-    config->schema = schema;
+    config->schema = std::move(schema);
     config->agg_fold_factory = std::move(run.factory);
     DFTRACER_UTILS_LOG_INFO("Aggregating {} files", config->file_paths.size());
     auto batch = co_await BatchBuilder::process(std::move(config));
@@ -119,23 +119,33 @@ coro::CoroTask<dstd::Result<ResolverResult>> resolve_and_build_once(
         co_return result;
     }
 
-    // A forced rebuild rebuilds every file whole, so every tier is stale.
-    dstd::HashSet<dstd::String> stale_tiers(
+    // A stale tier is the index-wide config or layout, so the whole root is
+    // cleared. A forced rebuild rebuilds only its own files, so it clears only
+    // their rows: a trace folder that shares the root keeps its tier.
+    const dstd::HashSet<dstd::String> stale_tiers(
         result.stale_aggregation_roots.begin(),
         result.stale_aggregation_roots.end());
-    if (input.force_rebuild)
+    for (const auto& root : stale_tiers) {
+        auto cleared = clear_aggregation(root);
+        if (!cleared) co_return cleared.error();
+    }
+    if (input.force_rebuild) {
+        dstd::Map<dstd::String, dstd::Vector<dstd::String>> forced_by_root;
         for (const auto& file : result.all_files) {
             auto root =
                 trace::internal::determine_index_path(file, input.index_dir);
+            if (stale_tiers.contains(root)) continue;
+            forced_by_root[std::move(root)].push_back(file);
+        }
+        for (const auto& [root, files] : forced_by_root) {
             const dstd::String store_path = trace::index::store_dir(root);
             auto checking = runtime::fs::exists(dstd::PathView(store_path));
             auto has_store = co_await std::move(checking);
             if (!has_store.has_value()) co_return has_store.error();
-            if (*has_store) stale_tiers.insert(std::move(root));
+            if (!*has_store) continue;
+            auto cleared = clear_aggregation_files(root, files);
+            if (!cleared) co_return cleared.error();
         }
-    for (const auto& root : stale_tiers) {
-        auto cleared = clear_aggregation(root);
-        if (!cleared) co_return cleared.error();
     }
 
     dstd::Vector<dstd::String> files_needing_work;
@@ -407,6 +417,18 @@ bool mentions_corruption(dstd::StringView text) {
 // the caller with the index directories named. Any other error is passed on.
 coro::CoroTask<dstd::Result<ResolverResult>> resolve_and_build_index(
     ResolveAndBuildInput input) {
+    // The files of a directory are found once, here, so the roots they write
+    // to are known before the first lock and the resolver does not walk again.
+    if (input.entries.empty() && input.files.empty() &&
+        !input.directory.empty()) {
+        auto walking = coro::with_scope([&](coro::Scope& scope) {
+            return find_input_files(scope, dstd::PathView(input.directory));
+        });
+        auto found = co_await std::move(walking);
+        if (!found) co_return found.error();
+        input.entries = std::move(*found);
+        input.directory.clear();
+    }
     dstd::Set<dstd::String> roots;
     for (const auto& file : input.files)
         roots.insert(
@@ -414,6 +436,17 @@ coro::CoroTask<dstd::Result<ResolverResult>> resolve_and_build_index(
     for (const auto& entry : input.entries)
         roots.insert(
             trace::internal::determine_index_path(entry.path, input.index_dir));
+    if (!input.index_dir.empty())
+        roots.insert(
+            trace::internal::determine_index_path("", input.index_dir));
+    dstd::Set<dstd::String> keys;
+    for (const auto& root : roots) keys.insert(index_write_key(root));
+    dstd::Vector<coro::AsyncMutexGuard> writing;
+    for (const auto& key : keys) {
+        coro::AsyncMutex& mutex = index_write_mutex(key);
+        co_await mutex.lock();
+        writing.push_back(coro::AsyncMutexGuard(mutex));
+    }
     auto first = co_await resolve_and_build_once(input);
     if (first) co_return std::move(first);
     if (!mentions_corruption(first.error().message())) co_return first.error();

@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/pattern.h>
@@ -74,10 +75,8 @@ inline std::int64_t find(dstd::StringView hay, dstd::StringView needle,
         }
         return -1;
     }
-    const auto n = static_cast<std::int64_t>(needle.size());
-    const auto h = static_cast<std::int64_t>(hay.size());
-    return icase ? detail::substr_find_icase(hay.data(), h, needle.data(), n)
-                 : detail::substr_find(hay.data(), h, needle.data(), n);
+    return icase ? detail::substr_find_icase(hay, needle)
+                 : detail::substr_find(hay, needle);
 }
 
 inline bool equal_at(dstd::StringView s, std::size_t at, dstd::StringView lit,
@@ -121,7 +120,7 @@ inline std::size_t step_char(dstd::StringView s, std::size_t i) {
 // `_` (ANY_ONE false) a restart may land on any byte: a literal never
 // matches a UTF-8 continuation byte.
 template <bool ICASE, bool AnyOne>
-bool glob_match_t(const dstd::Vector<GlobToken>& toks, dstd::StringView s) {
+bool glob_match_t(dstd::Span<const GlobToken> toks, dstd::StringView s) {
     std::size_t si = 0, pi = 0;
     std::size_t star = dstd::StringView::npos;
     std::size_t star_si = 0;
@@ -151,7 +150,7 @@ bool glob_match_t(const dstd::Vector<GlobToken>& toks, dstd::StringView s) {
     return pi == m;
 }
 
-inline bool glob_match(const dstd::Vector<GlobToken>& toks, dstd::StringView s,
+inline bool glob_match(dstd::Span<const GlobToken> toks, dstd::StringView s,
                        bool icase, bool any_one) {
     if (any_one)
         return icase ? glob_match_t<true, true>(toks, s)

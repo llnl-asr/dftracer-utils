@@ -2,15 +2,16 @@
 #ifndef DFTRACER_UTILS_DSTD_FATAL_H
 #define DFTRACER_UTILS_DSTD_FATAL_H
 
+#include <dftracer/utils/dstd/string.h>
+
 namespace dftracer::utils::dstd {
 
 /// @brief Ends the process on a broken invariant.
 ///
-/// Prints `what`, then `detail` when it is not null, then a stack trace to
+/// Prints `what`, then `detail` when it is not empty, then a stack trace to
 /// stderr, and aborts. Every fatal path goes through here, so one breakpoint
 /// stops on all of them.
-[[noreturn]] void fatal(const char* what,
-                        const char* detail = nullptr) noexcept;
+[[noreturn]] void fatal(StringView what, StringView detail = {}) noexcept;
 
 }  // namespace dftracer::utils::dstd
 

@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
+#include <span_list.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -40,8 +43,8 @@ dstd::String find_event_count_binary() {
 }
 
 // Run binary, capture stdout, return it as a string.
-dstd::String run_event_count_capture(const dstd::String& binary,
-                                     const dstd::Vector<dstd::String>& args) {
+dstd::String run_event_count_capture(dstd::String binary,
+                                     dstd::Vector<dstd::String> args) {
     return dftu_utils_test::run_process_capture(binary, args);
 }
 
@@ -50,9 +53,9 @@ dstd::String find_index_binary() {
                                                 "dftracer_index");
 }
 
-dstd::String event_line(int id, const char* ph) {
+dstd::String event_line(int id, dstd::CStringView ph) {
     return R"({"id":)" + dstd::to_string(id) + R"(,"pid":1,"tid":1,)" +
-           R"("name":"read","cat":"POSIX","ph":")" + ph + R"(","ts":)" +
+           R"("name":"read","cat":"POSIX","ph":")" + ph.c_str() + R"(","ts":)" +
            dstd::to_string(1000 + id) + R"(,"dur":5,"args":{"ret":1}})";
 }
 
@@ -73,15 +76,15 @@ dstd::String mixed_fixture(bool no_phase_line) {
     if (no_phase_line)
         text += R"({"id":5,"name":"no_phase","cat":"POSIX"})"
                 "\n";
-    text += R"({"id":6,"name":"broken","ph":"X")"
+    text += R"({"id":6,"name":"broken","ph":1)"
             "\n";
-    text += R"({"id":12,"name":"cut","ph":"X","a":1e400,"b":{"c":1})"
+    text += R"({"id":12,"name":"cut","ph":1,"a":1e400,"b":{"c":1})"
             "\n";
     text += "\n";
     text += event_line(7, "C") + "\n";
     text += event_line(8, "M") + "\n";
     text += event_line(9, "X") + "\n";
-    text += R"({"id":11,"pid":1,"tid":1,"name":"odd","cat":"POSIX","ph":"X",)"
+    text += R"({"id":11,"pid":1,"tid":1,"name":"odd","cat":"POSIX","ph":1,)"
             R"("ts":1,"dur":1,"args":{"ret":1e400,"s":"a\q"}})"
             "\n";
     text += "]\n";
@@ -92,7 +95,7 @@ dstd::String mixed_fixture(bool no_phase_line) {
 constexpr int DFTRACER_UTILS_FIXTURE_EVENTS = 6;
 constexpr int PATH_FIXTURE_EVENTS = 9;
 
-bool dir_has_dftindex(const dstd::String& dir) {
+bool dir_has_dftindex(dstd::StringView dir) {
     for (const auto& entry : dftu_utils_test::walk_dir(dir)) {
         if (entry.path.view().filename() == ".dftindex") return true;
     }
@@ -101,7 +104,7 @@ bool dir_has_dftindex(const dstd::String& dir) {
 
 // Extract the last non-empty line from a string and parse it as int.
 // Returns -1 on parse failure.
-int parse_event_count(const dstd::String& output) {
+int parse_event_count(dstd::StringView output) {
     dstd::String last;
     dftu_utils_test::LineStream iss(output);
     dstd::String line;
@@ -271,7 +274,10 @@ TEST_SUITE("DFTracerEventCount") {
                 binary, {dir.str(), "--index-dir", idx_dir});
             CHECK(parse_event_count(cold) == expected);
             const auto warned = dftu_utils_test::run_process_capture(
-                binary, {dir.str(), "--index-dir", idx_dir}, true);
+                binary,
+                dftu_utils_test::span_of<dstd::String>(
+                    {dir.str(), "--index-dir", idx_dir}),
+                true);
             CHECK(warned.find("2 line(s) could not be read in full") !=
                   dstd::String::npos);
             CHECK(!dstd::fs::exists(idx_dir).value());
@@ -279,8 +285,10 @@ TEST_SUITE("DFTracerEventCount") {
 
             int exit_code = -1;
             dftu_utils_test::run_process_capture(
-                index_binary, {dir.str(), "--index-dir", idx_dir}, false,
-                &exit_code);
+                index_binary,
+                dftu_utils_test::span_of<dstd::String>(
+                    {dir.str(), "--index-dir", idx_dir}),
+                false, &exit_code);
             REQUIRE(exit_code == 0);
             REQUIRE(dstd::fs::exists(idx_dir).value());
 
@@ -337,8 +345,10 @@ TEST_SUITE("DFTracerEventCount") {
 
         int exit_code = -1;
         dftu_utils_test::run_process_capture(
-            index_binary, {dir.str(), "--index-dir", idx_dir}, false,
-            &exit_code);
+            index_binary,
+            dftu_utils_test::span_of<dstd::String>(
+                {dir.str(), "--index-dir", idx_dir}),
+            false, &exit_code);
         REQUIRE(exit_code == 0);
         auto warm = run_event_count_capture(
             binary, {dir.str(), "--index-dir", idx_dir});

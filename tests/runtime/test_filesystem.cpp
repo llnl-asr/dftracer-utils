@@ -3,6 +3,7 @@
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/runtime/fs/filesystem.h>
 #include <dftracer/utils/runtime/fs/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -151,7 +152,7 @@ struct Mounted {
     ~Mounted() { runtime::fs::unregister_file_system("mem"); }
 };
 
-dstd::Vector<dstd::String> sorted_paths(const dstd::Vector<FoundFile>& found) {
+dstd::Vector<dstd::String> sorted_paths(dstd::Span<const FoundFile> found) {
     dstd::Vector<dstd::String> paths;
     for (const FoundFile& file : found) {
         paths.push_back(dstd::String(file.path.str()));

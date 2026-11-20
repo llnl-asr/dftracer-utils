@@ -75,8 +75,8 @@ struct SideAggregate {
 /// Memory is the rows of the per-window query for one cut at a time, then the
 /// collapsed groups.
 coro::CoroTask<dstd::Result<SideAggregate>> aggregate_side(
-    dstd::Span<const dstd::String> files, dstd::StringView index_dir,
-    const dstd::Vector<ComparisonFilter>& filters, std::uint64_t window_us,
+    dstd::Vector<dstd::String> files, dstd::String index_dir,
+    dstd::Vector<ComparisonFilter> filters, std::uint64_t window_us,
     std::size_t workers, dstd::StringIntern& strings);
 
 }  // namespace dftracer::utils::domains::analysis::comparator

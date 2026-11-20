@@ -12,6 +12,7 @@
 #include <dftracer/utils/domains/workload/dlio/yaml_emit.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/variant.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -128,7 +129,7 @@ class GenDlioConfigArgParse : public cli::ArgParse {
 };
 
 dstd::Optional<domains::workload::dlio::BestModel> fit_best_model(
-    const dstd::Vector<double>& data) {
+    dstd::Span<const double> data) {
     if (data.empty()) return dstd::nullopt;
     const auto singles =
         domains::workload::dlio::fit_all_single_distributions(data);

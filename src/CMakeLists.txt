@@ -94,6 +94,7 @@ set(DFTRACER_UTILS_MEMORY_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/arena.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/budget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/cgroup.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/debug.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/memory/heap_page.cpp
@@ -139,6 +140,8 @@ set(DFTRACER_UTILS_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/spill_file.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/env.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/cpu_features.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/cpu_limits.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/worker_share.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/intern_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/timer.cpp)
 
@@ -272,6 +275,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/c_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/store/root_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/format_index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/indexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/key.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/record_schema.cpp
@@ -287,6 +291,12 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/extension_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/kinds/time_bounds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/scalable_bloom_filter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/column_feeder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/json_feeder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/plugin_columns.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/summaries.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/summary.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/zone_bounds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/schemas/dft/agg/agg_store.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/schemas/dft/agg/aggregation_drain.cpp
@@ -377,6 +387,8 @@ set(DFTRACER_UTILS_PLUGINS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/abi_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/task_abi.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/borrow_release_pin.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/explain_abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/plan_abi.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/host_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/build_host.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/plugin_memory.cpp
@@ -405,6 +417,7 @@ set(DFTRACER_UTILS_PLUGINS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/phase_seed.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/state_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/plugin_abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/global_plugins.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/plugins/host/plugins.cpp
 )
 
@@ -463,6 +476,7 @@ set(DFTRACER_UTILS_TRACE_SOURCES
 set(DFTRACER_UTILS_ARROW_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/arrow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/arrow_bridge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/index_metadata.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/ipc_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/ipc_writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/schema_reconcile.cpp
@@ -986,6 +1000,7 @@ set(DFTRACER_UTILS_STORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/segment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/snapshot.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/store.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/store_id.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/writer_extents.cpp)
 
@@ -1093,6 +1108,11 @@ set(DFTRACER_UTILS_VEC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/parallel_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/batch_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/c_api_tz.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/tz/database.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/tz/footer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/tz/tzif.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/tz/zone.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/validate.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/frame_native.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/grace_join.cpp
@@ -1505,7 +1525,11 @@ use_precompiled_header(dftracer_utils_duql_objects)
 set(DFTRACER_UTILS_DATAFRAME_SOURCES
     ${DFTRACER_UTILS_VEC_SOURCES}
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/series_methods.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/series_index.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/reshape.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/label_index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/dataframe_methods.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/frame_index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/frame_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/order.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/ops/window.cpp
@@ -1516,9 +1540,11 @@ set(DFTRACER_UTILS_DATAFRAME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/provider_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/file_format_registry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/node_registry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/run_counters.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/c_api_schema.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/mask.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/query/vectorize.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/query/filter_duql.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/query/lookup.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/query/overlap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/query/group_fold.cpp
@@ -3017,6 +3043,8 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/prefilter_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/window_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/group_transform_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/frame_index_bench.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/tz_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/memory_attribution_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/counter_contention_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/heap_bench.cpp
@@ -3065,7 +3093,9 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
             index_bench
             fold_read_bench
             duql_eval_bench
-            group_transform_bench)
+            group_transform_bench
+            frame_index_bench
+            tz_bench)
       add_test(NAME ${bench}_smoke COMMAND ${bench} --smoke)
       set_tests_properties(${bench}_smoke PROPERTIES LABELS bench_smoke)
     endforeach()
@@ -3133,6 +3163,7 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
     set_tests_properties(
       view_api_bench_smoke view_batch_bench_smoke index_bench_smoke
       fold_read_bench_smoke duql_eval_bench_smoke group_transform_bench_smoke
+      frame_index_bench_smoke tz_bench_smoke
       bench_smoke/memory_attribution bench_smoke/counter_contention
       bench_smoke/heap bench_smoke/coro bench_smoke/channel bench_smoke/fs
       bench_smoke/pool bench_smoke/io bench_smoke/fmt bench_smoke/log
@@ -3181,6 +3212,9 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/module.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/errors.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/errors.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/call.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/api.def
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/api_methods.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index/indexer.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index/indexer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index/index.cpp
@@ -3191,7 +3225,8 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series_detail.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/arith.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/math.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/accessor.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/api.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/window.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/stats.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/series/reduce.cpp
@@ -3206,6 +3241,8 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/lazyframe.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/columnar_eval.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/columnar_eval.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/udf_python.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/udf_python.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/scalar_helpers.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/agg_helpers.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index/batch_indexer.cpp
@@ -3223,18 +3260,14 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/store/store.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime/task_handle.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime/task_handle.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/memoryview_batch.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/memoryview_batch.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/trace_reader_iterator.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/trace_reader_iterator.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_batch_capsule.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_batch_capsule.h
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_helpers.cpp
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_helpers.h
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_stream_capsule.cpp
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/core/arrow_stream_capsule.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/streaming_iterator.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/streaming_iterator.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/arrow_parallel_reader.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/arrow_parallel_reader.h)
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/streaming_iterator.h)
 
   # Link to unified library to test if this fixes the bus error
   target_link_libraries(dftracer_utils_ext PRIVATE dftracer_utils::shared)

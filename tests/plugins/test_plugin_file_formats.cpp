@@ -13,6 +13,7 @@
 #include <dftracer/utils/dataframe/internal/file_format_registry.h>
 #include <dftracer/utils/dataframe/internal/sink_plan.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -49,18 +50,18 @@ const char TOY_ROWS[] =
     "5 epsilon\n"
     "6 zeta\n";
 
-dstd::String write_temp(const char* name, const char* text) {
-    std::FILE* f = std::fopen(name, "wb");
+dstd::String write_temp(dstd::CStringView name, dstd::CStringView text) {
+    std::FILE* f = std::fopen(name.c_str(), "wb");
     REQUIRE(f != nullptr);
-    const std::size_t n =
-        std::fwrite(text, 1, std::char_traits<char>::length(text), f);
+    const std::size_t n = std::fwrite(text.c_str(), 1, text.size(), f);
     std::fclose(f);
-    REQUIRE(n == std::char_traits<char>::length(text));
+    REQUIRE(n == text.size());
     return dstd::String(name);
 }
 
-dstd::Optional<plugins::host::Plugins> load(const char* path) {
-    auto result = plugins::host::Plugins::Builder().add(path).build();
+dstd::Optional<plugins::host::Plugins> load(dstd::StringView path) {
+    auto result =
+        plugins::host::Plugins::Builder().add(dstd::String(path)).build();
     REQUIRE(result.has_value());
     return std::move(result).value();
 }
@@ -80,7 +81,7 @@ dstd::Result<DataFrame> run(const LazyFrame& lf) {
 
 // A collected frame of several chunks holds CHUNKED columns, so every read
 // materializes first.
-Series flat_column(const DataFrame& df, dstd::StringView name) {
+Series flat_column(const DataFrame& df, dstd::CStringView name) {
     Series column = df.column(name);
     REQUIRE(column.valid());
     if (!column.is_flat()) column = column.materialize();
@@ -88,7 +89,7 @@ Series flat_column(const DataFrame& df, dstd::StringView name) {
 }
 
 dstd::Vector<std::int64_t> i64_column(const DataFrame& df,
-                                      dstd::StringView name) {
+                                      dstd::CStringView name) {
     const Series column = flat_column(df, name);
     REQUIRE(column.type() == TypeId::Int64);
     const std::int64_t* data = column.data<std::int64_t>();
@@ -97,7 +98,7 @@ dstd::Vector<std::int64_t> i64_column(const DataFrame& df,
 }
 
 dstd::Vector<dstd::String> str_column(const DataFrame& df,
-                                      dstd::StringView name) {
+                                      dstd::CStringView name) {
     const Series column = flat_column(df, name);
     REQUIRE(column.type() == TypeId::String);
     dstd::Vector<dstd::String> out;
@@ -114,12 +115,12 @@ dstd::Vector<dstd::String> str_column(const DataFrame& df,
 // library stays mapped after ~Plugins drops the host's reference and the
 // counters below still see what the plugin wrote while it ran.
 template <class Getter>
-Getter plugin_symbol(const char* path, const char* symbol) {
+Getter plugin_symbol(dstd::CStringView path, dstd::CStringView symbol) {
     static dstd::Vector<void*> handles;
-    void* handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
     REQUIRE(handle != nullptr);
     handles.push_back(handle);
-    auto getter = reinterpret_cast<Getter>(dlsym(handle, symbol));
+    auto getter = reinterpret_cast<Getter>(dlsym(handle, symbol.c_str()));
     REQUIRE(getter != nullptr);
     return getter;
 }
@@ -148,11 +149,11 @@ const std::int64_t* toy_sink_rows() {
                                                     "toy_sink_rows")();
 }
 
-const char* toy_sink_option(const char* symbol) {
+dstd::StringView toy_sink_option(dstd::CStringView symbol) {
     return plugin_symbol<const char* (*)()>(TOY_SINK_PLUGIN_PATH, symbol)();
 }
 
-void remove_file(const char* name) { std::remove(name); }
+void remove_file(dstd::CStringView name) { std::remove(name.c_str()); }
 
 }  // namespace
 
@@ -270,7 +271,7 @@ TEST_CASE("the C ABI scans a file through its registered format") {
     const dstd::String path = write_temp("toy_c_abi.toy", TOY_ROWS);
 
     dftu_lazyframe* lf = nullptr;
-    REQUIRE(dftu_lazyframe_scan_file(path.c_str(), &lf) == 0);
+    REQUIRE(dftu_lazyframe_scan_file(path.c_str(), nullptr, 0, &lf) == 0);
     REQUIRE(lf != nullptr);
     dftu_dataframe* out = dftu_lazyframe_collect(lf, -1);
     REQUIRE(out != nullptr);
@@ -278,8 +279,8 @@ TEST_CASE("the C ABI scans a file through its registered format") {
     dftu_dataframe_free(out);
     dftu_lazyframe_free(lf);
 
-    CHECK(dftu_lazyframe_scan_file(nullptr, &lf) != 0);
-    CHECK(dftu_lazyframe_scan_file(path.c_str(), nullptr) != 0);
+    CHECK(dftu_lazyframe_scan_file(nullptr, nullptr, 0, &lf) != 0);
+    CHECK(dftu_lazyframe_scan_file(path.c_str(), nullptr, 0, nullptr) != 0);
     remove_file(path.c_str());
 }
 

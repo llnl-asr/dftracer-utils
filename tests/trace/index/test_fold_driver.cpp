@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/scope.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
@@ -17,18 +18,18 @@ using namespace dftracer::utils;
 
 namespace {
 
-dstd::String write_trace(const dstd::String& dir, int n, int events) {
+dstd::String write_trace(dstd::CStringView dir, int n, int events) {
     dstd::String out;
     out += "[\n";
     for (int i = 0; i < events; ++i)
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":{},\"tid\":"
-            "1,\"ph\":\"X\",\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
+            "1,\"ph\":1,\"ts\":{},\"dur\":3,\"args\":{\"fname\":\"/data/"
             "f{}_{}\",\"size\":{}}}\n">(out, i, 1 + n % 7, 1000 + i * 10, n,
                                         i % 17, i % 4096);
     out += "]\n";
     const dstd::String gz =
-        dir + "/t" + dstd::String(dstd::to_string(n)) + ".pfw.gz";
+        dstd::String(dir) + "/t" + dstd::String(dstd::to_string(n)) + ".pfw.gz";
     return dftu_utils_test::write_gz_trace(gz, out);
 }
 

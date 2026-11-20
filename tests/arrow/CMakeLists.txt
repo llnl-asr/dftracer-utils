@@ -8,6 +8,7 @@
 
 set(ARROW_TEST_SOURCES
     test_arrow_bridge.cpp
+    test_arrow_index.cpp
     test_arrow_ipc_reader.cpp
     test_arrow_ipc_writer.cpp
     test_arrow_stream.cpp

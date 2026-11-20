@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -21,14 +23,14 @@ dstd::String trace(int file) {
     out << "[\n";
     for (int i = 0; i < EVENTS_PER_FILE; ++i)
         out << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX","pid":)"
-            << file + 1 << R"(,"tid":1,"ph":"X","ts":)" << 1000 + i * 10
+            << file + 1 << R"(,"tid":1,"ph":1,"ts":)" << 1000 + i * 10
             << R"(,"dur":3,"args":{"fname":"/data/f)" << file << R"("}})"
             << "\n";
     out << "]\n";
     return out.str();
 }
 
-dstd::Set<dstd::String> files_under(const dstd::String& dir) {
+dstd::Set<dstd::String> files_under(dstd::StringView dir) {
     dstd::Set<dstd::String> out;
     for (const auto& e : dftu_utils_test::walk_dir(dir))
         if ((e.kind == dstd::fs::FileKind::File))
@@ -36,14 +38,15 @@ dstd::Set<dstd::String> files_under(const dstd::String& dir) {
     return out;
 }
 
-dstd::String tool(const char* env, const char* name) {
-    const dstd::String path = dftu_utils_test::find_binary_by_name(env, name);
+dstd::String tool(dstd::CStringView env, dstd::String name) {
+    const dstd::String path =
+        dftu_utils_test::find_binary_by_name(env.c_str(), name);
     REQUIRE_MESSAGE(!path.empty(), name << " not found");
     dftu_utils_test::set_test_library_path(path);
     return path;
 }
 
-int run(const dstd::String& binary, const dstd::Vector<dstd::String>& args,
+int run(dstd::String binary, dstd::Vector<dstd::String> args,
         dstd::String* out = nullptr) {
     int rc = -1;
     const auto text =

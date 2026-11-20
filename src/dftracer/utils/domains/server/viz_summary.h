@@ -80,10 +80,10 @@ struct VizSummary {
     double bucket_us = 0;       ///< level 0
     std::uint64_t max_dur = 0;  ///< longest event seen anywhere
 
-    /// Real ph="C" counter series, sampled sparsely at the finest bucket
+    /// Real ph=2 counter series, sampled sparsely at the finest bucket
     /// resolution (`fine_bucket_us`). Each holds the occupied fine-bucket
     /// indices (ascending) with a per-bucket sum + sample count (mean =
-    /// sum/cnt); a request re-buckets them onto its density columns. ph="C" is
+    /// sum/cnt); a request re-buckets them onto its density columns. ph=2 is
     /// rare, so sparse storage keeps this small.
     struct CounterSeriesData {
         dstd::String name;

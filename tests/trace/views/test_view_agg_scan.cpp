@@ -29,7 +29,7 @@ TEST_SUITE("View") {
             const char* names[] = {"read", "write", "open"};
             int ts = 1000;
             for (int i = 0; i < 90; ++i) {
-                ofs << R"({"ph":"X","name":")" << names[i % 3]
+                ofs << R"({"ph":1,"name":")" << names[i % 3]
                     << R"(","cat":"POSIX","pid":1,"tid":10,"ts":)" << ts
                     << R"(,"dur":200,"args":{}})" << "\n";
                 ts += 50;
@@ -58,11 +58,11 @@ TEST_SUITE("View") {
         };
         auto check_match = [](const dataframe::DataFrame& a0,
                               const dataframe::DataFrame& b0,
-                              const dstd::String& key) {
+                              dstd::StringView key) {
             dataframe::DataFrame a =
-                dftu_utils_test::ok(a0.sort_by(key, false));
+                dftu_utils_test::ok(a0.sort_by(dstd::String(key), false));
             dataframe::DataFrame b =
-                dftu_utils_test::ok(b0.sort_by(key, false));
+                dftu_utils_test::ok(b0.sort_by(dstd::String(key), false));
             REQUIRE(a.names.size() == b.names.size());
             for (std::size_t i = 0; i < a.names.size(); ++i) {
                 CHECK(a.names[i] == b.names[i]);
@@ -164,7 +164,7 @@ TEST_SUITE("View") {
             const char* cats[] = {"POSIX", "STDIO"};
             int ts = 1000;
             for (int i = 0; i < 90; ++i) {
-                ofs << R"({"ph":"X","name":")" << names[i % 3] << R"(","cat":")"
+                ofs << R"({"ph":1,"name":")" << names[i % 3] << R"(","cat":")"
                     << cats[i % 2] << R"(","pid":1,"tid":10,"ts":)" << ts
                     << R"(,"dur":)" << (5 + (i % 17)) << R"(,"args":{"bytes":)"
                     << (i % 13) << R"(}})" << "\n";
@@ -326,11 +326,11 @@ TEST_SUITE("View") {
             dftu_utils_test::FileOut ofs(pfw);
             for (int pid : {1, 2, 3})
                 ofs << R"({"name":"PR","cat":"dftracer","pid":)" << pid
-                    << R"(,"tid":1,"ph":"M","args":{"name":"rank","value":")"
+                    << R"(,"tid":1,"ph":4,"args":{"name":"rank","value":")"
                     << (pid * 10) << R"("}})" << "\n";
             int ts = 1000;
             for (int i = 0; i < 60; ++i) {
-                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":)"
+                ofs << R"({"ph":1,"name":"read","cat":"POSIX","pid":)"
                     << (1 + i % 3) << R"(,"tid":10,"ts":)" << ts << R"(,"dur":)"
                     << (5 + i % 9) << R"(,"args":{}})" << "\n";
                 ts += 100;

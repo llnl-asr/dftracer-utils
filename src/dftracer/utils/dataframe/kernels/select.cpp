@@ -9,8 +9,10 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/compare_simd.h>  // pack_flags
+#include <dftracer/utils/dataframe/internal/float_key.h>
 #include <dftracer/utils/dataframe/internal/radix_dedup.h>   // parallel dedup
 #include <dftracer/utils/dataframe/internal/string_reader.h>
+#include <dftracer/utils/dataframe/internal/value_ids.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/series.h>
@@ -20,6 +22,7 @@
 #include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 
 namespace dftracer::utils::dataframe {
@@ -32,16 +35,11 @@ Series borrow(const dftu_series* v) {
 }
 
 // A bit-packed Bool column from per-row flags (no validity).
-Series bool_from_flags(const dstd::Vector<char>& flags) {
+Series bool_from_flags(dstd::Span<const char> flags) {
     const std::int64_t n = static_cast<std::int64_t>(flags.size());
     dstd::Vector<std::uint8_t> packed(static_cast<std::size_t>((n + 7) / 8), 0);
-    pack_flags(flags.data(), n, packed.data());
+    pack_flags(flags, packed.data());
     return Series::flat(TypeId::Bool, packed.data(), n);
-}
-
-dstd::Vector<std::int64_t> to_index_vector(const Series& idx) {
-    const std::int64_t* p = idx.data<std::int64_t>();
-    return dstd::Vector<std::int64_t>(p, p + idx.length());
 }
 
 // Per-row occurrence count of each row's own value, keyed in the column's
@@ -71,8 +69,11 @@ dstd::Vector<std::int64_t> count_values(const Series& v) {
                        [&](std::int64_t j) {
                            return dstd::String(read_bytes(v, idx_at(j)));
                        })
-                 : radix_counts_by<double>(m, [&](std::int64_t j) {
-                       return read_f64(v, idx_at(j));
+                 : radix_counts_by<std::uint64_t>(m, [&](std::int64_t j) {
+                       // Every NaN is one value and -0.0 is +0.0 (Polars).
+                       const double d = read_f64(v, idx_at(j));
+                       if (d != d) return std::uint64_t{0x7ff8000000000000ULL};
+                       return std::bit_cast<std::uint64_t>(d == 0.0 ? 0.0 : d);
                    });
 
     dstd::Vector<std::int64_t> counts(static_cast<std::size_t>(n), 0);
@@ -100,6 +101,30 @@ Series occurrence_mask(const Series& v, bool keep_when_unique) {
                 (keep_when_unique ? unique : !unique) ? 1 : 0;
         }
     });
+    return bool_from_flags(flags);
+}
+
+// keep 0: mark every repeat of a value but its first row; 1: but its last row;
+// otherwise every row of a repeated value (is_duplicated). A null is one value.
+Series duplicated_keep(const Series& v, std::int32_t keep) {
+    if (keep != 0 && keep != 1) return occurrence_mask(v, false);
+    if (refuse_nested_value("duplicated", v.type())) return Series{};
+    ValueIds ids;
+    if (!value_ids(*v.handle(), ids)) return Series{};
+    const std::int64_t n = v.length();
+    dstd::Vector<std::int64_t> last;
+    if (keep == 1) {
+        last.assign(ids.first.size(), 0);
+        for (std::int64_t i = 0; i < n; ++i)
+            last[static_cast<std::size_t>(
+                ids.ids[static_cast<std::size_t>(i)])] = i;
+    }
+    const dstd::Vector<std::int64_t>& kept = keep == 0 ? ids.first : last;
+    dstd::Vector<char> flags(static_cast<std::size_t>(n), 0);
+    for (std::int64_t i = 0; i < n; ++i)
+        flags[static_cast<std::size_t>(i)] =
+            kept[static_cast<std::size_t>(
+                ids.ids[static_cast<std::size_t>(i)])] != i;
     return bool_from_flags(flags);
 }
 
@@ -158,6 +183,11 @@ Series is_in_strings(const dftu_series& v, const dftu_series& values) {
     return bool_from_flags(flags);
 }
 
+// A number as an is_in key: -0.0 is 0.0 and every NaN is one value.
+std::uint64_t number_key(double x) {
+    return canonical_f64_bits(std::bit_cast<std::uint64_t>(x));
+}
+
 Series is_in_impl(const Series& v_in, const Series& values_in) {
     if (refuse_nested_value("is_in", v_in.type())) return Series{};
     // FLAT Float64 with a small needle set: SIMD broadcast-compare.
@@ -181,7 +211,7 @@ Series is_in_impl(const Series& v_in, const Series& values_in) {
     const Series v = flatten(v_in);
     const Series values = flatten(values_in);
     const bool is_bytes = value_domain(v.type()) == ValueDomain::Bytes;
-    dstd::HashSet<double> num_set;
+    dstd::HashSet<std::uint64_t> num_set;
     dstd::HashSet<dstd::String> str_set;
     const std::int64_t m = values.length();
     const bool vals_null = values.null_count() > 0;
@@ -197,7 +227,7 @@ Series is_in_impl(const Series& v_in, const Series& values_in) {
         if (is_bytes) {
             if (vals_bytes) str_set.insert(dstd::String(read_bytes(values, j)));
         } else if (vals_domain == ValueDomain::Numeric) {
-            num_set.insert(read_f64(values, j));
+            num_set.insert(number_key(read_f64(values, j)));
         }
     }
     const std::int64_t n = v.length();
@@ -209,7 +239,7 @@ Series is_in_impl(const Series& v_in, const Series& values_in) {
             if (has_nulls && v.is_null(i)) continue;
             const bool hit =
                 is_bytes ? str_set.count(dstd::String(read_bytes(v, i))) > 0
-                         : num_set.count(read_f64(v, i)) > 0;
+                         : num_set.count(number_key(read_f64(v, i))) > 0;
             flags[static_cast<std::size_t>(i)] = hit ? 1 : 0;
         }
     };
@@ -283,6 +313,12 @@ Series sample_impl(const Series& v, std::int64_t n, std::uint64_t seed) {
 }
 
 }  // namespace
+
+dstd::Vector<std::int64_t> to_index_vector(const Series& idx) {
+    if (!idx.is_flat()) return to_index_vector(idx.materialize());
+    const std::int64_t* p = idx.data<std::int64_t>();
+    return dstd::Vector<std::int64_t>(p, p + idx.length());
+}
 }  // namespace dftracer::utils::dataframe
 
 using dftracer::utils::dataframe::borrow;
@@ -304,7 +340,16 @@ dftu_series* dftu_series_is_duplicated(const dftu_series* v) {
     c.release();
     return r.release();
 }
-int32_t dftu_series_is_sorted(const dftu_series* v, int32_t descending) {
+dftu_series* dftu_series_duplicated(const dftu_series* v, std::int32_t keep) {
+    if (!v) return nullptr;
+    DFTU_FLAT_INPUT(v, dftu_series_duplicated, keep);
+    Series c = borrow(v);
+    Series r = dftracer::utils::dataframe::duplicated_keep(c, keep);
+    c.release();
+    return r.release();
+}
+std::int32_t dftu_series_is_sorted(const dftu_series* v,
+                                   std::int32_t descending) {
     if (!v) return 0;
     DFTU_FLAT_INPUT(v, dftu_series_is_sorted, descending);
     Series c = borrow(v);
@@ -337,11 +382,17 @@ dftu_series* dftu_series_is_in(const dftu_series* v,
     cv.release();
     return r.release();
 }
-dftu_series* dftu_series_sort(const dftu_series* v, int32_t descending) {
+dftu_series* dftu_series_sort(const dftu_series* v, std::int32_t descending) {
+    return dftu_series_sort_nulls(v, descending, 1);
+}
+dftu_series* dftu_series_sort_nulls(const dftu_series* v,
+                                    std::int32_t descending,
+                                    std::int32_t nulls_last) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_sort, descending);
+    DFTU_FLAT_INPUT(v, dftu_series_sort_nulls, descending, nulls_last);
     Series c = borrow(v);
-    Series order = dftracer::utils::dataframe::argsort(c, descending != 0);
+    Series order = dftracer::utils::dataframe::argsort(c, descending != 0,
+                                                       nulls_last != 0);
     if (!order.valid()) {
         c.release();
         return nullptr;
@@ -350,14 +401,14 @@ dftu_series* dftu_series_sort(const dftu_series* v, int32_t descending) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_head(const dftu_series* v, int64_t n) {
+dftu_series* dftu_series_head(const dftu_series* v, std::int64_t n) {
     if (!v) return nullptr;
     Series c = borrow(v);
     Series r = dftracer::utils::dataframe::head_impl(c, n);
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_tail(const dftu_series* v, int64_t n) {
+dftu_series* dftu_series_tail(const dftu_series* v, std::int64_t n) {
     if (!v) return nullptr;
     Series c = borrow(v);
     Series r = dftracer::utils::dataframe::tail_impl(c, n);
@@ -371,14 +422,14 @@ dftu_series* dftu_series_reverse(const dftu_series* v) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_shift(const dftu_series* v, int64_t n) {
+dftu_series* dftu_series_shift(const dftu_series* v, std::int64_t n) {
     if (!v) return nullptr;
     Series c = borrow(v);
     Series r = dftracer::utils::dataframe::shift_impl(c, n);
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_top_k(const dftu_series* v, int64_t k) {
+dftu_series* dftu_series_top_k(const dftu_series* v, std::int64_t k) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_top_k, k);
     Series c = borrow(v);
@@ -391,7 +442,7 @@ dftu_series* dftu_series_top_k(const dftu_series* v, int64_t k) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_bottom_k(const dftu_series* v, int64_t k) {
+dftu_series* dftu_series_bottom_k(const dftu_series* v, std::int64_t k) {
     if (!v) return nullptr;
     DFTU_FLAT_INPUT(v, dftu_series_bottom_k, k);
     Series c = borrow(v);
@@ -404,8 +455,8 @@ dftu_series* dftu_series_bottom_k(const dftu_series* v, int64_t k) {
     c.release();
     return r.release();
 }
-dftu_series* dftu_series_sample(const dftu_series* v, int64_t n,
-                                uint64_t seed) {
+dftu_series* dftu_series_sample(const dftu_series* v, std::int64_t n,
+                                std::uint64_t seed) {
     if (!v) return nullptr;
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_sample(flat_v, n, seed));
     Series c = borrow(v);

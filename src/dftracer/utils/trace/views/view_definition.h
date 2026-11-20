@@ -20,7 +20,7 @@ struct ViewDefinition {
     dstd::String name;            ///< View name.
     dstd::String description;     ///< Human-readable description.
     dstd::Optional<Query> query;  ///< Event filter (nullopt = match all).
-    /// Return ph=M metadata records; they bypass `query` unless one of the
+    /// Return ph=4 metadata records; they bypass `query` unless one of the
     /// two flags below is set.
     bool include_metadata = false;
     /// The scan returns metadata records alone (phase("metadata")), filtered
@@ -59,14 +59,14 @@ struct ViewDefinition {
     /// (trace::index::plan::Prefilter). Results are the same either way.
     bool prefilter = true;
 
-    ViewDefinition& with_name(const dstd::String& n);
-    ViewDefinition& with_description(const dstd::String& d);
+    ViewDefinition& with_name(dstd::StringView n);
+    ViewDefinition& with_description(dstd::StringView d);
     /// Set query from a DSL string. Silently ignored if parse fails.
-    ViewDefinition& with_query(const dstd::String& query_str);
+    ViewDefinition& with_query(dstd::StringView query_str);
     ViewDefinition& with_query(Query q);
 
     dstd::String to_json() const;
-    static ViewDefinition from_json(const dstd::String& json);
+    static ViewDefinition from_json(dstd::StringView json);
 
     /// POSIX/STDIO I/O operations.
     static ViewDefinition io_view();

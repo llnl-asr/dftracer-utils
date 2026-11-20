@@ -17,7 +17,7 @@ def _events(seed, phases, calls):
 
     def span(name, tid):
         return {
-            "ph": "X",
+            "ph": 1,
             "name": name,
             "cat": "c",
             "pid": rng.randint(1, 3),

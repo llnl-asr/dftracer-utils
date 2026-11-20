@@ -7,7 +7,9 @@
 #include <dftracer/utils/domains/server/trace_index.h>
 #include <dftracer/utils/domains/server/viz/summary_build.h>
 #include <dftracer/utils/domains/server/viz_api.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -38,12 +40,12 @@ dstd::String make_trace(int n) {
              "\",\"cat\":\"" + cats[k] +
              "\",\"pid\":" + dstd::to_string(1 + k) +
              ",\"tid\":1,\"ts\":" + dstd::to_string(1000 + i) +
-             ",\"dur\":" + dstd::to_string(durs[k]) + ",\"ph\":\"X\"}\n";
+             ",\"dur\":" + dstd::to_string(durs[k]) + ",\"ph\":1}\n";
         if (i % 50 == 0) {
             s += "{\"id\":" + dstd::to_string(i) +
                  ",\"name\":\"cpu\",\"cat\":\"sys\",\"pid\":9,\"tid\":1,"
                  "\"ts\":" +
-                 dstd::to_string(1000 + i) + ",\"dur\":0,\"ph\":\"C\"}\n";
+                 dstd::to_string(1000 + i) + ",\"dur\":0,\"ph\":2}\n";
         }
     }
     return s;
@@ -60,9 +62,9 @@ struct BuiltSummary {
     std::uint64_t events = 0;
 };
 
-BuiltSummary build_and_ensure(const dstd::String& directory,
-                              const dstd::String& index_dir) {
-    TraceIndex index(directory, index_dir);
+BuiltSummary build_and_ensure(dstd::StringView directory,
+                              dstd::String index_dir) {
+    TraceIndex index(dstd::String(directory), std::move(index_dir));
     BuiltSummary out;
     Runtime rt(4);
     auto task = coro::with_scope(
@@ -81,7 +83,7 @@ BuiltSummary build_and_ensure(const dstd::String& directory,
     return out;
 }
 
-void write_trace(const dstd::String& path, int n) {
+void write_trace(dstd::String path, int n) {
     dftu_utils_test::write_gz_trace(path, make_trace(n));
 }
 
@@ -95,7 +97,7 @@ constexpr const char* VIZ_RESULT_TARGET =
 // index roots it held, as a restart does.
 class FolderServer {
    public:
-    FolderServer(const dstd::String& directory, const dstd::String& index_dir)
+    FolderServer(dstd::String directory, dstd::String index_dir)
         : index_(directory, index_dir), rt_(4) {
         auto task = coro::with_scope(
             [&](coro::Scope&) -> coro::CoroTask<dstd::Result<void>> {
@@ -114,7 +116,7 @@ class FolderServer {
         trace::index::release_all_roots();
     }
 
-    dstd::String request(const dstd::String& target) {
+    dstd::String request(dstd::String target) {
         HttpRequest req;
         req.method = "GET";
         req.path = target;
@@ -133,8 +135,7 @@ class FolderServer {
 
     // All of `targets` at once, the bodies in order. The requests share the
     // index, so they miss together and put together.
-    dstd::Vector<dstd::String> request_all(
-        const dstd::Vector<dstd::String>& targets) {
+    dstd::Vector<dstd::String> request_all(dstd::Vector<dstd::String> targets) {
         struct Slot {
             HttpRequest req;
             dstd::String body;
@@ -180,12 +181,12 @@ class FolderServer {
 };
 
 // The index root of `index_dir`, the way the server names it.
-dstd::String index_root(const dstd::String& index_dir) {
+dstd::String index_root(dstd::StringView index_dir) {
     return trace::index::normalize_index_root(index_dir);
 }
 
 // Every path the index under `root` holds, in path order.
-dstd::Vector<dstd::String> indexed_paths(const dstd::String& root) {
+dstd::Vector<dstd::String> indexed_paths(dstd::StringView root) {
     auto index = dftu_utils_test::ok(trace::index::Index::open(root));
     auto snapshot = dftu_utils_test::ok(index.snapshot());
     auto files = dftu_utils_test::ok(snapshot.files());
@@ -207,7 +208,7 @@ constexpr dstd::StringView VIZ_SUMMARY_NAMESPACE = "server.viz_summary";
 
 // Every record of `name` the store under `index_dir` holds, in key order: the
 // keys and bytes a scan of the namespace reports.
-dstd::Vector<StoreRecord> stored_records(const dstd::String& index_dir,
+dstd::Vector<StoreRecord> stored_records(dstd::StringView index_dir,
                                          dstd::StringView name) {
     dstd::Vector<StoreRecord> out;
     const dstd::String store_path =
@@ -234,7 +235,7 @@ dstd::Vector<StoreRecord> stored_records(const dstd::String& index_dir,
 
 // The stored responses of the folder: every record of the result namespace but
 // the folder's byte count, whose key starts with a NUL.
-dstd::Vector<StoreRecord> result_records(const dstd::String& index_dir) {
+dstd::Vector<StoreRecord> result_records(dstd::StringView index_dir) {
     dstd::Vector<StoreRecord> out;
     for (auto& record : stored_records(index_dir, VIZ_RESULT_NAMESPACE)) {
         if (!record.key.empty() && record.key.front() == '\0') continue;
@@ -243,7 +244,7 @@ dstd::Vector<StoreRecord> result_records(const dstd::String& index_dir) {
     return out;
 }
 
-std::size_t stored_bytes(const dstd::Vector<StoreRecord>& records) {
+std::size_t stored_bytes(dstd::Span<const StoreRecord> records) {
     std::size_t total = 0;
     for (const auto& record : records) total += record.value.size();
     return total;
@@ -265,8 +266,9 @@ dstd::Vector<dstd::String> window_targets(int from, int to) {
 // Sets an environment variable for one test case.
 class EnvVar {
    public:
-    EnvVar(const char* name, const dstd::String& value) : name_(name) {
-        REQUIRE(::setenv(name, value.c_str(), 1) == 0);
+    EnvVar(dstd::CStringView name, dstd::CStringView value)
+        : name_(name.c_str()) {
+        REQUIRE(::setenv(name.c_str(), value.c_str(), 1) == 0);
     }
     EnvVar(const EnvVar&) = delete;
     EnvVar& operator=(const EnvVar&) = delete;
@@ -281,7 +283,7 @@ class EnvVar {
 // at a time, so no other case sees the change.
 class WorkingDirectory {
    public:
-    explicit WorkingDirectory(const dstd::String& to) {
+    explicit WorkingDirectory(dstd::CStringView to) {
         const auto here = dstd::fs::current_path();
         REQUIRE(here.has_value());
         here_ = dstd::String(here->str());
@@ -303,7 +305,7 @@ struct RemovalCase {
     dstd::Path second;
 };
 
-RemovalCase make_removal_case(const dstd::String& tag) {
+RemovalCase make_removal_case(dstd::String tag) {
     RemovalCase c;
     c.base = dftu_utils_test::make_unique_test_path(tag);
     dftu_utils_test::require_ok(dstd::fs::create_directories(c.base.view()),
@@ -322,7 +324,7 @@ RemovalCase make_removal_case(const dstd::String& tag) {
 // Two traces in `directory` (one root), the second removed, then two restarts.
 // The restart after the removal drops the removed trace from the root, so the
 // restart after that finds the folder current and re-indexes nothing.
-void check_removal(const RemovalCase& c, const dstd::String& directory) {
+void check_removal(const RemovalCase& c, dstd::StringView directory) {
     const dstd::String root = index_root(c.index_dir);
     const BuiltSummary first = build_and_ensure(directory, c.index_dir);
     REQUIRE(first.computes == 1);

@@ -1092,7 +1092,8 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         - ``("row_number"|"rank"|"dense_rank", out)``
         - ``("lag"|"lead", value_col, offset, out)``
         - ``("running_sum"|"running_min"|"running_max"|"running_count"|"running_prod",
-          value_col, out)`` (``running_prod`` is Float64)
+          value_col, out)`` (``running_prod`` keeps an int64 or uint64 column's
+          type and wraps on overflow)
         - ``("delta", value_col, out)``
         - ``("rate", value_col, time_col, out[, counter])``
         - ``("sessionize", time_col, gap, out[, end_col[, span]])``: the

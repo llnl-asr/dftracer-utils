@@ -5664,17 +5664,16 @@ LazyFrame LazyFrame::frame_op(dstd::String name, OpArgs args,
 }
 
 // The type the composed window plan gives a transform of a column of type
-// `in`: the running sum widens to 64 bits (an unsigned 64-bit stays unsigned),
-// the extremes, shift and fill keep the column's type, a product is a float and
-// a difference is an integer unless the column is a float.
+// `in`: the running sum and product widen to 64 bits (an unsigned 64-bit
+// stays unsigned; a product wraps), the extremes, shift and fill keep the
+// column's type, and a difference is an integer unless the column is a float.
 static TypeId native_out_type(GroupwiseOp kind, TypeId in, NumClass cls) {
     switch (kind) {
         case GroupwiseOp::CumSum:
+        case GroupwiseOp::CumProd:
             return cls == NumClass::Float ? TypeId::Float64
                    : in == TypeId::Uint64 ? TypeId::Uint64
                                           : TypeId::Int64;
-        case GroupwiseOp::CumProd:
-            return TypeId::Float64;
         case GroupwiseOp::Diff:
             return cls == NumClass::Float ? TypeId::Float64 : TypeId::Int64;
         default:

@@ -75,55 +75,18 @@ struct Prod {
     double acc = 1.0;
     void mul(double v) { acc *= v; }
 };
-/// RUNNING_PROD of an integer column: the product is exact while it fits the
-/// type, and is converted to a float once; past the type's range it goes on as
-/// a float, as @ref Prod does, in place of wrapping to a wrong integer.
+/// RUNNING_PROD of an integer column: wraps on overflow, as pandas does.
 struct ProdI64 {
-    union {
-        std::int64_t acc = 1;
-        double wide;
-    };
-    bool overflowed = false;
+    std::int64_t acc = 1;
     void mul(std::int64_t v) {
-        if (!overflowed) {
-            const dstd::int128_t p = static_cast<dstd::int128_t>(acc) * v;
-            if (p >= INT64_MIN && p <= INT64_MAX) {
-                acc = static_cast<std::int64_t>(p);
-                return;
-            }
-            overflowed = true;
-            wide = static_cast<double>(acc);
-        }
-        wide *= static_cast<double>(v);
-    }
-    double value() const {
-        return overflowed ? wide : static_cast<double>(acc);
+        acc = static_cast<std::int64_t>(static_cast<std::uint64_t>(acc) *
+                                        static_cast<std::uint64_t>(v));
     }
 };
 struct ProdU64 {
-    union {
-        std::uint64_t acc = 1;
-        double wide;
-    };
-    bool overflowed = false;
-    void mul(std::uint64_t v) {
-        if (!overflowed) {
-            const dstd::uint128_t p = static_cast<dstd::uint128_t>(acc) * v;
-            if (p <= UINT64_MAX) {
-                acc = static_cast<std::uint64_t>(p);
-                return;
-            }
-            overflowed = true;
-            wide = static_cast<double>(acc);
-        }
-        wide *= static_cast<double>(v);
-    }
-    double value() const {
-        return overflowed ? wide : static_cast<double>(acc);
-    }
+    std::uint64_t acc = 1;
+    void mul(std::uint64_t v) { acc *= v; }
 };
-static_assert(sizeof(ProdI64) <= 16 && sizeof(ProdU64) <= 16,
-              "a product state must fit the transform's 16 byte step");
 
 /// RUNNING_MIN and RUNNING_MAX: the extreme value so far. The first of equal
 /// values wins; a float is ordered by compare_doubles (NaN greatest). The value

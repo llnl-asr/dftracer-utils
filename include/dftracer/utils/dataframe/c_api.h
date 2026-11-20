@@ -1715,20 +1715,20 @@ enum {
     DFTU_GROUPWISE_CUMPROD = 18
 };
 /** `kind` (a dftu_groupwise_op) over the groups of the `n_keys` `keys`
- * columns. CUMSUM / CUMPROD (Float64) / CUMMAX / CUMMIN / DIFF / PCT_CHANGE /
- * RANK take every numeric non-key column, SHIFT every non-key column, each
- * output under the column's own name; CUMCOUNT / NGROUP are one Int64 column of
- * that name; HEAD / TAIL / NTH keep the input columns of the selected rows;
- * FFILL / BFILL fill each non-key column's nulls within the group from the
- * nearest present value before / after; ROLLING_SUM / MEAN / MIN / MAX reduce
- * the trailing `n` rows of each numeric non-key column within the group, null
- * until the window holds `n` present values. `n` is the SHIFT periods
- * (negative looks ahead), the HEAD / TAIL count, the NTH position (0-based,
- * negative from the end) or the rolling window; `rank_method` (a
- * dftu_rank_method) and `ascending` apply to RANK. A null value stays null.
- * Runs the window kernel the utilities library registers as
- * `dftu.frame.window`. NULL if `df` is NULL, `kind` is not a transform, a key
- * is absent, NGROUP has no keys or no column is eligible. */
+ * columns. CUMSUM / CUMPROD (Int64 or UInt64 over an integer column, wrapping)
+ * / CUMMAX / CUMMIN / DIFF / PCT_CHANGE / RANK take every numeric non-key
+ * column, SHIFT every non-key column, each output under the column's own name;
+ * CUMCOUNT / NGROUP are one Int64 column of that name; HEAD / TAIL / NTH keep
+ * the input columns of the selected rows; FFILL / BFILL fill each non-key
+ * column's nulls within the group from the nearest present value before /
+ * after; ROLLING_SUM / MEAN / MIN / MAX reduce the trailing `n` rows of each
+ * numeric non-key column within the group, null until the window holds `n`
+ * present values. `n` is the SHIFT periods (negative looks ahead), the HEAD /
+ * TAIL count, the NTH position (0-based, negative from the end) or the rolling
+ * window; `rank_method` (a dftu_rank_method) and `ascending` apply to RANK. A
+ * null value stays null. Runs the window kernel the utilities library registers
+ * as `dftu.frame.window`. NULL if `df` is NULL, `kind` is not a transform, a
+ * key is absent, NGROUP has no keys or no column is eligible. */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_group_transform(
     const dftu_dataframe* df, const char* const* keys, int32_t n_keys,
     int32_t kind, int64_t n, int32_t rank_method, int32_t ascending);
@@ -2512,8 +2512,9 @@ enum { DFTU_WINDOW_FRAME_ROWS = 0, DFTU_WINDOW_FRAME_RANGE = 1 };
 /** One appended window column: `func` over `value` (a column name, or NULL
  * when the function takes none) into `out`. FILL_FORWARD is the nearest
  * present value at or before the row in the partition; RUNNING_PROD the
- * Float64 product of the present values so far. `param` holds what only some
- * functions read, and `func` names the member that is set:
+ * product of the present values so far (Int64 or UInt64 over an integer
+ * column, wrapping on overflow; Float64 over a float one). `param` holds what
+ * only some functions read, and `func` names the member that is set:
  * - `offset`: the LAG/LEAD shift, NTILE bucket count or NTH_VALUE 1-based k.
  * - `frame` (FRAME_*): the present count below which the output is null (0 =
  *   none), the bounds (DFTU_WINDOW_UNBOUNDED = no bound) and their `mode`:

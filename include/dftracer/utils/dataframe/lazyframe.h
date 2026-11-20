@@ -887,21 +887,22 @@ class LazyGroupBy {
     /// value per input row, rows in input order. Each is the window kernel
     /// (`dftu.frame.window`, registered by the utilities library) PARTITION
     /// BY the keys ORDER BY a row index the plan prepends, then the sort back
-    /// and the projection. CumSum / CumProd (Float64) / CumMax / CumMin /
-    /// Diff / PctChange / Rank take every numeric non-key column, Shift every
-    /// non-key column, each under its own name; CumCount / NGroup are one Int64
-    /// column of that name; Head / Tail / Nth keep the input columns of the
-    /// selected rows; FFill / BFill fill each non-key column's nulls from the
-    /// nearest present value before / after it within the group; RollingSum /
-    /// Mean / Min / Max reduce the trailing `n` rows of each numeric non-key
-    /// column within the group, null until the window holds `n` present values
-    /// (the pandas default `min_periods`). A null value stays null. `n` is the
-    /// Shift periods (negative looks ahead), the Head / Tail count, the Nth
-    /// position (0-based, negative from the end) or the rolling window;
-    /// `method` / `ascending` apply to Rank (Float64, as pandas; Ordinal is
-    /// pandas' `first`). An InvalidArgument error when
-    /// no column is eligible, NGroup has no keys, the window is under 1 or the
-    /// window op is not registered, and a NotFound error for an absent key.
+    /// and the projection. CumSum / CumProd (Int64 or UInt64 over an integer
+    /// column; a product wraps) / CumMax / CumMin / Diff / PctChange / Rank
+    /// take every numeric non-key column, Shift every non-key column, each
+    /// under its own name; CumCount / NGroup are one Int64 column of that name;
+    /// Head / Tail / Nth keep the input columns of the selected rows; FFill /
+    /// BFill fill each non-key column's nulls from the nearest present value
+    /// before / after it within the group; RollingSum / Mean / Min / Max reduce
+    /// the trailing `n` rows of each numeric non-key column within the group,
+    /// null until the window holds `n` present values (the pandas default
+    /// `min_periods`). A null value stays null. `n` is the Shift periods
+    /// (negative looks ahead), the Head / Tail count, the Nth position
+    /// (0-based, negative from the end) or the rolling window; `method` /
+    /// `ascending` apply to Rank (Float64, as pandas; Ordinal is pandas'
+    /// `first`). An InvalidArgument error when no column is eligible, NGroup
+    /// has no keys, the window is under 1 or the window op is not registered,
+    /// and a NotFound error for an absent key.
     dstd::Result<LazyFrame> transform(GroupwiseOp kind, std::int64_t n = 0,
                                       RankMethod method = RankMethod::Average,
                                       bool ascending = true) const;

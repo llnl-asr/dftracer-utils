@@ -913,6 +913,42 @@ def test_tz_localize_and_tz_convert_match_pandas():
         df.reset_index().tz_localize("UTC")  # no Timestamp index
 
 
+def test_groupby_cumprod_wraps_integers_like_pandas():
+    np = pytest.importorskip("numpy")
+    big = 2**63 - 1
+    k = [1, 1, 1, 2, 2, 2]
+    i = [2**40, 2**40, 3, big, 2, 2]
+    u = [2**32 + 1, 2**32 + 1, 3, 2**63, 2, 2]
+    f = [1e200, 1e200, 3.0, 2.0, 3.0, 4.0]
+    df = DataFrame(
+        {
+            "k": k,
+            "i": Series.from_numpy(np.array(i, dtype=np.int64)),
+            "u": Series.from_numpy(np.array(u, dtype=np.uint64)),
+            "f": f,
+        }
+    )
+    p = pd.DataFrame(
+        {
+            "k": k,
+            "i": np.array(i, dtype=np.int64),
+            "u": np.array(u, dtype=np.uint64),
+            "f": f,
+        }
+    )
+    want = p.groupby("k").cumprod()
+    assert str(want["i"].dtype) == "int64" and str(want["u"].dtype) == "uint64"
+    for got in (df.group_by("k").cumprod(), df.lazy().group_by("k").cumprod().collect()):
+        out = _d(got)
+        for c in ("i", "u", "f"):
+            assert out[c] == want[c].tolist(), c
+        assert [str(got.to_pandas()[c].dtype) for c in ("i", "u", "f")] == [
+            "int64",
+            "uint64",
+            "float64",
+        ]
+
+
 def test_groupby_prod_cumprod_median_quantile_match_pandas():
     df = DataFrame(
         {

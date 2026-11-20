@@ -193,7 +193,6 @@ groupby.sum#2[G] | keyword | [error] ours raised TypeError: GroupBy.sum() got an
 groupby.std#2[G] | keyword | [error] ours raised TypeError: GroupBy.std() got an unexpected keyword argument 'ddof'
 groupby.describe#1[G] | shape | [shape] columns ['k', 'a_count', 'a_mean', 'a_std', 'a_min', 'a_25%', 'a_50%', 'a_75%', 'a_max', 'b_count', 'b_mean', 'b_std', 'b_min', 'b_25%', 'b_50%', 'b_75%', 'b_max'] vs ["('k', '')", "('a', 'cou
 groupby.agg#2[G] | shape | [shape] columns ['k', 'a_sum', 'b_sum', 'a_min', 'b_min'] vs ["('k', '')", "('a', 'sum')", "('a', 'min')", "('b', 'sum')", "('b', 'min')"]
-groupby.cumprod#1[G] | semantics | [dtype] a: float64 vs int64
 groupby.cumcount#1[G] | shape | [type] ours DataFrame (frame), library Series (series)
 groupby.ngroup#1[G] | shape | [type] ours DataFrame (frame), library Series (series)
 groupby.pct_change#1[G] | keyword | [error] ours raised TypeError: GroupBy.pct_change() got an unexpected keyword argument 'fill_method'

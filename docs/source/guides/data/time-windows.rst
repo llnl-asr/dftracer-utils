@@ -142,7 +142,8 @@ Supported spec shapes:
 - ``("row_number"|"rank"|"dense_rank", out)``
 - ``("lag"|"lead", value_col, offset, out)``
 - ``("running_sum"|"running_min"|"running_max"|"running_count"|"running_prod", value_col, out)``
-  (``running_prod`` is Float64; ``running_sum`` over an integer column is
+  (``running_prod`` over an integer column is Int64, or UInt64 over a
+  UInt64 one, and wraps on overflow; ``running_sum`` over an integer column is
   exact, Int64, or UInt64 over an unsigned one, and a sum outside the type is
   an error, not a wrapped number)
 - ``("delta", value_col, out)`` (over an integer column the exact Int64

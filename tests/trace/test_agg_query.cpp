@@ -1178,12 +1178,26 @@ TEST_SUITE("AggQuery") {
         Ask ask;
         // The query asks with another config than the index was built with.
         AggQuery q = make_query(*fx, ask, FIVE_SECONDS_US);
-        q.config.compute_percentiles = false;
+        q.config.compute_statistics = false;
         const AggQueryResult r = run(q);
         CHECK(r.stats.files_without_partials == FILES);
         CHECK(r.stats.partials_read == 0);
         CHECK(r.stats.chunks_reread > 0);
         CHECK(r.stats.events_read == fx->events.size());
+    }
+
+    TEST_CASE("an index with percentiles serves a query without them") {
+        auto fx = build(FIVE_SECONDS_US, "five");
+        Ask ask;
+        const AggQueryResult full = run(make_query(*fx, ask, FIVE_SECONDS_US));
+        AggQuery q = make_query(*fx, ask, FIVE_SECONDS_US);
+        REQUIRE(q.config.compute_percentiles);
+        q.config.compute_percentiles = false;
+        const AggQueryResult r = run(q);
+        CHECK(r.stats.files_without_partials == 0);
+        CHECK(r.stats.partials_read == full.stats.partials_read);
+        CHECK(r.stats.events_read == full.stats.events_read);
+        CHECK(r.rows.size() == full.rows.size());
     }
 
     TEST_CASE("a re-index with larger chunks drops the old partials") {

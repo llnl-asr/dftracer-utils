@@ -133,6 +133,17 @@ dstd::Expected<dstd::Optional<Config>, dstd::Error> read_config(
     return decode_config(dstd::StringView((*value)->data(), (*value)->size()));
 }
 
+dstd::Result<AggregationConfig> serving_config(const Snapshot& snapshot,
+                                               const AggregationConfig& want) {
+    auto stored = read_config(snapshot);
+    if (!stored) return stored.error();
+    if (!*stored) return want;
+    auto config = aggregation_config_of(**stored);
+    if (config.params_hash() != (*stored)->params_hash || !config.covers(want))
+        return want;
+    return config;
+}
+
 dstd::Expected<bool, dstd::Error> has_config_record(const Snapshot& snapshot) {
     auto value = agg_meta(snapshot, CONFIG_NAME);
     if (!value) return dstd::Unexpected<dstd::Error>(value.error());

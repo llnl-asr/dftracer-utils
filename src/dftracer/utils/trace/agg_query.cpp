@@ -25,6 +25,7 @@
 #include <dftracer/utils/trace/index/index.h>
 #include <dftracer/utils/trace/index/plan/prune.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/agg_partial_update.h>
+#include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/trace/index/store/file.h>
@@ -59,23 +60,31 @@ enum class PidFit { All, None, Mixed };
 /// task. The files of a root that does not exist or cannot be opened are read
 /// whole.
 struct Source {
-    Source(const AggQuerySource& s, std::uint64_t default_params_hash)
+    Source(const AggQuerySource& s,
+           const trace::index::schemas::dft::agg::AggregationConfig& want)
         : path(s.index_path),
-          params_hash(s.params_hash ? *s.params_hash : default_params_hash) {}
+          params_hash(s.params_hash ? *s.params_hash : want.params_hash()) {}
 
     /// Opens the root. The error is that of the snapshot that cannot be
     /// opened.
-    dstd::Result<void> open(const AggQuerySource& s) {
+    dstd::Result<void> open(
+        const AggQuerySource& s,
+        const trace::index::schemas::dft::agg::AggregationConfig& want) {
         if (path.empty() || !dftracer::utils::common::input_exists(
                                 trace::index::store_of(path)))
             return {};
         if (s.snapshot) {
             snapshot.emplace(*s.snapshot);
-            return {};
+        } else {
+            auto opened = trace::index::plan::open_snapshot(path);
+            if (!opened) return opened.error();
+            snapshot.emplace(std::move(*opened));
         }
-        auto opened = trace::index::plan::open_snapshot(path);
-        if (!opened) return opened.error();
-        snapshot.emplace(std::move(*opened));
+        if (s.params_hash) return {};
+        auto serving = trace::index::schemas::dft::agg::tier::serving_config(
+            *snapshot, want);
+        if (!serving) return serving.error();
+        params_hash = serving->params_hash();
         return {};
     }
 
@@ -459,10 +468,9 @@ coro::CoroTask<dstd::Result<void>> Runner::run() {
             ex != nullptr ? std::max<std::size_t>(1, ex->concurrency()) : 1;
     }
     permits = dstd::make_unique<coro::AsyncSemaphore>(workers);
-    const std::uint64_t default_params_hash = rules.q.config.params_hash();
     for (const auto& s : rules.q.sources) {
-        auto source = dstd::make_unique<Source>(s, default_params_hash);
-        auto opened = source->open(s);
+        auto source = dstd::make_unique<Source>(s, rules.q.config);
+        auto opened = source->open(s, rules.q.config);
         if (!opened) co_return opened.error();
         sources.push_back(std::move(source));
     }

@@ -36,12 +36,15 @@ dstd::Result<AggRun> start_aggregation(
     if (!snapshot) return snapshot.error();
     auto dictionary = agg_dictionary(*snapshot, *intern);
     if (!dictionary) return dictionary.error();
+    auto serving = trace::index::schemas::dft::agg::tier::serving_config(
+        *snapshot, config);
+    if (!serving) return serving.error();
     auto written = trace::index::schemas::dft::agg::tier::write_config(
-        *target, trace::index::schemas::dft::agg::tier::make_config(config));
+        *target, trace::index::schemas::dft::agg::tier::make_config(*serving));
     if (!written) return written.error();
     auto cfg =
         dstd::make_shared<trace::index::schemas::dft::agg::AggregationConfig>(
-            config);
+            std::move(*serving));
     auto factory = [cfg,
                     intern](dftracer::utils::dstd::StringIntern& build_intern) {
         return dstd::make_unique<

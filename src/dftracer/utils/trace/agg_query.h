@@ -36,8 +36,8 @@ struct AggQuerySource {
     /// Trace paths as the index was built from them.
     dstd::Vector<dstd::String> files;
     /// The params hash the files of this index were built with. Unset takes
-    /// config.params_hash(). A caller that does not know the build config
-    /// reads the hash off the index.
+    /// the hash of the index's stored config when that config covers the
+    /// query's config, else config.params_hash().
     dstd::Optional<std::uint64_t> params_hash;
     /// Read in place of a new snapshot of `index_path`, so the query sees the
     /// index its caller checked.

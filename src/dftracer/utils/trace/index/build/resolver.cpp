@@ -312,6 +312,10 @@ dstd::Result<void> decide_group(ResolveGroupInput& input,
         if (!snapshot_result) return snapshot_result.error();
         const auto& snapshot = *snapshot_result;
 
+        auto serving = trace::index::schemas::dft::agg::tier::serving_config(
+            snapshot, input.aggregation_config);
+        if (!serving) return serving.error();
+        input.aggregation_config = std::move(*serving);
         const std::uint64_t params = input.aggregation_config.params_hash();
         const auto config =
             trace::index::schemas::dft::agg::tier::read_config(snapshot);

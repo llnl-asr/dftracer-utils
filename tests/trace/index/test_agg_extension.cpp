@@ -398,4 +398,64 @@ TEST_SUITE("AggExtension") {
         CHECK_FALSE((entry && entry->current));
         CHECK(count_reads({a, b}) == 50);
     }
+
+    TEST_CASE("a percentiles tier serves a request without percentiles") {
+        dftu_utils_test::TestEnvironment env(10);
+        const auto a = write_trace(env.dir(), "a", 30, 1000, true);
+        const auto b = write_trace(env.dir(), "b", 20, 500'000, true);
+        const dstd::Vector<dstd::String> both = {
+            dstd::String(dstd::StringView(a)),
+            dstd::String(dstd::StringView(b))};
+        auto with_pct = with_aggregation(1'000'000);
+        with_pct.aggregation.compute_percentiles = true;
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(Indexer::open(both, with_pct)).build());
+        plant_sentinel(a);
+
+        auto ix = dftu_utils_test::ok(
+            Indexer::open(both, with_aggregation(1'000'000)));
+        const auto status = dftu_utils_test::ok(ix.status());
+        CHECK_FALSE(status.aggregation_needs_rebuild);
+        CHECK(status.needs_work.empty());
+        for (const auto& t : {a, b}) {
+            REQUIRE(agg_entry(ix, t));
+            CHECK(agg_entry(ix, t)->current);
+        }
+
+        // A changed file is rebuilt with the stored settings, so the root
+        // keeps its percentiles for every file.
+        write_trace(env.dir(), "b", 45, 500'000, true);
+        REQUIRE(dstd::fs::set_mtime_ns(
+                    b, dstd::fs::mtime_ns(b).value() + 10'000'000'000ULL)
+                    .has_value());
+        dftu_utils_test::ok(ix.build());
+        CHECK(has_sentinel(a));
+        CHECK(count_reads({a, b}) == 75);
+        const auto snapshot =
+            dftu_utils_test::ok(trace::index::plan::open_snapshot(index_of(a)));
+        const auto stored = dftu_utils_test::ok(
+            trace::index::schemas::dft::agg::tier::read_config(snapshot));
+        REQUIRE(stored);
+        CHECK(stored->compute_percentiles);
+        CHECK(stored->params_hash == with_pct.aggregation.params_hash());
+
+        auto again = dftu_utils_test::ok(Indexer::open(both, with_pct));
+        CHECK(dftu_utils_test::ok(again.status()).needs_work.empty());
+        CHECK(agg_entry(again, b)->current);
+    }
+
+    TEST_CASE("a tier without percentiles is rebuilt for a request with them") {
+        dftu_utils_test::TestEnvironment env(10);
+        const auto gz = write_trace(env.dir(), "a", 50, 1000);
+        dftu_utils_test::ok(
+            dftu_utils_test::ok(
+                Indexer::open({dstd::String(dstd::StringView(gz))},
+                              with_aggregation(1'000'000)))
+                .build());
+        auto with_pct = with_aggregation(1'000'000);
+        with_pct.aggregation.compute_percentiles = true;
+        auto ix = dftu_utils_test::ok(
+            Indexer::open({dstd::String(dstd::StringView(gz))}, with_pct));
+        CHECK(dftu_utils_test::ok(ix.status()).aggregation_needs_rebuild);
+    }
 }

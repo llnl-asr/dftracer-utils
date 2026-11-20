@@ -32,7 +32,10 @@ aggregation knobs (``time_interval_ms``, ``group_keys``,
 ``compute_percentiles``, ``group_by_file``) are
 fields of :class:`~dftracer.utils.AggregationConfig`, not direct ``Indexer``
 arguments, and ``aggregation_config=AggregationConfig(...)`` customizes the
-tier. There is no switch that turns it off.
+tier. There is no switch that turns it off. A tier built with the percentile
+sketches also serves a config that differs only by
+``compute_percentiles=False``: the root keeps its sketches, and a changed file
+is rebuilt with them. Any other change to the config rebuilds the tier.
 
 Three arguments steer what the build keeps. ``extensions`` picks the pruning
 extensions from ``"zonemap"``, ``"bloom"``, ``"counts"`` and ``"postings"``

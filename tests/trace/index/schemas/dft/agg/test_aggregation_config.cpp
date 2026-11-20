@@ -53,4 +53,35 @@ TEST_SUITE("AggregationConfig") {
         AggregationConfig same = base;
         CHECK(base.params_hash() == same.params_hash());
     }
+
+    TEST_CASE(
+        "AggregationConfig - a percentiles build covers the same build "
+        "without") {
+        AggregationConfig want;
+        AggregationConfig stored = want;
+        stored.compute_percentiles = true;
+        stored.sketch_accuracy = 0.05;
+        stored.percentiles = {0.5, 0.99};
+
+        CHECK(stored.covers(want));
+        CHECK(stored.covers(stored));
+        CHECK(want.covers(want));
+        CHECK_FALSE(want.covers(stored));
+
+        AggregationConfig other_pct = stored;
+        other_pct.percentiles = {0.5};
+        CHECK_FALSE(stored.covers(other_pct));
+
+        AggregationConfig other_interval = want;
+        other_interval.time_interval_us = want.time_interval_us * 10;
+        CHECK_FALSE(stored.covers(other_interval));
+
+        AggregationConfig other_keys = want;
+        other_keys.extra_group_keys.push_back("epoch");
+        CHECK_FALSE(stored.covers(other_keys));
+
+        AggregationConfig no_stats = want;
+        no_stats.compute_statistics = false;
+        CHECK_FALSE(stored.covers(no_stats));
+    }
 }

@@ -66,6 +66,10 @@ struct TimeBounds {
 /// a record of an earlier layout.
 dstd::Expected<dstd::Optional<Config>, dstd::Error> read_config(
     const Snapshot& snapshot);
+/// The config a request with `want` is built and read with: the stored one
+/// when it reads back exactly and covers `want`, else `want`.
+dstd::Result<AggregationConfig> serving_config(const Snapshot& snapshot,
+                                               const AggregationConfig& want);
 /// Whether the index holds a config record, readable or not.
 dstd::Expected<bool, dstd::Error> has_config_record(const Snapshot& snapshot);
 /// Replaces the index-wide config, blocking until it is published. An extra

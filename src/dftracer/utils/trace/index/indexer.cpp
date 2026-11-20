@@ -675,8 +675,10 @@ coro::CoroTask<dstd::Result<dstd::Vector<FileManifest>>> Indexer::manifest(
         const auto opened = plan::open_snapshot(index_path);
         if (!opened) co_return opened.error();
         const auto& snapshot = *opened;
-        const std::uint64_t agg_params =
-            impl_->options.aggregation.params_hash();
+        const auto serving = schemas::dft::agg::tier::serving_config(
+            snapshot, impl_->options.aggregation);
+        if (!serving) co_return serving.error();
+        const std::uint64_t agg_params = serving->params_hash();
         for (const auto* p : traces) {
             const auto file = snapshot.file(fileio::get_logical_path(*p));
             if (!file) continue;

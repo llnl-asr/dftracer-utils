@@ -1363,8 +1363,8 @@ prefix, and none can take a built-in's name.
 - A ``let`` or sub-query side that calls a UDAF is not stored in the lookup
   cache.
 
-Explain
-~~~~~~~
+Explain lines
+~~~~~~~~~~~~~
 
 ``View::explain_duql``, ``TraceViewer.explain_duql``,
 ``dftu_view_explain_duql`` and ``dftracer_view -q ... --explain`` print

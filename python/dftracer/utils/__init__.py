@@ -12,6 +12,7 @@ from .dftracer_utils_ext import (  # noqa: F401
     set_log_level,
     write_shard_set,
 )
+from .discover import discover_trace_files  # noqa: F401
 from .enums import AggOp, DType, GroupKey, Phase, TimeUnit  # noqa: F401
 from .errors import (  # noqa: F401
     DFTUtilsAggregationError,
@@ -55,6 +56,7 @@ from .lazyframe import (  # noqa: F401
     lazy,
     scan_file,
 )
+from .memory_advice import MemoryBudgetAdvice, memory_budget_advice  # noqa: F401
 from .plugins import PluginHandle, load_plugin  # noqa: F401
 from .runtime import Runtime, TaskHandle, get_default_runtime, peek_default_runtime  # noqa: F401
 from .series import Series  # noqa: F401
@@ -123,6 +125,9 @@ __all__ = [
     "peek_default_runtime",
     "WorkerShare",
     "apply_worker_share",
+    "discover_trace_files",
+    "memory_budget_advice",
+    "MemoryBudgetAdvice",
     "worker_share",
     "get_log_level",
     "set_log_color",

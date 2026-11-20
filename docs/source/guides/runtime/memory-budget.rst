@@ -148,20 +148,17 @@ would spread that peak under the available limit.
 
 .. code-block:: python
 
-   from dftracer.utils.dftracer_utils_ext import memory_budget_advice
+   from dftracer.utils import memory_budget_advice
 
    advice = memory_budget_advice(required_bytes=40 * 1024**3)
-   # dict: fits, required_bytes, peak_bytes, available_bytes,
-   #       suggested_nodes, warning
-   if not advice["fits"]:
-       print(advice["warning"])
-       print("spread across", advice["suggested_nodes"], "nodes")
+   if not advice.fits:
+       print(advice.warning)
+       print("spread across", advice.suggested_nodes, "nodes")
 
-The returned advice carries ``fits`` (peak within available), ``required_bytes``
-(what you passed), ``peak_bytes`` (required times a peak factor),
-``available_bytes`` (what it judged against), and ``suggested_nodes``. The Python
-function returns these fields as a dict plus a ``warning`` string (empty when it
-fits).
+The Python function returns a frozen ``MemoryBudgetAdvice`` with ``fits``
+(peak within available), ``required_bytes`` (what you passed), ``peak_bytes``
+(required times a peak factor), ``available_bytes`` (what it judged against),
+``suggested_nodes`` and ``warning`` (a ready message, empty when it fits).
 
 Count your own allocations
 --------------------------

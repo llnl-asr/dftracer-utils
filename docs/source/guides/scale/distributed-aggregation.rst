@@ -184,6 +184,36 @@ starts at shard 0 (they are not shard-partitioned the same way).
 ``shard_end`` defaults to covering every shard (4096 in C++; ``<= 0`` in
 Python). ``progress`` is a ``(done, total)`` callback over shard units.
 
+On a Dask cluster, ``DaskTraceViewer.typed_futures(map_fn=None,
+progress=None)`` does this split for you. It gives one future per worker
+(``client.nthreads()``), each over a disjoint shard range, and does not gather
+them. ``map_fn`` runs on the worker on that range's tables, so a worker can
+turn them into what the caller needs before anything moves; it must be a
+top-level function a process cluster can pickle. ``progress`` names a phase
+that the workers publish their progress under, for a ``ProgressAggregator``.
+
+.. code-block:: python
+
+   from dftracer.utils import discover_trace_files
+   from dftracer.utils.dask import DaskTraceViewer, ProgressAggregator
+
+   def row_counts(tables):  # runs on the worker
+       return {k: (t.num_rows if t is not None else 0) for k, t in tables.items()}
+
+   files = discover_trace_files("/path/to/traces", recursive=True)
+   viewer = DaskTraceViewer(files, index_dir, client=client)
+   with ProgressAggregator(client, lambda done, total, phase: print(phase, done, total)):
+       futures = viewer.typed_futures(map_fn=row_counts, progress="Reading traces")
+       counts = client.gather(futures)
+
+``collect_typed()`` on the Dask viewer gathers the same futures without a
+``map_fn`` and concatenates each record family.
+
+``discover_trace_files(path, recursive=False)`` lists the files the indexer
+reads: a directory is scanned with the indexer's input patterns and skips its
+index and output folders, and a glob or a file is kept only when its name
+matches those patterns. A glob takes every folder it matches.
+
 See also
 --------
 

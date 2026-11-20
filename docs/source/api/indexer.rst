@@ -95,6 +95,12 @@ builds its filters with. Both are exported from ``dftracer.utils``; the guide
 .. autofunction:: dftracer.utils.hash_value
    :no-index:
 
+Input Files
+-----------
+
+.. autofunction:: dftracer.utils.discover_trace_files
+
+
 CheckpointIndexer Class
 -----------------------
 

@@ -59,6 +59,16 @@ Several worker processes on one host split it with these (see
 .. autoclass:: dftracer.utils.WorkerShare
    :members:
 
+Memory Advice
+-------------
+
+Check a footprint before a run (see :doc:`../guides/runtime/memory-budget`).
+
+.. autofunction:: dftracer.utils.memory_budget_advice
+
+.. autoclass:: dftracer.utils.MemoryBudgetAdvice
+   :members:
+
 Submitting Tasks
 ----------------
 

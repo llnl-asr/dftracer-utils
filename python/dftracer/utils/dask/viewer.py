@@ -6,11 +6,26 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, replace
 from importlib.util import find_spec
-from typing import TYPE_CHECKING, Iterator, Literal, NamedTuple, Optional, Sequence, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+    overload,
+)
 
 if TYPE_CHECKING:
     import pyarrow as pa
-    from dask.distributed import Client
+    from dask.distributed import Client, Future
 
 
 from ..dataframe import DataFrame, PhaseArg, TimeUnitArg
@@ -18,6 +33,11 @@ from ..dftracer_utils_ext import NUM_SHARDS
 from ..enums import coerce_bytes, coerce_duration
 from ..trace.viewer import TraceViewer
 from ._workers import _require_workers
+
+TypedTables = Dict[str, Optional["pa.Table"]]
+"""One shard range of a typed read: ``regular``, ``aggregated`` and ``counters``."""
+
+_T = TypeVar("_T")
 
 
 class QueryPage(NamedTuple):
@@ -176,22 +196,31 @@ def _dv_collect_typed_task(
     plan: _Plan,
     shard_begin: int,
     shard_end: int,
-) -> dict[str, pa.Table | None]:
+    map_fn: Optional[Callable[[TypedTables], object]],
+    progress: Optional[str],
+) -> object:
     """Worker: one CF shard range of the typed read. The tier is index-wide, so
     every worker sees all files but a distinct shard range of the aggregation
-    CF - returns {regular, aggregated, counters} pyarrow Tables.
+    CF - gives {regular, aggregated, counters} pyarrow Tables, or what
+    ``map_fn`` makes of them.
 
     The C++ terminal yields native VecBatches, which are not picklable; import
     each into a pyarrow Table here so a process cluster can ship them."""
     import pyarrow as pa
 
-    typed = _make_viewer(files, index_dir, plan).collect_typed(
-        shard_begin=shard_begin, shard_end=shard_end
+    from .progress import worker_progress_forwarder
+
+    forward = (
+        None
+        if progress is None
+        else worker_progress_forwarder(progress, f"{shard_begin}_{shard_end}")
     )
-    return {
+    typed = _make_viewer(files, index_dir, plan).collect_typed(shard_begin, shard_end, forward)
+    tables: TypedTables = {
         k: (pa.table(typed[k]) if typed.get(k) is not None else None)
         for k in ("regular", "aggregated", "counters")
     }
+    return tables if map_fn is None else map_fn(tables)
 
 
 def _slice_rows(df: DataFrame, plan: _Plan) -> DataFrame:
@@ -378,14 +407,35 @@ class DaskTraceViewer:
         partials = [p for p in client.gather(futures) if p]
         return TraceViewer.merge_flamegraph_partials(partials)
 
-    def collect_typed(self) -> dict[str, pa.Table | None]:
-        """Distributed one-pass typed read -> {regular, aggregated, counters}
-        pyarrow Tables, fanning disjoint group ranges (hash shards) of the partials across
-        workers (the index-wide tier can't be file-sharded)."""
-        import pyarrow as pa
+    @overload
+    def typed_futures(
+        self, map_fn: None = ..., progress: Optional[str] = ...
+    ) -> List[Future[TypedTables]]: ...
+    @overload
+    def typed_futures(
+        self, map_fn: Callable[[TypedTables], _T], progress: Optional[str] = ...
+    ) -> List[Future[_T]]: ...
 
+    def typed_futures(
+        self,
+        map_fn: Optional[Callable[[TypedTables], object]] = None,
+        progress: Optional[str] = None,
+    ) -> List[Future[Any]]:
+        """The typed read as one ungathered future per worker.
+
+        The aggregation tier is index-wide, so each worker reads a disjoint range
+        of its hash shards over all files and gives ``{regular, aggregated,
+        counters}`` as pyarrow Tables. ``map_fn``, when given, runs on the worker
+        on those tables and its result is what the future holds; it must be a
+        top-level function a process cluster can pickle. ``progress`` names a
+        phase: each worker then publishes its ``(done, total)`` under it for a
+        :class:`~dftracer.utils.dask.ProgressAggregator`. The worker count is
+        ``client.nthreads()``, so an in-process client with one worker gives one
+        future.
+        """
         client = self._resolve_client()
-        n = max(1, len(client.scheduler_info().get("workers") or {}))
+        workers = list((client.nthreads() or {}).keys())
+        n = max(1, len(workers))
         span = (NUM_SHARDS + n - 1) // n
         futures = []
         for i in range(n):
@@ -400,15 +450,24 @@ class DaskTraceViewer:
                     self._plan,
                     sb,
                     se,
+                    map_fn,
+                    progress,
+                    workers=[workers[i]] if workers else None,
                     pure=False,
                 )
             )
-        parts = client.gather(futures)
+        return futures
+
+    def collect_typed(self) -> TypedTables:
+        """Distributed one-pass typed read -> {regular, aggregated, counters}
+        pyarrow Tables: :meth:`typed_futures` gathered, each kind concatenated."""
+        import pyarrow as pa
+
+        parts: List[TypedTables] = self._resolve_client().gather(self.typed_futures())
 
         def cat(key: str) -> pa.Table | None:
-            # Workers already adopted the capsules into pyarrow Tables; permissive
-            # promotion unifies system's dynamic per-metric columns across shards.
-            tables = [p[key] for p in parts if p is not None and p.get(key) is not None]
+            # Permissive promotion unifies system's dynamic per-metric columns across shards.
+            tables = [p[key] for p in parts if p.get(key) is not None]
             return pa.concat_tables(tables, promote_options="permissive") if tables else None
 
         return {k: cat(k) for k in ("regular", "aggregated", "counters")}

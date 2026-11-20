@@ -2007,13 +2007,11 @@ def _unload_plugin(path: str, /) -> None:
     formats is open."""
     ...
 
-def memory_budget_advice(required_bytes: int, available_bytes: int = ...) -> dict[str, object]:
-    """Whether an aggregated workload of `required_bytes` fits in process.
-
-    `available_bytes=0` detects it (cgroup-aware). Returns a dict with `fits`,
-    `required_bytes`, `peak_bytes` (PEAK_MEMORY_FACTOR x required), `available_bytes`,
-    `suggested_nodes`, and `warning` (a ready message, empty when it fits).
-    """
+def _memory_budget_advice(
+    required_bytes: int, available_bytes: int = ...
+) -> tuple[bool, int, int, int, int, str]:
+    """(fits, required_bytes, peak_bytes, available_bytes, suggested_nodes,
+    warning); `dftracer.utils.memory_budget_advice` wraps it."""
     ...
 
 def _worker_share(workers: int, pin: bool = ..., /) -> tuple[int, int, int]:

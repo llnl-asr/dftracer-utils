@@ -562,5 +562,75 @@ class TestDaskTraceViewer:
             assert isinstance(base.group_by("cat").time_range(0, 1), DaskAggregatedTraceViewer)
 
 
+def _typed_row_count(tables):
+    return sum(t.num_rows for t in tables.values() if t is not None)
+
+
+@pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
+class TestTypedFutures:
+    """DaskTraceViewer.typed_futures: one ungathered future per worker."""
+
+    @staticmethod
+    def _rows(table):
+        return sorted((r["name"], r["pid"], r["count"]) for r in table.to_pylist())
+
+    def test_futures_cover_the_local_typed_read(self):
+        import time
+
+        import pyarrow as pa
+        from dask.distributed import Client, LocalCluster
+
+        from dftracer.utils.dask import DaskTraceViewer, ProgressAggregator
+
+        with Environment(lines=300) as env:
+            files = [env.create_test_gzip_file(f"f{k}/t{k}.pfw.gz") for k in range(3)]
+            with dftu_utils.Indexer(
+                files=files,
+                index_dir=env.temp_dir,
+                aggregation_config=dftu_utils.AggregationConfig(time_interval_ms=1000),
+            ) as ix:
+                ix.ensure()
+            local = pa.table(
+                dftu_utils.TraceViewer(files, index_dir=env.temp_dir)
+                .group_by("name", "pid")
+                .agg("count")
+                .collect_typed()["regular"]
+            )
+            cluster = LocalCluster(processes=False, n_workers=2, threads_per_worker=2)
+            client = Client(cluster)
+            try:
+                dv = (
+                    DaskTraceViewer(files, env.temp_dir, client=client)
+                    .group_by("name", "pid")
+                    .agg("count")
+                )
+                futures = dv.typed_futures()
+                assert len(futures) == 2
+                parts = client.gather(futures)
+                regular = pa.concat_tables(
+                    [p["regular"] for p in parts if p["regular"] is not None],
+                    promote_options="permissive",
+                )
+                assert self._rows(regular) == self._rows(local)
+                assert self._rows(dv.collect_typed()["regular"]) == self._rows(local)
+
+                seen = []
+                with ProgressAggregator(
+                    client, lambda done, total, phase: seen.append((phase, done, total))
+                ):
+                    counts = client.gather(
+                        dv.typed_futures(map_fn=_typed_row_count, progress="typed read")
+                    )
+                    deadline = time.monotonic() + 10
+                    while not seen and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                assert sum(counts) == sum(_typed_row_count(p) for p in parts)
+                assert seen and {phase for phase, _, _ in seen} == {"typed read"}
+                assert seen[-1][1] <= seen[-1][2]
+            finally:
+                client.close()
+                cluster.close()
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

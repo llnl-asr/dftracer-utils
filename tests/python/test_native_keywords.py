@@ -174,9 +174,9 @@ def test_an_unknown_keyword_is_named_like_python_does():
     with pytest.raises(TypeError, match=r"clip\(\) got an unexpected keyword argument 'extra'"):
         Series([1.0]).clip(lower=0, upper=1, extra=2)
     with pytest.raises(
-        TypeError, match=r"memory_budget_advice\(\) got an unexpected keyword argument 'nope'"
+        TypeError, match=r"_memory_budget_advice\(\) got an unexpected keyword argument 'nope'"
     ):
-        _ext.memory_budget_advice(required_bytes=1, nope=2)
+        _ext._memory_budget_advice(required_bytes=1, nope=2)
 
 
 def test_a_table_method_names_itself_in_an_unknown_keyword_error():

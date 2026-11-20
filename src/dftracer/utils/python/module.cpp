@@ -77,7 +77,7 @@ PyObject* py_set_log_color(PyObject*, PyObject* args) {
 
 PyObject* py_memory_budget_advice(PyObject*, PyObject* args, PyObject* kwds) {
     unsigned long long required = 0, available = 0;
-    if (!dftracer::utils::python::core::parse_kw<"K|K:memory_budget_advice">(
+    if (!dftracer::utils::python::core::parse_kw<"K|K:_memory_budget_advice">(
             args, kwds, {"required_bytes", "available_bytes"}, &required,
             &available))
         return nullptr;
@@ -87,11 +87,10 @@ PyObject* py_memory_budget_advice(PyObject*, PyObject* args, PyObject* kwds) {
     const dftracer::utils::dstd::String warning =
         dftracer::utils::common::format_memory_budget_warning(a);
     return Py_BuildValue(
-        "{s:O,s:K,s:K,s:K,s:K,s:s}", "fits", a.fits ? Py_True : Py_False,
-        "required_bytes", (unsigned long long)a.required_bytes, "peak_bytes",
-        (unsigned long long)a.peak_bytes, "available_bytes",
-        (unsigned long long)a.available_bytes, "suggested_nodes",
-        (unsigned long long)a.suggested_nodes, "warning", warning.c_str());
+        "(OKKKKs)", a.fits ? Py_True : Py_False,
+        (unsigned long long)a.required_bytes, (unsigned long long)a.peak_bytes,
+        (unsigned long long)a.available_bytes,
+        (unsigned long long)a.suggested_nodes, warning.c_str());
 }
 
 // _worker_share(workers, pin=False) -> (threads, io_threads, memory_budget)
@@ -228,14 +227,11 @@ PyMethodDef dftracer_utils_methods[] = {
      "names.\n"
      "Nothing runs until collect(), which returns the error of a file no\n"
      "format claims."},
-    {"memory_budget_advice", DFTU_PYCFUNCTION(py_memory_budget_advice),
+    {"_memory_budget_advice", DFTU_PYCFUNCTION(py_memory_budget_advice),
      METH_VARARGS | METH_KEYWORDS,
-     "memory_budget_advice(required_bytes, available_bytes=0) -> dict\n\n"
-     "Whether an aggregated workload of `required_bytes` fits in process, and\n"
-     "advice if not. `available_bytes=0` detects it (cgroup-aware). Returns\n"
-     "{fits, required_bytes, peak_bytes, available_bytes, suggested_nodes,\n"
-     "warning}: peak is PEAK_MEMORY_FACTOR x required; `warning` is a ready\n"
-     "message (empty when it fits)."},
+     "_memory_budget_advice(required_bytes, available_bytes=0) -> tuple\n\n"
+     "(fits, required_bytes, peak_bytes, available_bytes, suggested_nodes,\n"
+     "warning); dftracer.utils.memory_budget_advice wraps it."},
     {"_worker_share", py_worker_share, METH_VARARGS,
      "_worker_share(workers: int, pin: bool = False) -> tuple[int, int, "
      "int]\n\n"

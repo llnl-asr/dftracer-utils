@@ -266,7 +266,10 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
     gives the frame its labels, as pandas (see :func:`_with_series_labels`);
     :meth:`from_dict` takes the columns only."""
 
-    __slots__ = ()
+    # The header a table file gave this frame; only read_table sets it, and
+    # to_pandas() reads it (see dftracer.utils.table).
+    __slots__ = ("_table_header",)
+    _table_header: dict[str, Any]
 
     # The native type has no constructor of its own: its factories build this
     # class directly (_bind_types), so only a Python-data call comes through
@@ -640,9 +643,24 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         name raises ``KeyError`` and a repeated one ``ValueError``. Without
         ``index``, the frame's own row index (:meth:`index_names`) becomes the
         pandas index, a MultiIndex for several levels; a level that
-        :meth:`from_pandas` named ``__index_level_<i>__`` is unnamed again."""
+        :meth:`from_pandas` named ``__index_level_<i>__`` is unnamed again.
+
+        A frame that :func:`~dftracer.utils.read_table` returned is the one
+        exception to the rules above: called with no arguments it gives the
+        exact pandas frame its table header describes (dtypes, categories, set
+        and list cells, Arrow-backed and string-storage dtypes, the index and
+        its names). Any explicit ``arrow``, ``nullable`` or ``index`` argument
+        ignores the header. A new frame has no header, and a frame changed in
+        place (``df["a"] = ...``, ``df.loc[...] = ...``) drops it."""
         if arrow and nullable:
             raise ValueError("to_pandas: pass either arrow=True or nullable=True, not both")
+        header = getattr(self, "_table_header", None)
+        if header is not None and not arrow and not nullable and index is None:
+            from .table import exact_pandas
+
+            exact = exact_pandas(self, header)
+            if exact is not None:
+                return exact
         if arrow:
             out = cast("pd.DataFrame", _to_pandas(self.to_arrow(), arrow))
         else:

@@ -23,6 +23,11 @@ EQUAL = dict(check_dtype=True, check_index_type=False, rtol=0)
 U64_MAX = 2**64 - 1
 
 
+def read_pandas(path, **kwargs):
+    """The exact pandas frame of a table file: read_table, then to_pandas()."""
+    return read_table(path, **kwargs).to_pandas()
+
+
 def float64_masked(values, mask):
     return pd.arrays.FloatingArray(np.array(values, dtype="float64"), np.array(mask, dtype=bool))
 
@@ -107,7 +112,7 @@ def sets_equal_nan(a, b):
 def assert_round_trip(df, tmp_path, name="t.pfw.gz", **kwargs):
     path = str(tmp_path / name)
     write_table(df, path, name="t", **kwargs)
-    back = read_table(path)
+    back = read_pandas(path)
     pd.testing.assert_frame_equal(back, df, **EQUAL)
     return path, back
 
@@ -122,6 +127,117 @@ def test_exported():
     for name in ("write_table", "read_table", "TableWriter"):
         assert name in dftu.__all__
         assert hasattr(dftu, name)
+
+
+def test_read_table_returns_our_frame_that_restores_pandas_exactly(tmp_path):
+    df = matrix()
+    path = str(tmp_path / "t.pfw.gz")
+    write_table(df, path, name="t")
+    frame = read_table(path)
+    assert isinstance(frame, DataFrame)
+    assert frame.num_rows == len(df) and frame._table_header["table"] == "t"
+    # Category labels are plain values and set and list cells are JSON text.
+    assert frame["cat"].to_list() == ["lo", None, "hi", "mid", "lo"]
+    assert frame["sets"].to_list()[0] in ("[1,2]", "[2,1]")
+    assert frame["lists"].to_list()[3] == '["a","b","a"]'
+    exact = frame.to_pandas()
+    keep = [c for c in df.columns if c not in ("sets", "lists")]
+    pd.testing.assert_frame_equal(exact[keep], df[keep], **EQUAL)
+    sets_equal_nan(exact["sets"].tolist(), df["sets"].tolist())
+    sets_equal_nan(exact["lists"].tolist(), df["lists"].tolist())
+    assert list(frame.to_pandas().dtypes.astype(str)) == list(df.dtypes.astype(str))
+
+
+def test_index_names_and_the_native_row_index(tmp_path):
+    df = pd.DataFrame(
+        {"v": [1.5, 2.5, 3.5]},
+        index=pd.MultiIndex.from_arrays([[0, 1, 2], ["a", "b", "c"]], names=[None, "lvl"]),
+    )
+    path = str(tmp_path / "t.pfw.gz")
+    write_table(df, path, name="t")
+    frame = read_table(path)
+    assert frame.index_names() == ["__index_level_0__", "lvl"]
+    pandas_frame = frame.to_pandas()
+    assert list(pandas_frame.index.names) == [None, "lvl"]
+    pd.testing.assert_frame_equal(pandas_frame, df, **EQUAL)
+
+
+def test_a_derived_frame_and_explicit_arguments_ignore_the_header(tmp_path):
+    df = pd.DataFrame(
+        {
+            "i": np.array([1, 2, 3], dtype="int64"),
+            "c": pd.Categorical(["a", "b", "a"], categories=["a", "b", "z"]),
+            "s": pd.array(["x", "y", "z"], dtype=pd.StringDtype("python")),
+        }
+    )
+    path = str(tmp_path / "t.pfw.gz")
+    write_table(df, path, name="t")
+    frame = read_table(path)
+    exact = frame.to_pandas()
+    assert list(exact["c"].cat.categories) == ["a", "b", "z"]
+    assert exact["s"].dtype.storage == "python"
+
+    derived = frame.filter(frame["i"] > 1)
+    assert getattr(derived, "_table_header", None) is None
+    plain = derived.to_pandas()
+    assert not isinstance(plain["c"].dtype, pd.CategoricalDtype)
+    assert plain["i"].tolist() == [2, 3]
+
+    assert frame.to_pandas(nullable=True)["i"].dtype == "Int64"
+    assert not isinstance(frame.to_pandas(nullable=True)["c"].dtype, pd.CategoricalDtype)
+    assert isinstance(frame.to_pandas(arrow=True)["i"].dtype, pd.ArrowDtype)
+    assert frame.to_pandas(index="i").index.name == "i"
+    totals = frame.group_by("c").sum().to_pandas().sort_values("c")
+    assert totals["c"].tolist() == ["a", "b"] and totals["i"].tolist() == [4, 2]
+
+
+def test_a_dftracer_frame_is_written_directly(tmp_path):
+    table = pa.table(
+        {
+            "i": pa.array([1, None, 3]),
+            "f": pa.array([1.5, math.nan, None]),
+            "b": pa.array([True, None, False]),
+            "s": pa.array(["a", None, "b"]),
+            "d": pa.array(["u", "v", "u"]).dictionary_encode(),
+            "u8": pa.array([1, 2, 3], type=pa.uint8()),
+        }
+    )
+    frame = DataFrame.from_arrow(table)
+    path = str(tmp_path / "t.pfw.gz")
+    write_table(frame, path, name="native", meta={"k": 1})
+    args = json.loads(lines_of(path)[0])["args"]
+    assert [f["dtype"] for f in args["fields"]] == [
+        "Int64",
+        "Float64",
+        "boolean",
+        "object",
+        "category",
+        "uint8",
+    ]
+    back = read_table(path)
+    for col in ("i", "f", "b", "s", "u8"):
+        assert back[col].to_list() == frame[col].to_list() or col == "f"
+    assert back["f"].null_count == 1 and math.isnan(back["f"].to_list()[1])
+    exact = back.to_pandas()
+    assert exact["f"].isna().tolist() == [False, False, True] and math.isnan(exact["f"][1])
+    assert exact["i"].dtype == "Int64" and exact["u8"].dtype == "uint8"
+    assert exact["d"].tolist() == ["u", "v", "u"] and list(exact["d"].cat.categories) == ["u", "v"]
+    with pytest.raises(TypeError, match="Arrow type"):
+        write_table(
+            DataFrame.from_arrow(pa.table({"t": pa.array([1], type=pa.timestamp("us"))})),
+            path,
+            name="t",
+        )
+
+
+def test_a_dftracer_frame_keeps_its_row_index(tmp_path):
+    frame = DataFrame.from_arrow(pa.table({"k": ["a", "b"], "v": [1, 2]}))
+    frame = frame.with_index(["k"])
+    path = str(tmp_path / "t.pfw.gz")
+    write_table(frame, path, name="t")
+    back = read_table(path)
+    assert back.index_names() == ["k"]
+    assert back.to_pandas().index.tolist() == ["a", "b"]
 
 
 def test_every_dtype_round_trips_with_exact_dtypes(tmp_path):
@@ -148,7 +264,7 @@ def test_sets_and_lists_come_back_as_their_kind(tmp_path):
     df = matrix()[["sets", "lists"]]
     path = str(tmp_path / "s.pfw.gz")
     write_table(df, path, name="t")
-    back = read_table(path)
+    back = read_pandas(path)
     sets_equal_nan(back["sets"].tolist(), df["sets"].tolist())
     sets_equal_nan(back["lists"].tolist(), df["lists"].tolist())
     fields = json.loads(lines_of(path)[0])["args"]["fields"]
@@ -211,14 +327,14 @@ def test_plain_path_is_not_compressed(tmp_path):
     path = str(tmp_path / "t.pfw")
     write_table(df, path, name="t")
     assert lines_of(path)[0].startswith("{")
-    pd.testing.assert_frame_equal(read_table(path), df, **EQUAL)
+    pd.testing.assert_frame_equal(read_pandas(path), df, **EQUAL)
 
 
 def test_dftracer_dataframe_is_accepted(tmp_path):
     df = pd.DataFrame({"a": [1, 2, 3], "s": ["x", "y", "z"]})
     path = str(tmp_path / "t.pfw.gz")
     write_table(DataFrame.from_pandas(df), path, name="t")
-    back = read_table(path)
+    back = read_pandas(path)
     assert back["a"].tolist() == [1, 2, 3] and back["s"].tolist() == ["x", "y", "z"]
 
 
@@ -258,20 +374,20 @@ def test_reader_refusals(tmp_path):
     header["args"]["format_version"] = 2
     bad.write_text(json.dumps(header) + "\n" + "\n".join(lines[1:]) + "\n")
     with pytest.raises(dftu.DFTUtilsParseError, match="format_version"):
-        read_table(str(bad))
+        read_pandas(str(bad))
 
     header["args"]["format_version"] = 1
     header["args"]["nrows"] = 5
     bad.write_text(json.dumps(header) + "\n" + "\n".join(lines[1:]) + "\n")
     with pytest.raises(dftu.DFTUtilsParseError, match="rows"):
-        read_table(str(bad))
+        read_pandas(str(bad))
 
     header["args"]["nrows"] = 2
     bad.write_text(
         json.dumps(header) + "\n" + lines[1] + "\n" + json.dumps({"ph": 3, "args": {"b": 1}}) + "\n"
     )
     with pytest.raises(dftu.DFTUtilsParseError, match="field"):
-        read_table(str(bad))
+        read_pandas(str(bad))
 
     bad.write_text(
         json.dumps(header)
@@ -282,7 +398,7 @@ def test_reader_refusals(tmp_path):
         + "\n"
     )
     with pytest.raises(dftu.DFTUtilsParseError):
-        read_table(str(bad))
+        read_pandas(str(bad))
 
 
 def test_table_writer_appends_frames_into_one_file(tmp_path):
@@ -294,10 +410,27 @@ def test_table_writer_appends_frames_into_one_file(tmp_path):
     with TableWriter(path, name="t", meta={"parts": 3}) as w:
         for p in parts:
             w.write(p)
-    back = read_table(path)
+    back = read_pandas(path)
     pd.testing.assert_frame_equal(back, pd.concat(parts, ignore_index=True), **EQUAL)
     header = json.loads(lines_of(path)[0])
     assert header["args"]["nrows"] == 9 and header["ph"] == 4
+
+
+def test_table_writer_takes_dftracer_frames(tmp_path):
+    path = str(tmp_path / "w.pfw.gz")
+    parts = [
+        DataFrame.from_arrow(pa.table({"k": [i, i + 1], "v": [float(i), None]})) for i in (0, 10)
+    ]
+    indexed = [p.with_index(["k"]) for p in parts]
+    with TableWriter(path, name="t") as w:
+        for p in indexed:
+            w.write(p)
+        with pytest.raises(ValueError):
+            w.write(pd.DataFrame({"k": [1], "v": [1.0]}))
+    back = read_table(path)
+    assert back.index_names() == ["k"] and back.num_rows == 4
+    assert back["k"].to_list() == [0, 1, 10, 11]
+    assert json.loads(lines_of(path)[0])["args"]["nrows"] == 4
 
 
 def test_table_writer_with_an_index_and_a_mismatch(tmp_path):
@@ -309,7 +442,7 @@ def test_table_writer_with_an_index_and_a_mismatch(tmp_path):
         w.write(b)
         with pytest.raises(ValueError):
             w.write(pd.DataFrame({"v": [1], "extra": [2]}))
-    pd.testing.assert_frame_equal(read_table(path), pd.concat([a, b]), **EQUAL)
+    pd.testing.assert_frame_equal(read_pandas(path), pd.concat([a, b]), **EQUAL)
 
 
 def test_table_writer_discards_on_exception_and_when_empty(tmp_path):
@@ -338,7 +471,7 @@ def test_dask_folder_round_trip(tmp_path):
     assert files == ["part-00000.pfw.gz", "part-00001.pfw.gz", "part-00002.pfw.gz"]
     for f in files:
         assert json.loads(lines_of(os.path.join(folder, f))[0])["ph"] == 4
-    back = read_table(folder)
+    back = read_pandas(folder)
     pd.testing.assert_frame_equal(back, ddf.compute(), **EQUAL)
     with pytest.raises(FileExistsError):
         write_table(dd.from_pandas(df, npartitions=2), folder, name="t")
@@ -348,11 +481,11 @@ def test_folder_parts_must_agree(tmp_path):
     write_table(pd.DataFrame({"a": [1]}), str(tmp_path / "part-0.pfw.gz"), name="t")
     write_table(pd.DataFrame({"b": [1]}), str(tmp_path / "part-1.pfw.gz"), name="t")
     with pytest.raises(ValueError, match="differ"):
-        read_table(str(tmp_path))
+        read_pandas(str(tmp_path))
     empty = tmp_path / "empty"
     empty.mkdir()
     with pytest.raises(ValueError, match="holds no"):
-        read_table(str(empty))
+        read_pandas(str(empty))
 
 
 def rewrite(path, old, new, count=1):
@@ -368,7 +501,7 @@ def test_large_integer_labels_stay_exact_with_a_null(tmp_path):
     cat = pd.Categorical([2**53 + 1, None, 2**62 + 1, 2**53], categories=labels)
     df = pd.DataFrame({"c": cat})
     assert_round_trip(df, tmp_path)
-    back = read_table(str(tmp_path / "t.pfw.gz"))
+    back = read_pandas(str(tmp_path / "t.pfw.gz"))
     assert back["c"].cat.codes.tolist() == [1, -1, 2, 0]
 
 
@@ -376,22 +509,22 @@ def test_a_value_that_is_no_category_is_an_error(tmp_path):
     df = pd.DataFrame({"c": pd.Categorical(["a", "b", None], categories=["a", "b"])})
     path = str(tmp_path / "c.pfw")
     write_table(df, path, name="t")
-    pd.testing.assert_frame_equal(read_table(path), df, **EQUAL)
+    pd.testing.assert_frame_equal(read_pandas(path), df, **EQUAL)
     rewrite(path, '"c":"b"', '"c":"zzz"')
     with pytest.raises(ValueError, match="'c'.*zzz"):
-        read_table(path)
+        read_pandas(path)
     nums = pd.DataFrame({"c": pd.Categorical([1, 2], categories=[1, 2])})
     write_table(nums, path, name="t")
     rewrite(path, '"c":2', '"c":3')
     with pytest.raises(ValueError, match="'c'"):
-        read_table(path)
+        read_pandas(path)
 
 
 def test_category_nan_rules(tmp_path):
     df = pd.DataFrame({"c": pd.Categorical(["a", None, "NaN"], categories=["a", "NaN"])})
     path = str(tmp_path / "c.pfw")
     write_table(df, path, name="t")
-    back = read_table(path)
+    back = read_pandas(path)
     assert (
         back["c"].tolist()[0] == "a"
         and back["c"].tolist()[2] == "NaN"
@@ -404,16 +537,16 @@ def test_category_nan_rules(tmp_path):
     assert "categories_dtype" not in text
     open(path, "w", encoding="utf-8").write(text)
     rewrite(path, '"c":null', '"c":"NaN"')
-    assert pd.isna(read_table(path)["c"].tolist()[1])
+    assert pd.isna(read_pandas(path)["c"].tolist()[1])
     # With categories_dtype the same value is an error.
     write_table(plain, path, name="t")
     rewrite(path, '"c":null', '"c":"NaN"')
     with pytest.raises(ValueError, match="'c'"):
-        read_table(path)
+        read_pandas(path)
     # NaN and Infinity decode to floats only when the categories are floats.
     floats = pd.DataFrame({"c": pd.Categorical([1.5, None], categories=[1.5, 2.5])})
     write_table(floats, path, name="t")
-    assert read_table(path)["c"].cat.categories.dtype == np.float64
+    assert read_pandas(path)["c"].cat.categories.dtype == np.float64
 
 
 def test_unsupported_category_labels_are_refused(tmp_path):
@@ -433,7 +566,7 @@ def test_nan_in_an_object_column_reads_back_as_none(tmp_path):
     df = pd.DataFrame({"o": pd.Series(["a", math.nan, None], dtype=object)})
     path = str(tmp_path / "o.pfw")
     write_table(df, path, name="t")
-    assert read_table(path)["o"].tolist() == ["a", None, None]
+    assert read_pandas(path)["o"].tolist() == ["a", None, None]
 
 
 def test_non_string_index_names_and_collisions(tmp_path):
@@ -441,7 +574,7 @@ def test_non_string_index_names_and_collisions(tmp_path):
     path = str(tmp_path / "i.pfw.gz")
     write_table(df, path, name="t")
     assert json.loads(lines_of(path)[0])["args"]["index"] == ["0"]
-    back = read_table(path)
+    back = read_pandas(path)
     assert list(back.index.names) == [0] and back["v"].tolist() == [1, 2]
 
     clash = pd.DataFrame({"__index_level_0__": [1]}, index=pd.Index([5]))
@@ -460,7 +593,7 @@ def test_a_set_cell_that_is_no_array_is_an_error(tmp_path):
     write_table(df, path, name="t")
     rewrite(path, '"s":[2]', '"s":5')
     with pytest.raises(ValueError, match="'s'.*array"):
-        read_table(path)
+        read_pandas(path)
 
 
 def test_folder_parts_may_differ_in_content_but_not_in_names_and_dtypes(tmp_path):
@@ -476,7 +609,7 @@ def test_folder_parts_may_differ_in_content_but_not_in_names_and_dtypes(tmp_path
         str(folder / "part-1.pfw.gz"),
         name="t",
     )
-    back = read_table(str(folder))
+    back = read_pandas(str(folder))
     assert back["o"].tolist() == [None, None, {1}, {2, 3}]
 
 
@@ -563,9 +696,115 @@ def test_dfanalyzer_reads_our_files_and_we_read_theirs(tmp_path):
 
     theirs = str(tmp_path / "theirs.pfw.gz")
     ref.write_table(df, theirs, "t")
-    back = read_table(theirs)
+    back = read_pandas(theirs)
     pd.testing.assert_frame_equal(
         back.drop(columns=["sets", "lists"]), df.drop(columns=["sets", "lists"]), **EQUAL
     )
     sets_equal_nan(back["sets"].tolist(), df["sets"].tolist())
     sets_equal_nan(back["lists"].tolist(), df["lists"].tolist())
+
+
+def text_parts(folder):
+    folder.mkdir()
+    parts = [
+        (["x", "y", "x"], ["p", None, "q"], [{1}, {2, 3}, set()], ["a", None, "b"]),
+        (["y", "x"], [None, "r"], [{4}, set()], ["c", "d"]),
+    ]
+    for k, (c, o, s, sp) in enumerate(parts):
+        df = pd.DataFrame(
+            {
+                "c": pd.Categorical(c, categories=["x", "y"]),
+                "o": pd.Series(o, dtype=object),
+                "set": pd.Series(s, dtype=object),
+                "sp": pd.array(sp, dtype=pd.StringDtype("python")),
+            }
+        )
+        write_table(df, str(folder / f"part-{k}.pfw.gz"), name="t")
+
+
+def test_a_folder_with_text_columns_restores_exactly(tmp_path):
+    folder = tmp_path / "parts"
+    text_parts(folder)
+    back = read_table(str(folder)).to_pandas()
+    assert isinstance(back["c"].dtype, pd.CategoricalDtype)
+    assert back["c"].astype(object).tolist() == ["x", "y", "x", "y", "x"]
+    assert back["o"].tolist() == ["p", None, "q", None, "r"]
+    assert back["set"].tolist() == [{1}, {2, 3}, set(), {4}, set()]
+    assert back["sp"].dtype == pd.StringDtype("python")
+    assert back["sp"].tolist() == ["a", pd.NA, "b", "c", "d"]
+
+
+def test_dask_round_trip_keeps_a_string_category(tmp_path):
+    dd = pytest.importorskip("dask.dataframe")
+    df = pd.DataFrame({"a": np.arange(8, dtype="int64"), "c": pd.Categorical(list("abababab"))})
+    folder = str(tmp_path / "parts")
+    write_table(dd.from_pandas(df, npartitions=2), folder, name="t")
+    back = read_table(folder).to_pandas()
+    assert isinstance(back["c"].dtype, pd.CategoricalDtype)
+    assert back["c"].astype(object).tolist() == list("abababab")
+
+
+def stale_frame(tmp_path):
+    df = pd.DataFrame(
+        {
+            "a": np.array([1, 2, 3], dtype="int32"),
+            "s": pd.Categorical(["x", "y", "x"]),
+            "o": pd.Series(["p", "q", "r"], dtype=object),
+        }
+    )
+    path = str(tmp_path / "t.pfw.gz")
+    write_table(df, path, name="t")
+    return read_table(path)
+
+
+def test_a_frame_changed_in_place_drops_its_header(tmp_path):
+    f = stale_frame(tmp_path)
+    f["a"] = f["a"] * 2.5
+    assert not hasattr(f, "_table_header")
+    assert f.to_pandas()["a"].tolist() == [2.5, 5.0, 7.5]
+
+    g = stale_frame(tmp_path)
+    g.loc[0, "a"] = None
+    assert not hasattr(g, "_table_header")
+    assert g.to_pandas()["a"].isna().tolist() == [True, False, False]
+
+    h = stale_frame(tmp_path)
+    h.loc[0, "a"] = 2**40
+    assert h.to_pandas()["a"].tolist()[0] == 2**40
+
+    k = stale_frame(tmp_path)
+    k["c"] = k["s"]
+    assert not hasattr(k, "_table_header")
+    assert k.to_pandas()["c"].tolist() == ["x", "y", "x"]
+
+
+def test_a_new_frame_has_no_header_and_the_same_frame_keeps_it(tmp_path):
+    f = stale_frame(tmp_path)
+    assert hasattr(f.assign(z=1), "_table_header") is False
+    assert hasattr(f.sort_index(), "_table_header")
+    assert hasattr(f.iloc[:], "_table_header")
+
+
+def test_a_header_that_no_longer_fits_a_column_is_ignored(tmp_path):
+    f = stale_frame(tmp_path)
+    f._table_header = {
+        **f._table_header,
+        "fields": [
+            dict(x, dtype="int8") if x["name"] == "a" else x for x in f._table_header["fields"]
+        ],
+    }
+    big = DataFrame({"a": [2**40, 1, 2], "s": ["x", "y", "x"], "o": ["p", "q", "r"]})
+    big._table_header = f._table_header
+    assert big.to_pandas()["a"].tolist() == [2**40, 1, 2]
+    floats = DataFrame({"a": [1.5, 2.0, 3.0], "s": ["x", "y", "x"], "o": ["p", "q", "r"]})
+    floats._table_header = f._table_header
+    assert floats.to_pandas()["a"].tolist() == [1.5, 2.0, 3.0]
+
+
+def test_a_native_frame_keeps_nan_apart_from_null_on_write(tmp_path):
+    df = DataFrame({"x": [1.0, math.nan, None, 2.5]})
+    path = str(tmp_path / "t.pfw.gz")
+    write_table(df, path, name="t")
+    back = read_table(path)
+    values = back["x"].to_list()
+    assert values[0] == 1.0 and math.isnan(values[1]) and values[2] is None and values[3] == 2.5

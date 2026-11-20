@@ -15,13 +15,14 @@ import glob
 import json
 import math
 import os
+import re
 import shutil
 import tempfile
 import types
-from typing import TYPE_CHECKING, Any, Protocol, Union, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, Union, cast, runtime_checkable
 
 from . import dftracer_utils_ext as _ext
-from .dataframe import DataFrame
+from .dataframe import DataFrame, _bound
 
 if TYPE_CHECKING:
     import numpy as np
@@ -212,16 +213,11 @@ def _dtype_text(dtype: object) -> str:
 
 
 def _prepare(
-    df: pd.DataFrame | DataFrame, name: str, meta: Meta | None, keep_index: bool = False
+    df: pd.DataFrame, name: str, meta: Meta | None, keep_index: bool = False
 ) -> tuple[Header, pa.Table, list[str]]:
     np, pd, pa = _libs()
     if not isinstance(df, pd.DataFrame):
-        if isinstance(df, DataFrame):
-            df = df.to_pandas()
-        else:
-            raise TypeError(
-                f"expected a pandas or dftracer.utils DataFrame, got {type(df).__name__}"
-            )
+        raise TypeError(f"expected a pandas or dftracer.utils DataFrame, got {type(df).__name__}")
     index = df.index
     default = (
         isinstance(index, pd.RangeIndex)
@@ -305,8 +301,68 @@ def _prepare(
     return header, pa.Table.from_arrays(arrays, names=columns), raw_columns
 
 
+def _is_text(t: pa.DataType) -> bool:
+    _, _, pa = _libs()
+    return bool(
+        pa.types.is_string(t)
+        or pa.types.is_large_string(t)
+        or getattr(pa.types, "is_string_view", lambda _: False)(t)
+    )
+
+
+def _prepare_native(df: DataFrame, name: str, meta: Meta | None) -> Header:
+    """The header of a dftracer.utils frame, from its Arrow schema. A column keeps
+    its width; one that holds a null takes the nullable dtype, so a null stays
+    apart from NaN. Strings are ``object``, a dictionary column of strings a
+    ``category``, and the frame's row index names become the header's index."""
+    _, _, pa = _libs()
+    table = df.to_arrow()
+    names = [f.name for f in table.schema]
+    if len(set(names)) != len(names):
+        raise ValueError(f"table {name!r}: duplicate field names {names}")
+    fields: list[dict[str, object]] = []
+    for position, arrow_field in enumerate(table.schema):
+        col = arrow_field.name
+        column = table.column(position)
+        t = arrow_field.type
+        nulls = column.null_count > 0
+        field: dict[str, object] = {"name": col}
+        if pa.types.is_dictionary(t) and _is_text(t.value_type):
+            chunks = column.unify_dictionaries().chunks
+            labels = chunks[0].dictionary.to_pylist() if chunks else []
+            field.update(
+                dtype="category", categories=labels, categories_dtype="object", ordered=False
+            )
+        elif pa.types.is_signed_integer(t) or pa.types.is_unsigned_integer(t):
+            signed = pa.types.is_signed_integer(t)
+            stem = ("Int" if signed else "UInt") if nulls else ("int" if signed else "uint")
+            field["dtype"] = f"{stem}{t.bit_width}"
+        elif pa.types.is_floating(t) and t.bit_width in (32, 64):
+            field["dtype"] = f"Float{t.bit_width}" if nulls else f"float{t.bit_width}"
+        elif pa.types.is_boolean(t):
+            field["dtype"] = "boolean" if nulls else "bool"
+        elif _is_text(t):
+            field["dtype"] = "object"
+        else:
+            raise TypeError(f"column {col!r} has the Arrow type {t}, which a table cannot store")
+        fields.append(field)
+    index_fields = list(df.index_names())
+    return {
+        "format": FORMAT,
+        "format_version": FORMAT_VERSION,
+        "table": name,
+        "nrows": df.num_rows,
+        "index": index_fields,
+        "index_names": [
+            None if re.fullmatch(r"__index_level_\d+__", n) else n for n in index_fields
+        ],
+        "fields": fields,
+        "meta": meta or {},
+    }
+
+
 def write_table(
-    df: pd.DataFrame | DataFrame | _Partitioned,
+    df: DataFrame | pd.DataFrame | _Partitioned,
     path: PathLike,
     *,
     name: str,
@@ -316,14 +372,18 @@ def write_table(
 ) -> None:
     """Write ``df`` to ``path`` as one typed table named ``name``.
 
-    ``df`` is a pandas or dftracer.utils ``DataFrame``. A path ending in
-    ``.gz`` is written as a multi-member gzip file, any other path as plain
-    text. A default ``RangeIndex`` is not stored; any other index becomes
-    leading fields, an unnamed level as ``__index_level_<i>__`` that
-    :func:`read_table` restores without a name; a level name that is not a str
-    is stored as its text and restored as given. ``meta`` is a JSON-serializable
-    dict kept in the header. A NaN in an object column is written as null and
-    reads back as ``None``.
+    ``df`` is a dftracer.utils ``DataFrame``, which writes straight from its
+    columns, or a pandas ``DataFrame``. A path ending in ``.gz`` is written as
+    a multi-member gzip file, any other path as plain text. The row index of a
+    dftracer.utils frame becomes the header's index. A pandas default
+    ``RangeIndex`` is not stored; any other pandas index becomes leading
+    fields, an unnamed level as ``__index_level_<i>__`` that :func:`read_table`
+    restores without a name; a level name that is not a str is stored as its
+    text and restored as given. A dftracer.utils column that holds a null is
+    written with a nullable dtype, so a null stays apart from NaN, and a string
+    column as ``object``. ``meta`` is a JSON-serializable dict kept in the
+    header. A NaN in a pandas object column is written as null and reads back as
+    ``None``.
 
     A Dask ``DataFrame`` writes the folder ``path`` with one file per
     partition, ``part-00000.pfw.gz`` and on, each a full table.
@@ -342,7 +402,7 @@ def write_table(
 
 
 def _write_one(
-    df: pd.DataFrame | DataFrame,
+    df: DataFrame | pd.DataFrame,
     path: str,
     name: str,
     meta: Meta | None,
@@ -350,6 +410,10 @@ def _write_one(
     threads: int,
     keep_index: bool,
 ) -> None:
+    if isinstance(df, DataFrame):
+        header = _prepare_native(df, name, meta)
+        _ext._write_table(df, path, json.dumps(header, allow_nan=False), [], level, threads)
+        return
     header, table, raw_columns = _prepare(df, name, meta, keep_index)
     frame = DataFrame.from_arrow(table)
     _ext._write_table(frame, path, json.dumps(header, allow_nan=False), raw_columns, level, threads)
@@ -422,7 +486,7 @@ def _restore_category(name: str, arr: pa.Array, field: dict[str, Any]) -> pd.Cat
     null = arr.is_null().to_numpy(zero_copy_only=False)
     missing = null.copy()
     text = all(isinstance(c, str) for c in labels)
-    if pa.types.is_string(arr.type) and text:
+    if _is_text(arr.type) and text:
         values = arr.to_numpy(zero_copy_only=False)
         codes = pd.Index(labels, dtype=object).get_indexer(values)
         if legacy and "NaN" not in labels:
@@ -466,6 +530,55 @@ def _restore_category(name: str, arr: pa.Array, field: dict[str, Any]) -> pd.Cat
     )
 
 
+def _resolved(name: str, field: dict[str, Any]) -> Dtype:
+    """The pandas dtype a non-category, non-object field restores to."""
+    _, pd, pa = _libs()
+    resolved = _resolve(str(field["dtype"]))
+    if "arrow_type" in field:
+        try:
+            resolved = pd.ArrowDtype(pa.type_for_alias(str(field["arrow_type"])))
+        except ValueError:
+            raise ValueError(
+                f"column {name!r}: unknown Arrow type {field['arrow_type']!r}"
+            ) from None
+    return resolved
+
+
+def _fits(name: str, arr: pa.Array, field: dict[str, Any]) -> bool:
+    """Whether the column's current Arrow type is the one the header implies, so
+    that restoring it cannot wrap, truncate or turn a null into a value."""
+    np, pd, pa = _libs()
+    t = arr.type
+    dtype = str(field["dtype"])
+    if dtype == "category":
+        return bool(_is_text(t) or pa.types.is_integer(t) or pa.types.is_floating(t))
+    if dtype == "object":
+        return _is_text(t)
+    resolved = _resolved(name, field)
+    if isinstance(resolved, pd.StringDtype):
+        return _is_text(t)
+    if isinstance(resolved, pd.ArrowDtype):
+        wanted = resolved.pyarrow_dtype
+        same = (
+            pa.types.is_integer,
+            pa.types.is_floating,
+            pa.types.is_boolean,
+            _is_text,
+        )
+        return bool(t.equals(wanted) or any(k(t) and k(wanted) for k in same))
+    numpy_dtype = (
+        resolved if isinstance(resolved, np.dtype) else getattr(resolved, "numpy_dtype", None)
+    )
+    if numpy_dtype is None:
+        return False
+    kind = {"b": pa.types.is_boolean, "i": pa.types.is_integer, "u": pa.types.is_integer}.get(
+        numpy_dtype.kind, pa.types.is_floating
+    )
+    if not kind(t):
+        return False
+    return not (isinstance(resolved, np.dtype) and resolved.kind != "f" and arr.null_count)
+
+
 def _restore(name: str, arr: pa.Array, field: dict[str, Any]) -> Column:
     np, pd, pa = _libs()
     dtype = str(field["dtype"])
@@ -486,49 +599,64 @@ def _restore(name: str, arr: pa.Array, field: dict[str, Any]) -> Column:
                 raise ValueError(f"column {name!r}: row {i} is not a JSON array")
             out[i] = make(cell)
         return pd.Series(out, dtype=object)
-    resolved = _resolve(dtype)
-    if "arrow_type" in field:
-        try:
-            resolved = pd.ArrowDtype(pa.type_for_alias(str(field["arrow_type"])))
-        except ValueError:
-            raise ValueError(
-                f"column {name!r}: unknown Arrow type {field['arrow_type']!r}"
-            ) from None
+    resolved = _resolved(name, field)
+    # From pandas 3 on, copy-on-write makes the read-only Arrow buffer is safe to share, so a
+    # numpy column without nulls keeps it; otherwise a column is copied.
+    share = int(pd.__version__.split(".")[0]) >= 3
     if isinstance(resolved, np.dtype):
-        if resolved.kind == "f":
+        if resolved.kind == "f" and arr.null_count:
             return arr.fill_null(math.nan).to_numpy(zero_copy_only=False).astype(resolved)
-        return arr.to_numpy(zero_copy_only=False).astype(resolved)
+        values = arr.cast(pa.from_numpy_dtype(resolved), safe=True).to_numpy(zero_copy_only=False)
+        return values.astype(resolved, copy=not share)
     if isinstance(resolved, pd.ArrowDtype):
-        return pd.arrays.ArrowExtensionArray(arr.cast(resolved.pyarrow_dtype))
+        return pd.arrays.ArrowExtensionArray(arr.cast(resolved.pyarrow_dtype, safe=True))
     if isinstance(resolved, pd.StringDtype):
         return resolved.__from_arrow__(pa.chunked_array([arr]))
     numpy_dtype = getattr(resolved, "numpy_dtype", None)
-    if numpy_dtype is not None:
+    if numpy_dtype is not None and isinstance(resolved, pd.api.extensions.ExtensionDtype):
         fill = False if numpy_dtype == np.dtype(bool) else 0
-        data = arr.fill_null(fill).to_numpy(zero_copy_only=False).astype(numpy_dtype)
+        filled = arr.fill_null(fill) if arr.null_count else arr
+        data = (
+            filled.cast(pa.from_numpy_dtype(numpy_dtype), safe=True)
+            .to_numpy(zero_copy_only=False)
+            .astype(numpy_dtype, copy=not share)
+        )
         mask = arr.is_null().to_numpy(zero_copy_only=False)
         return resolved.construct_array_type()(data, mask)
-    raise TypeError(f"dtype {dtype} cannot be restored")
+    raise TypeError(f"dtype {field['dtype']} cannot be restored")
 
 
-def _read_one(path: str, threads: int) -> tuple[pd.DataFrame, Header]:
-    _, pd, _ = _libs()
+def _read_one(path: str, threads: int) -> tuple[DataFrame, Header]:
     frame, header_text = _ext._read_table(path, threads)
     header: Header = json.loads(header_text)
-    fields: list[dict[str, Any]] = header["fields"]
-    names = [str(f["name"]) for f in fields]
+    names = [str(f["name"]) for f in header["fields"]]
     if len(set(names)) != len(names):
         raise ValueError(f"{path}: duplicate field names {names}")
+    return _bound(frame), header
+
+
+def exact_pandas(frame: DataFrame, header: Header) -> pd.DataFrame | None:
+    """The exact pandas frame a table header describes, or None when a column of
+    ``frame`` no longer has the name or Arrow type the header implies."""
+    _, pd, pa = _libs()
+    fields: list[dict[str, Any]] = header["fields"]
+    names = [str(f["name"]) for f in fields]
+    if frame._names() != names:
+        return None
     table = frame.to_arrow()
-    data = {
-        n: _restore(n, _flat(table.column(i)), f) for i, (n, f) in enumerate(zip(names, fields))
-    }
-    df = pd.DataFrame(data, columns=names)
+    columns = [_flat(table.column(i)) for i in range(len(names))]
+    if not all(_fits(n, a, f) for n, a, f in zip(names, columns, fields)):
+        return None
+    try:
+        data = {n: _restore(n, a, f) for n, a, f in zip(names, columns, fields)}
+    except pa.ArrowInvalid:
+        return None
+    df = pd.DataFrame(data, columns=names, copy=False)
     index_fields: list[str] = header.get("index", [])
     if index_fields:
         df = df.set_index(index_fields)
         df.index.names = header.get("index_names") or index_fields
-    return df, header
+    return df
 
 
 def _schema(header: Header) -> tuple[list[tuple[str, str]], list[str]]:
@@ -538,40 +666,77 @@ def _schema(header: Header) -> tuple[list[tuple[str, str]], list[str]]:
     return fields, list(header.get("index") or [])
 
 
-def read_table(path: PathLike, *, threads: int = 0) -> pd.DataFrame:
-    """Read a table written by :func:`write_table` into a pandas frame.
+def _merged_header(headers: list[Header]) -> Header:
+    """The header of the concatenated parts: the first part's, with the total
+    row count, the union of each field's categories, and ``elem`` from any part."""
+    merged: Header = json.loads(json.dumps(headers[0]))
+    merged["nrows"] = sum(int(h["nrows"]) for h in headers)
+    for position, field in enumerate(merged["fields"]):
+        for h in headers[1:]:
+            other = h["fields"][position]
+            if "categories" in field:
+                known = list(field["categories"])
+                field["categories"] = known + [
+                    c for c in other.get("categories", []) if c not in known
+                ]
+            if "elem" in other and "elem" not in field:
+                field["elem"] = other["elem"]
+    return merged
 
-    Dtypes, categories, set and list cells and the index come back as the
-    header says. NaN stays apart from NA in a nullable float column; a missing
-    cell of an object column is ``None``. A folder
-    reads every ``*.pfw.gz`` in it in name order and concatenates the parts,
-    which must agree on their fields and index.
+
+def _with_header(frame: DataFrame, header: Header) -> DataFrame:
+    """``frame`` with the header's index, carrying the header for to_pandas."""
+    index_fields: list[str] = header.get("index") or []
+    if index_fields:
+        frame = _bound(_ext.DataFrame.with_index(frame, index_fields))
+    frame._table_header = header
+    return frame
+
+
+def read_table(path: PathLike, *, threads: int = 0) -> DataFrame:
+    """Read a table written by :func:`write_table` into a dftracer.utils frame.
+
+    The columns are the engine's native types: Int64, Uint64, Float64, Bool and
+    String, with a null for NA (NaN stays a float value). A category column
+    holds its labels as plain values, and a set or list column holds the JSON
+    text of each cell, because the engine has no list type; ``to_pandas()``
+    restores both. The header's index levels are the frame's row index
+    (:meth:`DataFrame.index_names`).
+
+    The frame carries its table header, so ``read_table(path).to_pandas()``
+    with no arguments gives the exact pandas frame that was written: its
+    dtypes, categories, set and list cells and index. A new frame
+    (a filter, a join) has no header, a frame changed in place drops it, and an explicit ``arrow``,
+    ``nullable`` or ``index`` argument of ``to_pandas`` ignores it.
+
+    A folder reads every ``*.pfw.gz`` in it in name order and concatenates the
+    parts, which must agree on their field names, dtypes and index.
 
     Raises ``DFTUtilsParseError`` for another format, an unknown
     ``format_version``, a row that misses a field or holds a value its dtype
     cannot take, or a row count that differs from the header's;
     ``DFTUtilsCompressionError`` for corrupt gzip data; and ``ValueError`` for
-    a cell that is no category label, a set or list cell that is no JSON array,
-    or the parts of a folder that disagree.
+    the parts of a folder that disagree. ``to_pandas()`` raises ``ValueError``
+    for a cell that is no category label or a set or list cell that is no JSON
+    array.
     """
-    _, pd, _ = _libs()
     path = os.fspath(path)
     if not os.path.isdir(path):
-        return _read_one(path, threads)[0]
+        frame, header = _read_one(path, threads)
+        return _with_header(frame, header)
     parts = sorted(glob.glob(os.path.join(path, _PART_GLOB)))
     if not parts:
         raise ValueError(f"{path} holds no {_PART_GLOB} table parts")
-    frames: list[Any] = []
-    first: Header | None = None
+    frames: list[DataFrame] = []
+    headers: list[Header] = []
     for part in parts:
-        df, header = _read_one(part, threads)
-        if first is None:
-            first = header
-        elif _schema(header) != _schema(first):
+        frame, header = _read_one(part, threads)
+        if headers and _schema(header) != _schema(headers[0]):
             raise ValueError(f"{part}: its fields differ from those of {parts[0]}")
-        frames.append(df)
-    assert first is not None
-    return pd.concat(frames, ignore_index=not first["index"]) if len(frames) > 1 else frames[0]
+        frames.append(frame)
+        headers.append(header)
+    whole = frames[0] if len(frames) == 1 else frames[0].concat(*frames[1:])
+    return _with_header(whole, _merged_header(headers))
 
 
 class TableWriter:
@@ -598,27 +763,37 @@ class TableWriter:
         self._meta = meta
         self._level = level
         self._threads = threads
-        self._frames: list[pd.DataFrame] = []
+        self._frames: list[DataFrame | pd.DataFrame] = []
         self._schema: tuple[object, ...] | None = None
         self._closed = False
 
-    def write(self, df: pd.DataFrame | DataFrame) -> None:
-        """Add ``df``, whose columns, dtypes and index levels match the first frame's."""
+    def write(self, df: DataFrame | pd.DataFrame) -> None:
+        """Add ``df``, whose columns, types and index levels match the first frame's."""
         if self._closed:
             raise ValueError("write to a closed TableWriter")
         _, pd, _ = _libs()
         if isinstance(df, DataFrame):
-            df = df.to_pandas()
-        if not isinstance(df, pd.DataFrame):
+            schema: tuple[object, ...] = (
+                "native",
+                tuple(df.index_names()),
+                tuple((f.name, str(f.type)) for f in df.to_arrow().schema),
+            )
+        elif isinstance(df, pd.DataFrame):
+            schema = (
+                "pandas",
+                tuple(df.index.names),
+                tuple(map(str, df.columns)),
+                tuple(df.dtypes),
+            )
+        else:
             raise TypeError(
                 f"expected a pandas or dftracer.utils DataFrame, got {type(df).__name__}"
             )
-        schema = (tuple(df.index.names), tuple(map(str, df.columns)), tuple(df.dtypes))
         if self._schema is None:
             self._schema = schema
         elif schema != self._schema:
             raise ValueError(
-                "the frame's columns, dtypes or index levels differ from the first frame's"
+                "the frame's kind, columns, types or index levels differ from the first frame's"
             )
         self._frames.append(df)
 
@@ -629,11 +804,27 @@ class TableWriter:
         self._closed = True
         if not self._frames:
             raise ValueError("no frame was written")
-        _, pd, _ = _libs()
+        _, pandas, _ = _libs()
         frames, self._frames = self._frames, []
         first = frames[0]
-        keep_index = not (isinstance(first.index, pd.RangeIndex) and first.index.name is None)
-        whole = frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=not keep_index)
+        whole: DataFrame | pd.DataFrame
+        if isinstance(first, DataFrame):
+            native = cast("list[DataFrame]", frames)
+            names = first.index_names()
+            if len(native) == 1:
+                whole = first
+            else:
+                flat = [_bound(_ext.DataFrame.with_index(f, [])) for f in native]
+                whole = flat[0].concat(*flat[1:])
+                if names:
+                    whole = _bound(_ext.DataFrame.with_index(whole, names))
+        else:
+            kept = not (isinstance(first.index, pandas.RangeIndex) and first.index.name is None)
+            whole = (
+                first
+                if len(frames) == 1
+                else pandas.concat(cast("list[pd.DataFrame]", frames), ignore_index=not kept)
+            )
         write_table(
             whole,
             self._path,

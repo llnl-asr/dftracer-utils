@@ -1,21 +1,66 @@
-:description: Reference for write_table, read_table and TableWriter, which store a pandas frame as a typed DFTracer gzip JSON-lines table file.
+:description: Reference for write_table, read_table and TableWriter, which store a DataFrame as a typed DFTracer gzip JSON-lines table file and read it back.
 
 Tables (write_table, read_table)
 ================================
 
-``write_table`` stores a pandas frame as one DFTracer-style file of JSON lines,
-and ``read_table`` reads it back with the same dtypes and index. The file is
-gzip when the path ends in ``.gz``, readable with ``zcat`` and ``jq``, and its
-members decode in parallel. Encoding and decoding run in C++.
+``write_table`` stores a dftracer.utils ``DataFrame`` (or a pandas frame) as one
+DFTracer-style file of JSON lines, and ``read_table`` reads it back as a
+dftracer.utils ``DataFrame``. The file is gzip when the path ends in ``.gz``,
+readable with ``zcat`` and ``jq``, and its members decode in parallel. Encoding
+and decoding run in C++, and ``read_table`` builds no pandas frame.
+
+.. code-block:: python
+
+   from dftracer.utils import DataFrame, read_table, write_table
+
+   df = DataFrame.from_dict(
+       {"proc": ["a", "b", "a"], "calls": [3, 5, 7], "time": [0.5, 1.5, 2.0]}
+   )
+   write_table(df, "frame.pfw.gz", name="frame", meta={"source": "demo"})
+   frame = read_table("frame.pfw.gz")
+   busy = frame.filter(frame["calls"] > 3)
+   totals = frame.group_by("proc").sum()
+
+``frame.to_pandas()`` with no arguments gives the exact pandas frame that was
+written, with its dtypes, categories, set and list cells and index, because the
+frame ``read_table`` returns carries the table header:
 
 .. code-block:: python
 
    import pandas as pd
-   from dftracer.utils import read_table, write_table
 
-   df = pd.DataFrame({"a": pd.array([1, None, 3], dtype="Int64"), "s": ["x", "y", None]})
-   write_table(df, "frame.pfw.gz", name="frame", meta={"source": "demo"})
-   back = read_table("frame.pfw.gz")
+   original = pd.DataFrame(
+       {"a": pd.array([1, None], dtype="Int64"), "s": pd.array(["x", None], dtype="string[python]")}
+   )
+   write_table(original, "typed.pfw.gz", name="typed")
+   exact = read_table("typed.pfw.gz").to_pandas()
+
+A new frame (a filter, a join) has no header, and a frame changed in place
+(``df["a"] = ...``, ``df.loc[...] = ...``) drops it. ``to_pandas`` with an explicit ``arrow``, ``nullable`` or ``index``
+argument ignores the header too. Each of these behaves as ``to_pandas`` does
+for any frame.
+
+Columns of the frame ``read_table`` returns
+-------------------------------------------
+
+The columns are the engine's types: Int64, Uint64, Float64, Bool and String,
+with a null for NA (a float NaN stays a value). A ``category`` column holds its
+labels as plain values (the native column is not dictionary-encoded), and a set
+or list column holds the JSON text of each cell, because the engine has no list
+type; ``to_pandas()`` restores the categories and builds the sets and lists. The
+header's index levels are the frame's row index, so ``frame.index_names()``
+lists them.
+
+Writing a dftracer.utils frame
+------------------------------
+
+A dftracer.utils frame is written from its columns, with no pandas step. A
+column keeps its width (``int32``, ``uint8``, ``float32``); a column that holds
+a null is written with a nullable dtype (``Int32``, ``Float64``, ``boolean``),
+so a null stays apart from NaN; a string column is written as ``object`` and a
+dictionary-encoded string column as a ``category``. The frame's row index names
+become the header's index. A column of another Arrow type (timestamps, lists,
+structs) is refused with ``TypeError``.
 
 File format
 -----------
@@ -31,15 +76,15 @@ its storage, as ``string[pyarrow]`` or ``string[python]``. An ``ArrowDtype``
 field adds ``arrow_type``, the text of its pyarrow type (``"string"``,
 ``"int64"``, ``"double"``), which the reader rebuilds with
 ``pyarrow.type_for_alias``; this keeps ``ArrowDtype(pa.string())`` apart from
-``StringDtype("pyarrow")``, which print alike. Every other line is a ``ph`` 3 record whose ``args``
-hold one row, in field order.
+``StringDtype("pyarrow")``, which print alike. Every other line is a ``ph`` 3
+record whose ``args`` hold one row, in field order.
 
 NA is ``null``. NaN, ``+inf`` and ``-inf`` are the strings ``"NaN"``,
 ``"Infinity"`` and ``"-Infinity"``, so a nullable float column keeps NaN apart
 from NA. Other floats are the shortest text that reads back to the same bits. A
 category cell is its label, and a set or list cell is a JSON array.
 
-A default ``RangeIndex`` is not stored. Any other index becomes leading fields,
+For a pandas frame a default ``RangeIndex`` is not stored. Any other index becomes leading fields,
 and an unnamed level is stored as ``__index_level_<i>__`` and restored without
 a name. DFAnalyzer's checkpoint tables use the same format, and each side reads
 the other's files.

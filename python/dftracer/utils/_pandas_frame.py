@@ -714,9 +714,12 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
 
     def pop(self, name: str) -> Series:
         """Remove ``name`` from this handle and return it."""
+        from ._loc import rebind
+
         out = self._col(name)
-        _ext.DataFrame._replace(
-            self, _ext.DataFrame.select(self, *[c for c in self._frame()._names() if c != name])
+        rebind(
+            self._frame(),
+            _ext.DataFrame.select(self, *[c for c in self._frame()._names() if c != name]),
         )
         return out
 
@@ -724,12 +727,12 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         """Put ``column`` at position ``loc`` (this handle is rebound)."""
         if column in self._frame():
             raise ValueError(f"insert: column {column!r} already exists")
-        from ._loc import Rows, assign_rows
+        from ._loc import Rows, assign_rows, rebind
 
         assign_rows(self._frame(), Rows.all(), [column], value)
         order = [c for c in self._frame()._names() if c != column]
         order.insert(loc, column)
-        _ext.DataFrame._replace(self, _ext.DataFrame.select(self, *order))
+        rebind(self._frame(), _ext.DataFrame.select(self, *order))
 
     def _level_names(self) -> list[str]:
         return list(_ext.DataFrame.index_names(self))
@@ -1181,7 +1184,9 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
             if name in other:
                 o = column_series(other, name)
                 out[name] = o.where(o.notna(), self._col(name))
-        _ext.DataFrame._replace(self, self._rebuild(out))
+        from ._loc import rebind
+
+        rebind(self._frame(), self._rebuild(out))
 
     def dot(self, other: Series | DataFrame) -> Series | DataFrame:
         """Matrix product with a Series (one value per column) or a frame

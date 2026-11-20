@@ -656,7 +656,7 @@ def assign_rows(df: DataFrame, rows: Rows, columns: list[str], value: object) ->
             for name, series in zip(columns, per_column):
                 assign_rows(df, rows, [name], series)
         except BaseException:
-            _ext.DataFrame._replace(df, before)
+            rebind(df, before)
             raise
         return
     if mask is not None:
@@ -680,7 +680,15 @@ def assign_rows(df: DataFrame, rows: Rows, columns: list[str], value: object) ->
                     new = new.astype(existing.dtype)
                 new = existing.mask(mask, new)
         native = _ext.DataFrame.with_column(native, name, new)
-    _ext.DataFrame._replace(df, native)
+    rebind(df, native)
+
+
+def rebind(df: DataFrame, new: _ext.DataFrame) -> None:
+    """Point the handle ``df`` at the frame ``new``. The frame changed, so the
+    table header a read gave it no longer describes it."""
+    _ext.DataFrame._replace(df, new)
+    if hasattr(df, "_table_header"):
+        del df._table_header
 
 
 class ILoc:
@@ -844,7 +852,7 @@ def enlarge(df: DataFrame, label: object, columns: list[str], value: object) -> 
             cells[name] = _broadcast(given.get(name), 1, existing)
     row = _ext.DataFrame.with_index(DataFrame.from_dict(cells), names)
     joined = _ext.DataFrame.concat(base, row)
-    _ext.DataFrame._replace(df, joined)
+    rebind(df, joined)
 
 
 _IMMUTABLE = "a Series is immutable; assign through df.loc[rows, column] = value"

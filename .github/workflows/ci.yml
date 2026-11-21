@@ -154,6 +154,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.0.0
+
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.11
 

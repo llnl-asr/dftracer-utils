@@ -228,6 +228,9 @@ jobs:
           cache: "pip"
           cache-dependency-path: "pyproject.toml"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.0.0
+
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.11
 
@@ -296,6 +299,9 @@ jobs:
           python-version: "3.12"
           cache: "pip"
           cache-dependency-path: "pyproject.toml"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.0.0
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.11

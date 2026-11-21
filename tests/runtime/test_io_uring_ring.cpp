@@ -1591,6 +1591,10 @@ TEST_CASE("uring register: a kernel allocated buffer ring needs the ring fd") {
         MESSAGE("skipped: Valgrind does not implement io_uring_setup");
         return;
 #endif
+        // A runtime that refuses io_uring (a seccomp filter) refuses every
+        // ring.
+        Ring plain;
+        OPEN_RING_OR_SKIP(plain, 8, 0);
         if (kernel_at_least(6, 5)) FAIL("a ring known by index was refused");
         MESSAGE("skipped: a kernel before 6.6 lacks REGISTERED_FD_ONLY");
         return;

@@ -892,6 +892,7 @@ coro::CoroTask<MorselResult> TableCursor::next(std::int64_t max_rows) {
             file_open_ = false;
             continue;
         }
+        acc_.seal();
         auto decoded =
             detail::decode_lines(file().header, settings_.wanted,
                                  dstd::StringView(acc_.text(), batch_end_));

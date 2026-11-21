@@ -31,6 +31,8 @@ struct Buffer {
     }
     /// Grows to hold `n` bytes, keeping the first `size` bytes.
     void reserve(std::size_t n);
+    /// Zeroes the @ref PADDING bytes after `size`, which simdjson may read.
+    void seal();
 };
 
 /// The engine type a field decodes to: the integer width and Float32 the

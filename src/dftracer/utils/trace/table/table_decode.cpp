@@ -53,6 +53,8 @@ void Buffer::reserve(std::size_t n) {
     *this = std::move(bigger);
 }
 
+void Buffer::seal() { std::memset(data.get() + size, 0, PADDING); }
+
 dstd::Result<Buffer> read_whole(dstd::StringView path) {
     auto file = dstd::File::open(dstd::PathView(path), {});
     if (!file) return file.error();
@@ -65,6 +67,7 @@ dstd::Result<Buffer> read_whole(dstd::StringView path) {
         if (!read) return read.error();
     }
     b.size = b.capacity;
+    b.seal();
     return b;
 }
 
@@ -124,6 +127,7 @@ dstd::Result<Buffer> inflate_in_order(const Buffer& comp, InflateStats& stats,
         out.size += res.out_bytes;
         at += res.in_bytes;
     }
+    out.seal();
     return out;
 }
 
@@ -191,6 +195,7 @@ dstd::Result<Buffer> inflate_gzip(const Buffer& comp, InflateStats& stats,
     for (const std::uint8_t g : good)
         if (!g) return in_order(comp, stats, max_bytes);
     stats.members_in_parallel = members;
+    out.seal();
     return out;
 }
 

@@ -41,6 +41,13 @@ _FLOAT_TEXT = {"NaN": math.nan, "Infinity": math.inf, "-Infinity": -math.inf}
 _INT64_MAX = 2**63 - 1
 
 
+def _float_text(value: float) -> str:
+    """The text a table stores for a float that JSON cannot hold."""
+    if math.isnan(value):
+        return "NaN"
+    return "Infinity" if value > 0 else "-Infinity"
+
+
 def _libs() -> tuple[types.ModuleType, types.ModuleType, types.ModuleType]:
     try:
         import numpy as np
@@ -132,10 +139,9 @@ def _category_labels(name: str, categories: pd.Index) -> tuple[list[object], str
             raise ValueError(f"column {name!r}: category labels above 2**63 - 1 cannot be stored")
         return list(labels), "int"
     if pd.api.types.is_float_dtype(dtype):
+        # JSON has no infinity: an infinite label is the text of an infinite cell.
         floats = [float(c) for c in categories]
-        if not all(math.isfinite(f) for f in floats):
-            raise ValueError(f"column {name!r}: infinite category labels cannot be stored")
-        return list(floats), "float"
+        return [f if math.isfinite(f) else _float_text(f) for f in floats], "float"
     if all(isinstance(c, str) for c in categories):
         return list(categories), "str"
     raise TypeError(f"column {name!r}: categories must be all str or all numbers")

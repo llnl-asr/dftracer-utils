@@ -562,11 +562,22 @@ def test_category_nan_rules(tmp_path):
     assert read_pandas(path)["c"].cat.categories.dtype == np.float64
 
 
+@pytest.mark.parametrize("dtype", ["float64", "float32", "Float64"])
+def test_infinite_float_category_labels_round_trip(tmp_path, dtype):
+    cats = pd.Index([1.5, math.inf, -math.inf], dtype=dtype)
+    df = pd.DataFrame(
+        {"c": pd.Categorical([1.5, None, math.inf, -math.inf, math.inf], categories=cats)}
+    )
+    path = str(tmp_path / "inf.pfw.gz")
+    save_table(df, path, name="t")
+    field = json.loads(lines_of(path)[0])["args"]["fields"][0]
+    assert field["categories"] == [1.5, "Infinity", "-Infinity"]
+    back = read_pandas(path)
+    pd.testing.assert_series_equal(back["c"], df["c"], **{"check_index_type": False})
+
+
 def test_unsupported_category_labels_are_refused(tmp_path):
     path = str(tmp_path / "x.pfw")
-    inf = pd.DataFrame({"c": pd.Categorical([1.5], categories=[1.5, math.inf])})
-    with pytest.raises(ValueError, match="infinite"):
-        save_table(inf, path, name="t")
     big = pd.DataFrame({"c": pd.Categorical([1], categories=pd.Index([1, 2**63], dtype="uint64"))})
     with pytest.raises(ValueError, match="2\\*\\*63"):
         save_table(big, path, name="t")
@@ -876,3 +887,4 @@ assert not hasattr(DataFrame.from_pandas(dated), "_table_header")
 """
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+

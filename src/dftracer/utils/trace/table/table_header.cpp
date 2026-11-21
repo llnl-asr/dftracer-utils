@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/trace/table/table_header.h>
@@ -84,6 +85,13 @@ dstd::Optional<Field> resolve(const RawField& raw) {
         suffixed = true;
     }
     if (base == "category") {
+        // Float labels may hold the text of an infinite float, as cells do.
+        const dstd::StringView cats(raw.categories_dtype);
+        if (cats.size() >= 5 &&
+            dstd::ascii_iequals(cats.substr(0, 5), "float")) {
+            f.kind = Kind::Float;
+            return f;
+        }
         switch (raw.labels) {
             case Labels::Str:
                 f.kind = Kind::String;

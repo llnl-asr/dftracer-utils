@@ -301,6 +301,10 @@ def _raw_columns(header: Mapping[str, Any]) -> list[str]:
             out.append(str(field["name"]))
         elif field.get("dtype") == "category":
             labels = field.get("categories") or []
+            # Float labels may hold the text of an infinite float, and the
+            # cells stay floats.
+            if str(field.get("categories_dtype", "")).lower().startswith("float"):
+                continue
             if not (
                 all(isinstance(c, str) for c in labels)
                 or all(isinstance(c, int) and not isinstance(c, bool) for c in labels)

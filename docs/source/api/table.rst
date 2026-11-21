@@ -126,8 +126,9 @@ own version. The integer ``1``, as DFAnalyzer's writer stamps it, reads as
 
 NA is ``null``. NaN, ``+inf`` and ``-inf`` are the strings ``"NaN"``,
 ``"Infinity"`` and ``"-Infinity"``, so a nullable float column keeps NaN apart
-from NA. Other floats are the shortest text that reads back to the same bits. A
-category cell is its label, and a set or list cell is a JSON array.
+from NA. Other floats are the shortest text that reads back to the same bits.
+An infinite float category label is written the same way. A category cell is
+its label, and a set or list cell is a JSON array.
 
 ``DataFrame.from_pandas`` turns a pandas index into columns and the frame's row
 index; an unnamed level is stored as ``__index_level_<i>__`` and restored

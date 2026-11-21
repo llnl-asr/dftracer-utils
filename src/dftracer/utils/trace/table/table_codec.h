@@ -45,8 +45,9 @@ struct ReadOptions {
 /// signed integers, Uint64, Float64, Bool, and String for string, object and
 /// category dtypes whose labels are strings. A column with elem set, an object
 /// column of arrays, holds the JSON text of each cell; so does a category of
-/// mixed labels. A category of integers is Int64 and of numbers Float64. A
-/// null cell is null; NaN is a float value.
+/// mixed labels. A category of integers is Int64 and of numbers Float64, as
+/// is one whose categories_dtype is a float, whose labels may be the text of
+/// an infinite float. A null cell is null; NaN is a float value.
 struct Table {
     dataframe::DataFrame frame;
     dstd::String header_json;  ///< the args object of the header record

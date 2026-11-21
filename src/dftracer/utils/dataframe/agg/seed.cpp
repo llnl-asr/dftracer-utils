@@ -45,7 +45,6 @@ void agg_sort_groups(AggState& st) {
 }
 
 void agg_permute_groups(AggState& st, dstd::Span<const std::int64_t> perm) {
-    st.settle_light();
     const std::int64_t ng = st.ngroups();
     for (std::size_t k = 0; k < st.nkeys; ++k) {
         if (st.key_is_bytes[k])
@@ -57,6 +56,7 @@ void agg_permute_groups(AggState& st, dstd::Span<const std::int64_t> perm) {
     permute_blocks(st.counts, perm, 1);
     if (agg_first_rows_known(st)) permute_blocks(st.group_first_row, perm, 1);
     permute_blocks(st.fstats, perm, st.nf);
+    permute_blocks(st.light, perm, st.light_stride);
     if (st.has_fl) {
         permute_blocks(st.fl_first, perm, st.nf);
         permute_blocks(st.fl_last, perm, st.nf);
@@ -117,6 +117,13 @@ void agg_permute_groups(AggState& st, dstd::Span<const std::int64_t> perm) {
     auto renumber = [&](std::int64_t g) {
         return g < 0 ? g : at[static_cast<std::size_t>(g)];
     };
+    if (!st.light_carry.empty()) {
+        dstd::HashMap<std::size_t, std::int64_t> carried;
+        for (const auto& [slot, wraps] : st.light_carry)
+            carried[static_cast<std::size_t>(at[slot / st.nf]) * st.nf +
+                    slot % st.nf] = wraps;
+        st.light_carry.swap(carried);
+    }
     for (auto& [h, g] : st.key_buckets) g = renumber(g);
     dstd::Vector<std::int64_t> next(at.size());
     for (std::size_t i = 0; i < at.size(); ++i)

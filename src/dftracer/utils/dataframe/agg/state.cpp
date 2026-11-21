@@ -25,6 +25,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <string>
 #include <utility>
@@ -2144,10 +2145,15 @@ AggStatePtr agg_merge_many(dstd::Vector<AggStatePtr>& partials) {
         return nullptr;
     }
     AggStatePtr base = std::move(partials[widest]);
-    base->settle_light();
+    // Partials of one layout merge in the light form, which holds a cell as
+    // the words its reducers read; any other mix is expanded into field stats.
+    bool light = true;
+    for (const AggStatePtr& p : partials)
+        if (p && p->inited && !base->light_matches(*p)) light = false;
+    if (!light) base->settle_light();
     dstd::Vector<const AggState*> others;
     for (const AggStatePtr& p : partials)
-        if (p && p->inited) others.push_back(&settled(*p));
+        if (p && p->inited) others.push_back(light ? p.get() : &settled(*p));
     // One remap per partial, built here because it grows base's name table
     // and the merges below run in parallel.
     dstd::Vector<dstd::Vector<std::uint32_t>> dyn_map(others.size());
@@ -2180,16 +2186,23 @@ AggStatePtr agg_merge_many(dstd::Vector<AggStatePtr>& partials) {
     });
     const std::int64_t ng = base->ngroups();
     constexpr std::int64_t GRAIN = 1024;
+    AggState::LightCarries carried;
+    std::mutex carried_mutex;
     parallel_for(ng, GRAIN, [&](std::int64_t gb, std::int64_t ge) {
+        AggState::LightCarries mine;
         for (std::size_t p = 0; p < others.size(); ++p) {
             const dstd::Vector<std::int64_t>& m = map[p];
             for (std::size_t j = 0; j < m.size(); ++j)
                 if (m[j] >= gb && m[j] < ge)
                     base->merge_group(
                         m[j], *others[p], static_cast<std::int64_t>(j),
-                        others[p]->has_dyn ? &dyn_map[p] : nullptr);
+                        others[p]->has_dyn ? &dyn_map[p] : nullptr, &mine);
         }
+        if (mine.empty()) return;
+        const std::lock_guard<std::mutex> lock(carried_mutex);
+        carried.insert(carried.end(), mine.begin(), mine.end());
     });
+    for (const auto& [slot, wraps] : carried) base->light_carry[slot] = wraps;
     for (std::size_t p = 0; p < others.size(); ++p) {
         dstd::Vector<std::int64_t>& m = map[p];
         for (std::size_t j = 0; j < m.size(); ++j)
@@ -2208,6 +2221,7 @@ AggStatePtr agg_merge_many(dstd::Vector<AggStatePtr>& partials) {
             std::iota(from.begin(), from.end(), std::int64_t{0});
             base->udaf_combine(*others[p], map[p], from);
         }
+    for (AggStatePtr& p : partials) p.reset();
     return base;
 }
 

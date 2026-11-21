@@ -29,6 +29,7 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_series_math_bitwis
                            test_join_null_keys.cpp test_join_contract.cpp
                            test_concat_large_string.cpp
                            test_groupby_scale.cpp
+                           test_group_by_memory.cpp
                            test_float_keys.cpp
                            test_string_simd.cpp test_string_match.cpp test_expr_string_methods.cpp
                            test_concat_text.cpp test_struct_concat_by_name.cpp
@@ -108,6 +109,10 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
       set(scale_timeout 1800)
     endif()
     set_tests_properties(dataframe/${bin_exec} PROPERTIES TIMEOUT ${scale_timeout})
+  endif()
+  if(bin_exec STREQUAL "test_group_by_memory")
+    set_tests_properties(dataframe/${bin_exec} PROPERTIES ENVIRONMENT
+                         "DFTRACER_UTILS_MEMORY_DEBUG=1")
   endif()
   # Runs every op in a child process at several budgets.
   # It is CPU-bound and reads peak memory, so it runs serially.

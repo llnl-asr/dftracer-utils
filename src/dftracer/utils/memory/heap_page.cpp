@@ -158,6 +158,7 @@ struct Heap {
     std::atomic<Heap*> stack_next;
     Heap* all_next;
     std::atomic<std::ptrdiff_t> reserved;
+    std::uint64_t relief_next;
     std::uint32_t remote_count;
     std::uint32_t chain_count;
     Chain chains[REMOTE_BUFFER];
@@ -659,16 +660,13 @@ std::uint64_t now_ms() noexcept { return dstd::coarse_now_ns() / 1000000ULL; }
 
 bool purge_range(void* p, std::size_t n) noexcept {
 #if defined(__APPLE__)
-    return os_madvise(p, n, MADV_FREE_REUSABLE) == 0;
+    // MADV_FREE_REUSABLE leaves the pages in the resident size until the
+    // kernel is short of memory, so a purge would not lower what the process
+    // holds. A fresh mapping over the range frees them now.
+    return os_mmap(p, n, PROT_READ | PROT_WRITE,
+                   MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0) != MAP_FAILED;
 #else
     return os_madvise(p, n, MADV_DONTNEED) == 0;
-#endif
-}
-
-void reuse_range([[maybe_unused]] void* p,
-                 [[maybe_unused]] std::size_t n) noexcept {
-#if defined(__APPLE__)
-    os_madvise(p, n, MADV_FREE_REUSE);
 #endif
 }
 
@@ -703,9 +701,6 @@ void unpurge_pages(Heap& h, SpanHeader* s, std::size_t index,
                    std::size_t n) noexcept {
     std::uint64_t mask = run_bits(index, n) & s->purged_mask;
     if (mask == 0) return;
-    for_each_page_run(mask, [&](std::size_t first, std::size_t count) {
-        reuse_range(page_base(s, first), count * HEAP_PAGE_SIZE);
-    });
     s->purged_mask &= ~mask;
     bump(h.reserved,
          static_cast<std::size_t>(std::popcount(mask)) * HEAP_PAGE_SIZE, true);
@@ -900,12 +895,17 @@ void decay_step(Heap& h) noexcept {
     decay_live_caches(now, delay, CACHE_ENTRIES_PER_CALL);
 }
 
-// Past the cap, purge this heap's idle pages and then the oldest cache entries,
-// whatever their age. Other heaps purge their own when they next free.
+// Past the cap, purge this heap's idle pages and then the oldest cache entries
+// that have sat idle for RELIEF_AGE_MS, at most once per RELIEF_INTERVAL_MS, so
+// pages that a busy heap frees and takes again are not purged and faulted back.
+// Other heaps purge their own when they next free.
 void relieve_idle(Heap& h) noexcept {
     std::uint64_t now = now_ms();
-    purge_heap(h, now, 0, UNLIMITED);
-    if (idle_over_cap()) decay_live_caches(now, 0, CACHE_ENTRIES_PER_CALL);
+    if (now < h.relief_next) return;
+    h.relief_next = now + RELIEF_INTERVAL_MS;
+    purge_heap(h, now, RELIEF_AGE_MS, UNLIMITED);
+    if (idle_over_cap())
+        decay_live_caches(now, RELIEF_AGE_MS, CACHE_ENTRIES_PER_CALL);
 }
 
 void stamp_free_pages(SpanHeader* s, std::size_t index, std::size_t n,
@@ -946,7 +946,6 @@ SpanHeader* adopt_cached_run(Heap& h, std::size_t run) noexcept {
     if (s == nullptr) s = stack_pop(g_caches[1 + own].cold);
     if (s == nullptr) return nullptr;
     if (s->purged_mask != 0) {
-        reuse_range(page_base(s, 1), s->map_bytes - HEAP_PAGE_SIZE);
         s->purged_mask = 0;
         cache_take_accounting(HEAP_PAGE_SIZE);
     } else {
@@ -1660,6 +1659,11 @@ PageStats page_stats() noexcept {
     std::ptrdiff_t live = attrib_live_total();
     return {static_cast<std::size_t>(std::max<std::ptrdiff_t>(live, 0)),
             page_reserved()};
+}
+
+std::size_t page_idle_backed() noexcept {
+    return static_cast<std::size_t>(std::max<std::ptrdiff_t>(
+        g_idle_backed.load(std::memory_order_relaxed), 0));
 }
 
 std::size_t page_budget_purged() noexcept {

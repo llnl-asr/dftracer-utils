@@ -273,7 +273,7 @@ TEST_CASE("decay purges after the delay with no trim call") {
     }
 }
 
-TEST_CASE("freed memory past the idle cap is purged at once") {
+TEST_CASE("freed memory past the idle cap is purged once it has sat idle") {
     page_trim(Mode::All);
     std::size_t base = reserved();
     std::vector<WorkingSet> sets;
@@ -284,7 +284,14 @@ TEST_CASE("freed memory past the idle cap is purged at once") {
     }
     std::size_t peak = reserved();
     for (WorkingSet& set : sets) free_set(set);
-    // No trim and no decay: only the cap gives back the bytes past it.
+    // No trim and no decay: only the cap gives back the bytes past it, once
+    // they have sat idle for RELIEF_AGE_MS and a free comes after.
+    sleep_ms(RELIEF_AGE_MS + 20);
+    for (int i = 0; i < 100 && reserved() - base > IDLE_BACKED_CAP; ++i) {
+        sleep_ms(RELIEF_INTERVAL_MS + 1);
+        void* p = page_allocate(MEDIUM_MAX / 2, 16);
+        page_deallocate(p, MEDIUM_MAX / 2);
+    }
     std::size_t held = reserved() - base;
     CHECK(held <= IDLE_BACKED_CAP + bytes / 10);
     CHECK(drop(peak, reserved()) + IDLE_BACKED_CAP + bytes / 10 >= bytes);

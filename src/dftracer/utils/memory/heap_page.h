@@ -23,11 +23,18 @@ inline constexpr std::size_t LARGE_PURGE_SIZE = std::size_t{8} << 20;
 /// so that a large buffer faults in 2 MiB pages, not 4 KiB ones. Smaller runs
 /// and the spans of small blocks do not, so their resident size stays exact.
 inline constexpr std::size_t HUGE_PAGE_RUN_MIN = std::size_t{2} << 20;
-/// Freed but still backed bytes past which a heap purges its idle pages on
-/// free, so retention does not grow with the free rate or the thread count.
-/// 64 MiB made an index build fault its buffers back far more often and
-/// spend much of its time in the kernel at high thread counts.
-inline constexpr std::size_t IDLE_BACKED_CAP = std::size_t{1} << 30;
+/// Freed but still backed bytes, summed over every heap and cache, past which
+/// a heap purges its idle pages on free. The sum is the bound, so what a
+/// process retains does not grow with the thread count: at 1 GiB, 16 idle
+/// threads kept 165 MiB after one burst each and a 14-thread sink kept about
+/// 7 MiB per thread.
+inline constexpr std::size_t IDLE_BACKED_CAP = std::size_t{32} << 20;
+/// Over IDLE_BACKED_CAP a heap purges only pages idle this long, and looks at
+/// most once per RELIEF_INTERVAL_MS. Purging at once made a heap that frees and
+/// takes pages at full rate spend its time in madvise: 9x slower in a
+/// multi-thread churn.
+inline constexpr std::uint64_t RELIEF_AGE_MS = 10;
+inline constexpr std::uint64_t RELIEF_INTERVAL_MS = 5;
 /// The largest alignment the page heap serves. A block aligned more would sit
 /// in a span other than the one that holds its header.
 inline constexpr std::size_t MAX_ALIGN = HEAP_SPAN_SIZE / 2;
@@ -77,6 +84,8 @@ std::size_t page_reserved_peak() noexcept;
 std::size_t page_used_peak() noexcept;
 /// Backed bytes purged so far because a map would have passed the budget.
 std::size_t page_budget_purged() noexcept;
+/// Freed bytes that are still backed, in the heaps and the caches.
+std::size_t page_idle_backed() noexcept;
 /// Push the calling thread's buffered remote frees to their pages.
 void page_flush_remote() noexcept;
 /// Heaps ever created. A heap is never unmapped and an exited thread's heap is

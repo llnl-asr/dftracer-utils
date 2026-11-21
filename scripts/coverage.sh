@@ -189,14 +189,30 @@ run_python_tests() {
 		[ -e "$lib" ] && ln -sf "${PWD}/${lib}" "python/lib/$(basename "$lib")"
 	done
 
-	# Install test dependencies only (not the package itself)
-	pip install pytest pyarrow pandas numpy
+	# Install test dependencies only (not the package itself): the dev extras
+	# of pyproject.toml, which tests/python reads (dask, scipy, hypothesis).
+	pip install pytest pyarrow pandas numpy scipy hypothesis "pytz>=2024.1,<2026" \
+		"dask[bag,dataframe,distributed]>=2024.1.0" "dask_jobqueue~=0.8.0"
 
-	PYTHONPATH="${PWD}/python" pytest tests/python -v
-	local pytest_status=$?
+	# A test that starts `python -I` ignores PYTHONPATH, so the source tree is
+	# also named in a .pth file of the interpreter. The version file is what
+	# the build generates; without it the import reads the package metadata.
+	local site_dir pth_file
+	site_dir=$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+	pth_file="${site_dir}/dftracer_utils_coverage.pth"
+	echo "${PWD}/python" >"$pth_file"
+	local version_file="python/dftracer/utils/_version.py" made_version=0
+	if [ ! -e "$version_file" ]; then
+		echo '__version__ = "0.0.0"' >"$version_file"
+		made_version=1
+	fi
+
+	local pytest_status=0
+	PYTHONPATH="${PWD}/python" pytest tests/python -v || pytest_status=$?
 
 	# Clean up symlinks
-	rm -f "python/dftracer/utils/$(basename "$ext_so")"
+	rm -f "python/dftracer/utils/$(basename "$ext_so")" "$pth_file"
+	[ "$made_version" -eq 1 ] && rm -f "$version_file"
 	rm -rf python/lib
 
 	if [ "$pytest_status" -ne 0 ]; then

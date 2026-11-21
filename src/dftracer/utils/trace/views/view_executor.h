@@ -37,13 +37,19 @@ bool collect_bootstrap_eligible(const ViewPlan& plan);
 
 #if DFTRACER_UTILS_TEST_PROBES
 /// Files the first-touch bootstrap has in flight, for tests: the most at once
-/// since the last reset.
+/// since the last reset. Each of the first @p hold_until files waits, up to
+/// 10 s, until that many are in flight, so a test sees every worker busy
+/// at once whatever the scheduler does.
 struct BootstrapCounters {
     std::atomic<std::size_t> in_flight{0};
     std::atomic<std::size_t> max_in_flight{0};
+    std::atomic<std::size_t> hold_until{0};
+    std::atomic<std::size_t> held{0};
     void reset() {
         in_flight.store(0, std::memory_order_relaxed);
         max_in_flight.store(0, std::memory_order_relaxed);
+        hold_until.store(0, std::memory_order_relaxed);
+        held.store(0, std::memory_order_relaxed);
     }
 };
 BootstrapCounters& bootstrap_counters();

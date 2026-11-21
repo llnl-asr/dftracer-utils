@@ -97,11 +97,14 @@ TEST_SUITE("BootstrapParallelism") {
         REQUIRE(default_runtime().threads() == WORKERS);
 
         trace::views::detail::bootstrap_counters().reset();
+        trace::views::detail::bootstrap_counters().hold_until.store(
+            RUNNING_WORKERS);
         const auto store_opens_before =
             dftracer::utils::store::internal::opens();
         const auto cold = bootstrap_test::count_by_name(files, index_dir);
         const auto store_opens =
             dftracer::utils::store::internal::opens() - store_opens_before;
+        trace::views::detail::bootstrap_counters().hold_until.store(0);
 
         CHECK(trace::views::detail::bootstrap_counters().max_in_flight.load() ==
               RUNNING_WORKERS);

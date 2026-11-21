@@ -10,6 +10,7 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -88,6 +89,7 @@
 #include <limits>
 #include <mutex>
 #include <numeric>
+#include <thread>
 
 // The View terminals: each lowers a ViewPlan onto the module pieces and runs a
 // pruned parallel scan. The scan Source lives in view_scan (gather_units +
@@ -795,6 +797,15 @@ coro::CoroTask<dstd::Result<BootstrapFile>> bootstrap_file(
     auto seen = counters.max_in_flight.load(std::memory_order_relaxed);
     while (now > seen && !counters.max_in_flight.compare_exchange_weak(
                              seen, now, std::memory_order_relaxed)) {
+    }
+    const auto want = counters.hold_until.load(std::memory_order_relaxed);
+    if (want != 0 &&
+        counters.held.fetch_add(1, std::memory_order_relaxed) < want) {
+        constexpr std::int64_t HOLD_NS = 10'000'000'000;
+        const std::int64_t deadline = dstd::steady_now_ns() + HOLD_NS;
+        while (counters.in_flight.load(std::memory_order_relaxed) < want &&
+               dstd::steady_now_ns() < deadline)
+            std::this_thread::yield();
     }
     struct Leave {
         BootstrapCounters& c;

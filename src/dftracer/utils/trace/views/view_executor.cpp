@@ -801,8 +801,8 @@ coro::CoroTask<dstd::Result<BootstrapFile>> bootstrap_file(
     const auto want = counters.hold_until.load(std::memory_order_relaxed);
     if (want != 0 &&
         counters.held.fetch_add(1, std::memory_order_relaxed) < want) {
-        constexpr std::int64_t HOLD_NS = 10'000'000'000;
-        const std::int64_t deadline = dstd::steady_now_ns() + HOLD_NS;
+        constexpr std::uint64_t HOLD_NS = 10'000'000'000;
+        const std::uint64_t deadline = dstd::steady_now_ns() + HOLD_NS;
         while (counters.in_flight.load(std::memory_order_relaxed) < want &&
                dstd::steady_now_ns() < deadline)
             std::this_thread::yield();

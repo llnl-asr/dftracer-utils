@@ -428,11 +428,16 @@ void ThreadPoolExecutor::ensure_running_worker() {
     }
     const std::size_t justified =
         thread_count_.load(std::memory_order_acquire) +
-        blocked_workers_.load(std::memory_order_acquire);
-    if (live_workers_.load(std::memory_order_acquire) < justified &&
-        !spawn_worker(max_live_.load(std::memory_order_acquire),
-                      /*best_effort=*/true))
+        handed_off_workers_.load(std::memory_order_acquire);
+    if (live_workers_.load(std::memory_order_acquire) >= justified) return;
+    if (spawn_worker(max_live_.load(std::memory_order_acquire),
+                     /*best_effort=*/true)) {
+#if DFTRACER_UTILS_TEST_PROBES
+        replacement_spawns_.fetch_add(1, std::memory_order_relaxed);
+#endif
+    } else {
         owed_replacements_.fetch_add(1, std::memory_order_acq_rel);
+    }
 }
 
 void ThreadPoolExecutor::enter_blocking() {
@@ -445,6 +450,9 @@ void ThreadPoolExecutor::enter_blocking() {
     ctx->blocking_since_ns.store(dstd::steady_now_ns(),
                                  std::memory_order_relaxed);
     ctx->blk_state.store(BLK_SYSCALL, std::memory_order_release);
+#if DFTRACER_UTILS_TEST_PROBES
+    blocking_regions_.fetch_add(1, std::memory_order_relaxed);
+#endif
     // Only the 0->1 transition can find the sysmon parked; skip the wake else.
     // Notify under sysmon_mutex_ so the wake cannot slip between the sysmon's
     // predicate check and its wait().
@@ -466,6 +474,7 @@ void ThreadPoolExecutor::exit_blocking() {
         return;  // kept our permit
     }
     // Handed off: reacquire a permit before resuming.
+    handed_off_workers_.fetch_sub(1, std::memory_order_acq_rel);
     ctx->holds_permit = false;
     ctx->blk_state.store(BLK_NONE, std::memory_order_release);
     if (acquire_permit(ctx)) ctx->holds_permit = true;
@@ -515,6 +524,11 @@ void ThreadPoolExecutor::sysmon_loop() {
                     if (w->blk_state.compare_exchange_strong(
                             expected, BLK_HANDED_OFF, std::memory_order_acq_rel,
                             std::memory_order_acquire)) {
+                        handed_off_workers_.fetch_add(
+                            1, std::memory_order_acq_rel);
+#if DFTRACER_UTILS_TEST_PROBES
+                        handoffs_.fetch_add(1, std::memory_order_relaxed);
+#endif
                         permits_.fetch_add(1, std::memory_order_acq_rel);
                         permits_.notify_one();
                         ++handed;

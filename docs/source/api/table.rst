@@ -84,7 +84,9 @@ The columns are the engine's types: Int64, Uint64, Float64, Bool and String,
 with a null for NA (a float NaN stays a value). A ``category`` column holds its
 labels as plain values (the native column is not dictionary-encoded), and a set
 or list column holds the JSON text of each cell, because the engine has no list
-type; ``to_pandas()`` restores the categories and builds the sets and lists. The
+type; ``to_pandas()`` restores the categories and builds the sets and lists.
+``to_pandas(set_type=...)`` builds each set cell with another type, such as
+``frozenset`` or a ``set`` subclass, from the list of its values. The
 header's index levels are the frame's row index, so ``frame.index_names()``
 lists them.
 

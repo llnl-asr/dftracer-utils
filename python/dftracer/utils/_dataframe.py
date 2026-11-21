@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     from ._groupby import GroupBy
     from ._lazyframe import LazyFrame
     from ._loc import At, ILoc, Loc, Resampler
+    from ._table import JsonValue
     from ._time_index import TimeResampler
     from .dftracer_utils_ext import Scalar
 
@@ -631,6 +632,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         arrow: bool = False,
         nullable: bool = False,
         index: str | Sequence[str] | None = None,
+        set_type: Callable[[list[JsonValue]], object] | None = None,
     ) -> pd.DataFrame:
         """This frame as a pandas DataFrame. By default the columns are NumPy
         dtypes, which copies (pyarrow packs them into blocks), except that a
@@ -663,16 +665,31 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         and list cells, Arrow-backed and string-storage dtypes, the index and
         its names). Any explicit ``arrow``, ``nullable`` or ``index`` argument
         ignores the header. A new frame has no header, and a frame changed in
-        place (``df["a"] = ...``, ``df.loc[...] = ...``) drops it."""
+        place (``df["a"] = ...``, ``df.loc[...] = ...``) drops it.
+
+        ``set_type`` builds each cell of a set field of that header from the
+        list of the cell's values, in place of ``set``, such as ``frozenset``
+        or a ``set`` subclass. It applies only where the header is used: it
+        raises ``ValueError`` with ``arrow``, ``nullable`` or ``index`` and on a
+        frame without a table header."""
         if arrow and nullable:
             raise ValueError("to_pandas: pass either arrow=True or nullable=True, not both")
+        if set_type is not None and (arrow or nullable or index is not None):
+            raise ValueError(
+                "to_pandas: set_type applies to a table's set cells, which arrow, nullable"
+                " and index do not build"
+            )
         header = getattr(self, "_table_header", None)
         if header is not None and not arrow and not nullable and index is None:
             from ._table import _exact_pandas
 
-            exact = _exact_pandas(self, header)
+            exact = _exact_pandas(self, header, set_type if set_type is not None else set)
             if exact is not None:
                 return exact
+        if set_type is not None:
+            raise ValueError(
+                "to_pandas: set_type needs a frame with a table header, from a table or from_pandas"
+            )
         if arrow:
             out = cast("pd.DataFrame", _to_pandas(self.to_arrow(), arrow))
         else:

@@ -17,7 +17,7 @@ import math
 import os
 import re
 import types
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Callable, Union
 
 from . import dftracer_utils_ext as _ext
 from ._dataframe import DataFrame, _bound
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     PathLike = Union[str, "os.PathLike[str]"]
     JsonValue = Union[None, bool, int, float, str, list["JsonValue"], dict[str, "JsonValue"]]
     Meta = dict[str, JsonValue]
+    SetType = Callable[[list[JsonValue]], object]
     Header = dict[str, Any]
     Column = Union["np.ndarray[Any, Any]", "pd.api.extensions.ExtensionArray", "pd.Series"]
     Dtype = Union["np.dtype[Any]", "pd.api.extensions.ExtensionDtype"]
@@ -475,7 +476,7 @@ def _fits(name: str, arr: pa.Array, field: dict[str, Any]) -> bool:
     return not (isinstance(resolved, np.dtype) and resolved.kind != "f" and arr.null_count)
 
 
-def _restore(name: str, arr: pa.Array, field: dict[str, Any]) -> Column:
+def _restore(name: str, arr: pa.Array, field: dict[str, Any], set_type: SetType = set) -> Column:
     np, pd, pa = _libs()
     dtype = str(field["dtype"])
     if dtype == "category":
@@ -484,7 +485,7 @@ def _restore(name: str, arr: pa.Array, field: dict[str, Any]) -> Column:
         elem = field.get("elem")
         if not elem:
             return pd.Series(arr.to_numpy(zero_copy_only=False), dtype=object)
-        make = list if elem == "list" else set
+        make: SetType = list if elem == "list" else set_type
         out = np.empty(len(arr), dtype=object)
         for i, t in enumerate(arr.to_pylist()):
             if t is None:
@@ -522,7 +523,7 @@ def _restore(name: str, arr: pa.Array, field: dict[str, Any]) -> Column:
     raise TypeError(f"dtype {field['dtype']} cannot be restored")
 
 
-def _exact_pandas(frame: DataFrame, header: Header) -> pd.DataFrame | None:
+def _exact_pandas(frame: DataFrame, header: Header, set_type: SetType = set) -> pd.DataFrame | None:
     """The exact pandas frame a table header describes, or None when a column of
     ``frame`` no longer has the name or Arrow type the header implies."""
     _, pd, pa = _libs()
@@ -535,7 +536,7 @@ def _exact_pandas(frame: DataFrame, header: Header) -> pd.DataFrame | None:
     if not all(_fits(n, a, f) for n, a, f in zip(names, columns, fields)):
         return None
     try:
-        data = {n: _restore(n, a, f) for n, a, f in zip(names, columns, fields)}
+        data = {n: _restore(n, a, f, set_type) for n, a, f in zip(names, columns, fields)}
     except pa.ArrowInvalid:
         return None
     df = pd.DataFrame(data, columns=names, copy=False)

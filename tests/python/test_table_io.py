@@ -888,3 +888,32 @@ assert not hasattr(DataFrame.from_pandas(dated), "_table_header")
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
+
+class TaggedSet(set):
+    """A set subclass, as DFAnalyzer's BetterSet is one."""
+
+
+@pytest.mark.parametrize("make", [frozenset, TaggedSet, sorted])
+def test_set_type_builds_each_set_cell(tmp_path, make):
+    df = pd.DataFrame(
+        {"s": pd.Series([{1, 2}, set(), None, {"a"}], dtype=object), "v": [1, 2, 3, 4]}
+    )
+    path = str(tmp_path / "s.pfw.gz")
+    save_table(df, path, name="t")
+    cells = load_table(path).to_pandas(set_type=make)["s"].tolist()
+    assert cells[2] is None
+    assert [type(c) for c in cells if c is not None] == [type(make([]))] * 3
+    assert [set(c) for c in cells if c is not None] == [{1, 2}, set(), {"a"}]
+
+
+def test_set_type_refuses_the_arguments_that_skip_the_header(tmp_path):
+    df = pd.DataFrame({"s": pd.Series([{1}], dtype=object)})
+    path = str(tmp_path / "s.pfw.gz")
+    save_table(df, path, name="t")
+    frame = load_table(path)
+    with pytest.raises(ValueError, match="set_type"):
+        frame.to_pandas(arrow=True, set_type=frozenset)
+    with pytest.raises(ValueError, match="set_type"):
+        frame.to_pandas(nullable=True, set_type=frozenset)
+    with pytest.raises(ValueError, match="set_type"):
+        DataFrame({"v": [1, 2]}).to_pandas(set_type=frozenset)

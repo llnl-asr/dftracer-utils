@@ -748,6 +748,8 @@ DataFrame.with_columns | python-semantics | frame method written in Python over 
 DataFrame.with_index | python-semantics | native method of the binding, sets the row index of the frame, not one registry op
 DataFrame.with_row_index | python-semantics | frame method written in Python over native calls
 DataFrame.write | python-semantics | frame method written in Python over the native sink writer
+DataFrame.write_table | python-semantics | frame method written in Python over the native sink writer
+DataFrame.write_trace | python-semantics | frame method written in Python over the native sink writer
 DataFrame.write_csv | conversion | write_csv gives the data in another form
 DataFrame.write_ipc | conversion | write_ipc gives the data in another form
 DataFrame.write_parquet | conversion | write_parquet gives the data in another form
@@ -812,6 +814,8 @@ LazyFrame.select | python-semantics | plan step written in Python over native pl
 LazyFrame.set_index | python-semantics | plan step written in Python over native plan ops
 LazyFrame.share | python-semantics | native method of the binding, not one registry op
 LazyFrame.sink | python-semantics | plan step written in Python over native plan ops
+LazyFrame.sink_table | python-semantics | plan step written in Python over native plan ops
+LazyFrame.sink_trace | python-semantics | plan step written in Python over native plan ops
 LazyFrame.skew | python-semantics | plan step written in Python over native plan ops
 LazyFrame.slice | python-semantics | plan step written in Python over native plan ops
 LazyFrame.sort | python-semantics | plan step written in Python over native plan ops

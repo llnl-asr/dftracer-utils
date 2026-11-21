@@ -49,7 +49,7 @@ def save_table(frame, path, hdr, raw_columns, level, member_size):
         known_rows=frame.num_rows,
         raw_columns=tuple(raw_columns),
         mode="overwrite",
-        default_rows="records",
+        kind="records",
         options=TraceWriteOptions(level=level, member_size=member_size, build_index=False),
     )
 

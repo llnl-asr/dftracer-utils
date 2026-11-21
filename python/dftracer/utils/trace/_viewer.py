@@ -43,14 +43,7 @@ from .._dataframe import DataFrame, PhaseArg, TimeUnitArg
 from .._enums import coerce_bytes, coerce_duration
 from .._expr import Agg, Expr, Named, SelectItem
 from .._lazyframe import BoundColumn, LazyFrame, LazyResult, collect_all
-from .._sink import (
-    DEFAULT_MAX_OPEN_FILES,
-    DEFAULT_MODE,
-    DEFAULT_PART_SIZE,
-    SinkSummary,
-    TraceWriteOptions,
-    run_sink,
-)
+from .._sink_verbs import SessionSinkVerbs, SinkVerbs
 from .._table import _carry_header, _table_header, _typed_empty
 from ..schemas import JsonValue, RecordSchema, schema_id
 from ._index_records import IndexRecords
@@ -66,7 +59,6 @@ _plan_columns = _ext.LazyFrame.schema
 
 if TYPE_CHECKING:
     from .._enums import DType
-    from .._sink import PathLike, SinkOption
     from .._table import Header
     from ..dftracer_utils_ext import Scalar
     from ..plugins import Plugins
@@ -113,7 +105,7 @@ class Containment(NamedTuple):
     flamegraph: DataFrame
 
 
-class TraceViewer(LazyOps, _ext.TraceViewer):
+class TraceViewer(SinkVerbs, LazyOps, _ext.TraceViewer):
     """A lazy view over trace files; see the module docstring.
 
     ``files`` is a path (``str`` or ``os.PathLike``) or a sequence of paths,
@@ -711,84 +703,8 @@ class TraceViewer(LazyOps, _ext.TraceViewer):
         result: LazyResult[dict[str, JsonValue]] = LazyResult([], finish)
         return result if lazy else result.collect()
 
-    @overload
-    def sink(
-        self,
-        path: PathLike,
-        *,
-        format: str | None = ...,
-        options: TraceWriteOptions | Mapping[str, SinkOption] | None = ...,
-        name: str | None = ...,
-        meta: Mapping[str, JsonValue] | None = ...,
-        rows: Literal["events", "records"] | None = ...,
-        mode: Literal["error", "overwrite"] = ...,
-        part_size: int = ...,
-        partition_by: Sequence[str] | None = ...,
-        max_open_files: int = ...,
-        lazy: Literal[False] = ...,
-    ) -> SinkSummary: ...
-    @overload
-    def sink(
-        self,
-        path: PathLike,
-        *,
-        format: str | None = ...,
-        options: TraceWriteOptions | Mapping[str, SinkOption] | None = ...,
-        name: str | None = ...,
-        meta: Mapping[str, JsonValue] | None = ...,
-        rows: Literal["events", "records"] | None = ...,
-        mode: Literal["error", "overwrite"] = ...,
-        part_size: int = ...,
-        partition_by: Sequence[str] | None = ...,
-        max_open_files: int = ...,
-        lazy: Literal[True],
-    ) -> LazyResult[SinkSummary]: ...
-
-    def sink(
-        self,
-        path: PathLike,
-        *,
-        format: str | None = None,
-        options: TraceWriteOptions | Mapping[str, SinkOption] | None = None,
-        name: str | None = None,
-        meta: Mapping[str, JsonValue] | None = None,
-        rows: Literal["events", "records"] | None = None,
-        mode: Literal["error", "overwrite"] = DEFAULT_MODE,
-        part_size: int = DEFAULT_PART_SIZE,
-        partition_by: Sequence[str] | None = None,
-        max_open_files: int = DEFAULT_MAX_OPEN_FILES,
-        lazy: bool = False,
-    ) -> SinkSummary | LazyResult[SinkSummary]:
-        """Write this viewer's rows to ``path`` and return a
-        :class:`SinkSummary`: the selected events as a DFTracer trace
-        (``rows="events"``, the default for a plan that keeps the event
-        envelope), or typed records for an aggregation or any other plan.
-        :meth:`LazyFrame.sink` describes the path, the staging and the index.
-        Over table files the records keep the table header's dtypes while the
-        columns are the table's own."""
-        header = self._header
-
-        def run() -> SinkSummary:
-            return run_sink(
-                self.lazy(),
-                path,
-                header=header,
-                schema=self.schema,
-                rows=rows,
-                runtime=self._runtime,
-                max_open_files=max_open_files,
-                partition_by=partition_by,
-                part_size=part_size,
-                mode=mode,
-                name=name,
-                meta=meta,
-                format=format,
-                options=options,
-            )
-
-        if lazy:
-            return LazyResult([], lambda _frames: run())
-        return run()
+    def _sink_target(self) -> tuple[LazyFrame, dict[str, Any], Runtime | None]:
+        return self.lazy(), {"header": self._header, "schema": self.schema}, self._runtime
 
     @overload
     def statistics(self, lazy: Literal[False] = ...) -> dict[str, JsonValue]: ...
@@ -848,7 +764,7 @@ class Handle(Generic[T]):
         return cast("T", self._value)
 
 
-class Session:
+class Session(SessionSinkVerbs):
     """Plans registered here run together on :meth:`execute` (or at the end of
     a ``with`` block, or on the first :meth:`Handle.result`), as
     :func:`collect_all` runs them: plans over the same trace share one scan.
@@ -857,7 +773,7 @@ class Session:
 
         with tv.session() as s:
             by_cat = s.collect(tv.group_by("cat").agg("count", "mean:dur"))
-            s.sink(tv.filter("dur > 1000000"), "slow.pfw.gz")
+            s.sink_trace(tv.filter("dur > 1000000"), "slow.pfw.gz")
         by_cat.result()
     """
 
@@ -879,38 +795,6 @@ class Session:
         self._roots.append(root)
         self._handles.append(handle)
         return handle
-
-    def sink(
-        self,
-        viewer: TraceViewer,
-        path: PathLike,
-        *,
-        format: str | None = None,
-        options: TraceWriteOptions | Mapping[str, SinkOption] | None = None,
-        name: str | None = None,
-        meta: Mapping[str, JsonValue] | None = None,
-        rows: Literal["events", "records"] | None = None,
-        mode: Literal["error", "overwrite"] = DEFAULT_MODE,
-        part_size: int = DEFAULT_PART_SIZE,
-        partition_by: Sequence[str] | None = None,
-        max_open_files: int = DEFAULT_MAX_OPEN_FILES,
-    ) -> Handle[SinkSummary]:
-        """``viewer.sink(path, ...)``, run with the session."""
-        return self.collect(
-            viewer.sink(
-                path,
-                format=format,
-                options=options,
-                name=name,
-                meta=meta,
-                rows=rows,
-                mode=mode,
-                part_size=part_size,
-                partition_by=partition_by,
-                max_open_files=max_open_files,
-                lazy=True,
-            )
-        )
 
     def materialize(
         self,

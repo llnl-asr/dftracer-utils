@@ -227,10 +227,11 @@ one scan:
 Other terminals: ``stream(batch_size=65536)`` yields
 :class:`~dftracer.utils.DataFrame` chunks of about ``batch_size`` rows for
 out-of-core reads; ``statistics()`` returns a summary dict;
-``sink(path)`` writes the selected events as an indexed trace file (typed
-records for an aggregation) and returns a ``SinkSummary``; ``column_info()`` lists the
+``sink_trace(path)`` writes the selected events as an indexed trace file and
+``sink_table(path)`` writes any plan, an aggregation for one, as typed records;
+both return a ``SinkSummary``; ``column_info()`` lists the
 columns and their types from the index (no scan, see below).
-``statistics``, ``sink`` and ``materialize`` take ``lazy=True`` to return
+``statistics``, ``sink_trace``, ``sink_table``, ``sink`` and ``materialize`` take ``lazy=True`` to return
 a :class:`~dftracer.utils.LazyResult` instead of running now.
 
 Lazy indexing mirrors :class:`~dftracer.utils.LazyFrame`: ``view["dur"]`` is a
@@ -253,7 +254,7 @@ returns one value per root in order; plans over the same trace share one scan:
    by_name, flame, stats = collect_all([
        view.group_by("name").agg("count", "sum:dur"),
        view.flamegraph(),
-       view.sink("posix.pfw.gz", lazy=True),
+       view.sink_trace("posix.pfw.gz", lazy=True),
    ])
 
 Inspecting the schema
@@ -383,7 +384,7 @@ runs them, at the end of the ``with`` block or on the first
    with view.session() as s:
        by_cat = s.collect(view.group_by("cat").agg("count", "mean:dur"))
        tree = s.collect(view.containment())
-       written = s.sink(view.filter('cat == "POSIX"'), "posix.pfw.gz")
+       written = s.sink_trace(view.filter('cat == "POSIX"'), "posix.pfw.gz")
    by_cat.result()                  # DataFrame
    tree.result().flamegraph         # Containment field
 

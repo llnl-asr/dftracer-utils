@@ -49,7 +49,7 @@ Python
 
 ``s.collect(root)`` registers any :class:`~dftracer.utils.LazyFrame` (a
 ``TraceViewer`` plan included) or :class:`~dftracer.utils.LazyResult` and
-returns a :class:`~dftracer.utils.trace.Handle`. ``s.sink(viewer, path)``,
+returns a :class:`~dftracer.utils.trace.Handle`. ``s.sink_trace(viewer, path)``,
 ``s.materialize(viewer)`` and ``s.attach(plugins)`` register an export, a
 materialization and a plugin set the same way. A ``with`` block executes on
 exit, or call ``s.execute()`` (the first ``handle.result()`` also triggers it):
@@ -63,7 +63,7 @@ exit, or call ``s.execute()`` (the first ``handle.result()`` also triggers it):
    with tv.session() as s:
        by_cat  = s.collect(tv.group_by("cat").agg("count", "mean:dur"))
        by_rank = s.collect(tv.group_by("rank").agg("count").sort_by("count"))
-       posix   = s.sink(tv.filter('cat == "POSIX"'), "posix.pfw.gz")
+       posix   = s.sink_trace(tv.filter('cat == "POSIX"'), "posix.pfw.gz")
        tree    = s.collect(tv.filter('cat == "POSIX"').call_tree(partition=("pid", "tid")))
 
    cat_df  = by_cat.result()     # a DataFrame, resolved by the one scan

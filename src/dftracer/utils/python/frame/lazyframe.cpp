@@ -900,7 +900,8 @@ PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
     return dftracer::utils::python::frame::wrap_dataframe(std::move(out));
 }
 
-PyObject* LazyFrame_sink(PyObject* self, PyObject* args, PyObject* kwds) {
+PyObject* LazyFrame_sink_plugin(PyObject* self, PyObject* args,
+                                PyObject* kwds) {
     LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
     const char* name = nullptr;
@@ -1332,8 +1333,9 @@ PyMethodDef LazyFrame_methods[] = {
     {"collect", DFTU_PYCFUNCTION(LazyFrame_collect),
      METH_VARARGS | METH_KEYWORDS,
      "collect(batch_size=65536) -> DataFrame, running the pipeline."},
-    {"sink", DFTU_PYCFUNCTION(LazyFrame_sink), METH_VARARGS | METH_KEYWORDS,
-     "sink(name, options=None, batch_size=0, runtime=None) -> (rows, "
+    {"_sink_plugin", DFTU_PYCFUNCTION(LazyFrame_sink_plugin),
+     METH_VARARGS | METH_KEYWORDS,
+     "_sink_plugin(name, options=None, batch_size=0, runtime=None) -> (rows, "
      "batches), writing the pipeline's rows to the sink the plugin "
      "registered as name."},
     {"collect_async", DFTU_PYCFUNCTION(LazyFrame_collect_async),

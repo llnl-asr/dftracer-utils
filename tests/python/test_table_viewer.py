@@ -789,7 +789,7 @@ def test_narrow_dtypes_keep_their_width_through_read_and_sink(tmp_path, indexed)
     assert TraceViewer(path).schema["int8"] == dftu.DType.INT8
     pd.testing.assert_frame_equal(frame.to_pandas(), df, **EQUAL)
     out = str(tmp_path / "out.pfw.gz")
-    TraceViewer(path).sink(out)
+    TraceViewer(path).sink_table(out)
     carried = {f["name"]: f["dtype"] for f in header_fields(path)}
     written = {f["name"]: f["dtype"] for f in header_fields(out)}
     assert written == carried

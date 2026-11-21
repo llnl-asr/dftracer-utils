@@ -95,7 +95,7 @@ def test_shared_arguments_reach_the_plugin_sink_as_options(tmp_path, plugin, mon
 
     class Recorder:
         @staticmethod
-        def sink(plan, format, options, batch_size, runtime):
+        def _sink_plugin(plan, format, options, batch_size, runtime):
             seen.update(options)
             return 0, 0
 
@@ -107,7 +107,6 @@ def test_shared_arguments_reach_the_plugin_sink_as_options(tmp_path, plugin, mon
         mode="overwrite",
         name="n",
         meta={"k": 1},
-        rows="records",
         part_size=3,
         max_open_files=8,
     )
@@ -117,7 +116,6 @@ def test_shared_arguments_reach_the_plugin_sink_as_options(tmp_path, plugin, mon
         "mode": "overwrite",
         "name": "n",
         "meta": '{"k": 1}',
-        "rows": "records",
         "part_size": "3",
         "max_open_files": "8",
     }
@@ -137,7 +135,7 @@ def test_a_shared_argument_equal_to_its_default_still_reaches_the_plugin(
 
     class Recorder:
         @staticmethod
-        def sink(plan, format, options, batch_size, runtime):
+        def _sink_plugin(plan, format, options, batch_size, runtime):
             seen.append(dict(options))
             return 0, 0
 

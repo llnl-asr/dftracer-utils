@@ -1242,7 +1242,7 @@ class LazyFrame:
         really took and the counters the plugins added."""
         ...
     def collect(self, batch_size: int = 0, runtime: RuntimeArg = None) -> PublicDataFrame: ...
-    def sink(
+    def _sink_plugin(
         self,
         name: str,
         options: Mapping[str, str] | None = None,
@@ -1544,7 +1544,7 @@ def _dataframe_from_columns(
 def _sink_output(
     plan: PublicLazyFrame,
     path: str,
-    rows: str,
+    kind: str,
     mode: str,
     compress: bool,
     level: int,
@@ -1556,7 +1556,7 @@ def _sink_output(
     known_rows: int,
     runtime: RuntimeArg = None,
 ) -> tuple[str, int, list[str]]:
-    """Run ``plan`` into ``path`` as ``rows`` ("events" or "records"): stage,
+    """Run ``plan`` into ``path`` as ``kind`` ("events" or "records"): stage,
     write, rename into place and index. Returns the root, the row count and the
     written files. ``header_args`` is the args object of a records header
     without its row count; ``known_rows`` is the row count when it is known

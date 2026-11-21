@@ -219,9 +219,9 @@ through the parallel writer - the engine behind ``dftracer_view --merge``.
        .sink_counters(sink)
        .get();
 
-In Python, ``TraceViewer.sink(path)`` writes the selected events as an
-indexed trace file (typed records when the viewer aggregates) and returns a
-``SinkSummary``. See
+In Python, ``TraceViewer.sink_trace(path)`` writes the selected events as an
+indexed trace file and ``TraceViewer.sink_table(path)`` writes any plan, such
+as an aggregation, as typed records; both return a ``SinkSummary``. See
 :doc:`../../api/trace_viewer`.
 
 Custom folds: map_batches
@@ -319,7 +319,7 @@ two branches after the shared scan, goes through the lower-level
 path. From Python the same fused scan is ``TraceViewer.session()``:
 ``s.collect(plan)`` registers any lazy plan over the view (an aggregation, a
 row filter, a ``call_tree`` / ``flamegraph`` plan, the ``containment()``
-result), and ``s.sink(viewer, path)``, ``s.materialize(viewer)`` and
+result), and ``s.sink_trace(viewer, path)``, ``s.materialize(viewer)`` and
 ``s.attach(plugins)`` register the other branches, each returning a ``Handle``
 resolved on ``execute()``. :func:`~dftracer.utils.collect_all` shares the scan
 the same way without a session. See :doc:`sessions` and
@@ -377,7 +377,7 @@ coordinator publishing the result:
    coordinator.register_materialized(mv_dir);
 
 In Python the same steps are ``TraceViewer.materialize_dir()``,
-``TraceViewer.sink(path)`` and
+``TraceViewer.sink_trace(path)`` and
 ``TraceViewer.register_materialized(dir)``. Either way it is a building block
 for a caller-driven distributed materialize (the caller owns rank coordination
 and the barrier between steps 2 and 3, same as the distributed patterns in

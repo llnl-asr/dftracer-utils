@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: MIT
-"""Writing plans and frames as DFTracer files: ``LazyFrame.sink``,
-``TraceViewer.sink`` and ``DataFrame.write``.
+"""Writing plans and frames as DFTracer files: ``sink_trace`` and
+``sink_table`` on ``LazyFrame`` and ``TraceViewer``, ``write_trace`` and
+``write_table`` on ``DataFrame``, and the generic plugin ``sink`` and ``write``.
 
 A path ending in ``.pfw.gz`` or ``.pfw`` is one file; any other path is a
-folder of ``part-NNNNN.pfw.gz`` files (plain output is one ``.pfw`` file). The rows are DFTracer
-events when the plan keeps the event envelope, else typed records: a
-``dftu.table`` header line and one ph 3 line per row. The native writer stages
+folder of ``part-NNNNN.pfw.gz`` files (plain output is one ``.pfw`` file). A
+trace verb writes DFTracer events and needs the event envelope; a table verb
+writes typed records: a ``dftu.table`` header line and one ph 3 line per row. The native writer stages
 the output next to the target, renames it into place and builds one index for
 the files.
 """
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 
 
 _MODES = ("error", "overwrite")
-_ROWS = (None, "events", "records")
+_KINDS = (None, "events", "records")
 
 # The dtype a streamed column gets in a records header. The plan does not say
 # whether a column holds a null, so the nullable dtype keeps a null apart from
@@ -168,9 +169,9 @@ _EVENT_HASHES = ("hhash", "fhash", "shash")
 
 def _events_problem(schema: Mapping[str, DType]) -> str | None:
     """Why ``schema`` is not the event envelope, or ``None`` when it is."""
-    for name in _EVENT_TEXT + _EVENT_INT:
-        if name not in schema:
-            return f"the plan has no {name!r} column"
+    missing = [name for name in _EVENT_TEXT + _EVENT_INT if name not in schema]
+    if missing:
+        return f"the plan has no column {', '.join(repr(m) for m in missing)}"
     for name in _EVENT_TEXT:
         if schema[name] not in (DType.STRING, DType.LARGE_STRING):
             return f"column {name!r} is {schema[name].name.lower()}, not text"
@@ -346,7 +347,7 @@ def _plugin_sink(
         if key in text:
             raise ValueError(f"{key!r} is a sink argument and also a sink option; pass it once")
         text[key] = _option_text(value)
-    rows, _batches = _ext.LazyFrame.sink(plan, format, text, 0, runtime)
+    rows, _batches = _ext.LazyFrame._sink_plugin(plan, format, text, 0, runtime)
     return SinkSummary(root=path, rows=int(rows), kind=format, part_count=1)
 
 
@@ -354,26 +355,25 @@ def run_sink(
     plan: LazyFrame,
     path: PathLike,
     *,
+    kind: str | None = None,
     format: str | None = None,
     options: object = None,
     name: str | None = None,
     meta: Mapping[str, JsonValue] | None = None,
-    rows: str | None = None,
     mode: str = DEFAULT_MODE,
     part_size: int = DEFAULT_PART_SIZE,
     partition_by: object = None,
     max_open_files: int = DEFAULT_MAX_OPEN_FILES,
-    default_rows: str | None = None,
     header: Mapping[str, Any] | None = None,
     known_rows: int = -1,
     raw_columns: tuple[str, ...] = (),
     schema: Mapping[str, DType] | None = None,
     runtime: Runtime | None = None,
 ) -> SinkSummary:
-    """Run ``plan`` into ``path``. ``header`` is a records header to use when it
-    describes the plan's columns, ``known_rows`` the row count of an eager
-    frame, ``default_rows`` the kind a plan gets when ``rows`` is ``None`` and
-    the plan keeps the event envelope. ``schema`` is the plan's columns when the
+    """Run ``plan`` into ``path``. ``kind`` is ``"events"`` or ``"records"`` for
+    the DFTracer format and ``None`` for a plugin ``format``. ``header`` is a
+    records header to use when it describes the plan's columns, ``known_rows``
+    the row count of an eager frame. ``schema`` is the plan's columns when the
     plan itself cannot name them before it runs (a trace viewer's ``args.*``)."""
     mode, mode_given = _given(mode)
     part_size, part_size_given = _given(part_size)
@@ -385,8 +385,10 @@ def run_sink(
         raise ValueError("the sink path is empty")
     if mode not in _MODES:
         raise ValueError(f"mode must be one of {_MODES}, not {mode!r}")
-    if rows not in _ROWS:
-        raise ValueError(f"rows must be 'events', 'records' or None, not {rows!r}")
+    if kind not in _KINDS:
+        raise ValueError(f"kind must be 'events' or 'records', not {kind!r}")
+    if kind is not None and format is not None:
+        raise ValueError("give a DFTracer kind or a plugin format, not both")
     if partition_by is not None:
         raise ValueError("partition_by is not supported yet")
     if (
@@ -397,7 +399,7 @@ def run_sink(
         raise ValueError(f"max_open_files must be a positive int, not {max_open_files!r}")
     if not isinstance(part_size, int) or isinstance(part_size, bool) or part_size < 0:
         raise ValueError(f"part_size must be a non-negative int, not {part_size!r}")
-    if format is not None and format != "dftracer":
+    if format is not None:
         if not isinstance(format, str):
             raise TypeError(f"format must be a str or None, not {type(format).__name__}")
         shared: dict[str, SinkOption] = {}
@@ -405,8 +407,6 @@ def run_sink(
             shared["name"] = name
         if meta is not None:
             shared["meta"] = _meta_text(meta)
-        if rows is not None:
-            shared["rows"] = rows
         if mode_given:
             shared["mode"] = mode
         if part_size_given:
@@ -414,6 +414,8 @@ def run_sink(
         if max_open_files_given:
             shared["max_open_files"] = max_open_files
         return _plugin_sink(plan, target, format, options, shared, runtime)
+    if kind is None:
+        raise ValueError("give a DFTracer kind or a plugin format")
 
     opts = _options(options)
     is_file = _is_file(target)
@@ -447,10 +449,11 @@ def run_sink(
     if opts.build_index and not compress:
         raise ValueError("a plain .pfw output cannot be indexed; use .pfw.gz or build_index=False")
 
-    if meta is not None:
-        _meta_text(meta)
-    if name is not None and (not isinstance(name, str) or not name):
-        raise ValueError("name must be a non-empty str")
+    if kind == "records":
+        if meta is not None:
+            _meta_text(meta)
+        if name is not None and (not isinstance(name, str) or not name):
+            raise ValueError("name must be a non-empty str")
     if mode == "error" and os.path.lexists(target):
         raise FileExistsError(f"{target} already exists; pass mode='overwrite' to replace it")
 
@@ -459,14 +462,8 @@ def run_sink(
     problem = (
         "the plan's columns are not known before it runs" if unknown else _events_problem(schema)
     )
-    if rows == "events":
-        if problem is not None:
-            raise ValueError(f"rows='events' needs the event envelope: {problem}")
-        kind = "events"
-    elif rows == "records":
-        kind = "records"
-    else:
-        kind = "records" if problem is not None else (default_rows or "events")
+    if kind == "events" and problem is not None:
+        raise ValueError(f"a trace needs the event envelope: {problem}")
 
     header_args: str | None = None
     if kind == "records":

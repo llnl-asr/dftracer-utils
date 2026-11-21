@@ -349,7 +349,7 @@ def _frame_from_pandas(
     df: pd.DataFrame, name: str, meta: Meta | None = None, keep_index: bool = False
 ) -> DataFrame:
     """A native frame carrying the exact table header of a pandas frame, so
-    ``frame.write(path)`` stores every dtype, category, Arrow type and set or
+    ``frame.write_table(path)`` stores every dtype, category, Arrow type and set or
     list cell of ``df`` and ``frame.to_pandas()`` gives ``df`` back. A pandas
     default ``RangeIndex`` is not stored unless ``keep_index``; any other index
     becomes leading fields. Raises ``TypeError`` for a column the format cannot

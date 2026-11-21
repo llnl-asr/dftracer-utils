@@ -535,8 +535,11 @@ PY_ALLOWLIST = {
         "map",
     },
     "DataFrame": {
-        # Writes the frame as DFTracer files through the sink writer.
+        # Write the frame as DFTracer files through the sink writer; write is
+        # the generic plugin-format verb.
         "write",
+        "write_table",
+        "write_trace",
         "share",
         "index_names",
         "with_index",
@@ -653,6 +656,8 @@ PY_ALLOWLIST = {
         "index_names",
         "with_index",
         "sink",
+        "sink_table",
+        "sink_trace",
         "stream",
     },
 }

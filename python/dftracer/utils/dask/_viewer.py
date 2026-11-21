@@ -163,7 +163,7 @@ def _dv_write_task(
     build_index: bool,
 ) -> dict[str, str]:
     """Worker: export this shard to one re-indexable .pfw.gz."""
-    _make_viewer(files, index_dir, plan).sink(
+    _make_viewer(files, index_dir, plan).sink_trace(
         output_path, options=TraceWriteOptions(build_index=build_index), mode="overwrite"
     )
     return {"path": output_path}
@@ -179,7 +179,7 @@ def _dv_materialize_shard_task(
     """Worker: materialize this shard's filtered events into a rank subdir of
     the view's parts dir, indexed in the view root that holds them all."""
     os.makedirs(subdir, exist_ok=True)
-    _make_viewer(files, index_dir, plan).sink(
+    _make_viewer(files, index_dir, plan).sink_trace(
         os.path.join(subdir, "part.pfw.gz"),
         options=TraceWriteOptions(build_index=True, member_size=checkpoint_size),
         mode="overwrite",

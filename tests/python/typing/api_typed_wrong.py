@@ -24,5 +24,5 @@ assert_type(collect_all([count]), List[DataFrame])  # a lazy int collects to an 
 assert_type(handle.result(), str)  # the handle holds an int
 ix.manifest()[0]["nope"]  # no such key
 ix.explain(1)  # the query is text
-tv.sink(1)  # the path is text
+tv.sink_trace(1)  # the path is text
 ix.ensure().nope  # no such field

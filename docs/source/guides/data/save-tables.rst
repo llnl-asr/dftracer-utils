@@ -1,4 +1,4 @@
-:description: Store a DataFrame as a typed DFTracer JSON-lines table file with DataFrame.write, read it back with TraceViewer, and get the exact pandas frame with to_pandas().
+:description: Store a DataFrame as a typed DFTracer JSON-lines table file with DataFrame.write_table, read it back with TraceViewer, and get the exact pandas frame with to_pandas().
 
 Save a frame as a table file
 ============================
@@ -24,7 +24,7 @@ Write and read
            "time": [0.5, 1.5, 2.0, 0.25],
        }
    )
-   df.write("profile.pfw.gz", name="profile", meta={"run": 1}, mode="overwrite")
+   df.write_table("profile.pfw.gz", name="profile", meta={"run": 1}, mode="overwrite")
    profile = TraceViewer("profile.pfw.gz").collect()
 
 A path ending in ``.pfw.gz`` is a multi-member gzip file, which a read decodes
@@ -63,7 +63,7 @@ dtypes, categories and index. NA and NaN stay apart in a nullable float column.
        },
        index=pd.Index(["a", "b", "c"], name="proc"),
    )
-   DataFrame.from_pandas(original).write("typed.pfw.gz", name="typed", mode="overwrite")
+   DataFrame.from_pandas(original).write_table("typed.pfw.gz", name="typed", mode="overwrite")
    exact = TraceViewer("typed.pfw.gz").collect().to_pandas()
 
 A new frame (a filter, a join) has no header, and a frame changed in place
@@ -85,14 +85,17 @@ carry.
 Write a plan without collecting it
 ----------------------------------
 
-``LazyFrame.sink`` and ``TraceViewer.sink`` write a plan as it streams, in
-parts of ``part_size`` rows when you ask for them.
+``LazyFrame.sink_table`` and ``TraceViewer.sink_table`` write a plan as it
+streams, in parts of ``part_size`` rows when you ask for them. Pass
+``lazy=True`` to get a :class:`~dftracer.utils.LazyResult` for
+:func:`~dftracer.utils.collect_all`. To write events instead, use
+``write_trace``, ``sink_trace`` on a plan that keeps the event envelope.
 
 .. code-block:: python
 
    from dftracer.utils import col
 
-   summary = profile.lazy().filter(col("calls") > 2).sink(
+   summary = profile.lazy().filter(col("calls") > 2).sink_table(
        "busy", part_size=2, mode="overwrite"
    )
    whole = TraceViewer("busy").collect()

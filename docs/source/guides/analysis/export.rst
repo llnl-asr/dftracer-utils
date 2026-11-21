@@ -178,7 +178,7 @@ Write a new trace
 
 To export matching events back out as a re-indexable ``.pfw.gz`` trace (rather
 than a table), use the trace query's own export path - ``sink_json`` (C++) for
-newline-delimited events, ``sink_trace`` (C++) or ``TraceViewer.sink(path)``
+newline-delimited events, ``sink_trace`` (C++) or ``TraceViewer.sink_trace(path)``
 (Python) for the parallel multi-member writer. See :doc:`../../trace-viewer`.
 
 See also

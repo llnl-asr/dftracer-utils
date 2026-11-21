@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import (
     TYPE_CHECKING,
+    Any,
     Callable,
     Generic,
     Iterator,
@@ -61,14 +62,7 @@ from ._group_transforms import GroupTransforms
 from ._groupby import GroupKey, GroupResample, GroupRolling, group_quantile, trace_group
 from ._series import Series
 from ._series_index import default_name
-from ._sink import (
-    DEFAULT_MAX_OPEN_FILES,
-    DEFAULT_MODE,
-    DEFAULT_PART_SIZE,
-    SinkSummary,
-    TraceWriteOptions,
-    run_sink,
-)
+from ._sink_verbs import SinkVerbs
 from ._window_spec import norm_window_spec
 from .runtime import TaskHandle
 
@@ -77,9 +71,7 @@ if TYPE_CHECKING:
 
     from ._enums import DType
     from ._loc import LazyILoc, LazyLoc, Resampler
-    from ._sink import PathLike, SinkOption
     from .runtime import Runtime
-    from .schemas import JsonValue
     from .trace._viewer import TraceViewer
 
     _P = ParamSpec("_P")
@@ -116,7 +108,7 @@ def _as_plan(other: object) -> LazyFrame:
     raise TypeError(f"expected a LazyFrame, got {type(other).__name__}")
 
 
-class LazyFrame(_ext.LazyFrame):
+class LazyFrame(SinkVerbs, _ext.LazyFrame):
     """A deferred query over a native batch; :meth:`collect` runs it."""
 
     __slots__ = ("_rt", "_open")
@@ -807,96 +799,8 @@ class LazyFrame(_ext.LazyFrame):
             finish=lambda out: out,
         )
 
-    @overload
-    def sink(
-        self,
-        path: PathLike,
-        *,
-        format: str | None = ...,
-        options: TraceWriteOptions | Mapping[str, SinkOption] | None = ...,
-        name: str | None = ...,
-        meta: Mapping[str, JsonValue] | None = ...,
-        rows: Literal["events", "records"] | None = ...,
-        mode: Literal["error", "overwrite"] = ...,
-        part_size: int = ...,
-        partition_by: Sequence[str] | None = ...,
-        max_open_files: int = ...,
-        lazy: Literal[False] = ...,
-    ) -> SinkSummary: ...
-    @overload
-    def sink(
-        self,
-        path: PathLike,
-        *,
-        format: str | None = ...,
-        options: TraceWriteOptions | Mapping[str, SinkOption] | None = ...,
-        name: str | None = ...,
-        meta: Mapping[str, JsonValue] | None = ...,
-        rows: Literal["events", "records"] | None = ...,
-        mode: Literal["error", "overwrite"] = ...,
-        part_size: int = ...,
-        partition_by: Sequence[str] | None = ...,
-        max_open_files: int = ...,
-        lazy: Literal[True],
-    ) -> LazyResult[SinkSummary]: ...
-
-    def sink(
-        self,
-        path: PathLike,
-        *,
-        format: str | None = None,
-        options: TraceWriteOptions | Mapping[str, SinkOption] | None = None,
-        name: str | None = None,
-        meta: Mapping[str, JsonValue] | None = None,
-        rows: Literal["events", "records"] | None = None,
-        mode: Literal["error", "overwrite"] = DEFAULT_MODE,
-        part_size: int = DEFAULT_PART_SIZE,
-        partition_by: Sequence[str] | None = None,
-        max_open_files: int = DEFAULT_MAX_OPEN_FILES,
-        lazy: bool = False,
-    ) -> SinkSummary | LazyResult[SinkSummary]:
-        """Write the pipeline's rows to ``path`` and return a
-        :class:`SinkSummary`; nothing is collected into memory.
-
-        A path ending in ``.pfw.gz`` or ``.pfw`` is one file, any other path a
-        folder of ``part-NNNNN.pfw.gz`` files (plain output is one ``.pfw`` file). The rows are
-        DFTracer events when the plan keeps the event envelope (``name``,
-        ``cat``, ``pid``, ``tid``, ``ts``, ``ph``, with ``dur`` and
-        ``args.<key>`` columns), else typed records: a ``dftu.table`` header
-        and one row per line. A streamed plan does not know whether a column
-        holds a null, so the header of a records write types its integers and
-        booleans as the nullable pandas dtypes.
-
-        The output is staged beside ``path`` and renamed into place when it is
-        complete, so a failed write leaves nothing at ``path``. ``mode``
-        ``"error"`` refuses an existing ``path``, ``"overwrite"`` replaces it.
-        The index of the files is built once under the output root unless
-        ``options`` says otherwise. ``format`` names a plugin sink instead of
-        the DFTracer format; ``options`` are then its text options and
-        ``path`` its ``path`` option. ``part_size`` is the rows of one part of
-        a folder. ``partition_by`` is not supported yet. ``lazy=True`` returns
-        a :class:`LazyResult` for :func:`collect_all` that writes when it runs.
-        """
-
-        def run() -> SinkSummary:
-            return run_sink(
-                self,
-                path,
-                format=format,
-                options=options,
-                name=name,
-                meta=meta,
-                rows=rows,
-                mode=mode,
-                part_size=part_size,
-                partition_by=partition_by,
-                max_open_files=max_open_files,
-                runtime=self._runtime,
-            )
-
-        if lazy:
-            return LazyResult([], lambda _frames: run())
-        return run()
+    def _sink_target(self) -> tuple[LazyFrame, dict[str, Any], Runtime | None]:
+        return self, {}, self._runtime
 
     def stream(self, batch_size: int = 0) -> Iterator[DataFrame]:
         """Run the pipeline and yield its rows as :class:`DataFrame` chunks of

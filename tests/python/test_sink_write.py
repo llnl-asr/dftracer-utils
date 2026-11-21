@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""LazyFrame.sink, TraceViewer.sink and DataFrame.write: staging and commit,
+"""sink_trace, sink_table, write_trace and write_table: staging and commit,
 the nrows slot, parts, events output, the index and crash behavior."""
 
 import gzip
@@ -59,7 +59,7 @@ def header_of(path):
 
 def test_a_streamed_sink_patches_the_row_count_and_every_reader_reads_it(tmp_path):
     path = str(tmp_path / "t.pfw.gz")
-    summary = frame(25).lazy().filter(col("i") >= 5).sink(path)
+    summary = frame(25).lazy().filter(col("i") >= 5).sink_table(path)
     assert summary == SinkSummary(root=path, rows=20, kind="records", part_count=1)
     assert header_of(path)["nrows"] == 20
     assert header_of(path)["format_version"] == ext.TABLE_FORMAT_VERSION
@@ -72,7 +72,7 @@ def test_a_streamed_sink_patches_the_row_count_and_every_reader_reads_it(tmp_pat
 
 def test_a_plain_streamed_sink_patches_the_slot_only(tmp_path):
     path = str(tmp_path / "t.pfw")
-    frame(7).lazy().sink(path)
+    frame(7).lazy().sink_table(path)
     assert header_of(path)["nrows"] == 7
     assert not os.path.exists(tmp_path / ".dftindex")
     assert TraceViewer(path).collect().num_rows == 7
@@ -80,7 +80,7 @@ def test_a_plain_streamed_sink_patches_the_slot_only(tmp_path):
 
 def test_an_eager_write_has_the_row_count_at_once(tmp_path):
     path = str(tmp_path / "t.pfw.gz")
-    summary = frame(6).write(path)
+    summary = frame(6).write_table(path)
     assert summary.rows == 6 and summary.kind == "records"
     assert header_of(path)["nrows"] == 6
     assert header_of(path)["table"] == "t"
@@ -89,30 +89,30 @@ def test_an_eager_write_has_the_row_count_at_once(tmp_path):
 def test_a_header_above_one_stored_block_and_zero_rows(tmp_path):
     big = tmp_path / "big.pfw.gz"
     meta = {"blob": "x" * 150_000}
-    frame(3).write(str(big), meta=meta)
+    frame(3).write_table(str(big), meta=meta)
     assert header_of(str(big))["meta"] == meta
     assert zlib_multi_member(str(big)).splitlines() == lines(str(big))
     assert TraceViewer(str(big)).collect().num_rows == 3
     # The same header streamed: the slot and the CRC32 patch still hold.
     streamed = tmp_path / "streamed.pfw.gz"
-    frame(4).lazy().sink(str(streamed), meta=meta)
+    frame(4).lazy().sink_table(str(streamed), meta=meta)
     assert header_of(str(streamed))["nrows"] == 4
     assert zlib_multi_member(str(streamed)).splitlines() == lines(str(streamed))
 
     empty = tmp_path / "empty.pfw.gz"
-    summary = frame(5).lazy().filter(col("i") > 99).sink(str(empty))
+    summary = frame(5).lazy().filter(col("i") > 99).sink_table(str(empty))
     assert summary.rows == 0
     assert header_of(str(empty))["nrows"] == 0
     assert len(lines(str(empty))) == 1
     assert TraceViewer(str(empty)).collect().num_rows == 0
     plain_empty = tmp_path / "empty.pfw"
-    frame(5).write(str(plain_empty), rows="records", options=TraceWriteOptions(build_index=False))
+    frame(5).write_table(str(plain_empty), options=TraceWriteOptions(build_index=False))
     assert len(lines(str(plain_empty))) == 1 + 5
 
 
 def test_a_reader_refuses_a_slot_that_was_never_patched(tmp_path):
     path = tmp_path / "t.pfw"
-    frame(3).write(str(path))
+    frame(3).write_table(str(path))
     text = path.read_text()
     patched = text.replace('"nrows":3 ', '"nrows":-1', 1)
     assert patched != text
@@ -123,19 +123,19 @@ def test_a_reader_refuses_a_slot_that_was_never_patched(tmp_path):
 
 def test_mode_error_refuses_and_overwrite_replaces(tmp_path):
     path = str(tmp_path / "t.pfw.gz")
-    frame(3).write(path)
+    frame(3).write_table(path)
     with pytest.raises(FileExistsError):
-        frame(4).write(path)
+        frame(4).write_table(path)
     assert TraceViewer(path).collect().num_rows == 3
-    frame(4).write(path, mode="overwrite")
+    frame(4).write_table(path, mode="overwrite")
     assert TraceViewer(path).collect().num_rows == 4
     assert sorted(os.listdir(tmp_path)) == [".dftindex", "t.pfw.gz"]
 
     folder = str(tmp_path / "parts")
-    frame(5).write(folder, part_size=2)
+    frame(5).write_table(folder, part_size=2)
     with pytest.raises(FileExistsError):
-        frame(5).write(folder, part_size=2)
-    frame(3).write(folder, part_size=2, mode="overwrite")
+        frame(5).write_table(folder, part_size=2)
+    frame(3).write_table(folder, part_size=2, mode="overwrite")
     assert TraceViewer(folder).collect().num_rows == 3
     assert not any(n.startswith(".parts.") for n in os.listdir(tmp_path))
 
@@ -153,7 +153,7 @@ def test_the_next_write_removes_leftover_staging_siblings(tmp_path):
         (tmp_path / name / "x").write_text("x")
     keep = tmp_path / ".other.pfw.gz.tmp-9"
     keep.write_text("keep")
-    frame(2).write(str(tmp_path / "t.pfw.gz"))
+    frame(2).write_table(str(tmp_path / "t.pfw.gz"))
     assert sorted(n for n in os.listdir(tmp_path) if n.startswith(".")) == [
         ".dftindex",
         ".other.pfw.gz.tmp-9",
@@ -162,7 +162,7 @@ def test_the_next_write_removes_leftover_staging_siblings(tmp_path):
 
 def test_part_size_makes_numbered_parts_read_in_order(tmp_path):
     folder = str(tmp_path / "out")
-    summary = frame(23).write(folder, part_size=2)
+    summary = frame(23).write_table(folder, part_size=2)
     assert summary.part_count == 12 and summary.rows == 23
     parts = sorted(n for n in os.listdir(folder) if n.startswith("part-"))
     assert parts[0] == "part-00000.pfw.gz" and parts[-1] == "part-00011.pfw.gz"
@@ -175,16 +175,16 @@ def test_a_folder_of_plain_parts_is_refused(tmp_path):
     folder = str(tmp_path / "plain")
     for options in ({"compress": False}, TraceWriteOptions(compress=False)):
         with pytest.raises(ValueError, match="write a single .pfw file"):
-            frame(4).write(folder, part_size=2, options=options)
+            frame(4).write_table(folder, part_size=2, options=options)
         with pytest.raises(ValueError, match="write a single .pfw file"):
-            frame(4).lazy().sink(folder, part_size=2, options=options)
+            frame(4).lazy().sink_table(folder, part_size=2, options=options)
     assert os.listdir(tmp_path) == []
 
 
 def test_a_plain_file_in_a_folder_is_not_read_and_not_indexed(tmp_path):
     folder = tmp_path / "mixed"
-    frame(3).write(str(folder / "good.pfw.gz"))
-    frame(2).write(str(folder / "raw.pfw"))
+    frame(3).write_table(str(folder / "good.pfw.gz"))
+    frame(2).write_table(str(folder / "raw.pfw"))
     assert TraceViewer(str(folder)).collect().num_rows == 3
     assert Indexer(str(folder), index_dir=str(tmp_path / "idx")).status().total_files == 1
     with pytest.raises(dft.errors.DFTUtilsIOError, match="not gzip"):
@@ -195,39 +195,39 @@ def test_arguments_are_checked(tmp_path):
     path = str(tmp_path / "t.pfw.gz")
     f = frame(3)
     with pytest.raises(ValueError, match="part_size needs a folder"):
-        f.write(path, part_size=2)
+        f.write_table(path, part_size=2)
     with pytest.raises(ValueError, match="unknown sink option"):
-        f.write(path, options={"nope": 1})
+        f.write_table(path, options={"nope": 1})
     with pytest.raises(ValueError, match="contradicts"):
-        f.write(path, options=TraceWriteOptions(compress=False))
+        f.write_table(path, options=TraceWriteOptions(compress=False))
     with pytest.raises(ValueError, match="contradicts"):
-        f.write(str(tmp_path / "p.pfw"), options=TraceWriteOptions(compress=True))
+        f.write_table(str(tmp_path / "p.pfw"), options=TraceWriteOptions(compress=True))
     with pytest.raises(ValueError, match="partition_by is not supported yet"):
-        f.write(path, partition_by=["s"])
+        f.write_table(path, partition_by=["s"])
     with pytest.raises(ValueError, match="event envelope"):
-        f.write(path, rows="events")
+        f.write_trace(path)
     with pytest.raises(ValueError, match="mode"):
-        f.write(path, mode="append")
+        f.write_table(path, mode="append")
     with pytest.raises(ValueError, match="cannot be indexed"):
-        f.write(str(tmp_path / "q.pfw"), options=TraceWriteOptions(build_index=True))
+        f.write_table(str(tmp_path / "q.pfw"), options=TraceWriteOptions(build_index=True))
     assert os.listdir(tmp_path) == []
 
 
 def test_name_and_meta_go_into_the_header(tmp_path):
     path = str(tmp_path / "stem.pfw.gz")
-    frame(2).write(path)
+    frame(2).write_table(path)
     assert header_of(path)["table"] == "stem"
-    frame(2).write(path, name="custom", meta={"run": [1, 2]}, mode="overwrite")
+    frame(2).write_table(path, name="custom", meta={"run": [1, 2]}, mode="overwrite")
     args = header_of(path)
     assert args["table"] == "custom" and args["meta"] == {"run": [1, 2]}
     sunk = str(tmp_path / "lazy.pfw.gz")
-    frame(2).lazy().sink(sunk, name="n", meta={"k": 1})
+    frame(2).lazy().sink_table(sunk, name="n", meta={"k": 1})
     assert header_of(sunk)["table"] == "n" and header_of(sunk)["meta"] == {"k": 1}
 
 
 def test_a_lazy_sink_runs_in_collect_all_and_commits_on_its_own(tmp_path):
     a, b = str(tmp_path / "a.pfw.gz"), str(tmp_path / "b.pfw.gz")
-    pending = [frame(2).lazy().sink(a, lazy=True), frame(3).lazy().sink(b, lazy=True)]
+    pending = [frame(2).lazy().sink_table(a, lazy=True), frame(3).lazy().sink_table(b, lazy=True)]
     assert not os.path.exists(a)
     first, second = dft.collect_all(pending)
     assert (first.rows, second.rows) == (2, 3)
@@ -258,7 +258,7 @@ def test_events_output_re_reads_as_a_trace_with_ph_ts_and_dur(tmp_path):
     src = str(tmp_path / "in.pfw.gz")
     _trace(src)
     out = str(tmp_path / "events.pfw.gz")
-    summary = TraceViewer(src).filter('name == "read"').sink(out)
+    summary = TraceViewer(src).filter('name == "read"').sink_trace(out)
     assert summary.kind == "events" and summary.rows == 20
     records = [json.loads(line) for line in lines(out)]
     assert all(r["ph"] == 1 for r in records)
@@ -269,7 +269,7 @@ def test_events_output_re_reads_as_a_trace_with_ph_ts_and_dur(tmp_path):
     assert back["dur"].to_list() == [6 + 2 * k for k in range(20)]
     # The same plan as records, forced.
     forced = str(tmp_path / "records.pfw.gz")
-    assert TraceViewer(src).sink(forced, rows="records").kind == "records"
+    assert TraceViewer(src).sink_table(forced).kind == "records"
     assert header_of(forced)["nrows"] == 40
 
 
@@ -277,7 +277,7 @@ def test_the_index_is_built_prunes_and_marks_the_rows_complete(tmp_path):
     n = 60_000
     path = str(tmp_path / "big.pfw.gz")
     f = DataFrame.from_dict({"i": list(range(n)), "s": [f"k{i % 100}" for i in range(n)]})
-    f.lazy().sink(path, options=TraceWriteOptions(member_size="64KB"))
+    f.lazy().sink_table(path, options=TraceWriteOptions(member_size="64KB"))
     assert os.path.isdir(tmp_path / ".dftindex")
     ext._table_read_counters(True)
     got = TraceViewer(path).filter(col("i") == 12345).collect()
@@ -289,7 +289,7 @@ def test_the_index_is_built_prunes_and_marks_the_rows_complete(tmp_path):
 
 def test_without_an_index_the_data_still_reads(tmp_path):
     path = str(tmp_path / "t.pfw.gz")
-    frame(30).lazy().sink(path, options=TraceWriteOptions(build_index=False))
+    frame(30).lazy().sink_table(path, options=TraceWriteOptions(build_index=False))
     assert not os.path.exists(tmp_path / ".dftindex")
     assert TraceViewer(path).filter(col("i") > 25).collect().num_rows == 4
 
@@ -304,7 +304,7 @@ def test_a_killed_write_leaves_nothing_at_the_target(tmp_path):
             from dftracer.utils import DataFrame
             n = 6_000_000
             f = DataFrame.from_dict({"i": list(range(n)), "s": ["x"] * n})
-            f.lazy().sink(sys.argv[1])
+            f.lazy().sink_table(sys.argv[1])
             """
         )
     )
@@ -323,7 +323,7 @@ def test_a_killed_write_leaves_nothing_at_the_target(tmp_path):
     child.send_signal(signal.SIGKILL)
     child.wait()
     assert not target.exists()
-    frame(2).write(str(target))
+    frame(2).write_table(str(target))
     assert not (tmp_path / staging).exists()
     assert TraceViewer(str(target)).collect().num_rows == 2
     shutil.rmtree(tmp_path / ".dftindex", ignore_errors=True)
@@ -347,7 +347,7 @@ def test_dataframe_write_builds_no_table_header_for_events(tmp_path, monkeypatch
         }
     )
     out = str(tmp_path / "events.pfw.gz")
-    assert events.write(out, rows="events").kind == "events"
+    assert events.write_trace(out).kind == "events"
     assert TraceViewer(out).collect().num_rows == 2
 
 
@@ -363,7 +363,7 @@ def _carried_source(tmp_path):
         }
     )
     path = str(tmp_path / "src.pfw.gz")
-    DataFrame.from_pandas(df).write(path)
+    DataFrame.from_pandas(df).write_table(path)
     return path
 
 
@@ -374,14 +374,14 @@ def _fields(path):
 def test_a_sink_keeps_the_field_details_of_the_columns_it_keeps(tmp_path):
     src = _carried_source(tmp_path)
     selected = str(tmp_path / "select.pfw.gz")
-    TraceViewer(src).select("f", "c", "i").sink(selected)
+    TraceViewer(src).select("f", "c", "i").sink_table(selected)
     fields = header_of(selected)["fields"]
     assert [f["name"] for f in fields] == ["f", "c", "i"]
     assert fields[0]["dtype"] == "float64" and fields[2]["dtype"] == "int64"
     assert fields[1]["dtype"] == "category" and fields[1]["categories"] == ["a", "b", "z"]
 
     dropped = str(tmp_path / "drop.pfw.gz")
-    TraceViewer(src).drop("c").sink(dropped)
+    TraceViewer(src).drop("c").sink_table(dropped)
     assert [(f["name"], f["dtype"]) for f in header_of(dropped)["fields"]] == [
         ("i", "int64"),
         ("f", "float64"),
@@ -422,13 +422,13 @@ def test_the_carried_index_stays_only_when_every_index_column_survives(tmp_path)
     pd = pytest.importorskip("pandas")
     df = pd.DataFrame({"k": [3, 1, 2], "v": [1.5, 2.5, 3.5]}).set_index("k")
     src = str(tmp_path / "idx.pfw.gz")
-    DataFrame.from_pandas(df).write(src)
+    DataFrame.from_pandas(df).write_table(src)
     assert header_of(src)["index"] == ["k"]
     kept = str(tmp_path / "kept.pfw.gz")
-    TraceViewer(src).select("v", "k").sink(kept)
+    TraceViewer(src).select("v", "k").sink_table(kept)
     assert header_of(kept)["index"] == ["k"]
     lost = str(tmp_path / "lost.pfw.gz")
-    TraceViewer(src).select("v").sink(lost)
+    TraceViewer(src).select("v").sink_table(lost)
     assert header_of(lost)["index"] == [] and header_of(lost)["index_names"] == []
 
 
@@ -445,12 +445,12 @@ def test_a_sink_over_a_table_with_raw_columns_reads_back_equal(tmp_path, kind):
     src = str(tmp_path / "src.pfw.gz")
     save_table(df, src, name="t")
     out = str(tmp_path / "out.pfw.gz")
-    TraceViewer(src).sink(out)
+    TraceViewer(src).sink_table(out)
     want = TraceViewer(src).collect().to_pandas()
     got = TraceViewer(out).collect().to_pandas()
     assert got["x"].tolist() == want["x"].tolist() == df["x"].tolist()
     narrowed = str(tmp_path / "narrow.pfw.gz")
-    TraceViewer(src).select("x").sink(narrowed)
+    TraceViewer(src).select("x").sink_table(narrowed)
     assert TraceViewer(narrowed).collect().to_pandas()["x"].tolist() == df["x"].tolist()
 
 
@@ -469,9 +469,9 @@ _STREAM_SCRIPT = textwrap.dedent(
     def peak():
         value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         return value if sys.platform == "darwin" else value * 1024
-    DataFrame.from_dict({"i": [1]}).write(out + ".warm.pfw.gz")
+    DataFrame.from_dict({"i": [1]}).write_table(out + ".warm.pfw.gz")
     before = peak()
-    summary = plan.sink(out)
+    summary = plan.sink_table(out) if kind == "records" else plan.sink_trace(out)
     print(summary.rows, summary.kind, before, peak())
     """
 )
@@ -590,11 +590,62 @@ def test_a_plan_with_no_schema_before_it_runs_streams_without_collecting(tmp_pat
     plan = frame(7).lazy().describe()
     assert not plan.schema
     out = str(tmp_path / "d.pfw.gz")
-    summary = plan.sink(out)
+    summary = plan.sink_table(out)
     assert summary.kind == "records" and summary.rows > 0
     want = frame(7).lazy().describe().collect()
     got = TraceViewer(out).collect()
     assert got.columns == want.columns and got.num_rows == want.num_rows
     assert header_of(out)["nrows"] == want.num_rows
-    with pytest.raises(ValueError, match="rows='events'"):
-        plan.sink(str(tmp_path / "e.pfw.gz"), rows="events")
+    with pytest.raises(ValueError, match="event envelope"):
+        plan.sink_trace(str(tmp_path / "e.pfw.gz"))
+
+
+def test_sink_trace_refuses_a_plan_without_the_envelope_and_names_the_columns(tmp_path):
+    out = str(tmp_path / "e.pfw.gz")
+    with pytest.raises(
+        ValueError, match=r"event envelope.*'name'.*'cat'.*'pid'.*'tid'.*'ts'.*'ph'"
+    ):
+        frame(3).lazy().sink_trace(out)
+    partial = DataFrame.from_dict({"name": ["a"], "cat": ["c"], "pid": [1], "tid": [1]})
+    with pytest.raises(ValueError, match=r"'ts', 'ph'"):
+        partial.lazy().sink_trace(out)
+    with pytest.raises(ValueError, match=r"'ts', 'ph'"):
+        partial.write_trace(out)
+    assert os.listdir(tmp_path) == []
+
+
+def test_write_trace_of_a_collected_trace_frame_re_reads_as_a_trace(tmp_path):
+    src = str(tmp_path / "in.pfw.gz")
+    _trace(src)
+    collected = TraceViewer(src).filter('name == "read"').collect()
+    out = str(tmp_path / "out.pfw.gz")
+    summary = collected.write_trace(out)
+    assert summary.kind == "events" and summary.rows == 20
+    back = TraceViewer(out).collect()
+    assert back.num_rows == 20
+    assert back["ph"].to_list() == [1] * 20
+    assert back["ts"].to_list() == collected["ts"].to_list()
+    assert back["dur"].to_list() == collected["dur"].to_list()
+
+
+def test_a_trace_verb_has_no_name_and_meta_and_no_verb_takes_rows(tmp_path):
+    path = str(tmp_path / "t.pfw.gz")
+    for call in (
+        lambda: frame(2).write_table(path, rows="records"),
+        lambda: frame(2).write_trace(path, rows="events"),
+        lambda: frame(2).lazy().sink_table(path, rows="records"),
+        lambda: frame(2).lazy().sink_trace(path, rows="events"),
+        lambda: frame(2).write_trace(path, name="n"),
+        lambda: frame(2).lazy().sink_trace(path, meta={}),
+    ):
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            call()
+    assert os.listdir(tmp_path) == []
+
+
+def test_the_generic_sink_and_write_need_a_format(tmp_path):
+    path = str(tmp_path / "x.csv")
+    with pytest.raises(TypeError, match="format"):
+        frame(2).lazy().sink(path)
+    with pytest.raises(TypeError, match="format"):
+        frame(2).write(path)

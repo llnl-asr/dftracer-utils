@@ -82,7 +82,7 @@ registered branch sees every matching event from the same traversal.
              counts = s.collect(base_view.group_by("cat").agg("count"))
              stats  = s.collect(base_view.statistics(lazy=True))
              hist   = s.attach(Plugins(["dur_histogram.so"]))   # plugin/JIT fold
-             s.sink(base_view.filter('cat == "POSIX"'), "posix.pfw.gz")
+             s.sink_trace(base_view.filter('cat == "POSIX"'), "posix.pfw.gz")
 
          counts_df = counts.result()   # resolved from the shared scan
          stats_dict = stats.result()

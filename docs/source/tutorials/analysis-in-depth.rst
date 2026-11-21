@@ -532,12 +532,12 @@ Expected output:
    DataFrame Table
 
 To write rows back out as a trace, use the viewer instead of the frame.
-``TraceViewer.sink`` writes the selected events as an indexed gzip trace and
+``TraceViewer.sink_trace`` writes the selected events as an indexed gzip trace and
 returns a ``SinkSummary``:
 
 .. code-block:: python
 
-   summary = TraceViewer("app.pfw.gz").filter('name == "read"').sink("reads.pfw.gz")
+   summary = TraceViewer("app.pfw.gz").filter('name == "read"').sink_trace("reads.pfw.gz")
    print(summary.rows)
 
 Expected output:

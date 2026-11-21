@@ -35,7 +35,7 @@ def save_table(df, path, *, name, meta=None, level=6):
         frame = df
     else:
         raise TypeError(f"expected a pandas or dftracer.utils DataFrame, got {type(df).__name__}")
-    return frame.write(
+    return frame.write_table(
         path,
         name=name,
         meta=meta,
@@ -453,7 +453,7 @@ def test_native_frames_with_an_index_are_one_file(tmp_path):
     ]
     flat = [_ext.DataFrame.with_index(p, []) for p in parts]
     whole = DataFrame(flat[0]).concat(DataFrame(flat[1])).with_index(["k"])
-    whole.write(path, name="t")
+    whole.write_table(path, name="t")
     back = load_table(path)
     assert back.index_names() == ["k"] and back.num_rows == 4
     assert back["k"].to_list() == [0, 1, 10, 11]
@@ -478,7 +478,7 @@ def test_a_failed_write_leaves_nothing(tmp_path):
 def test_a_folder_of_parts_round_trips(tmp_path):
     df = pd.DataFrame({"a": np.arange(10, dtype="int64"), "s": [f"v{i}" for i in range(10)]})
     folder = str(tmp_path / "parts")
-    summary = _frame_from_pandas(df, "t").write(folder, name="t", part_size=4)
+    summary = _frame_from_pandas(df, "t").write_table(folder, name="t", part_size=4)
     assert (summary.rows, summary.part_count, summary.kind) == (10, 3, "records")
     files = sorted(f for f in os.listdir(folder) if f.startswith("part-"))
     assert files == ["part-00000.pfw.gz", "part-00001.pfw.gz", "part-00002.pfw.gz"]
@@ -487,7 +487,7 @@ def test_a_folder_of_parts_round_trips(tmp_path):
     back = read_pandas(folder)
     pd.testing.assert_frame_equal(back, df, **EQUAL)
     with pytest.raises(FileExistsError):
-        _frame_from_pandas(df, "t").write(folder, name="t", part_size=4)
+        _frame_from_pandas(df, "t").write_table(folder, name="t", part_size=4)
 
 
 def test_folder_parts_must_agree(tmp_path):
@@ -657,7 +657,7 @@ def test_a_partitioned_failure_leaves_nothing(tmp_path):
     folder = tmp_path / "parts"
     part = pd.DataFrame({"a": np.arange(4)}).assign(t=pd.to_timedelta(np.arange(4), unit="s"))
     with pytest.raises(TypeError):
-        _frame_from_pandas(part, "t").write(str(folder), part_size=2)
+        _frame_from_pandas(part, "t").write_table(str(folder), part_size=2)
     assert not folder.exists() and os.listdir(tmp_path) == []
 
 
@@ -767,7 +767,7 @@ def test_a_folder_with_text_columns_restores_exactly(tmp_path):
 def test_a_folder_of_parts_keeps_a_string_category(tmp_path):
     df = pd.DataFrame({"a": np.arange(8, dtype="int64"), "c": pd.Categorical(list("abababab"))})
     folder = str(tmp_path / "parts")
-    _frame_from_pandas(df, "t").write(folder, name="t", part_size=4)
+    _frame_from_pandas(df, "t").write_table(folder, name="t", part_size=4)
     back = load_table(folder).to_pandas()
     assert isinstance(back["c"].dtype, pd.CategoricalDtype)
     assert back["c"].astype(object).tolist() == list("abababab")

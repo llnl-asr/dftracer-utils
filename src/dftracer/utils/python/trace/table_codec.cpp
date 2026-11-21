@@ -49,7 +49,7 @@ sink_plan(dataframe::LazyFrame lf, trace::writer::OutputOptions options) {
     co_return co_await std::move(closing);
 }
 
-// _sink_output(plan, path, rows, mode, compress, level, member_size,
+// _sink_output(plan, path, kind, mode, compress, level, member_size,
 //              part_size, build_index, header_args, raw_columns, known_rows,
 //              runtime) -> (root, rows, files)
 PyObject *sink_output_py(PyObject *, PyObject *args) {
@@ -57,7 +57,7 @@ PyObject *sink_output_py(PyObject *, PyObject *args) {
     PyObject *raw_obj = nullptr;
     PyObject *runtime_obj = nullptr;
     const char *path = nullptr;
-    const char *rows = nullptr;
+    const char *kind = nullptr;
     const char *mode = nullptr;
     const char *header = nullptr;
     int compress = 1;
@@ -66,7 +66,7 @@ PyObject *sink_output_py(PyObject *, PyObject *args) {
     Py_ssize_t member_size = 0;
     Py_ssize_t part_size = 0;
     long long known_rows = -1;
-    if (!PyArg_ParseTuple(args, "OssspinnpzOLO", &plan_obj, &path, &rows, &mode,
+    if (!PyArg_ParseTuple(args, "OssspinnpzOLO", &plan_obj, &path, &kind, &mode,
                           &compress, &level, &member_size, &part_size,
                           &build_index, &header, &raw_obj, &known_rows,
                           &runtime_obj))
@@ -81,7 +81,7 @@ PyObject *sink_output_py(PyObject *, PyObject *args) {
     if (!rt) return nullptr;
     trace::writer::OutputOptions options;
     options.path = dstd::String(path);
-    options.rows = dstd::StringView(rows) == "events"
+    options.rows = dstd::StringView(kind) == "events"
                        ? trace::writer::OutputRows::Events
                        : trace::writer::OutputRows::Records;
     options.mode = dstd::StringView(mode) == "overwrite"
@@ -157,7 +157,7 @@ PyMethodDef COUNTERS_DEF = {
 
 PyMethodDef SINK_DEF = {
     "_sink_output", sink_output_py, METH_VARARGS,
-    "_sink_output(plan, path, rows, mode, compress, level, member_size, "
+    "_sink_output(plan, path, kind, mode, compress, level, member_size, "
     "part_size, build_index, header_args, raw_columns, known_rows, runtime) "
     "-> (root, rows, files)\n\nWrite a plan's rows as events or records."};
 

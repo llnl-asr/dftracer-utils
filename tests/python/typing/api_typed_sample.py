@@ -39,7 +39,7 @@ assert_type(collect_all(mixed), List[Union[DataFrame, int]])
 with tv.session() as session:
     frame_handle = session.collect(lf)
     value_handle = session.collect(count)
-    sink_handle = session.sink(tv, "out.pfw.gz")
+    sink_handle = session.sink_trace(tv, "out.pfw.gz")
     assert_type(frame_handle, Handle[DataFrame])
     assert_type(value_handle, Handle[int])
     assert_type(sink_handle, Handle[SinkSummary])

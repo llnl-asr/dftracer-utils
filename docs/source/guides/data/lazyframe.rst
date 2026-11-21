@@ -462,7 +462,7 @@ kinds of root in one list and returns a list. A reduction of a bound column
 
          fg, both, stats, mean_dur = dft.collect_all([
              tv.flamegraph(), tv.containment(),
-             tv.sink("out.pfw.gz", lazy=True), tv["dur"].mean(),
+             tv.sink_trace("out.pfw.gz", lazy=True), tv["dur"].mean(),
          ])
          both.call_tree, both.flamegraph   # the Containment fields
 

@@ -269,10 +269,10 @@ class TestTerminals:
 
     def test_sink_eager_and_lazy(self, tv, tmp_path):
         path = str(tmp_path / "posix.pfw.gz")
-        summary = tv.filter('cat == "POSIX"').sink(path)
+        summary = tv.filter('cat == "POSIX"').sink_trace(path)
         assert (summary.rows, summary.kind, summary.part_count) == (16, "events", 1)
         assert TraceViewer(path).collect().height == 16
-        lazy = tv.filter('cat == "APP"').sink(str(tmp_path / "app.pfw.gz"), lazy=True)
+        lazy = tv.filter('cat == "APP"').sink_trace(str(tmp_path / "app.pfw.gz"), lazy=True)
         assert isinstance(lazy, LazyResult)
         assert lazy.collect().rows == 16
 
@@ -305,7 +305,7 @@ class TestCollectAll:
             [
                 tv.flamegraph(),
                 tv.containment(),
-                tv.filter('cat == "APP"').sink(path, lazy=True),
+                tv.filter('cat == "APP"').sink_trace(path, lazy=True),
                 tv.filter('cat == "POSIX"'),
                 tv["dur"].mean(),
             ]
@@ -321,7 +321,7 @@ class TestCollectAll:
         with tv.session() as s:
             by_name = s.collect(tv.group_by("name").agg("count"))
             both = s.collect(tv.containment())
-            written = s.sink(tv.filter('cat == "POSIX"'), path)
+            written = s.sink_trace(tv.filter('cat == "POSIX"'), path)
         assert by_name.result().height == 4
         assert both.result().call_tree.height == 32
         assert written.result().rows == 16

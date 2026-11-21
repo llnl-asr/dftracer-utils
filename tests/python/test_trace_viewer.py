@@ -746,7 +746,7 @@ class TestTraceViewer:
         with Environment(lines=300) as env:
             gz = _indexed(env)
             out = str(tmp_path / "events.pfw.gz")
-            summary = TraceViewer(gz).filter('cat == "STDIO"').sink(out)
+            summary = TraceViewer(gz).filter('cat == "STDIO"').sink_trace(out)
             assert summary.kind == "events" and 0 < summary.rows < 300
             # The written trace is a valid trace with an index beside it.
             with dftu_utils.index.Indexer(files=[out], index_dir=str(tmp_path)) as ix:
@@ -759,7 +759,7 @@ class TestTraceViewer:
             gz = _indexed(env)
             out = str(tmp_path / "agg.pfw.gz")
             agg = TraceViewer(gz).group_by("cat").time_bucket(1000).agg("count")
-            summary = agg.sink(out)
+            summary = agg.sink_table(out)
             assert summary.kind == "records"
             with gzip.open(out, "rt") as fh:
                 records = [json.loads(line) for line in fh if line.strip()]
@@ -772,8 +772,8 @@ class TestTraceViewer:
             agg = TraceViewer(gz).group_by("cat").time_bucket(1000).agg("count")
             packed = str(tmp_path / "agg.pfw.gz")
             plain = str(tmp_path / "agg.pfw")
-            agg.sink(packed)
-            agg.sink(plain)
+            agg.sink_table(packed)
+            agg.sink_table(plain)
             with gzip.open(packed, "rb") as fh:
                 assert fh.read() == open(plain, "rb").read()
 
@@ -781,7 +781,7 @@ class TestTraceViewer:
         with Environment(lines=100) as env:
             gz = _indexed(env)
             out = str(tmp_path / "plain.pfw")
-            TraceViewer(gz).sink(out)
+            TraceViewer(gz).sink_trace(out)
             lines = [line for line in open(out) if line.strip()]
             assert len(lines) == 100
 
@@ -934,7 +934,7 @@ class TestTraceViewer:
             by_cat = s.collect(tv.group_by("cat").agg("count", "mean:dur"))
             by_rank = s.collect(tv.group_by("rank").agg("count"))
             posix = s.collect(tv.filter('cat == "POSIX"').group_by("cat").agg("count"))
-            exported = s.sink(tv.filter('cat == "POSIX"'), out)
+            exported = s.sink_trace(tv.filter('cat == "POSIX"'), out)
 
         cat = by_cat.result().to_pandas().set_index("cat")
         rank = by_rank.result().to_pandas().set_index("rank")

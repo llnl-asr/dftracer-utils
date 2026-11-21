@@ -465,7 +465,7 @@ trace. When several reads of the same files should share a single pass - a few
 unrelated aggregations at once, or an aggregate alongside an export - open a
 session with ``TraceViewer.session()``. ``s.collect(plan)`` registers any
 ``LazyFrame`` or ``LazyResult`` built from the viewer and returns a ``Handle``;
-``s.sink(view, path)`` and ``s.materialize(view)`` register those
+``s.sink_trace(view, path)`` and ``s.materialize(view)`` register those
 terminals. ``execute()`` (or leaving the ``with`` block, or the first
 ``Handle.result()``) runs every registered plan, and plans over the same trace
 share one decompression:
@@ -475,7 +475,7 @@ share one decompression:
    with tv.session() as s:
        by_cat  = s.collect(tv.group_by("cat").agg("count", "mean:dur"))
        by_rank = s.collect(tv.group_by("rank").agg("count"))
-       s.sink(tv.filter('cat == "POSIX"'), "posix.pfw.gz")
+       s.sink_trace(tv.filter('cat == "POSIX"'), "posix.pfw.gz")
 
    cat_df  = by_cat.result()    # DataFrame, resolved after the shared scan
    rank_df = by_rank.result()

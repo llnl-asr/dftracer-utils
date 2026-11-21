@@ -1,10 +1,10 @@
 .. meta::
-   :description: Reference for DataFrame.write and TraceViewer, which store a DataFrame as a typed DFTracer table file and read it back.
+   :description: Reference for DataFrame.write_table and TraceViewer, which store a DataFrame as a typed DFTracer table file and read it back.
 
-Tables (DataFrame.write, TraceViewer)
-=====================================
+Tables (DataFrame.write_table, TraceViewer)
+===========================================
 
-``DataFrame.write`` stores a dftracer.utils ``DataFrame`` as DFTracer-style
+``DataFrame.write_table`` stores a dftracer.utils ``DataFrame`` as DFTracer-style
 files of JSON lines, and ``TraceViewer(path).collect()`` reads them back as a
 dftracer.utils ``DataFrame``. A path ending in ``.pfw.gz`` is one gzip file,
 readable with ``zcat`` and ``jq``, whose members decode in parallel; ``.pfw``
@@ -19,14 +19,14 @@ Encoding and decoding run in C++.
    df = DataFrame.from_dict(
        {"proc": ["a", "b", "a"], "calls": [3, 5, 7], "time": [0.5, 1.5, 2.0]}
    )
-   summary = df.write("frame.pfw.gz", name="frame", meta={"source": "demo"}, mode="overwrite")
+   summary = df.write_table("frame.pfw.gz", name="frame", meta={"source": "demo"}, mode="overwrite")
    frame = TraceViewer("frame.pfw.gz").collect()
    busy = frame.filter(frame["calls"] > 3)
    totals = frame.group_by("proc").sum()
 
 ``frame.to_pandas()`` with no arguments gives the exact pandas frame that was
 written, with its dtypes, categories and index, because the frame a table read
-returns carries the table header, and ``write`` stores a header that keeps it.
+returns carries the table header, and ``write_table`` stores a header that keeps it.
 
 .. code-block:: python
 
@@ -35,7 +35,7 @@ returns carries the table header, and ``write`` stores a header that keeps it.
    original = DataFrame.from_pandas(
        pd.DataFrame({"a": pd.array([1, None], dtype="Int64"), "s": ["x", None]})
    )
-   original.write("typed.pfw.gz", name="typed", mode="overwrite")
+   original.write_table("typed.pfw.gz", name="typed", mode="overwrite")
    exact = TraceViewer("typed.pfw.gz").collect().to_pandas()
 
 A new frame (a filter, a join) has no header, and a frame changed in place
@@ -46,11 +46,18 @@ for any frame.
 Writing
 -------
 
-``write`` writes typed records: line 1 is the header and every other line is
-one row. ``LazyFrame.sink`` and ``TraceViewer.sink`` write a plan the same way
-without collecting it, and write DFTracer events instead when the plan keeps
-the event envelope (``name``, ``cat``, ``pid``, ``tid``, ``ts``, ``ph``, with
-``dur`` and ``args.<key>`` columns). The output is staged next to the target
+The verb chooses what is written. ``write_table`` writes typed records: line 1
+is the header and every other line is one row. ``LazyFrame.sink_table`` and
+``TraceViewer.sink_table`` write a plan the same way without collecting it.
+``write_trace``, ``LazyFrame.sink_trace`` and ``TraceViewer.sink_trace`` write
+DFTracer events and need the event envelope (``name``, ``cat``, ``pid``,
+``tid``, ``ts``, ``ph``, with ``dur`` and ``args.<key>`` columns); a plan
+without it raises an error that names the missing columns. The sink verbs take
+``lazy=True`` to return a :class:`~dftracer.utils.LazyResult` for
+:func:`~dftracer.utils.collect_all`; the write verbs run at once. ``name`` and
+``meta`` set the table name and metadata, so only the table verbs take them. A
+plugin format has the generic ``sink(path, format=...)`` on a plan and
+``write(path, format=...)`` on a frame; ``format`` is required. The output is staged next to the target
 (``.<name>.tmp-<id>``), synced and renamed into place, so a failed write leaves
 nothing at the target; ``mode="error"`` refuses an existing target and
 ``mode="overwrite"`` replaces it. A leftover staging path of a crashed write
@@ -61,11 +68,11 @@ sets ``level``, ``member_size`` (0 is automatic, 4 MiB of text per gzip member)
 and ``build_index``.
 
 A streamed plan cannot know before it runs whether a column holds a null or how
-many rows it has. The header of a records ``sink`` therefore types integers
+many rows it has. The header of a ``sink_table`` therefore types integers
 and booleans as the nullable pandas dtypes and starts with ``nrows`` ``-1`` in a
 20-character slot, which the writer overwrites with the part's row count (and
 the CRC32 of the header member) before it syncs. A reader refuses a file whose
-slot still holds ``-1``. ``DataFrame.write`` knows both and writes them at once.
+slot still holds ``-1``. ``DataFrame.write_table`` knows both and writes them at once.
 
 Columns of the frame a table read returns
 -----------------------------------------
@@ -140,7 +147,7 @@ Folders
 
 A table read of a folder reads every ``*.pfw.gz`` in it in part-number order
 and concatenates them; the parts must agree on their fields and index.
-``write`` with ``part_size`` writes such a folder. A folder is always gzip:
+``write_table`` with ``part_size`` writes such a folder. A folder is always gzip:
 ``TraceWriteOptions(compress=False)`` for a folder raises, and plain output is
 one ``.pfw`` file.
 
@@ -151,4 +158,14 @@ Classes
 
 .. autoclass:: dftracer.utils.TraceWriteOptions
 
+.. automethod:: dftracer.utils.DataFrame.write_table
+
+.. automethod:: dftracer.utils.DataFrame.write_trace
+
 .. automethod:: dftracer.utils.DataFrame.write
+
+.. automethod:: dftracer.utils.LazyFrame.sink_table
+
+.. automethod:: dftracer.utils.LazyFrame.sink_trace
+
+.. automethod:: dftracer.utils.LazyFrame.sink

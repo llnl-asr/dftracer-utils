@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/value.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/trace/table/table_header.h>
 #include <dftracer/utils/trace/writer/sink_plan.h>
 
@@ -211,6 +212,11 @@ class OutputCursor final : public Cursor {
     }
 
     coro::CoroTask<dstd::Result<void>> run(coro::Scope* scope) {
+        options_.memory_budget = memory::resolve_spill_budget(
+            options_.memory_budget != 0 ? options_.memory_budget
+                                        : inner_.memory_budget());
+        inner_ = inner_.memory_budget(
+            split_sink_budget(options_.memory_budget).scan);
         auto opening = OutputWriter::open(options_);
         if (!opening) co_return opening.error();
         OutputWriter out = std::move(*opening);

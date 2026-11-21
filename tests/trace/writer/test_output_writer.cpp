@@ -14,6 +14,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/fileio/gzip_line_writer.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/table/table_codec.h>
 #include <dftracer/utils/trace/writer/output_writer.h>
@@ -745,7 +746,24 @@ TEST_SUITE("trace.writer.output_writer") {
         REQUIRE(summary.has_value());
         CHECK(summary->rows == 60000);
         CHECK(summary->peak_buffer_bytes > 0);
-        CHECK(summary->peak_buffer_bytes <= (std::uint64_t{1} << 18) + 256);
+        CHECK(summary->peak_buffer_bytes <= (std::uint64_t{1} << 17) + 256);
+    }
+
+    TEST_CASE("one sink budget is shared, not given to each stage") {
+        const std::uint64_t total = (std::uint64_t{64} << 20) + 7;
+        const SinkBudget s = split_sink_budget(total);
+        CHECK(s.scan + s.members + s.index + s.partitions == total);
+        CHECK(s.scan < total);
+        CHECK(s.members < total);
+        CHECK(s.index < total);
+        const SinkBudget unbounded = split_sink_budget(memory::NO_SPILL_BUDGET);
+        CHECK(unbounded.scan == memory::NO_SPILL_BUDGET);
+        CHECK(unbounded.members == memory::NO_SPILL_BUDGET);
+        CHECK(unbounded.index == memory::NO_SPILL_BUDGET);
+        CHECK(unbounded.partitions == memory::NO_SPILL_BUDGET);
+        const SinkBudget automatic = split_sink_budget(0);
+        CHECK(automatic.scan > 0);
+        CHECK(automatic.partitions > 0);
     }
 
     TEST_CASE(

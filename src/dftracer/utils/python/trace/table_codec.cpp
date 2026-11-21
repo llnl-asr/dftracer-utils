@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/error_exception.h>
 #include <dftracer/utils/python/core/runtime_mixin.h>
@@ -52,6 +53,9 @@ dftracer::utils::coro::CoroTask<
     dftracer::utils::dstd::Result<trace::writer::OutputSummary>>
 sink_plan_run(dataframe::LazyFrame lf, trace::writer::OutputOptions options,
               coro::Scope *scope) {
+    options.memory_budget = memory::resolve_spill_budget(options.memory_budget);
+    lf = lf.memory_budget(
+        trace::writer::split_sink_budget(options.memory_budget).scan);
     auto opening = trace::writer::OutputWriter::open(std::move(options));
     if (!opening) co_return opening.error();
     trace::writer::OutputWriter out = std::move(*opening);

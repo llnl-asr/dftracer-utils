@@ -491,6 +491,7 @@ struct OutputWriter::Impl {
     std::uint64_t buffered = 0;
     std::uint64_t peak_buffered = 0;
     std::uint64_t buffer_budget = 0;
+    SinkBudget shares{};
 
     // the index fed while writing
     dstd::Optional<trace::index::WriteFeed> feed;
@@ -962,7 +963,7 @@ fileio::GzipWriterOptions OutputWriter::Impl::gzip_options(
     g.level = opts.level;
     g.workers = opts.workers;
     g.compress = opts.compress;
-    g.memory_budget = opts.memory_budget;
+    g.memory_budget = shares.members;
     if (records()) {
         g.part_header = header_with(known_part_rows(part_index));
         g.part_header_stored = opts.compress;
@@ -1547,9 +1548,8 @@ coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::finish_partition_part(
 coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::write_partitioned(
     const dataframe::DataFrame& batch) {
     if (buffer_budget == 0)
-        buffer_budget = std::max<std::uint64_t>(
-            memory::resolve_spill_budget(opts.memory_budget) / 4,
-            std::uint64_t{64} * 1024);
+        buffer_budget = std::max<std::uint64_t>(shares.partitions,
+                                                std::uint64_t{64} * 1024);
     key_columns.clear();
     for (const dstd::String& name : opts.partition_by) {
         std::size_t found = batch.num_columns();
@@ -1633,11 +1633,21 @@ coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::finish_partitions() {
     co_return dstd::Result<void>{};
 }
 
+SinkBudget split_sink_budget(std::uint64_t budget) {
+    if (budget == memory::NO_SPILL_BUDGET)
+        return {budget, budget, budget, budget};
+    const std::uint64_t total = memory::resolve_spill_budget(budget);
+    const std::uint64_t quarter = total / 4;
+    const std::uint64_t index = total / 8 * 3;
+    return {quarter, quarter, index, total - 2 * quarter - index};
+}
+
 dstd::Result<OutputWriter> OutputWriter::open(OutputOptions options) {
     auto impl = dstd::make_unique<Impl>();
     Impl& s = *impl;
     s.opts = std::move(options);
     OutputOptions& o = s.opts;
+    s.shares = split_sink_budget(o.memory_budget);
     if (o.path.empty())
         return common::make_error(ErrorCode::InvalidArgument,
                                   "the output path is empty");
@@ -1678,7 +1688,7 @@ dstd::Result<OutputWriter> OutputWriter::open(OutputOptions options) {
         trace::index::IndexerOptions io;
         io.index_dir = o.index_dir;
         if (io.index_dir.empty() && !s.is_file) io.index_dir = s.target;
-        io.memory_budget = o.memory_budget;
+        io.memory_budget = s.shares.index;
         if (!s.records()) io.schema = o.schema;
         io.checkpoint_size =
             std::max<std::size_t>(io.checkpoint_size, s.member_size());
@@ -1686,9 +1696,8 @@ dstd::Result<OutputWriter> OutputWriter::open(OutputOptions options) {
         if (!feed) return feed.error();
         s.feed.emplace(std::move(*feed));
         s.fed_file_limit = std::clamp<std::uint64_t>(
-            memory::resolve_spill_budget(o.memory_budget) /
-                OUTPUT_FED_FILE_BYTES,
-            OUTPUT_FED_FILES_MIN, OUTPUT_FED_FILES_MAX);
+            s.shares.index / OUTPUT_FED_FILE_BYTES, OUTPUT_FED_FILES_MIN,
+            OUTPUT_FED_FILES_MAX);
     }
     if (o.max_open_files == 0)
         return common::make_error(ErrorCode::InvalidArgument,

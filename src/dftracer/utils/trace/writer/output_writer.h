@@ -46,6 +46,23 @@ inline constexpr dstd::StringView HIVE_DEFAULT_PARTITION =
 /// The width of the nrows slot of a records header.
 inline constexpr std::size_t NROWS_SLOT_WIDTH = 20;
 
+/// The shares of one sink memory budget: a quarter for the scan that feeds the
+/// writer, a quarter for members in flight, three eighths for the index fed
+/// during the write, whose parse pieces in flight set its speed, and an
+/// eighth for the partition buffers.
+struct SinkBudget {
+    std::uint64_t scan;
+    std::uint64_t members;
+    std::uint64_t index;
+    std::uint64_t partitions;
+};
+
+/// @p budget read as resolve_spill_budget reads it (0 is auto); a budget of
+/// NO_SPILL_BUDGET is NO_SPILL_BUDGET in every share. The shares sum to the
+/// resolved budget. Auto follows the free memory, so a caller that splits
+/// twice resolves the budget once first.
+SinkBudget split_sink_budget(std::uint64_t budget);
+
 struct OutputOptions {
     /// A path ending in `.pfw.gz` or `.pfw` is one file; any other path is a
     /// folder of `part-NNNNN.pfw.gz` files, unless @ref one_file is set.
@@ -83,7 +100,8 @@ struct OutputOptions {
     /// closed to stay under it is reopened for more rows, never finished early.
     std::size_t max_open_files = 64;
     std::size_t workers = 0;  ///< compression workers; 0 is the machine's
-    /// Bytes the writer may hold in buffers and in-flight members; 0 is auto.
+    /// Bytes the whole sink may hold, the scan feeding the writer included,
+    /// as @ref split_sink_budget shares them; 0 is auto.
     std::uint64_t memory_budget = 0;
     /// Index the files. Records, and events without @ref aggregation_tier,
     /// are indexed while they are written, up to a share of the memory budget

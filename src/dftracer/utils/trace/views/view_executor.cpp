@@ -2,7 +2,6 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/executor.h>
@@ -618,6 +617,11 @@ coro::CoroTask<dstd::Result<LineExport>> run_export_lines(
 
     options.rows = writer::OutputRows::Events;
     if (options.schema.empty()) options.schema = plan_record_schema(plan).id;
+    options.memory_budget = memory::resolve_spill_budget(
+        options.memory_budget != 0 ? options.memory_budget
+                                   : plan.memory_budget);
+    const std::uint64_t scan_budget =
+        writer::split_sink_budget(options.memory_budget).scan;
     auto opening = writer::OutputWriter::open(std::move(options));
     if (!opening) co_return opening.error();
     writer::OutputWriter out = std::move(*opening);
@@ -638,9 +642,9 @@ coro::CoroTask<dstd::Result<LineExport>> run_export_lines(
     dstd::Optional<dstd::Error> scan_error;
     dstd::Optional<dstd::Error> write_error;
     dstd::Optional<writer::OutputSummary> summary;
-    // As fuse does: a unit reserves its span times the inflate factor.
-    coro::AsyncSemaphore budget(
-        common::compute_memory_budget(plan.memory_budget));
+    // As fuse does: a unit reserves its span times the inflate factor, from
+    // the scan's share of the sink budget.
+    coro::AsyncSemaphore budget(scan_budget);
     auto ch = coro::make_channel<LineBatch>(2 * producer_count + 1);
     // One producer that every scan task shares. It is made before the
     // consumer waits and released when the last scan task ends, which closes

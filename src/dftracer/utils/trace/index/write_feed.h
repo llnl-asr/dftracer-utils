@@ -38,14 +38,15 @@ struct FedMember {
 /// is fed whole and in file order: lines(), then end_member(), per member, the
 /// header member of a table file first. The caller names where each member
 /// landed in finish(). The result is the index that an @ref Indexer build of
-/// the same file would make, except that no aggregation tier is built. Not
-/// thread safe.
+/// the same file would make, except that the aggregation tier of an events
+/// file is left unbuilt (a table's is empty). Not thread safe.
 class WriteFeed {
    public:
     class File;
 
     /// Checks the options like @ref Indexer::open. `options.index_dir` is the
-    /// index root, empty for the folder of each file.
+    /// index root, empty for the folder of each file. `options.schema` names
+    /// the record schema of every file; empty is "dftracer".
     static dstd::Result<WriteFeed> open(IndexerOptions options);
 
     WriteFeed(WriteFeed&&) noexcept;

@@ -466,7 +466,6 @@ set(DFTRACER_UTILS_TRACE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_counter_format.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_executor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/sharded_view.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_export_index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/result_join.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/c_api.cpp
 

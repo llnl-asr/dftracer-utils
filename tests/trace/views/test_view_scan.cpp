@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -260,15 +261,16 @@ TEST_SUITE("View") {
         CHECK(sink.lines().size() == static_cast<std::size_t>(n));
     }
 
-    // A write that cannot open its output fails; the scan feeding it through
-    // a bounded channel must not wait forever on the stopped writer.
+    // A write that cannot open its output fails before any scan starts.
     TEST_CASE("View - an indexed sink_trace to an unwritable path fails") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         dstd::String gz = create_multimember_trace(env, 300, 512);
         dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        const dstd::String blocker = env.dir() + "/a_file";
+        REQUIRE(dstd::fs::write_file(dstd::PathView(blocker), "x").has_value());
         TraceWriteOptions opts;
-        opts.output_path = env.dir() + "/no_such_dir/out.pfw.gz";
+        opts.output_path = blocker + "/out.pfw.gz";
         opts.member_size = 4096;
         opts.worker_count = 4;
         opts.build_index = true;
@@ -359,7 +361,7 @@ TEST_SUITE("View") {
         REQUIRE(dstd::fs::create_directories(dir_a).has_value());
         REQUIRE(dstd::fs::create_directories(dir_b).has_value());
         TraceWriteOptions opts;
-        opts.output_path = dir_a + "/out.pfw.gz";
+        opts.output_path = dir_a + "/out";
         opts.member_size = 512;
         opts.part_size = 8192;
         opts.worker_count = 4;
@@ -369,12 +371,12 @@ TEST_SUITE("View") {
                                 .get());
 
         dstd::Vector<dstd::String> parts_a, parts_b;
-        for (int i = 0;
-             dstd::fs::exists(fileio::gzip_part_path(opts.output_path, i, true))
-                 .value();
-             ++i) {
-            parts_a.emplace_back(
-                fileio::gzip_part_path(opts.output_path, i, true));
+        const auto part_path = [&](int i) {
+            return dstd::fmt<"{}/part-{:05}.pfw.gz">(
+                dstd::StringView(opts.output_path), i);
+        };
+        for (int i = 0; dstd::fs::exists(part_path(i)).value(); ++i) {
+            parts_a.emplace_back(part_path(i));
             parts_b.push_back(
                 dir_b + "/" +
                 dstd::String(dstd::PathView(parts_a.back()).filename()));
@@ -430,6 +432,101 @@ TEST_SUITE("View") {
                 CHECK(ma[k].first_line_num == mb[k].first_line_num);
                 CHECK(ma[k].last_line_num == mb[k].last_line_num);
             }
+        }
+    }
+
+    // A cancel while batches are on the way to the writer ends the write: the
+    // producers stop, the writer aborts and nothing is left at the target.
+    TEST_CASE("View - a sink_trace cancelled mid-write leaves nothing") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        dstd::String gz = create_multimember_trace(env, 3000, 512);
+        dstd::String idx = dstd::String(determine_index_path(gz, ""));
+        const dstd::String dir = env.dir() + "/out";
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        TraceWriteOptions opts;
+        opts.output_path = dir + "/c.pfw.gz";
+        opts.member_size = 1024;
+        opts.build_index = true;
+        auto polls = dstd::make_shared<int>(0);
+        auto result = View::from_file(dstd::String(gz), dstd::String(idx))
+                          .cancel_when([polls] { return ++*polls > 20; })
+                          .sink_trace(opts)
+                          .get();
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().is(dstd::Condition::Cancelled));
+        CHECK(*polls > 20);
+        std::size_t left = 0;
+        auto walked = dstd::fs::walk(
+            dstd::PathView(dir), [&](dstd::PathView path, dstd::fs::FileKind) {
+                if (path.str() == dir) return dstd::fs::WalkAction::Continue;
+                ++left;
+                return dstd::fs::WalkAction::SkipDir;
+            });
+        REQUIRE(walked.has_value());
+        CHECK(left == 0);
+    }
+
+    // The index fed by the write leaves the aggregation tier unbuilt, so the
+    // tier of the output, read in a root where other files have theirs,
+    // holds every event.
+    TEST_CASE("View - the aggregation tier of an indexed sink_trace is whole") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        dstd::String gz = create_mixed_trace(env, 30, 20);
+        const dstd::String root = env.dir() + "/shared";
+        const View source = View::from_file(
+            dstd::String(gz), dstd::String(determine_index_path(gz, root)));
+        const auto regular =
+            dftu_utils_test::ok(source.collect_index_records().get()).regular;
+        REQUIRE(regular.num_rows() > 0);
+        const dstd::String out = env.dir() + "/agg.pfw.gz";
+        TraceWriteOptions opts;
+        opts.output_path = out;
+        opts.member_size = 512;
+        opts.build_index = true;
+        opts.index_dir = root;
+        dftu_utils_test::ok(source.sink_trace(opts).get());
+        const auto written =
+            dftu_utils_test::ok(
+                View::from_file(dstd::String(out),
+                                dstd::String(determine_index_path(out, root)))
+                    .collect_index_records()
+                    .get())
+                .regular;
+        CHECK(written.num_rows() == regular.num_rows());
+    }
+
+    TEST_CASE("View - sink_trace writes the plan's select and take") {
+        const auto& s = shared_trace();  // 30 POSIX + 20 STDIO
+        TestEnvironment env(0);
+        const auto written = [&](View v, dstd::StringView name) {
+            TraceWriteOptions opts;
+            opts.output_path = env.dir() + "/" + dstd::String(name);
+            dftu_utils_test::ok(v.sink_trace(opts).get());
+            StringSink sink;
+            dftu_utils_test::ok(
+                View::from_file(
+                    opts.output_path,
+                    dstd::String(determine_index_path(opts.output_path, "")))
+                    .sink_json(sink)
+                    .get());
+            return sink.lines();
+        };
+        const View base =
+            View::from_file(dstd::String(s.gz), dstd::String(s.idx));
+        const auto taken =
+            written(base.duql(R"(cat == "POSIX" | take 7)"), "take.pfw.gz");
+        CHECK(taken.size() == 7);
+        const auto projected =
+            written(base.duql(R"(cat == "STDIO")").select({"name", "dur"}),
+                    "select.pfw.gz");
+        REQUIRE(projected.size() == 20);
+        for (const auto& line : projected) {
+            CHECK(dstd::StringView(line).find("\"cat\"") ==
+                  dstd::StringView::npos);
+            CHECK(dstd::StringView(line).find("\"dur\"") !=
+                  dstd::StringView::npos);
         }
     }
 

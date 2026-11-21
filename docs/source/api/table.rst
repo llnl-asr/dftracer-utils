@@ -52,7 +52,10 @@ is the header and every other line is one row. ``LazyFrame.sink_table`` and
 ``write_trace``, ``LazyFrame.sink_trace`` and ``TraceViewer.sink_trace`` write
 DFTracer events and need the event envelope (``name``, ``cat``, ``pid``,
 ``tid``, ``ts``, ``ph``, with ``dur`` and ``args.<key>`` columns); a plan
-without it raises an error that names the missing columns. The sink verbs take
+without it raises an error that names the missing columns. A
+``TraceViewer.sink_trace`` of the viewer's own events (no column op, select,
+row window or ``partition_by``) writes each event line as the trace holds it,
+so a key that no column carries stays. The sink verbs take
 ``lazy=True`` to return a :class:`~dftracer.utils.LazyResult` for
 :func:`~dftracer.utils.collect_all`; the write verbs run at once. ``name`` and
 ``meta`` set the table name and metadata, so only the table verbs take them. A

@@ -48,17 +48,26 @@ inline constexpr std::size_t NROWS_SLOT_WIDTH = 20;
 
 struct OutputOptions {
     /// A path ending in `.pfw.gz` or `.pfw` is one file; any other path is a
-    /// folder of `part-NNNNN.pfw.gz` files.
+    /// folder of `part-NNNNN.pfw.gz` files, unless @ref one_file is set.
     dstd::String path;
+    /// Write one file at path whatever its name. A name ending in `.pfw.gz`
+    /// or `.pfw` must still agree with compress.
+    bool one_file = false;
     OutputRows rows = OutputRows::Records;
     OutputMode mode = OutputMode::Error;
     /// Must agree with the extension of a file path; a folder is gzip only.
     bool compress = true;
     int level = 6;
     /// Uncompressed bytes per gzip member; 0 is @ref OUTPUT_AUTO_MEMBER_SIZE.
+    /// The index takes a larger one as its checkpoint size.
     std::size_t member_size = 0;
     /// Rows per part of a folder; 0 is one part. Refused for a file.
     std::size_t part_size = 0;
+    /// Uncompressed bytes per part of a folder: a part ends at the first row
+    /// end at or past it (for a DataFrame batch, at the end of the slice of
+    /// rows that passes it); 0 is no limit. Refused for a file and with
+    /// partition_by.
+    std::uint64_t part_bytes = 0;
     /// Hive partitioning of a folder: the columns whose values name the
     /// `key=value/` folders a row goes to. Names and values are percent-encoded
     /// (a byte outside A-Z a-z 0-9 `.` `_` `-` `~` becomes `%XX`, and a value
@@ -76,13 +85,20 @@ struct OutputOptions {
     std::size_t workers = 0;  ///< compression workers; 0 is the machine's
     /// Bytes the writer may hold in buffers and in-flight members; 0 is auto.
     std::uint64_t memory_budget = 0;
-    /// Index the files. Records are indexed while they are written, up to a
-    /// share of the memory budget of files, and the index is committed after
-    /// the files are renamed; events, and the records of any file past that
-    /// share, are indexed by @ref index_output after close(), because an
-    /// aggregation tier reads the committed files. Plain output cannot be
-    /// indexed.
+    /// Index the files. Records, and events without @ref aggregation_tier,
+    /// are indexed while they are written, up to a share of the memory budget
+    /// of files, and the index is committed after the files are renamed;
+    /// events with the aggregation tier, and the files past that share, are
+    /// indexed by @ref index_output after close(), because the aggregation
+    /// tier reads the committed files. Plain output cannot be indexed.
     bool build_index = true;
+    /// Events: build the aggregation tier, by indexing after close(). Without
+    /// it the files are indexed while they are written and the tier is left
+    /// for a later index build.
+    bool aggregation_tier = true;
+    /// Events: the record schema the index decodes the lines with; empty is
+    /// "dftracer".
+    dstd::String schema;
     dstd::String index_dir;  ///< empty is the default root of the files
 
     /// Records: the args object of the header without "nrows". The writer
@@ -161,6 +177,11 @@ class OutputWriter {
     /// keys), and any number of `args.<key>` columns; a null args cell leaves
     /// its key out.
     coro::CoroTask<dstd::Result<void>> write(const dataframe::DataFrame& batch);
+
+    /// Appends DFTracer event lines as they are: `text` is whole lines, each
+    /// ending in a newline. Events only, and refused with partition_by. Each
+    /// line is one row.
+    coro::CoroTask<dstd::Result<void>> write_lines(dstd::StringView text);
 
     /// Finishes the parts, fsyncs, renames into place and fsyncs the parent.
     /// The files are final when this returns; build their index with

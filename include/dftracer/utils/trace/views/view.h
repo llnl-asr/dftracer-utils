@@ -254,29 +254,26 @@ struct ScanCounter {
     }
 };
 
-/// Options for sink_trace(): write the view's events as a new
-/// re-indexable multi-member trace through the parallel (PFS-aware) writer.
-/// `member_size` is the target uncompressed bytes per gzip member (0 =
-/// default); `worker_count` caps the writer fan-out. The writer layout
-/// (striped/sharded/padded) and the exact worker count are chosen from the
-/// target filesystem.
+/// Options for sink_trace(): write the view's event lines, unchanged, as a
+/// new multi-member trace. `member_size` is the uncompressed bytes per gzip
+/// member (0 is the index checkpoint size); `worker_count` is the compression
+/// workers (0 is the machine's). Missing parent folders are created. The
+/// output is staged beside `output_path` and renamed over it when complete; a
+/// failed or cancelled write leaves the target as it was.
 struct TraceWriteOptions {
     dstd::String output_path;
     std::size_t member_size = 0;
-    std::size_t worker_count = 1;
+    std::size_t worker_count = 0;
     bool compress = true;
     int level = 6;
-    /// Build the member+bloom+stats index during the write (no re-inflate of
-    /// the output). `index_dir` is the index DB directory; empty falls back to
-    /// the indexer default location for `output_path`. When set, the write uses
-    /// a single in-order member stream (scan/decompress stays parallel) so the
-    /// index needs no post-hoc offset remap.
+    /// Index the output while it is written (members, blooms, zonemaps; no
+    /// aggregation tier). `index_dir` is the index root; empty is the default
+    /// root of `output_path`. Plain output cannot be indexed.
     bool build_index = false;
     dstd::String index_dir;
-    /// Roll to a new `part-<k>` file once a part reaches this many uncompressed
-    /// bytes, so one large result splits into several indexed part files
-    /// sharing `index_dir`. 0 = one file. Only honored on the indexed write
-    /// path.
+    /// 0 writes one file at `output_path`. Otherwise `output_path` is a folder
+    /// of `part-NNNNN.pfw.gz` files, each ending at the first line end at or
+    /// past this many uncompressed bytes.
     std::size_t part_size = 0;
 };
 

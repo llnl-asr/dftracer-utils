@@ -90,6 +90,7 @@ class WriteFeed::File : public std::enable_shared_from_this<WriteFeed::File> {
     std::uint64_t member_bytes = 0;
     std::uint64_t member_lines = 0;
     bool finished = false;
+    bool is_table = false;
     gzip::GzipBuildArtifacts artifacts;
 
     dstd::SharedPtr<coro::AsyncSemaphore> budget;
@@ -119,8 +120,8 @@ struct WriteFeed::Impl {
           config(std::move(c)),
           schema(s),
           admission(memory::resolve_spill_budget(options.memory_budget),
-                    std::max<std::size_t>(default_runtime().threads() / 3, 1),
-                    0, 1) {
+                    std::max<std::size_t>(default_runtime().threads(), 1), 0,
+                    1) {
         drain_every = std::max<std::uint64_t>(
             memory::resolve_spill_budget(options.memory_budget) / 32,
             std::uint64_t{1} << 20);
@@ -153,7 +154,9 @@ coro::CoroTask<void> WriteFeed::abandon() {
 dstd::Result<WriteFeed> WriteFeed::open(IndexerOptions options) {
     auto config = index_chunk_config(options);
     if (!config) return config.error();
-    auto schema = get_schema(DFTRACER_SCHEMA);
+    auto schema =
+        get_schema(options.schema.empty() ? DFTRACER_SCHEMA
+                                          : dstd::StringView(options.schema));
     if (!schema) return schema.error();
     return WriteFeed(dstd::make_unique<Impl>(std::move(options),
                                              std::move(*config), *schema));
@@ -242,13 +245,10 @@ coro::CoroTask<void> run_stage(StageEnd end) {
                 step = co_await std::move(flushing);
             }
         } else if (m.kind == StageMessage::Kind::EndMember) {
+            // The driver tags each piece with its member, so the members of a
+            // file parse at once; only the end of the file waits for them.
             auto closing = file->driver->on_checkpoint(file->fed_bytes.size());
             step = co_await std::move(closing);
-            if (step) {
-                undrained = 0;
-                auto flushing = file->driver->flush();
-                step = co_await std::move(flushing);
-            }
             file->fed_bytes.push_back(file->member_bytes);
             file->fed_lines.push_back(file->member_lines);
             file->member_bytes = 0;
@@ -371,6 +371,7 @@ dstd::Result<void> WriteFeed::finish(File& file,
         file.driver->table_rows_complete(a.total_lines, table_rows);
     if (file.bloom) file.bloom->set_file_bytes(compressed);
     file.artifacts = std::move(a);
+    file.is_table = table_rows >= 0;
     file.finished = true;
     impl_->admission.gate().file_out();
     return {};
@@ -387,7 +388,8 @@ coro::CoroTask<dstd::Result<void>> WriteFeed::commit() {
         auto snapshot = index->snapshot();
         if (!snapshot) co_return snapshot.error();
         // A table's rows are not events, so its aggregation tier is empty; it
-        // is marked built so that the index reads as current.
+        // is marked built so that the index reads as current. The tier of an
+        // events file is left for a build that reads the committed file.
         auto serving = schemas::dft::agg::tier::serving_config(
             *snapshot, s.options.aggregation);
         if (!serving) co_return serving.error();
@@ -425,7 +427,8 @@ coro::CoroTask<dstd::Result<void>> WriteFeed::commit() {
                 co_return common::make_error<"index of {}: {}">(
                     ErrorCode::Io, dstd::StringView(f->final_path),
                     dstd::StringView(job.error_message));
-            started->finish(store::IndexExtension::Agg, agg_params);
+            if (f->is_table)
+                started->finish(store::IndexExtension::Agg, agg_params);
             auto adding =
                 group.add(std::move(*started), tag++, f->logical_path);
             const dstd::String staged = co_await std::move(adding);

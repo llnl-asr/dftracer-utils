@@ -279,6 +279,44 @@ def test_events_output_re_reads_as_a_trace_with_ph_ts_and_dur(tmp_path):
     assert header_of(forced)["nrows"] == 40
 
 
+def test_a_viewer_sink_trace_writes_each_event_line_as_the_trace_holds_it(tmp_path):
+    src = tmp_path / "odd.pfw.gz"
+    want = [
+        json.dumps(
+            {
+                "name": "read",
+                "cat": "POSIX",
+                "pid": 1,
+                "tid": 1,
+                "ts": 1000 + i,
+                "dur": 5,
+                "ph": "X",
+                "host": f"n{i}",
+                "args": {"deep": {"k": [i, "x"]}, "big": 123456789012345678901234567890},
+            },
+            separators=(",", ":"),
+        )
+        for i in range(30)
+    ]
+    want[3] = want[3].replace('"x"', '"\\u00e9"')
+    with gzip.open(src, "wt") as fh:
+        fh.write("\n".join(want) + "\n")
+    out = str(tmp_path / "same.pfw.gz")
+    summary = TraceViewer(str(src)).sink_trace(out)
+    assert summary.kind == "events" and summary.rows == 30 and summary.part_count == 1
+    assert sorted(lines(out)) == sorted(want)
+    folder = str(tmp_path / "parts")
+    parts = TraceViewer(str(src)).sink_trace(folder, part_size=12)
+    assert parts.part_count == 3 and parts.rows == 30
+    got = [
+        line
+        for name in sorted(os.listdir(folder))
+        if name.endswith(".pfw.gz")
+        for line in lines(os.path.join(folder, name))
+    ]
+    assert sorted(got) == sorted(want)
+
+
 def test_the_index_is_built_prunes_and_marks_the_rows_complete(tmp_path):
     n = 60_000
     path = str(tmp_path / "big.pfw.gz")

@@ -15,6 +15,7 @@
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
+#include <dftracer/utils/trace/writer/output_writer.h>
 
 #include <cstdint>
 #include <utility>
@@ -112,6 +113,14 @@ coro::CoroTask<dstd::Result<ExportStats>> export_json(ScanPlan plan,
                                                       ExportSink& sink);
 coro::CoroTask<dstd::Result<ExportStats>> export_trace(ScanPlan plan,
                                                        TraceWriteOptions opts);
+/// The trace scan behind `plan` when its rows are whole events as the files
+/// hold them: a view scan of events with no op after it, no select and no
+/// window. nullopt for any other plan.
+dstd::Optional<ScanPlan> line_export_plan(const dataframe::LazyFrame& plan);
+/// Writes the events of `plan` as the files hold them through an output
+/// writer opened with `options`; the caller indexes summary.unindexed.
+coro::CoroTask<dstd::Result<trace::writer::OutputSummary>> export_lines(
+    ScanPlan plan, trace::writer::OutputOptions options);
 dataframe::LazyFrame collect(const ScanPlan& plan);
 coro::AsyncGenerator<dstd::Result<dataframe::DataFrame>> stream(
     ScanPlan plan, std::int64_t batch_size = 0);

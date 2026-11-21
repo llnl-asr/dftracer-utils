@@ -197,8 +197,12 @@ Export
 
 ``sink_json`` streams matching events verbatim as newline-delimited JSON to
 an ``ExportSink`` (a re-indexable dftracer trace if the sink is a file/gzip
-writer). ``sink_trace`` writes a new multi-member, re-indexable trace
-through the parallel writer - the engine behind ``dftracer_view --merge``.
+writer). ``sink_trace`` writes the matching event lines as they are (projected
+when the view selects fields) as a new multi-member trace, the engine behind
+``dftracer_view --merge``. The output is staged beside the target and renamed
+over it when complete. With ``build_index`` the index is built while the files
+are written, without the aggregation tier; with ``part_size`` the path is a
+folder of ``part-NNNNN.pfw.gz`` files.
 ``sink_counters`` runs the view's ``group_by`` +
 ``agg`` and emits each result row as a ``ph=2`` counter event, which with a
 ``time_bucket`` set produces the aggregator's counter-trace format:
@@ -220,7 +224,7 @@ through the parallel writer - the engine behind ``dftracer_view --merge``.
        .get();
 
 In Python, ``TraceViewer.sink_trace(path)`` writes the selected events as an
-indexed trace file and ``TraceViewer.sink_table(path)`` writes any plan, such
+indexed trace file, each line as the trace holds it, and ``TraceViewer.sink_table(path)`` writes any plan, such
 as an aggregation, as typed records; both return a ``SinkSummary``. See
 :doc:`../../api/trace_viewer`.
 

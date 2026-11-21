@@ -17,6 +17,7 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan.h>
+#include <dftracer/utils/trace/writer/output_writer.h>
 
 #include <atomic>
 
@@ -61,16 +62,26 @@ BootstrapCounters& bootstrap_counters();
 coro::CoroTask<dstd::Result<ExportStats>> run_export(const ViewPlan& plan,
                                                      ExportSink& sink);
 
-// Write matching events as a new multi-member trace via the parallel writer
-// (PFS-aware); sharded output is concatenated on close.
-coro::CoroTask<dstd::Result<ExportStats>> run_export_trace(
-    const ViewPlan& plan, const TraceWriteOptions& opts);
+/// What a line export wrote.
+struct LineExport {
+    ExportStats stats;
+    writer::OutputSummary summary;
+};
 
-// Fused variant of run_export_trace that builds the member+bloom+stats index
-// during the write, avoiding a re-inflate. A single in-order consumer writes
-// members so member_idx == checkpoint_idx and no offset remap is needed.
-// Reached when TraceWriteOptions::build_index is set.
-coro::CoroTask<dstd::Result<ExportStats>> run_export_trace_indexed(
+/// Writes the matching event lines, unchanged unless the plan selects fields,
+/// through an output writer opened with `options` (OutputRows::Events, not
+/// partitioned). The plan's offset and limit apply in arrival order. A scan or
+/// write error, or a cancel, leaves nothing at the target. The files that
+/// summary.unindexed lists are for the caller to index.
+coro::CoroTask<dstd::Result<LineExport>> run_export_lines(
+    const ViewPlan& plan, writer::OutputOptions options,
+    const ProgressFn* progress = nullptr);
+
+/// run_export_lines with options from `opts`, then the index of the files
+/// the write left unindexed. A scan or write
+/// error, or a cancel, leaves nothing at the target. With `opts.build_index`
+/// the files are indexed while they are written, with no aggregation tier.
+coro::CoroTask<dstd::Result<ExportStats>> run_export_trace(
     const ViewPlan& plan, const TraceWriteOptions& opts,
     const ProgressFn* progress = nullptr);
 

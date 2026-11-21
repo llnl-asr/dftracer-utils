@@ -22,6 +22,7 @@
 #include <sys/wait.h>
 #include <task_result.h>
 #include <testing_utilities.h>
+#include <trace/views/test_view_common.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -208,6 +209,77 @@ class EndingSource final : public dataframe::Source {
     int batches_;
     EndOf end_;
 };
+
+// An event line with a top-level key that no event column holds.
+dstd::String event_line(std::int64_t i) {
+    dstd::String line = "{\"id\":";
+    line += dstd::fmt<"{}">(i);
+    line +=
+        ",\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
+        "\"ts\":";
+    line += dstd::fmt<"{}">(1000 + i);
+    line += ",\"dur\":1,\"ph\":\"X\",\"args\":{\"k\":\"v\"},\"top\":";
+    line += dstd::fmt<"{}">(i * 7);
+    line += "}";
+    return line;
+}
+
+dstd::String event_text(std::int64_t first, std::int64_t count) {
+    dstd::String text;
+    for (std::int64_t i = first; i < first + count; ++i) {
+        text += event_line(i);
+        text += '\n';
+    }
+    return text;
+}
+
+OutputOptions events_to(dstd::StringView path) {
+    OutputOptions o;
+    o.path = dstd::String(path);
+    o.rows = OutputRows::Events;
+    o.build_index = false;
+    return o;
+}
+
+coro::CoroTask<dstd::Result<OutputSummary>> write_texts(
+    OutputOptions options, dstd::Vector<dstd::String> texts) {
+    auto opening = OutputWriter::open(std::move(options));
+    if (!opening) co_return opening.error();
+    OutputWriter out = std::move(*opening);
+    for (const dstd::String& text : texts) {
+        auto writing = out.write_lines(text);
+        auto written = co_await std::move(writing);
+        if (!written) co_return written.error();
+    }
+    auto closing = out.close();
+    co_return co_await std::move(closing);
+}
+
+dstd::Result<OutputSummary> run_texts(OutputOptions options,
+                                      dstd::Vector<dstd::String> texts) {
+    auto done = default_runtime().block_on(coro::named(
+        "write_texts", write_texts(std::move(options), std::move(texts))));
+    if (!done) return done.error();
+    return std::move(*done);
+}
+
+// The lines of `file`, read back through a view, sorted.
+dstd::Vector<dstd::String> lines_of(dstd::StringView file) {
+    const dstd::String path(file);
+    test_view_common::StringSink sink;
+    auto view = trace::views::View::from_file(
+        path, dstd::String(trace::internal::determine_index_path(path, "")));
+    ok(view.sink_json(sink).get());
+    auto lines = sink.lines();
+    std::sort(lines.begin(), lines.end());
+    return lines;
+}
+
+dstd::Vector<dstd::String> one_text(dstd::String text) {
+    dstd::Vector<dstd::String> v;
+    v.push_back(std::move(text));
+    return v;
+}
 
 dstd::Vector<DataFrame> one(DataFrame frame) {
     dstd::Vector<DataFrame> v;
@@ -773,5 +845,111 @@ TEST_SUITE("trace.writer.output_writer") {
         CHECK(has_name(env.dir(), ".dftindex"));
         auto got = ok(trace::table::read_table(path));
         CHECK(got.frame.num_rows() == 6000);
+    }
+
+    TEST_CASE("event lines are written as they are and indexed on the way") {
+        TestEnvironment env(0);
+        const dstd::String path = env.dir() + "/ev.pfw.gz";
+        OutputOptions o = events_to(path);
+        o.build_index = true;
+        o.aggregation_tier = false;
+        o.member_size = 1000;
+        dstd::Vector<dstd::String> texts;
+        for (int k = 0; k < 3; ++k) texts.push_back(event_text(k * 100, 100));
+        auto summary = ok(run_texts(std::move(o), std::move(texts)));
+        CHECK(summary.rows == 300);
+        CHECK(summary.files.size() == 1);
+        CHECK(summary.unindexed.empty());
+        CHECK(has_name(env.dir(), ".dftindex"));
+        dstd::Vector<dstd::String> want;
+        for (std::int64_t i = 0; i < 300; ++i) want.push_back(event_line(i));
+        std::sort(want.begin(), want.end());
+        CHECK(lines_of(path) == want);
+    }
+
+    TEST_CASE("events with the aggregation tier are left to index_output") {
+        TestEnvironment env(0);
+        OutputOptions o = events_to(env.dir() + "/ev.pfw.gz");
+        o.build_index = true;
+        auto summary = ok(run_texts(std::move(o), one_text(event_text(0, 10))));
+        CHECK(summary.unindexed == summary.files);
+        CHECK_FALSE(has_name(env.dir(), ".dftindex"));
+    }
+
+    TEST_CASE("part_bytes ends each part at the first line end past it") {
+        TestEnvironment env(0);
+        const dstd::String dir = env.dir() + "/parts";
+        const std::size_t line_size = event_line(100).size() + 1;
+        OutputOptions o = events_to(dir);
+        o.part_bytes = 2000;
+        // Lines 100..399 all have the same width.
+        dstd::Vector<dstd::String> texts;
+        texts.push_back(event_text(100, 150));
+        texts.push_back(event_text(250, 150));
+        auto summary = ok(run_texts(std::move(o), std::move(texts)));
+        const std::size_t per_part = (2000 + line_size - 1) / line_size;
+        REQUIRE(summary.files.size() == (300 + per_part - 1) / per_part);
+        std::size_t total = 0;
+        for (std::size_t i = 0; i < summary.files.size(); ++i) {
+            const std::size_t n = lines_of(summary.files[i]).size();
+            if (i + 1 < summary.files.size()) CHECK(n == per_part);
+            total += n;
+        }
+        CHECK(total == 300);
+    }
+
+    TEST_CASE("part_size counts the rows of event lines") {
+        TestEnvironment env(0);
+        OutputOptions o = events_to(env.dir() + "/parts");
+        o.part_size = 70;
+        auto summary =
+            ok(run_texts(std::move(o), one_text(event_text(0, 200))));
+        REQUIRE(summary.files.size() == 3);
+        CHECK(lines_of(summary.files[0]).size() == 70);
+        CHECK(lines_of(summary.files[1]).size() == 70);
+        CHECK(lines_of(summary.files[2]).size() == 60);
+    }
+
+    TEST_CASE("one_file writes one file whatever the name") {
+        TestEnvironment env(0);
+        const dstd::String path = env.dir() + "/out.gz";
+        OutputOptions o = events_to(path);
+        o.one_file = true;
+        auto summary = ok(run_texts(std::move(o), one_text(event_text(0, 5))));
+        REQUIRE(summary.files.size() == 1);
+        CHECK(summary.files[0] == path);
+        auto st = dstd::fs::lstat(dstd::PathView(path));
+        REQUIRE(st.has_value());
+        CHECK(st->kind == dstd::fs::FileKind::File);
+        CHECK(lines_of(path).size() == 5);
+    }
+
+    TEST_CASE("write_lines refuses records, partitions and a cut line") {
+        TestEnvironment env(0);
+        auto records = run_texts(records_to(env.dir() + "/r.pfw.gz"),
+                                 one_text(event_text(0, 2)));
+        expect_error(records, common::ErrorCode::InvalidArgument);
+        OutputOptions keyed = events_to(env.dir() + "/k");
+        keyed.partition_by.push_back(dstd::String("name"));
+        expect_error(run_texts(std::move(keyed), one_text(event_text(0, 2))),
+                     common::ErrorCode::InvalidArgument);
+        dstd::String cut = event_text(0, 2);
+        cut.pop_back();
+        expect_error(run_texts(events_to(env.dir() + "/c.pfw.gz"),
+                               one_text(std::move(cut))),
+                     common::ErrorCode::InvalidArgument);
+        CHECK_FALSE(has_name(env.dir(), "r.pfw.gz"));
+        CHECK_FALSE(has_name(env.dir(), "c.pfw.gz"));
+    }
+
+    TEST_CASE("part_bytes is refused for a file and with partition_by") {
+        TestEnvironment env(0);
+        OutputOptions file = events_to(env.dir() + "/f.pfw.gz");
+        file.part_bytes = 100;
+        CHECK_FALSE(OutputWriter::open(std::move(file)).has_value());
+        OutputOptions keyed = events_to(env.dir() + "/k");
+        keyed.partition_by.push_back(dstd::String("name"));
+        keyed.part_bytes = 100;
+        CHECK_FALSE(OutputWriter::open(std::move(keyed)).has_value());
     }
 }

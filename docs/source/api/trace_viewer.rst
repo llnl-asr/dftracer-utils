@@ -227,7 +227,8 @@ one scan:
 Other terminals: ``stream(batch_size=65536)`` yields
 :class:`~dftracer.utils.DataFrame` chunks of about ``batch_size`` rows for
 out-of-core reads; ``statistics()`` returns a summary dict;
-``sink_trace(path)`` writes the selected events as an indexed trace file and
+``sink_trace(path)`` writes the selected events as an indexed trace file, each
+line as the trace holds it, and
 ``sink_table(path)`` writes any plan, an aggregation for one, as typed records;
 both return a :class:`~dftracer.utils.SinkSummary`; ``column_info()`` lists the
 columns and their types from the index (no scan, see below).

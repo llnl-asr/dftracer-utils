@@ -1387,6 +1387,34 @@ coro::CoroTask<dstd::Result<ExportStats>> export_trace(ScanPlan plan,
     co_return co_await detail::run_export_trace(*plan, opts);
 }
 
+dstd::Optional<ScanPlan> line_export_plan(const dataframe::LazyFrame& plan) {
+    if (!plan.status()) return {};
+    const dataframe::LazyFrame planned = dataframe::detail::optimize_plan(plan);
+    if (dataframe::detail::first_op(planned)) return {};
+    const auto* src = dynamic_cast<const ViewSource*>(
+        dataframe::detail::plan_source(planned).get());
+    if (src == nullptr || src->output() != TraceOutput::Events) return {};
+    const ScanPlan& v = src->scan_plan();
+    if (!detail::is_row_query(*v) || !v->select.empty() || v->offset != 0 ||
+        v->limit != 0)
+        return {};
+    return v;
+}
+
+coro::CoroTask<dstd::Result<trace::writer::OutputSummary>> export_lines(
+    ScanPlan plan, trace::writer::OutputOptions options) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
+    if (options.memory_budget != 0 &&
+        (plan->memory_budget == 0 ||
+         options.memory_budget < plan->memory_budget))
+        plan = memory_budget(plan, options.memory_budget);
+    auto exporting = detail::run_export_lines(*plan, std::move(options));
+    auto exported = co_await std::move(exporting);
+    if (!exported) co_return exported.error();
+    co_return std::move(exported->summary);
+}
+
 dataframe::LazyFrame collect(const ScanPlan& plan) {
     // A row-query select is built by the scan producer itself (NativeRowFold /
     // StreamRowFold, via build_row_frame's select branch), which emits exactly

@@ -17,6 +17,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/table/table_codec.h>
 #include <dftracer/utils/trace/table/table_source.h>
+#include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/writer/output_writer.h>
 
 using dftracer::utils::python::core::guard;
@@ -145,11 +146,21 @@ PyObject *sink_output_py(PyObject *, PyObject *args) {
     options.known_rows = known_rows;
     const dataframe::LazyFrame lf = *plan;
     options.memory_budget = lf.memory_budget();
+    // A plain scan of trace events is written line by line as the files hold
+    // it, so a key that no column carries survives.
+    dstd::Optional<trace::views::detail::scan::ScanPlan> lines;
+    if (options.rows == trace::writer::OutputRows::Events &&
+        options.partition_by.empty())
+        lines = trace::views::detail::scan::line_export_plan(lf);
     return guard([&]() -> PyObject * {
         trace::writer::OutputSummary summary;
         py_unwrap(release_gil([&]() -> dstd::Result<void> {
-            auto ran = rt->block_on(
-                coro::named("sink_output", sink_plan(lf, options)));
+            auto ran = lines ? rt->block_on(coro::named(
+                                   "sink_lines",
+                                   trace::views::detail::scan::export_lines(
+                                       *lines, options)))
+                             : rt->block_on(coro::named(
+                                   "sink_output", sink_plan(lf, options)));
             if (!ran) return ran.error();
             summary = std::move(*ran);
             if (options.build_index)

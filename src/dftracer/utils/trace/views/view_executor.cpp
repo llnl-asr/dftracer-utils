@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/scope.h>
@@ -24,9 +25,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/fileio/file_helpers.h>
-#include <dftracer/utils/fileio/gzip_line_writer.h>
-#include <dftracer/utils/fileio/parallel/merge.h>
-#include <dftracer/utils/fileio/parallel/parallel_writer.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/dom_form.h>
 #include <dftracer/utils/json/json_escape.h>
@@ -74,6 +72,7 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/trace/views/view_system_collect.h>
+#include <dftracer/utils/trace/writer/output_writer.h>
 #include <fcntl.h>
 #include <simdjson.h>
 #include <sys/stat.h>
@@ -584,125 +583,234 @@ coro::CoroTask<dstd::Result<ExportStats>> run_export(const ViewPlan& base_plan,
     co_return stats;
 }
 
-coro::CoroTask<dstd::Result<ExportStats>> run_export_trace(
-    const ViewPlan& plan, const TraceWriteOptions& opts) {
-    // Member size defaults to the checkpoint granularity (a member == a chunk).
-    constexpr std::size_t DEFAULT_FLUSH_BYTES =
-        common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
-    constexpr std::size_t BUFFER_HEADROOM_BYTES = 1 * 1024 * 1024;
+namespace {
 
-    if (opts.build_index)
-        co_return co_await run_export_trace_indexed(plan, opts);
+// A unit's share of the memory budget, given back once the unit is scanned
+// and the writer has taken every batch it sent.
+struct UnitHold {
+    coro::AsyncSemaphore* budget;
+    std::uint64_t bytes;
+    UnitHold(coro::AsyncSemaphore* b, std::uint64_t n) : budget(b), bytes(n) {}
+    UnitHold(const UnitHold&) = delete;
+    UnitHold& operator=(const UnitHold&) = delete;
+    ~UnitHold() { budget->release(bytes); }
+};
+
+struct LineBatch {
+    dstd::String text;
+    dstd::SharedPtr<UnitHold> hold;
+};
+
+}  // namespace
+
+coro::CoroTask<dstd::Result<LineExport>> run_export_lines(
+    const ViewPlan& plan, writer::OutputOptions options,
+    const ProgressFn* progress) {
+    constexpr std::size_t MAX_PRODUCERS = 16;
 
     auto made = make_vdef(plan, /*for_aggregation=*/false);
     if (!made) co_return made.error();
     ViewDefinition vdef = std::move(*made);
-
     std::uint64_t skipped = 0;
     auto gathered = co_await gather_units(plan, vdef, skipped);
     if (!gathered) co_return gathered.error();
     auto units = std::move(*gathered);
 
-    const std::size_t baseline = std::max<std::size_t>(1, opts.worker_count);
-    const auto sizing =
-        fileio::parallel::make_writer_for_path(
-            {dstd::String(opts.output_path), baseline,
-             opts.member_size ? opts.member_size : DEFAULT_FLUSH_BYTES,
-             BUFFER_HEADROOM_BYTES, opts.compress})
-            .sizing;
-    const std::size_t worker_count = sizing.worker_count;
+    options.rows = writer::OutputRows::Events;
+    if (options.schema.empty()) options.schema = plan_record_schema(plan).id;
+    auto opening = writer::OutputWriter::open(std::move(options));
+    if (!opening) co_return opening.error();
+    writer::OutputWriter out = std::move(*opening);
 
-    fileio::GzipWriterOptions wopts;
-    wopts.member_size = sizing.flush_threshold;
-    wopts.level = opts.level;
-    wopts.workers = worker_count;
-    wopts.compress = opts.compress;
-    wopts.ordered = false;
-    wopts.memory_budget = plan.memory_budget;
-    auto opened = co_await fileio::GzipLineWriter::open(
-        dstd::String(opts.output_path), std::move(wopts));
-    if (!opened) {
-        co_return common::make_error<"export_trace failed writing {}">(
-            common::ErrorCode::Io, opts.output_path);
-    }
-    auto writer = std::move(*opened);
+    const std::size_t producer_count = std::max<std::size_t>(
+        1, std::min<std::size_t>(units.size(), MAX_PRODUCERS));
+    std::atomic<std::uint64_t> matched{0}, scanned{0}, units_done{0};
+    std::atomic<std::uint64_t> invalid{0}, unconverted{0};
+    // Set when the writer or a scan fails, so the producers stop.
+    std::atomic<bool> failed{false};
+    // offset and limit apply in arrival order, as in run_export: the events
+    // kept are not a stable page.
+    const bool windowed = plan.offset != 0 || plan.limit != 0;
+    std::mutex window_mu;
+    std::uint64_t seen = 0, kept = 0;
+    std::atomic<bool> filled{false};
+    std::mutex scan_error_mu;
+    dstd::Optional<dstd::Error> scan_error;
+    dstd::Optional<dstd::Error> write_error;
+    dstd::Optional<writer::OutputSummary> summary;
+    // As fuse does: a unit reserves its span times the inflate factor.
+    coro::AsyncSemaphore budget(
+        common::compute_memory_budget(plan.memory_budget));
+    auto ch = coro::make_channel<LineBatch>(2 * producer_count + 1);
+    // One producer that every scan task shares. It is made before the
+    // consumer waits and released when the last scan task ends, which closes
+    // the channel.
+    dstd::Optional<decltype(ch->producer())> prod;
 
-    dstd::Vector<ScanCounts> counts_v(worker_count);
-    dstd::Vector<dstd::Optional<dstd::Error>> scan_errors(worker_count);
-    bool ok = true;
-
-    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
-        for (std::size_t w = 0; w < worker_count; ++w) {
-            scope.spawn([&, w]() -> coro::CoroTask<void> {
-                auto prod = writer.producer();
-                if (!prod) {
-                    ok = false;
+    const auto stopping = [&] {
+        return is_cancelled(plan) || failed.load(std::memory_order_relaxed) ||
+               filled.load(std::memory_order_relaxed);
+    };
+    auto produce = [&](std::size_t w) -> coro::CoroTask<void> {
+        dftracer::utils::json::RecordParser proj_parser;
+        for (std::size_t i = w; i < units.size(); i += producer_count) {
+            if (stopping()) co_return;
+            const std::uint64_t reserve =
+                (units[i].end_byte > units[i].start_byte
+                     ? units[i].end_byte - units[i].start_byte
+                     : 0) *
+                common::constants::scan::UNIT_BYTES_PER_SPAN_BYTE;
+            auto acquiring = budget.acquire(reserve);
+            co_await acquiring;
+            auto hold = dstd::make_shared<UnitHold>(&budget, reserve);
+            ViewScannerInput sin =
+                make_scanner_input(units[i], vdef, vdef.query);
+            ViewScannerUtility scanner;
+            auto gen = scanner(sin);
+            for (;;) {
+                auto next = co_await gen.next();
+                if (!next) break;
+                if (!*next) {
+                    {
+                        std::lock_guard<std::mutex> lk(scan_error_mu);
+                        if (!scan_error) scan_error = next->error();
+                    }
+                    failed.store(true, std::memory_order_relaxed);
                     co_return;
                 }
-                bool stop = false;
-                for (std::size_t i = w; !stop && i < units.size();
-                     i += worker_count) {
-                    if (is_cancelled(plan)) break;
-                    ViewScannerInput sin =
-                        make_scanner_input(units[i], vdef, vdef.query);
-                    ViewScannerUtility scanner;
-                    auto gen = scanner(sin);
-                    for (;;) {
-                        auto next = co_await gen.next();
-                        if (!next) break;
-                        if (!*next) {
-                            scan_errors[w] = next->error();
-                            stop = true;
-                            break;
-                        }
-                        auto& b = *next;
-                        if (is_cancelled(plan)) {
-                            stop = true;
-                            break;
-                        }
-                        counts_v[w].add(*b);
-                        std::size_t total = 0;
-                        for (const auto& ev : b->events) total += ev.size() + 1;
-                        if (total == 0) continue;
-                        const auto append_with_ok = co_await prod->append_with(
-                            total, [&](char* dst, std::size_t) {
-                                char* p = dst;
-                                for (const auto& ev : b->events) {
-                                    std::memcpy(p, ev.data(), ev.size());
-                                    p += ev.size();
-                                    *p++ = '\n';
-                                }
-                                return static_cast<std::size_t>(p - dst);
-                            });
-                        if (!append_with_ok) {
-                            ok = false;
-                            co_return;
-                        }
+                auto& b = *next;
+                if (stopping()) co_return;
+                matched.fetch_add(b->events_matched, std::memory_order_relaxed);
+                scanned.fetch_add(b->events_scanned, std::memory_order_relaxed);
+                invalid.fetch_add(b->lines_invalid, std::memory_order_relaxed);
+                unconverted.fetch_add(b->values_unconverted,
+                                      std::memory_order_relaxed);
+                std::size_t begin = 0;
+                std::size_t end = b->events.size();
+                if (windowed && end != 0) {
+                    std::lock_guard<std::mutex> lk(window_mu);
+                    if (seen < plan.offset)
+                        begin = static_cast<std::size_t>(
+                            std::min<std::uint64_t>(end, plan.offset - seen));
+                    seen += end;
+                    if (plan.limit != 0) {
+                        end = begin +
+                              static_cast<std::size_t>(std::min<std::uint64_t>(
+                                  end - begin, plan.limit - kept));
+                        kept += end - begin;
+                        if (kept >= plan.limit)
+                            filled.store(true, std::memory_order_relaxed);
                     }
                 }
-                const auto flush_ok = co_await prod->flush();
-                if (!flush_ok) ok = false;
+                if (begin == end) continue;
+                LineBatch batch{dstd::String(), hold};
+                for (std::size_t e = begin; e < end; ++e) {
+                    if (plan.select.empty())
+                        batch.text.append(b->events[e]);
+                    else
+                        batch.text.append(
+                            project_event(proj_parser, b->events[e],
+                                          plan.select, vdef.args_fallback));
+                    batch.text.push_back('\n');
+                }
+                auto sending = prod->send(std::move(batch));
+                co_await std::move(sending);
+            }
+            if (progress)
+                (*progress)(
+                    units_done.fetch_add(1, std::memory_order_relaxed) + 1,
+                    units.size());
+        }
+    };
+
+    auto produce_all = [&]() -> coro::CoroTask<void> {
+        auto scanning =
+            coro::with_scope([&](coro::Scope& workers) -> coro::CoroTask<void> {
+                for (std::size_t w = 0; w < producer_count; ++w)
+                    workers.spawn(produce(w));
                 co_return;
             });
+        co_await std::move(scanning);
+        prod.reset();
+    };
+
+    auto consume = [&](coro::Scope& scope) -> coro::CoroTask<void> {
+        out.bind_scope(scope);
+        auto cons = ch->consumer();
+        prod.emplace(ch->producer());
+        scope.spawn(produce_all());
+        for (;;) {
+            auto receiving = cons.receive();
+            auto item = co_await std::move(receiving);
+            if (!item) break;
+            if (write_error) continue;
+            auto writing = out.write_lines(item->text);
+            auto written = co_await std::move(writing);
+            if (written) continue;
+            write_error = written.error();
+            failed.store(true, std::memory_order_relaxed);
         }
-        co_return;
-    });
+        if (!failed.load(std::memory_order_relaxed) && !is_cancelled(plan)) {
+            auto closing = out.close();
+            auto closed = co_await std::move(closing);
+            if (closed) {
+                summary = std::move(*closed);
+                co_return;
+            }
+            write_error = closed.error();
+        }
+        auto aborting = out.abort();
+        co_await std::move(aborting);
+    };
+    auto running = coro::with_scope(consume);
+    co_await std::move(running);
 
-    const auto close_ok = co_await writer.close();
-    if (!close_ok) ok = false;
-
-    for (auto& e : scan_errors)
-        if (e) co_return *e;
-    if (!ok) {
-        co_return common::make_error<"export_trace failed writing {}">(
-            common::ErrorCode::Io, opts.output_path);
-    }
+    if (scan_error) co_return *scan_error;
+    if (write_error) co_return *write_error;
+    if (!summary)
+        co_return dstd::Error{dstd::Condition::Cancelled,
+                              "the trace export was cancelled"};
 
     ExportStats st;
     st.chunks_skipped = skipped;
     st.chunks_scanned = units.size();
-    for (const auto& c : counts_v) c.add_to(st);
-    co_return st;
+    st.events_matched = matched.load(std::memory_order_relaxed);
+    st.events_scanned = scanned.load(std::memory_order_relaxed);
+    st.lines_invalid = invalid.load(std::memory_order_relaxed);
+    st.values_unconverted = unconverted.load(std::memory_order_relaxed);
+    co_return LineExport{st, std::move(*summary)};
+}
+
+coro::CoroTask<dstd::Result<ExportStats>> run_export_trace(
+    const ViewPlan& plan, const TraceWriteOptions& opts,
+    const ProgressFn* progress) {
+    writer::OutputOptions options;
+    options.path = opts.output_path;
+    options.one_file = opts.part_size == 0;
+    options.mode = writer::OutputMode::Overwrite;
+    options.compress = opts.compress;
+    options.level = opts.level;
+    // A member is an index checkpoint.
+    options.member_size =
+        opts.member_size ? opts.member_size
+                         : common::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
+    options.part_bytes = opts.part_size;
+    options.workers = opts.worker_count;
+    options.memory_budget = plan.memory_budget;
+    options.build_index = opts.build_index;
+    options.aggregation_tier = false;
+    options.index_dir = opts.index_dir;
+    options.schema = plan_record_schema(plan).id;
+    const writer::OutputOptions kept = options;
+    auto exporting = run_export_lines(plan, std::move(options), progress);
+    auto exported = co_await std::move(exporting);
+    if (!exported) co_return exported.error();
+    if (kept.build_index) {
+        if (auto indexed = writer::index_output(exported->summary, kept);
+            !indexed)
+            co_return indexed.error();
+    }
+    co_return exported->stats;
 }
 
 coro::CoroTask<dstd::Result<ExportStats>> run_folds(
@@ -1115,11 +1223,7 @@ coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
             co_return ExportStats{};
         constexpr std::uint64_t DEFAULT_PART_SIZE = 128ull * 1024 * 1024;
         TraceWriteOptions opts;
-        opts.output_path = dstd::String(
-            (dstd::PathView(
-                 dftracer::utils::trace::index::view_parts_dir(dir)) /
-             "part.pfw.gz")
-                .str());
+        opts.output_path = dftracer::utils::trace::index::view_parts_dir(dir);
         opts.index_dir = dir;
         opts.build_index = true;
         opts.compress = true;
@@ -1128,7 +1232,7 @@ coro::CoroTask<dstd::Result<ExportStats>> run_materialize(
         opts.member_size = plan.mv_checkpoint_size;
         opts.part_size =
             plan.mv_part_size ? plan.mv_part_size : DEFAULT_PART_SIZE;
-        auto exported = co_await run_export_trace_indexed(plan, opts, progress);
+        auto exported = co_await run_export_trace(plan, opts, progress);
         if (!exported) co_return exported.error();
         dftracer::utils::trace::index::cache::register_view(dir, plan);
         co_return *exported;

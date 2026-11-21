@@ -448,6 +448,7 @@ struct OutputWriter::Impl {
     dstd::Optional<fileio::GzipLineWriter> gz;
     dstd::String part_path;
     std::uint64_t part_rows = 0;
+    std::uint64_t part_text = 0;  // uncompressed bytes of the part's rows
     std::uint64_t rows = 0;
     dstd::Vector<PartDone> done;
     dstd::String lines;
@@ -584,6 +585,15 @@ struct OutputWriter::Impl {
     coro::CoroTask<dstd::Result<void>> drain_feeds();
     coro::CoroTask<dstd::Result<void>> write_batch(
         const dataframe::DataFrame& batch);
+    coro::CoroTask<dstd::Result<void>> write_text(dstd::StringView text);
+    coro::CoroTask<dstd::Result<void>> write_scoped(
+        const dataframe::DataFrame* batch, dstd::StringView text);
+    coro::CoroTask<dstd::Result<void>> append_text(dstd::StringView text);
+    coro::CoroTask<dstd::Result<void>> roll_part();
+    bool part_full() const {
+        return (opts.part_size != 0 && part_rows >= opts.part_size) ||
+               (opts.part_bytes != 0 && part_text >= opts.part_bytes);
+    }
     coro::CoroTask<dstd::Result<void>> start_part();
     coro::CoroTask<dstd::Result<void>> finish_part();
     coro::CoroTask<dstd::Result<void>> flush_lines();
@@ -972,6 +982,7 @@ coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::start_part() {
     if (!opened) co_return opened.error();
     gz.emplace(std::move(*opened));
     part_rows = 0;
+    part_text = 0;
     if (feed) {
         const dstd::String name = part_file_name(done.size(), gzip());
         auto added = begin_fed_file(final_path_of(
@@ -992,16 +1003,39 @@ coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::start_part() {
     co_return dstd::Result<void>{};
 }
 
-coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::flush_lines() {
-    if (lines.empty()) co_return dstd::Result<void>{};
-    auto appending = gz->append(lines);
+coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::append_text(
+    dstd::StringView text) {
+    auto appending = gz->append(text);
     auto appended = co_await std::move(appending);
     if (appended && part_feed != nullptr) {
-        auto feeding = feed_text(lines);
+        auto feeding = feed_text(text);
         appended = co_await std::move(feeding);
     }
+    part_text += text.size();
+    co_return appended;
+}
+
+coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::flush_lines() {
+    if (lines.empty()) co_return dstd::Result<void>{};
+    auto appending = append_text(lines);
+    auto appended = co_await std::move(appending);
     lines.clear();
     co_return appended;
+}
+
+// Finishes a full part and starts the next one when none is open.
+coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::roll_part() {
+    if (gz && part_full()) {
+        auto finishing = finish_part();
+        auto finished = co_await std::move(finishing);
+        if (!finished) co_return finished;
+    }
+    if (!gz) {
+        auto starting = start_part();
+        auto started = co_await std::move(starting);
+        if (!started) co_return started;
+    }
+    co_return dstd::Result<void>{};
 }
 
 dstd::Result<void> OutputWriter::Impl::patch_and_sync(
@@ -1607,17 +1641,18 @@ dstd::Result<OutputWriter> OutputWriter::open(OutputOptions options) {
     if (o.path.empty())
         return common::make_error(ErrorCode::InvalidArgument,
                                   "the output path is empty");
-    s.is_file = is_file_output(without_trailing_slashes(o.path));
+    s.is_file = o.one_file || is_file_output(without_trailing_slashes(o.path));
     s.target = dstd::String(without_trailing_slashes(o.path));
     if (s.is_file) {
-        if (o.compress != s.target.ends_with(GZ_EXTENSION))
+        if (is_file_output(s.target) &&
+            o.compress != s.target.ends_with(GZ_EXTENSION))
             return common::make_error<
                 "compress does not agree with the extension of {}">(
                 ErrorCode::InvalidArgument, dstd::StringView(s.target));
-        if (o.part_size != 0)
+        if (o.part_size != 0 || o.part_bytes != 0)
             return common::make_error<
-                "part_size needs a folder, but {} names one file">(
-                ErrorCode::InvalidArgument, dstd::StringView(s.target));
+                "part_size and part_bytes need a folder, but {} names one "
+                "file">(ErrorCode::InvalidArgument, dstd::StringView(s.target));
     } else if (!o.compress) {
         return common::make_error<
             "{} is a folder of parts, which is gzip; write a single .pfw file "
@@ -1628,7 +1663,15 @@ dstd::Result<OutputWriter> OutputWriter::open(OutputOptions options) {
         return common::make_error<
             "partition_by needs a folder, but {} names one file">(
             ErrorCode::InvalidArgument, dstd::StringView(s.target));
-    if (o.build_index && s.records()) {
+    if (o.part_bytes != 0 && !o.partition_by.empty())
+        return common::make_error(
+            ErrorCode::InvalidArgument,
+            "part_bytes cannot split a partitioned output");
+    if (o.part_bytes != 0 && o.known_rows >= 0)
+        return common::make_error(
+            ErrorCode::InvalidArgument,
+            "part_bytes cannot split an output whose row count is known");
+    if (o.build_index && (s.records() || !o.aggregation_tier)) {
         if (!o.compress)
             return common::make_error<"a plain output {} cannot be indexed">(
                 ErrorCode::InvalidArgument, dstd::StringView(s.target));
@@ -1636,12 +1679,9 @@ dstd::Result<OutputWriter> OutputWriter::open(OutputOptions options) {
         io.index_dir = o.index_dir;
         if (io.index_dir.empty() && !s.is_file) io.index_dir = s.target;
         io.memory_budget = o.memory_budget;
-        if (s.member_size() > io.checkpoint_size)
-            return common::make_error<
-                "member_size {} is over the index checkpoint size {}; lower "
-                "it or write without an index">(ErrorCode::InvalidArgument,
-                                                s.member_size(),
-                                                io.checkpoint_size);
+        if (!s.records()) io.schema = o.schema;
+        io.checkpoint_size =
+            std::max<std::size_t>(io.checkpoint_size, s.member_size());
         auto feed = trace::index::WriteFeed::open(std::move(io));
         if (!feed) return feed.error();
         s.feed.emplace(std::move(*feed));
@@ -1710,16 +1750,9 @@ coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::write_batch(
     const auto total = static_cast<std::size_t>(batch.num_rows());
     std::size_t at = 0;
     while (at < total) {
-        if (s.gz && s.opts.part_size != 0 && s.part_rows >= s.opts.part_size) {
-            auto finishing = s.finish_part();
-            auto finished = co_await std::move(finishing);
-            if (!finished) co_return finished.error();
-        }
-        if (!s.gz) {
-            auto starting = s.start_part();
-            auto started = co_await std::move(starting);
-            if (!started) co_return started.error();
-        }
+        auto rolling = s.roll_part();
+        auto rolled = co_await std::move(rolling);
+        if (!rolled) co_return rolled;
         std::size_t end = total;
         if (s.opts.part_size != 0)
             end = std::min<std::size_t>(
@@ -1737,6 +1770,11 @@ coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::write_batch(
             s.part_rows += stop - slice;
             s.rows += stop - slice;
             slice = stop;
+            if (s.opts.part_bytes != 0 &&
+                s.part_text + s.lines.size() >= s.opts.part_bytes) {
+                end = slice;
+                break;
+            }
             if (s.lines.size() >= LINES_FLUSH_BYTES) {
                 auto flushing = s.flush_lines();
                 auto flushed = co_await std::move(flushing);
@@ -1747,6 +1785,55 @@ coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::write_batch(
         auto flushed = co_await std::move(flushing);
         if (!flushed) co_return flushed.error();
         at = end;
+    }
+    co_return dstd::Result<void>{};
+}
+
+coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::write_text(
+    dstd::StringView text) {
+    Impl& s = *this;
+    if (s.records())
+        co_return common::make_error<
+            "{} holds table records; write_lines takes event lines">(
+            ErrorCode::InvalidArgument, dstd::StringView(s.target));
+    if (s.partitioned())
+        co_return common::make_error(
+            ErrorCode::InvalidArgument,
+            "write_lines cannot write a partitioned output");
+    if (text.empty()) co_return dstd::Result<void>{};
+    if (text.back() != '\n')
+        co_return common::make_error(
+            ErrorCode::InvalidArgument,
+            "write_lines takes whole lines, each ending in a newline");
+    const bool limited = s.opts.part_size != 0 || s.opts.part_bytes != 0;
+    while (!text.empty()) {
+        auto rolling = s.roll_part();
+        auto rolled = co_await std::move(rolling);
+        if (!rolled) co_return rolled;
+        std::size_t take = text.size();
+        std::uint64_t n = 0;
+        if (!limited) {
+            n = static_cast<std::uint64_t>(
+                std::count(text.begin(), text.end(), '\n'));
+        } else {
+            take = 0;
+            while (take < text.size()) {
+                take = text.find('\n', take) + 1;
+                ++n;
+                if (s.opts.part_size != 0 &&
+                    s.part_rows + n >= s.opts.part_size)
+                    break;
+                if (s.opts.part_bytes != 0 &&
+                    s.part_text + take >= s.opts.part_bytes)
+                    break;
+            }
+        }
+        auto appending = s.append_text(text.substr(0, take));
+        auto appended = co_await std::move(appending);
+        if (!appended) co_return appended;
+        s.part_rows += n;
+        s.rows += n;
+        text = text.substr(take);
     }
     co_return dstd::Result<void>{};
 }
@@ -1775,16 +1862,40 @@ void OutputWriter::bind_scope(coro::Scope& scope) {
 
 coro::CoroTask<dstd::Result<void>> OutputWriter::write(
     const dataframe::DataFrame& batch) {
-    Impl& s = *impl_;
+    auto writing = impl_->write_scoped(&batch, {});
+    co_return co_await std::move(writing);
+}
+
+coro::CoroTask<dstd::Result<void>> OutputWriter::write_lines(
+    dstd::StringView text) {
+    auto writing = impl_->write_scoped(nullptr, text);
+    co_return co_await std::move(writing);
+}
+
+// Without a bound scope, the index parse tasks a write starts run in a scope of
+// its own, drained and joined before it returns.
+coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::write_scoped(
+    const dataframe::DataFrame* batch, dstd::StringView text) {
+    Impl& s = *this;
     if (s.bound_scope != nullptr) {
         s.scope = s.bound_scope;
-        auto bound_writing = s.write_batch(batch);
+        if (batch != nullptr) {
+            auto bound_writing = s.write_batch(*batch);
+            co_return co_await std::move(bound_writing);
+        }
+        auto bound_writing = s.write_text(text);
         co_return co_await std::move(bound_writing);
     }
-    coro::Scope scope;
-    s.scope = &scope;
-    auto writing = s.write_batch(batch);
-    auto written = co_await std::move(writing);
+    coro::Scope own_scope;
+    s.scope = &own_scope;
+    dstd::Result<void> written;
+    if (batch != nullptr) {
+        auto writing = s.write_batch(*batch);
+        written = co_await std::move(writing);
+    } else {
+        auto writing = s.write_text(text);
+        written = co_await std::move(writing);
+    }
     if (written) {
         auto draining = s.drain_feeds();
         written = co_await std::move(draining);
@@ -1793,7 +1904,7 @@ coro::CoroTask<dstd::Result<void>> OutputWriter::write(
         auto abandoning = s.feed->abandon();
         co_await std::move(abandoning);
     }
-    auto joining = scope.join();
+    auto joining = own_scope.join();
     co_await std::move(joining);
     s.scope = nullptr;
     co_return written;
@@ -1908,6 +2019,7 @@ dstd::Result<void> index_output(const OutputSummary& summary,
     if (io.index_dir.empty() && !is_file_output(summary.root))
         io.index_dir = summary.root;
     io.memory_budget = options.memory_budget;
+    if (options.rows == OutputRows::Events) io.schema = options.schema;
     dstd::Vector<dstd::String> paths = summary.unindexed;
     auto indexer = trace::index::Indexer::open(std::move(paths), std::move(io));
     dstd::Optional<dstd::Error> failure;

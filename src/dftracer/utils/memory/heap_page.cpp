@@ -582,10 +582,15 @@ bool slow_path(Heap& h) noexcept {
     return drain_inbox(h);
 }
 
+std::uint64_t now_ms() noexcept;
+void purge_heap(Heap& h, std::uint64_t now, std::uint64_t delay,
+                std::size_t max_spans) noexcept;
+
 void thread_exit(void* arg) {
     auto* h = static_cast<Heap*>(arg);
     flush_remote(*h);
     drain_inbox(*h);
+    purge_heap(*h, now_ms(), 0, UNLIMITED);
     attrib_set_scope(h->attrib, GENERAL_POOL_ID);
     t_heap = nullptr;
     t_page_attrib = nullptr;
@@ -1521,7 +1526,11 @@ void page_deallocate(void* p, std::size_t size) noexcept {
     release(p, size, true);
 }
 
-void page_trim_thread() noexcept { trim_own_heap(now_ms()); }
+void page_trim_thread() noexcept {
+    const std::uint64_t now = now_ms();
+    trim_own_heap(now);
+    decay_live_caches(now, decay_ms(), UNLIMITED);
+}
 
 void page_trim(Mode mode) noexcept {
     std::uint64_t now = now_ms();

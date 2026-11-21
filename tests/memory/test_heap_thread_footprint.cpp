@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstring>
 #include <thread>
 #include <vector>
 
@@ -59,4 +60,31 @@ TEST_CASE("freed memory that stays backed is bounded, not a share per thread") {
     constexpr std::size_t BOUND = 48 * MIB;
     CHECK(one <= BOUND);
     CHECK(many <= BOUND);
+}
+
+TEST_CASE("a thread that exits gives back the idle pages of its heap") {
+    constexpr std::size_t size = HEAP_PAGE_SIZE + 5000;
+    constexpr std::size_t count = 64;
+    std::vector<void*> kept;
+    std::size_t idle_before_exit = 0;
+    std::thread worker([&] {
+        std::vector<void*> blocks;
+        for (std::size_t i = 0; i < count; ++i) {
+            blocks.push_back(page_allocate(size, 16));
+            std::memset(blocks.back(), 1, size);
+        }
+        // Every other block stays live, so the freed runs stay in this heap.
+        for (std::size_t i = 0; i < count; ++i) {
+            if (i % 2 == 0)
+                page_deallocate(blocks[i], size);
+            else
+                kept.push_back(blocks[i]);
+        }
+        idle_before_exit = page_idle_backed();
+    });
+    worker.join();
+    const std::size_t idle_after_exit = page_idle_backed();
+    for (void* p : kept) page_deallocate(p, size);
+    CHECK(idle_before_exit >= count / 2 * HEAP_PAGE_SIZE);
+    CHECK(idle_after_exit + count / 2 * HEAP_PAGE_SIZE <= idle_before_exit);
 }

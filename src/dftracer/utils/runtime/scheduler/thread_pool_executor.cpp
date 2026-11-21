@@ -748,6 +748,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
             }
         }
         if (context->searching) stop_searching(context);
+        context->idle_since_ns = 0;
 
         coro::reset_timeslice();
         context->resumes.store(
@@ -1067,7 +1068,7 @@ void ThreadPoolExecutor::park_worker(WorkerContext* ctx) {
     void* const io_token = io_backend_ ? io_backend_->prepare_park() : nullptr;
     const bool work = pending_tasks(false) != 0;
 
-    bool timed_out = false;
+    if (ctx->idle_since_ns == 0) ctx->idle_since_ns = dstd::steady_now_ns();
     {
         std::unique_lock<std::mutex> lock(sleepers_mutex_);
         // Under the lock, so a waker either sees it or leaves notified set.
@@ -1086,7 +1087,6 @@ void ThreadPoolExecutor::park_worker(WorkerContext* ctx) {
             }
             if (ctx->park_cv.wait_for(lock, IDLE_PARK_MAX) ==
                 std::cv_status::timeout) {
-                timed_out = true;
                 break;
             }
         }
@@ -1102,8 +1102,16 @@ void ThreadPoolExecutor::park_worker(WorkerContext* ctx) {
     if (io_token != nullptr) io_backend_->finish_park(io_token);
     wake_sysmon_if_parked();
     // Only this thread may purge its heap, so an idle worker gives its freed
-    // pages back itself.
-    if (timed_out) memory::detail::trim_thread();
+    // pages back itself, again each IDLE_PARK_MAX while idle, as other threads
+    // keep freeing its blocks. The idle time counts across parks: a pool that
+    // retires workers wakes every parked one, so no single park may time out.
+    const std::uint64_t now = dstd::steady_now_ns();
+    if (now - ctx->idle_since_ns >=
+        static_cast<std::uint64_t>(
+            std::chrono::nanoseconds(IDLE_PARK_MAX).count())) {
+        memory::detail::trim_thread();
+        ctx->idle_since_ns = now;
+    }
 }
 
 bool ThreadPoolExecutor::wake_sleeper(bool force) noexcept {

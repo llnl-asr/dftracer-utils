@@ -99,6 +99,10 @@ class ThreadPoolExecutor final : public TaskExecutor {
         // idle. Touched only by this worker's own thread, so unsynced.
         bool holds_permit{false};
 
+        // When this worker first parked after its last task or last trimmed,
+        // 0 while it runs tasks. Touched only by its own thread.
+        std::uint64_t idle_since_ns{0};
+
         // Lazy handoff state (BLK_*). Worker and sysmon race a CAS out of
         // SYSCALL: exactly one of keep-on-exit and reclaim wins.
         std::atomic<int> blk_state{0};

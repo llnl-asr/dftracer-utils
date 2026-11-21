@@ -110,10 +110,6 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
     endif()
     set_tests_properties(dataframe/${bin_exec} PROPERTIES TIMEOUT ${scale_timeout})
   endif()
-  if(bin_exec STREQUAL "test_group_by_memory")
-    set_tests_properties(dataframe/${bin_exec} PROPERTIES ENVIRONMENT
-                         "DFTRACER_UTILS_MEMORY_DEBUG=1")
-  endif()
   # Runs every op in a child process at several budgets.
   # It is CPU-bound and reads peak memory, so it runs serially.
   # Under the full suite it can time out.

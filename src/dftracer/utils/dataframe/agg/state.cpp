@@ -968,7 +968,10 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
                 total *= w;
             }
             const std::uint64_t limit =
-                static_cast<std::uint64_t>(end - begin) * 4 + 1024;
+                static_cast<std::uint64_t>(
+                    std::max<std::int64_t>(end - begin, st.rows_hint)) *
+                    4 +
+                1024;
             if (fits && total <= limit && total <= (std::uint64_t{1} << 26)) {
                 bool same = !st.direct_groups.empty();
                 for (std::size_t j = 0; j < nk && same; ++j)
@@ -2152,8 +2155,13 @@ AggStatePtr agg_merge_many(dstd::Vector<AggStatePtr>& partials) {
         if (p && p->inited && !base->light_matches(*p)) light = false;
     if (!light) base->settle_light();
     dstd::Vector<const AggState*> others;
-    for (const AggStatePtr& p : partials)
-        if (p && p->inited) others.push_back(light ? p.get() : &settled(*p));
+    dstd::Vector<std::size_t> owner;  // the partial each of `others` came from
+    for (std::size_t i = 0; i < partials.size(); ++i)
+        if (partials[i] && partials[i]->inited) {
+            others.push_back(light ? partials[i].get()
+                                   : &settled(*partials[i]));
+            owner.push_back(i);
+        }
     // One remap per partial, built here because it grows base's name table
     // and the merges below run in parallel.
     dstd::Vector<dstd::Vector<std::uint32_t>> dyn_map(others.size());
@@ -2184,44 +2192,56 @@ AggStatePtr agg_merge_many(dstd::Vector<AggStatePtr>& partials) {
                 base->find_group_of_other(*others[p], j);
         }
     });
-    const std::int64_t ng = base->ngroups();
-    constexpr std::int64_t GRAIN = 1024;
-    AggState::LightCarries carried;
-    std::mutex carried_mutex;
-    parallel_for(ng, GRAIN, [&](std::int64_t gb, std::int64_t ge) {
-        AggState::LightCarries mine;
-        for (std::size_t p = 0; p < others.size(); ++p) {
-            const dstd::Vector<std::int64_t>& m = map[p];
-            for (std::size_t j = 0; j < m.size(); ++j)
-                if (m[j] >= gb && m[j] < ge)
-                    base->merge_group(
-                        m[j], *others[p], static_cast<std::int64_t>(j),
-                        others[p]->has_dyn ? &dyn_map[p] : nullptr, &mine);
-        }
-        if (mine.empty()) return;
-        const std::lock_guard<std::mutex> lock(carried_mutex);
-        carried.insert(carried.end(), mine.begin(), mine.end());
-    });
-    for (const auto& [slot, wraps] : carried) base->light_carry[slot] = wraps;
+    // The groups the others add, at most: each partial's unmapped groups, so
+    // the per-group arrays grow once and not as each group arrives.
+    std::size_t added = 0;
+    for (const dstd::Vector<std::int64_t>& m : map)
+        added += static_cast<std::size_t>(std::count(m.begin(), m.end(), -1));
+    if (added != 0)
+        base->reserve_groups(static_cast<std::size_t>(base->ngroups()) + added);
+    // One partial at a time, in order, and each is released once merged. The
+    // groups of one partial map to distinct groups here, so they merge in
+    // parallel, and a group still sees the partials in order.
+    bool rows_known = agg_first_rows_known(*base);
+    for (const AggState* o : others)
+        rows_known = rows_known && agg_first_rows_known(*o);
     for (std::size_t p = 0; p < others.size(); ++p) {
         dstd::Vector<std::int64_t>& m = map[p];
+        const dstd::Vector<std::uint32_t>* dm =
+            others[p]->has_dyn ? &dyn_map[p] : nullptr;
         for (std::size_t j = 0; j < m.size(); ++j)
-            if (m[j] < 0) {
+            if (m[j] < 0)
                 m[j] = base->group_of_other(*others[p],
                                             static_cast<std::int64_t>(j));
-                base->merge_group(m[j], *others[p],
-                                  static_cast<std::int64_t>(j),
-                                  others[p]->has_dyn ? &dyn_map[p] : nullptr);
-            }
-    }
-    // The UDAF tables merge one after another: each is used by one thread.
-    if (base->has_udaf)
-        for (std::size_t p = 0; p < others.size(); ++p) {
-            dstd::Vector<std::int64_t> from(map[p].size());
+        // The new groups' first rows are taken by the merge like any other.
+        if (rows_known)
+            base->group_first_row.resize(
+                static_cast<std::size_t>(base->ngroups()),
+                std::numeric_limits<std::int64_t>::max());
+        AggState::LightCarries carried;
+        std::mutex carried_mutex;
+        parallel_for(static_cast<std::int64_t>(m.size()), 1024,
+                     [&](std::int64_t jb, std::int64_t je) {
+                         AggState::LightCarries mine;
+                         for (std::int64_t j = jb; j < je; ++j)
+                             base->merge_group(m[static_cast<std::size_t>(j)],
+                                               *others[p], j, dm, &mine);
+                         if (mine.empty()) return;
+                         const std::lock_guard<std::mutex> lock(carried_mutex);
+                         carried.insert(carried.end(), mine.begin(),
+                                        mine.end());
+                     });
+        for (const auto& [slot, wraps] : carried)
+            base->light_carry[slot] = wraps;
+        // The UDAF tables merge one after another: each is used by one thread.
+        if (base->has_udaf) {
+            dstd::Vector<std::int64_t> from(m.size());
             std::iota(from.begin(), from.end(), std::int64_t{0});
-            base->udaf_combine(*others[p], map[p], from);
+            base->udaf_combine(*others[p], m, from);
         }
-    for (AggStatePtr& p : partials) p.reset();
+        partials[owner[p]].reset();
+        m = {};
+    }
     return base;
 }
 

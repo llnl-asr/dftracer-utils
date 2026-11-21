@@ -138,10 +138,10 @@ void agg_accumulate_packed(AggState& st, dstd::Span<const Series* const> keys,
                            dstd::Span<const Series* const> values,
                            const AggPacked& shape, const AggPages& rows);
 
-/// Merge the partials into one state: the groups the widest partial holds
-/// merge in parallel over group ranges (each partial's groups mapped to it
-/// first), the rest are appended after. Empty partials are skipped; null
-/// when there is none. The partials are released once merged.
+/// Merge the partials into one state: the widest partial is the base and the
+/// others follow in order, each one's groups merging in parallel (the groups it
+/// adds are appended first). Empty partials are skipped; null when there is
+/// none. Each partial is released once merged.
 AggStatePtr agg_merge_many(dstd::Vector<AggStatePtr>& partials);
 
 /// Default sketch width when AggSpec::param does not set one.
@@ -1479,6 +1479,9 @@ class AggState : public dstd::HeapObject {
     // rows), reserved once the first group arrives, so the per-group arrays
     // are allocated once and not regrown (and freed) as the groups come in.
     std::size_t groups_hint = 0;
+    /// Rows a caller folds in several calls, so the direct table is sized as
+    /// for one call over all of them. Zero: the rows of each call.
+    std::int64_t rows_hint = 0;
     void reserve_groups(std::size_t h) {
         counts.reserve(h);
         group_first_row.reserve(h);

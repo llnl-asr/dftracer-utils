@@ -55,10 +55,13 @@ add_test(NAME c_abi_guard
          COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target
                  c_abi_guard --config $<CONFIG>)
 
-add_executable(schema_class_bad_member EXCLUDE_FROM_ALL
-               trace/index/schema_class_bad_member.cpp)
-target_link_libraries(schema_class_bad_member
-                      PRIVATE testing_utilities)
+# Compile only, with the include paths and no link: the build then compiles
+# this file and nothing of the libraries, which CI strips of objects.
+add_library(schema_class_bad_member OBJECT EXCLUDE_FROM_ALL
+            trace/index/schema_class_bad_member.cpp)
+target_include_directories(
+  schema_class_bad_member PRIVATE ${CMAKE_SOURCE_DIR}/include
+                                  ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR}/include)
 target_set_warnings(schema_class_bad_member)
 add_test(NAME schema_class_bad_member
          COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target
@@ -1178,6 +1181,11 @@ foreach(test_file ${TEST_BINARY_SOURCES})
 
   set_target_properties(${target_name} PROPERTIES OUTPUT_NAME ${bin_name})
 
+  # The tools load the MPI backend at run time, so only a dependency builds it.
+  if(_comm_mpi_shared AND bin_exec MATCHES "_mpi$")
+    add_dependencies(${target_name} ${_comm_mpi_shared})
+  endif()
+
   if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(${target_name} PRIVATE --coverage -fprofile-arcs
                                                -ftest-coverage)
@@ -1755,7 +1763,7 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
          test_target_dftracer_utils_${VARIANT}_no_namespace)
   endforeach()
 
-  if(TARGET dftracer_plugin)
+  if(TEST plugin_scaffold)
     list(APPEND PACKAGE_DISCOVERY_TESTS plugin_scaffold)
   endif()
 

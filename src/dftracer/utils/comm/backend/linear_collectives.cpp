@@ -134,7 +134,9 @@ struct Slot {
     Collectives::Done done;
 };
 
-class LinearCollectives : public Collectives {
+class LinearCollectives final
+    : public Collectives,
+      public std::enable_shared_from_this<LinearCollectives> {
    public:
     explicit LinearCollectives(dstd::SharedPtr<Messaging> messaging)
         : messaging_(std::move(messaging)) {}
@@ -347,8 +349,10 @@ class LinearCollectives : public Collectives {
 
     Messaging::SendDone failed_send(const dstd::SharedPtr<Slot>& slot,
                                     std::uint32_t rank) {
-        return [this, slot, rank](const dstd::Error* why) {
-            if (why != nullptr)
+        return [this, weak = weak_from_this(), slot,
+                rank](const dstd::Error* why) {
+            const auto alive = weak.lock();
+            if (alive && why != nullptr)
                 finish_slot(slot, Arrival{}, rank, why, Table{});
         };
     }
@@ -357,9 +361,11 @@ class LinearCollectives : public Collectives {
         const MessageKey key{
             slot->key.group, 0, rank,
             message_tag(TagPurpose::CollectiveTable, slot->key.seq)};
-        Messaging::RecvDone took = [this, slot, rank](
+        Messaging::RecvDone took = [this, weak = weak_from_this(), slot, rank](
                                        dstd::Span<const std::byte> bytes,
                                        const dstd::Error* why) {
+            const auto alive = weak.lock();
+            if (!alive) return;
             if (why != nullptr) {
                 finish_slot(slot, Arrival{}, rank, why, Table{});
                 return;
@@ -445,9 +451,12 @@ class LinearCollectives : public Collectives {
             const MessageKey key{slot->key.group, member, 0,
                                  message_tag(TagPurpose::CollectiveRecord,
                                              record_index(slot->key.seq))};
-            Messaging::RecvDone took = [this, slot, member](
+            Messaging::RecvDone took = [this, weak = weak_from_this(), slot,
+                                        member](
                                            dstd::Span<const std::byte> bytes,
                                            const dstd::Error* why) {
+                const auto alive = weak.lock();
+                if (!alive) return;
                 if (why != nullptr) {
                     finish_slot(slot, Arrival{}, 0, why, Table{});
                     return;
@@ -498,9 +507,11 @@ class LinearCollectives : public Collectives {
         const MessageKey key{slot->key.group, member, 0,
                              message_tag(TagPurpose::CollectiveRecord,
                                          payload_index(slot->key.seq))};
-        Messaging::RecvDone took = [this, slot, member](
-                                       dstd::Span<const std::byte> bytes,
-                                       const dstd::Error* why) {
+        Messaging::RecvDone took = [this, weak = weak_from_this(), slot,
+                                    member](dstd::Span<const std::byte> bytes,
+                                            const dstd::Error* why) {
+            const auto alive = weak.lock();
+            if (!alive) return;
             if (why != nullptr) {
                 finish_slot(slot, Arrival{}, 0, why, Table{});
                 return;

@@ -309,6 +309,7 @@ _TOP_LEVEL = frozenset(
         "udaf",
         "lazy",
         "collect_all",
+        "concat",
         "LazyResult",
         "LazyScalar",
         "BoundColumn",

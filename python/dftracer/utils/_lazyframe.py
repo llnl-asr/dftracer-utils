@@ -1322,6 +1322,20 @@ def lazy(frame: DataFrame) -> LazyFrame:
     return frame.lazy()
 
 
+def concat(plans: Sequence[LazyFrame | TraceViewer | DataFrame]) -> LazyFrame:
+    """One plan that yields every row of each of ``plans`` in turn (UNION ALL).
+    A frame joins as its plan and a trace viewer by its plan. All plans must
+    share a schema; nothing runs until the result is collected or sunk, and the
+    result streams each plan in turn."""
+    items = list(plans)
+    if not items:
+        raise ValueError("concat() needs at least one plan")
+    first, *rest = (
+        p.lazy() if hasattr(p, "lazy") and not isinstance(p, LazyFrame) else p for p in items
+    )
+    return _as_plan(first).concat(*[_as_plan(p) for p in rest])
+
+
 def scan_file(path: str, index_dir: str = "", format: str = "") -> LazyFrame:
     """A plan over the file at ``path``, read by the reader that claims it (the
     one with the highest probe score for the file): a plugin file format, or

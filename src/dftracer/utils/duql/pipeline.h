@@ -365,9 +365,13 @@ struct PipelineCall {
 };
 
 /// `sink "name" key "value" ...`: the rows go to the registered sink `name`,
-/// with `options` as they are written. It ends the pipeline. duql keeps this
-/// as data: the sink registry is the trace layer's.
+/// with `options` as they are written; `sink trace "path" ...` and
+/// `sink table "path" ...` write a DFTracer trace or table at `name`. It ends
+/// the pipeline. duql keeps this as data: the sink registry and the writer are
+/// the trace layer's.
 struct PipelineSink {
+    enum class Kind : std::uint8_t { Plugin, Trace, Table };
+    Kind kind = Kind::Plugin;
     dstd::String name;
     dstd::Vector<dstd::Pair<dstd::String, dstd::String>> options;
     dstd::String text;

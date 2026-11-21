@@ -33,6 +33,7 @@ from ._lazyframe import (  # noqa: F401
     LazyResult,
     LazyScalar,
     collect_all,
+    concat,
     lazy,
     scan_file,
 )
@@ -75,6 +76,7 @@ __all__ = [
     "udaf",
     "lazy",
     "collect_all",
+    "concat",
     "LazyResult",
     "LazyScalar",
     "BoundColumn",

@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, fields
-from typing import TYPE_CHECKING, Any, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, Union
 
 from . import dftracer_utils_ext as _ext
 from ._enums import DType, coerce_bytes
@@ -96,6 +96,7 @@ class _Default:
 DEFAULT_MODE: Any = _Default("error")
 DEFAULT_PART_SIZE: Any = _Default(0)
 DEFAULT_MAX_OPEN_FILES: Any = _Default(64)
+DEFAULT_MAX_PARTITIONS: Any = _Default(1024)
 
 
 def _given(value: Any) -> tuple[Any, bool]:  # noqa: ANN401
@@ -157,6 +158,22 @@ def output_stem(path: str) -> str:
         if leaf.endswith(suffix) and len(leaf) > len(suffix):
             return leaf[: -len(suffix)]
     return leaf
+
+
+def _partition_keys(partition_by: object) -> list[str]:
+    if partition_by is None:
+        return []
+    if isinstance(partition_by, str) or not isinstance(partition_by, Sequence):
+        raise TypeError("partition_by must be a sequence of column names")
+    keys = list(partition_by)
+    if not keys:
+        raise ValueError("partition_by must name at least one column")
+    for key in keys:
+        if not isinstance(key, str):
+            raise TypeError(f"partition_by names must be str, not {type(key).__name__}")
+    if len(set(keys)) != len(keys):
+        raise ValueError("partition_by names a column twice")
+    return keys
 
 
 def _is_file(path: str) -> bool:
@@ -364,6 +381,7 @@ def run_sink(
     part_size: int = DEFAULT_PART_SIZE,
     partition_by: object = None,
     max_open_files: int = DEFAULT_MAX_OPEN_FILES,
+    max_partitions: int = DEFAULT_MAX_PARTITIONS,
     header: Mapping[str, Any] | None = None,
     known_rows: int = -1,
     raw_columns: tuple[str, ...] = (),
@@ -378,6 +396,7 @@ def run_sink(
     mode, mode_given = _given(mode)
     part_size, part_size_given = _given(part_size)
     max_open_files, max_open_files_given = _given(max_open_files)
+    max_partitions, max_partitions_given = _given(max_partitions)
     target = os.fspath(path)
     if not isinstance(target, str):
         raise TypeError("the sink path must be a str or a path-like object of str")
@@ -389,17 +408,26 @@ def run_sink(
         raise ValueError(f"kind must be 'events' or 'records', not {kind!r}")
     if kind is not None and format is not None:
         raise ValueError("give a DFTracer kind or a plugin format, not both")
-    if partition_by is not None:
-        raise ValueError("partition_by is not supported yet")
+    keys = _partition_keys(partition_by)
     if (
         not isinstance(max_open_files, int)
         or isinstance(max_open_files, bool)
         or max_open_files < 1
     ):
         raise ValueError(f"max_open_files must be a positive int, not {max_open_files!r}")
+    if (
+        not isinstance(max_partitions, int)
+        or isinstance(max_partitions, bool)
+        or max_partitions < 1
+    ):
+        raise ValueError(f"max_partitions must be a positive int, not {max_partitions!r}")
+    if max_partitions_given and format is not None:
+        raise ValueError("a plugin sink does not take max_partitions")
     if not isinstance(part_size, int) or isinstance(part_size, bool) or part_size < 0:
         raise ValueError(f"part_size must be a non-negative int, not {part_size!r}")
     if format is not None:
+        if keys:
+            raise ValueError("a plugin sink does not take partition_by")
         if not isinstance(format, str):
             raise TypeError(f"format must be a str or None, not {type(format).__name__}")
         shared: dict[str, SinkOption] = {}
@@ -421,6 +449,8 @@ def run_sink(
     is_file = _is_file(target)
     if is_file and part_size:
         raise ValueError(f"part_size needs a folder, but {target!r} names one file")
+    if is_file and keys:
+        raise ValueError(f"partition_by needs a folder, but {target!r} names one file")
     if not isinstance(opts.level, int) or isinstance(opts.level, bool) or not 1 <= opts.level <= 12:
         raise ValueError(f"level must be an int from 1 to 12, not {opts.level!r}")
     if opts.compress is not None and not isinstance(opts.compress, bool):
@@ -459,6 +489,9 @@ def run_sink(
 
     schema = dict(schema) if schema is not None else plan.schema
     unknown = not schema
+    missing_keys = [k for k in keys if schema and k not in schema]
+    if missing_keys:
+        raise ValueError(f"partition_by names {missing_keys}, which are not columns of the plan")
     problem = (
         "the plan's columns are not known before it runs" if unknown else _events_problem(schema)
     )
@@ -484,6 +517,9 @@ def run_sink(
         opts.level,
         member_size,
         part_size,
+        keys,
+        max_open_files,
+        max_partitions,
         build_index,
         header_args,
         list(raw_columns),

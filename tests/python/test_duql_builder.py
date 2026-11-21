@@ -590,6 +590,22 @@ def test_source_refuses_a_row_set_that_reads_a_file():
         Source().rowset("x", source("a.pfw"))
 
 
+def test_trace_and_table_sinks_name_a_path_and_take_string_options():
+    t = source("t.pfw.gz").where(c("dur") > 1)
+    assert t.sink_trace("out", mode="overwrite").raw() == (
+        'from "t.pfw.gz" | where (dur > 1) | sink trace "out" mode "overwrite"'
+    )
+    assert (
+        t.sink_table("o.pfw.gz", partition_by="a,b")
+        .raw()
+        .endswith('sink table "o.pfw.gz" partition_by "a,b"')
+    )
+    with pytest.raises(TypeError):
+        t.sink_table(1)
+    with pytest.raises(TypeError):
+        t.sink_trace("o", part_size=3)
+
+
 def test_sink_is_the_last_stage_and_takes_string_options():
     p = source("t.pfw.gz").where(c("dur") > 1).sink("toy_sink.out", path="out.csv")
     assert p.raw() == ('from "t.pfw.gz" | where (dur > 1) | sink "toy_sink.out" path "out.csv"')

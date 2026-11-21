@@ -202,8 +202,14 @@ def test_arguments_are_checked(tmp_path):
         f.write_table(path, options=TraceWriteOptions(compress=False))
     with pytest.raises(ValueError, match="contradicts"):
         f.write_table(str(tmp_path / "p.pfw"), options=TraceWriteOptions(compress=True))
-    with pytest.raises(ValueError, match="partition_by is not supported yet"):
+    with pytest.raises(ValueError, match="partition_by needs a folder"):
         f.write_table(path, partition_by=["s"])
+    with pytest.raises(ValueError, match="not columns of the plan"):
+        f.write_table(str(tmp_path / "dir"), partition_by=["nope"])
+    with pytest.raises(ValueError, match="at least one column"):
+        f.write_table(str(tmp_path / "dir"), partition_by=[])
+    with pytest.raises(ValueError, match="does not take partition_by"):
+        f.write(str(tmp_path / "dir"), format="csv", partition_by=["s"])
     with pytest.raises(ValueError, match="event envelope"):
         f.write_trace(path)
     with pytest.raises(ValueError, match="mode"):
@@ -385,7 +391,7 @@ def test_a_sink_keeps_the_field_details_of_the_columns_it_keeps(tmp_path):
     assert [(f["name"], f["dtype"]) for f in header_of(dropped)["fields"]] == [
         ("i", "int64"),
         ("f", "float64"),
-        ("s", "object"),
+        ("s", header_of(src)["fields"][3]["dtype"]),
     ]
     assert TraceViewer(dropped).collect()["i"].to_list() == list(range(8))
 
@@ -467,8 +473,12 @@ _STREAM_SCRIPT = textwrap.dedent(
     if kind == "records":
         plan = plan.filter(col("i") >= 0)
     def peak():
-        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        return value if sys.platform == "darwin" else value * 1024
+        # On Linux ru_maxrss also holds the peak of the process that spawned
+        # this one, so read this image's own high-water mark.
+        if sys.platform == "darwin":
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        with open("/proc/self/status") as status:
+            return next(int(l.split()[1]) for l in status if l.startswith("VmHWM:")) * 1024
     DataFrame.from_dict({"i": [1]}).write_table(out + ".warm.pfw.gz")
     before = peak()
     summary = plan.sink_table(out) if kind == "records" else plan.sink_trace(out)
@@ -557,8 +567,12 @@ _SLOW_STREAM_SCRIPT = textwrap.dedent(
     path, budget = sys.argv[1:3]
     plan = TraceViewer(path).lazy().memory_budget(int(budget))
     def peak():
-        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        return value if sys.platform == "darwin" else value * 1024
+        # On Linux ru_maxrss also holds the peak of the process that spawned
+        # this one, so read this image's own high-water mark.
+        if sys.platform == "darwin":
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        with open("/proc/self/status") as status:
+            return next(int(l.split()[1]) for l in status if l.startswith("VmHWM:")) * 1024
     before = peak()
     rows = 0
     for frame in plan.stream():
@@ -649,3 +663,451 @@ def test_the_generic_sink_and_write_need_a_format(tmp_path):
         frame(2).lazy().sink(path)
     with pytest.raises(TypeError, match="format"):
         frame(2).write(path)
+
+
+HIVE_DEFAULT = "__HIVE_DEFAULT_PARTITION__"
+
+
+def _walk(root):
+    return sorted(
+        os.path.relpath(os.path.join(d, f), root) for d, _, fs in os.walk(root) for f in fs
+    )
+
+
+def _parts(root):
+    return [p for p in _walk(root) if p.endswith(".pfw.gz") and ".dftindex" not in p]
+
+
+def test_hive_partitions_round_trip_keys_with_special_bytes_and_nulls(tmp_path):
+    keys = ["a/b", "c=d", "e f", "é", "%x", "p:q", HIVE_DEFAULT, None, "a/b", ""]
+    f = DataFrame.from_dict({"k": keys, "v": list(range(len(keys)))})
+    out = str(tmp_path / "out")
+    summary = f.write_table(out, partition_by=["k"])
+    assert summary.rows == len(keys) and summary.kind == "records"
+    folders = sorted({p.split("/")[0] for p in _parts(out)})
+    assert "k=a%2Fb" in folders and "k=c%3Dd" in folders and "k=e%20f" in folders
+    assert "k=%C3%A9" in folders and "k=%25x" in folders and "k=p%3Aq" in folders
+    assert f"k={HIVE_DEFAULT}" in folders
+    assert "k=%5F_HIVE_DEFAULT_PARTITION__" in folders
+    assert summary.part_count == len(_parts(out)) == len(set(map(str, keys)))
+    back = TraceViewer(out).collect().to_pandas().sort_values("v")
+    assert back["v"].tolist() == list(range(len(keys)))
+    pd = pytest.importorskip("pandas")
+    got = [None if v is None or v is pd.NA or v != v else v for v in back["k"]]
+    assert got == keys
+
+
+def test_a_part_holds_its_key_column_and_reads_alone(tmp_path):
+    f = DataFrame.from_dict({"k": ["x", "y", "x"], "v": [1, 2, 3]})
+    out = str(tmp_path / "out")
+    f.write_table(out, partition_by=["k"])
+    one = TraceViewer(os.path.join(out, "k=x", "part-00000.pfw.gz")).collect()
+    assert one["k"].to_list() == ["x", "x"] and one["v"].to_list() == [1, 3]
+    assert header_of(os.path.join(out, "k=y", "part-00000.pfw.gz"))["nrows"] == 1
+
+
+def test_two_keys_make_nested_folders_and_part_size_rolls_inside_a_partition(tmp_path):
+    n = 10
+    f = DataFrame.from_dict({"a": ["p"] * n, "b": [i % 2 for i in range(n)], "v": list(range(n))})
+    out = str(tmp_path / "out")
+    f.write_table(out, partition_by=["a", "b"], part_size=2)
+    assert _parts(out) == sorted(f"a=p/b={b}/part-{i:05d}.pfw.gz" for b in (0, 1) for i in range(3))
+    back = TraceViewer(out).collect()
+    assert sorted(back["v"].to_list()) == list(range(n))
+
+
+def test_more_than_max_partitions_raises_at_the_first_excess_key(tmp_path):
+    out = str(tmp_path / "out")
+    f = DataFrame.from_dict({"k": list(range(1025)), "v": list(range(1025))})
+    with pytest.raises(Exception, match="at least 1025"):
+        f.write_table(out, partition_by=["k"])
+    assert not os.path.exists(out)
+    ok = DataFrame.from_dict({"k": list(range(1024)), "v": list(range(1024))})
+    ok.write_table(out, partition_by=["k"])
+    assert len(_parts(out)) == 1024
+
+
+def _event_frame():
+    return DataFrame.from_dict(
+        {
+            "name": ["a", "b", "c", "d"],
+            "cat": ["io"] * 4,
+            "pid": [0, 1, 2, 3],
+            "tid": [1] * 4,
+            "ts": [10, 20, 30, 40],
+            "ph": [1] * 4,
+        }
+    )
+
+
+def _eager(verb):
+    return lambda f, out, **kw: getattr(f, verb)(out, **kw)
+
+
+def _lazy_plan(verb):
+    return lambda f, out, **kw: getattr(f.lazy(), verb)(out, **kw)
+
+
+def _viewer(verb):
+    def run(f, out, **kw):
+        src = out + ".src.pfw.gz"
+        f.write_trace(src, mode="overwrite")
+        return getattr(TraceViewer(src), verb)(out, **kw)
+
+    return run
+
+
+@pytest.mark.parametrize(
+    "run",
+    [
+        _eager("write_table"),
+        _eager("write_trace"),
+        _lazy_plan("sink_table"),
+        _lazy_plan("sink_trace"),
+        _viewer("sink_trace"),
+    ],
+    ids=["write_table", "write_trace", "lazy_sink_table", "lazy_sink_trace", "viewer_sink_trace"],
+)
+def test_max_partitions_is_a_limit_the_caller_sets(tmp_path, run):
+    out = str(tmp_path / "out")
+    f = _event_frame()
+    with pytest.raises(Exception, match="at least 3"):
+        run(f, out, partition_by=["pid"], max_partitions=2)
+    assert not os.path.exists(out)
+    run(f, out, partition_by=["pid"], max_partitions=4)
+    assert len(_parts(out)) == 4
+    with pytest.raises(ValueError, match="max_partitions"):
+        run(f, out, partition_by=["pid"], max_partitions=0, mode="overwrite")
+
+
+def test_a_session_sink_passes_max_partitions(tmp_path):
+    src = str(tmp_path / "src.pfw.gz")
+    _event_frame().write_trace(src)
+    out = str(tmp_path / "out")
+    viewer = TraceViewer(src)
+    session = viewer.session()
+    handle = session.sink_table(viewer, out, partition_by=["pid"], max_partitions=2)
+    with pytest.raises(Exception, match="at least 3"):
+        handle.result()
+    session = viewer.session()
+    handle = session.sink_table(
+        viewer, out, partition_by=["pid"], max_partitions=4, mode="overwrite"
+    )
+    assert handle.result().part_count == 4
+
+
+def test_more_partitions_than_open_files_still_write_every_row(tmp_path):
+    n = 3000
+    f = DataFrame.from_dict({"k": [i % 40 for i in range(n)], "v": list(range(n))})
+    out = str(tmp_path / "out")
+    f.write_table(
+        out, partition_by=["k"], max_open_files=3, options=TraceWriteOptions(member_size=2000)
+    )
+    assert len(_parts(out)) == 40
+    back = TraceViewer(out).collect()
+    assert sorted(back["v"].to_list()) == list(range(n))
+    for p in _parts(out):
+        assert header_of(os.path.join(out, p))["nrows"] == n // 40
+    with pytest.raises(ValueError, match="max_open_files"):
+        f.write_table(str(tmp_path / "z"), partition_by=["k"], max_open_files=0)
+
+
+def test_members_compressed_in_parallel_land_in_row_order_in_each_part(tmp_path):
+    n = 20000
+    f = DataFrame.from_dict({"k": [i % 3 for i in range(n)], "v": list(range(n))})
+    out = str(tmp_path / "out")
+    f.write_table(out, partition_by=["k"], options=TraceWriteOptions(member_size=1000))
+    for key in range(3):
+        part = TraceViewer(os.path.join(out, f"k={key}")).collect()
+        assert part["v"].to_list() == list(range(key, n, 3))
+
+
+_LATE_FAILURE_SCRIPT = textwrap.dedent(
+    """
+    import os, sys, tempfile
+    from dftracer.utils import DataFrame, TraceWriteOptions
+    n = 600_000
+    k = [i % 3 for i in range(n)]
+    for j in range(1, 5):
+        k[n - j] = 100 + j
+    f = DataFrame.from_dict(
+        {"k": k, "v": list(range(n)), "s": [f"payload-{i % 977}-xxxxxxxxxxxxxxxxxxxx" for i in range(n)]}
+    )
+    d = tempfile.mkdtemp()
+    try:
+        f.write_table(
+            os.path.join(d, "o"),
+            partition_by=["k"],
+            max_partitions=3,
+            options=TraceWriteOptions(member_size="64KB"),
+        )
+        print("no error")
+    except Exception as e:
+        print("ERR", os.listdir(d))
+    """
+)
+
+
+def test_a_write_that_fails_late_while_the_index_is_fed_stops_cleanly(tmp_path):
+    # The failure comes at the last rows, with members of every partition
+    # still waiting for the index. The process must survive each time.
+    for _ in range(8):
+        got = subprocess.run(
+            [sys.executable, "-I", "-c", _LATE_FAILURE_SCRIPT],
+            capture_output=True,
+            text=True,
+        )
+        assert got.returncode == 0, got.stderr
+        assert "ERR []" in got.stdout
+
+
+_FAILING_PLAN_SCRIPT = textwrap.dedent(
+    """
+    import os, tempfile
+    import numpy as np
+    import dftracer.utils as dft
+    from dftracer.utils import DataFrame, col
+    from dftracer.utils.trace import TraceViewer
+    d = tempfile.mkdtemp()
+    n = 600_000
+    src = os.path.join(d, "src.pfw.gz")
+    DataFrame.from_dict({
+        "name": ["a"] * n, "cat": ["io"] * n, "pid": [i % 5 for i in range(n)],
+        "tid": [1] * n, "ts": list(range(n)), "ph": [1] * n, "dur": [1] * n,
+    }).write_trace(src)
+    ok_batches = [0]
+    start = [0]
+
+    @dft.udf(batch=True, returns=np.uint64)
+    def bomb(x):
+        ok_batches[0] += 1
+        if ok_batches[0] - start[0] >= 3:
+            raise ValueError("past the threshold")
+        return x
+
+    view = TraceViewer(src)
+    plan = view.lazy().with_columns(j=bomb(col("ts")))
+    runs = (
+        lambda o: plan.sink_table(o, partition_by=["pid"]),
+        lambda o: plan.sink_table(o + ".pfw.gz"),
+        lambda o: view.duql(
+            f'from "{src}" | derive j = bomb(ts) | sink table "{o}" partition_by "pid"'
+        ).collect(),
+    )
+    for k, run in enumerate(runs):
+        start[0] = ok_batches[0]
+        try:
+            run(os.path.join(d, f"out{k}"))
+            print("WROTE")
+        except Exception as e:
+            assert "past the threshold" in str(e), str(e)
+            assert ok_batches[0] - start[0] >= 3
+            print("ERR", sorted(x for x in os.listdir(d) if x not in (".dftindex", "src.pfw.gz")))
+    """
+)
+
+
+def test_a_plan_that_fails_after_some_batches_leaves_nothing_on_every_sink_path():
+    got = subprocess.run(
+        [sys.executable, "-I", "-c", _FAILING_PLAN_SCRIPT],
+        capture_output=True,
+        text=True,
+    )
+    assert got.returncode == 0, got.stderr
+    lines = [x for x in got.stdout.splitlines() if x.startswith(("ERR", "WROTE"))]
+    assert lines == ["ERR []"] * 3, got.stdout + got.stderr
+
+
+def test_keys_that_differ_only_in_case_raise_before_anything_is_committed(tmp_path):
+    out = str(tmp_path / "out")
+    f = DataFrame.from_dict({"k": ["File", "x", "file"], "v": [1, 2, 3]})
+    with pytest.raises(Exception, match="k=File and k=file differ only in case"):
+        f.write_table(out, partition_by=["k"])
+    assert os.listdir(tmp_path) == []
+    nested = DataFrame.from_dict({"a": ["X", "x"], "b": [1, 2], "v": [1, 2]})
+    with pytest.raises(Exception, match="differ only in case"):
+        nested.write_table(out, partition_by=["a", "b"])
+    assert os.listdir(tmp_path) == []
+
+
+def test_an_over_long_partition_name_raises_before_anything_is_committed(tmp_path):
+    out = str(tmp_path / "out")
+    f = DataFrame.from_dict({"k": ["é" * 100], "v": [1]})
+    with pytest.raises(Exception, match="over the limit"):
+        f.write_table(out, partition_by=["k"])
+    assert os.listdir(tmp_path) == []
+
+
+def test_partitioned_trace_output_is_events_and_partition_needs_a_folder(tmp_path):
+    events = DataFrame.from_dict(
+        {
+            "name": ["r", "w", "r"],
+            "cat": ["POSIX"] * 3,
+            "pid": [1, 1, 1],
+            "tid": [1, 1, 1],
+            "ts": [1, 2, 3],
+            "ph": [1, 1, 1],
+            "dur": [5, 6, 7],
+        }
+    )
+    out = str(tmp_path / "ev")
+    s = events.write_trace(out, partition_by=["name"])
+    assert s.kind == "events" and s.rows == 3
+    assert sorted({p.split("/")[0] for p in _parts(out)}) == ["name=r", "name=w"]
+    assert TraceViewer(out).collect().num_rows == 3
+    with pytest.raises(ValueError, match="partition_by needs a folder"):
+        events.write_trace(str(tmp_path / "x.pfw.gz"), partition_by=["name"])
+
+
+def test_a_partitioned_folder_has_one_shared_index_that_prunes(tmp_path):
+    n = 40_000
+    f = DataFrame.from_dict(
+        {
+            "k": [f"g{i % 4}" for i in range(n)],
+            "i": list(range(n)),
+            "s": [f"v{i % 50}" for i in range(n)],
+        }
+    )
+    out = str(tmp_path / "out")
+    f.lazy().sink_table(out, partition_by=["k"], options=TraceWriteOptions(member_size="16KB"))
+    assert os.path.isdir(os.path.join(out, ".dftindex"))
+    stores = [d for d, ds, _ in os.walk(out) if os.path.basename(d) == ".dftindex"]
+    assert len(stores) == 1
+    ext._table_read_counters(True)
+    got = TraceViewer(out).filter(col("i") == 12345).collect()
+    counts = ext._table_read_counters(True)
+    assert got["i"].to_list() == [12345]
+    assert counts["indexed_files"] >= 1 and counts["chunks_skipped"] > 0
+
+
+def test_overwrite_replaces_a_partitioned_folder_atomically(tmp_path):
+    out = str(tmp_path / "out")
+    DataFrame.from_dict({"k": ["a", "b"], "v": [1, 2]}).write_table(out, partition_by=["k"])
+    with pytest.raises(FileExistsError):
+        DataFrame.from_dict({"k": ["c"], "v": [3]}).write_table(out, partition_by=["k"])
+    DataFrame.from_dict({"k": ["c"], "v": [3]}).write_table(
+        out, partition_by=["k"], mode="overwrite"
+    )
+    assert _parts(out) == ["k=c/part-00000.pfw.gz"]
+    assert [n for n in os.listdir(tmp_path) if n.startswith(".out.")] == []
+
+
+def test_a_killed_partitioned_write_leaves_nothing_at_the_target(tmp_path):
+    target = tmp_path / "big"
+    script = tmp_path / "child.py"
+    script.write_text(
+        textwrap.dedent(
+            """
+            import sys
+            from dftracer.utils import DataFrame
+            n = 6_000_000
+            f = DataFrame.from_dict({"k": [i % 8 for i in range(n)], "s": ["x"] * n})
+            f.lazy().sink_table(sys.argv[1], partition_by=["k"])
+            """
+        )
+    )
+    child = subprocess.Popen([sys.executable, str(script), str(target)], cwd=str(tmp_path))
+    staging = None
+    deadline = time.time() + 120
+    while time.time() < deadline and child.poll() is None:
+        found = [n for n in os.listdir(tmp_path) if n.startswith(".big.tmp-")]
+        if found and any(f for _, _, fs in os.walk(tmp_path / found[0]) for f in fs):
+            staging = found[0]
+            break
+        time.sleep(0.01)
+    if staging is None:
+        child.wait()
+        pytest.skip("the write ended before it could be killed")
+    child.send_signal(signal.SIGKILL)
+    child.wait()
+    assert not target.exists()
+    DataFrame.from_dict({"k": ["a"], "v": [1]}).write_table(str(target), partition_by=["k"])
+    assert not (tmp_path / staging).exists()
+    assert TraceViewer(str(target)).collect().num_rows == 1
+
+
+_PARTITION_SCRIPT = textwrap.dedent(
+    """
+    import resource, sys
+    from dftracer.utils import DataFrame, col
+    from dftracer.utils.trace import TraceViewer
+    path, out, budget = sys.argv[1:4]
+    plan = TraceViewer(path).lazy().memory_budget(int(budget)).filter(col("i") >= 0)
+    def peak():
+        # On Linux ru_maxrss also holds the peak of the process that spawned
+        # this one, so read this image's own high-water mark.
+        if sys.platform == "darwin":
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        with open("/proc/self/status") as status:
+            return next(int(l.split()[1]) for l in status if l.startswith("VmHWM:")) * 1024
+    DataFrame.from_dict({"i": [1]}).write_table(out + ".warm.pfw.gz")
+    before = peak()
+    summary = plan.sink_table(out, partition_by=["k"])
+    print(summary.rows, summary.part_count, before, peak())
+    """
+)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="peak memory is read with resource")
+def test_a_partitioned_sink_larger_than_the_budget_stays_bounded(tmp_path):
+    rows = 1_500_000
+    src = str(tmp_path / "in.pfw.gz")
+    DataFrame.from_dict(
+        {
+            "i": list(range(rows)),
+            "k": [i % 200 for i in range(rows)],
+            "s": [f"payload-{i % 977}-xxxxxxxxxxxxxxxxxxxx" for i in range(rows)],
+        }
+    ).write_table(src)
+    out = str(tmp_path / "out")
+    got = subprocess.run(
+        [sys.executable, "-I", "-c", _PARTITION_SCRIPT, src, out, str(_SINK_BUDGET)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    count, parts, before, after = (int(x) for x in got)
+    assert count == rows and parts == 200
+    assert rows * 90 > 4 * _SINK_BUDGET
+    assert after - before < _EVENTS_PEAK_FACTOR * _SINK_BUDGET
+
+
+def test_concat_joins_plans_at_the_top_level(tmp_path):
+    a = DataFrame.from_dict({"x": [1, 2]})
+    b = DataFrame.from_dict({"x": [3]})
+    out = dft.concat([a.lazy(), b, a.lazy().filter(col("x") > 1)]).collect()
+    assert out["x"].to_list() == [1, 2, 3, 2]
+    path = str(tmp_path / "c.pfw.gz")
+    assert dft.concat([a, b]).sink_table(path).rows == 3
+    with pytest.raises(ValueError, match="at least one"):
+        dft.concat([])
+
+
+def test_a_duql_trace_or_table_sink_writes_what_the_verbs_write(tmp_path):
+    src = str(tmp_path / "in.pfw.gz")
+    DataFrame.from_dict(
+        {
+            "name": ["r", "w", "r", "w"],
+            "cat": ["POSIX"] * 4,
+            "pid": [1, 1, 2, 2],
+            "tid": [1, 1, 1, 1],
+            "ts": [1, 2, 3, 4],
+            "ph": [1, 1, 1, 1],
+            "dur": [5, 6, 7, 8],
+        }
+    ).write_trace(src)
+    out = str(tmp_path / "out")
+    got = (
+        TraceViewer(src)
+        .duql(f'from "{src}" | sink trace "{out}" partition_by "pid" mode "overwrite"')
+        .collect()
+    )
+    assert got["rows"].to_list() == [4]
+    assert sorted(_parts(out)) == ["pid=1/part-00000.pfw.gz", "pid=2/part-00000.pfw.gz"]
+    assert TraceViewer(out).collect().num_rows == 4
+    tab = str(tmp_path / "tab.pfw.gz")
+    got = TraceViewer(src).duql(f'from "{src}" | select name, dur | sink table "{tab}"').collect()
+    assert got["rows"].to_list() == [4]
+    assert TraceViewer(tab).collect().num_rows == 4
+    with pytest.raises(Exception, match="unknown sink option"):
+        TraceViewer(src).duql(f'from "{src}" | sink table "{tmp_path}/z" nope "1"').collect()

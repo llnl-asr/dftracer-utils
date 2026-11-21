@@ -283,6 +283,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/record_schema.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/record_schema_yaml.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/source.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/write_feed.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/bloom_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/bloom_fold.cpp
@@ -479,6 +480,7 @@ set(DFTRACER_UTILS_TRACE_SOURCES
     # Writer
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/writer/trace_writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/writer/output_writer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/writer/sink_plan.cpp
 
     # Table codec
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/table/table_header.cpp

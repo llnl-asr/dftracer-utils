@@ -2,10 +2,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
@@ -13,6 +17,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/table/table_codec.h>
 #include <dftracer/utils/trace/writer/output_writer.h>
+#include <dftracer/utils/trace/writer/sink_plan.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <task_result.h>
@@ -44,6 +49,38 @@ DataFrame ints(std::int64_t first, std::int64_t count) {
     frame.names.push_back(dstd::SharedString("i"));
     frame.columns.push_back(Series::flat(TypeId::Int64, values.data(), count));
     return frame;
+}
+
+constexpr dstd::StringView KEYED_HEADER_ARGS =
+    "{\"format\":\"dftu.table\",\"format_version\":\"1.0\",\"table\":\"t\","
+    "\"index\":[],\"index_names\":[],\"fields\":[{\"name\":\"k\","
+    "\"dtype\":\"object\"},{\"name\":\"i\",\"dtype\":\"int64\"}],"
+    "\"meta\":{}}";
+
+// Rows 0..count-1, row r keyed by keys[r % keys.size()].
+DataFrame keyed(dstd::Span<const dstd::String> keys, std::int64_t count) {
+    dstd::Vector<dstd::String> k;
+    dstd::Vector<std::int64_t> values;
+    for (std::int64_t r = 0; r < count; ++r) {
+        k.push_back(keys[static_cast<std::size_t>(r) % keys.size()]);
+        values.push_back(r);
+    }
+    DataFrame frame;
+    frame.names.push_back(dstd::SharedString("k"));
+    frame.columns.push_back(
+        Series::strings(dstd::Span<const dstd::String>(k.data(), k.size())));
+    frame.names.push_back(dstd::SharedString("i"));
+    frame.columns.push_back(Series::flat(TypeId::Int64, values.data(), count));
+    return frame;
+}
+
+OutputOptions keyed_to(dstd::StringView path) {
+    OutputOptions o;
+    o.path = dstd::String(path);
+    o.header_args_json = dstd::String(KEYED_HEADER_ARGS);
+    o.build_index = false;
+    o.partition_by.push_back(dstd::String("k"));
+    return o;
 }
 
 OutputOptions records_to(dstd::StringView path) {
@@ -89,6 +126,88 @@ coro::CoroTask<dstd::Result<OutputSummary>> write_then_create(
     auto closing = out.close();
     co_return co_await std::move(closing);
 }
+
+coro::CoroTask<dstd::Result<OutputSummary>> write_frames_bound(
+    OutputOptions options, dstd::Vector<DataFrame> frames) {
+    auto opening = OutputWriter::open(std::move(options));
+    if (!opening) co_return opening.error();
+    OutputWriter out = std::move(*opening);
+    coro::Scope scope;
+    out.bind_scope(scope);
+    dstd::Result<OutputSummary> result =
+        common::make_error(common::ErrorCode::Internal, "no write");
+    for (const DataFrame& frame : frames) {
+        auto writing = out.write(frame);
+        auto written = co_await std::move(writing);
+        if (!written) {
+            result = written.error();
+            break;
+        }
+    }
+    if (result.has_value() || frames.empty()) {
+        auto closing = out.close();
+        result = co_await std::move(closing);
+    }
+    if (!result) {
+        auto aborting = out.abort();
+        co_await std::move(aborting);
+    }
+    auto joining = scope.join();
+    co_await std::move(joining);
+    co_return result;
+}
+
+enum class EndOf { Failure, Stop };
+
+// Yields `batches` frames of ints, then ends its next() the way `end` says:
+// as a task failure or a stop, not as a returned error.
+class EndingSource final : public dataframe::Source {
+   public:
+    EndingSource(int batches, EndOf end) : batches_(batches), end_(end) {}
+
+    dataframe::Schema schema() const override {
+        return dataframe::InMemorySource(ints(0, 1)).schema();
+    }
+
+    dstd::Result<dataframe::ScanResult> scan(
+        const dataframe::ScanRequest&) const override {
+        dataframe::ScanResult r;
+        r.cursor = dstd::make_unique<EndingCursor>(batches_, end_);
+        return r;
+    }
+
+   private:
+    class EndingCursor final : public dataframe::Cursor {
+       public:
+        EndingCursor(int batches, EndOf end) : left_(batches), end_(end) {}
+
+        coro::CoroTask<dataframe::MorselResult> next(std::int64_t) override {
+            if (left_ == 0) {
+                if (end_ == EndOf::Stop) co_await coro::stop_here();
+                auto failure = coro::fail_with(
+                    common::make_error(common::ErrorCode::Internal,
+                                       "the source failed")
+                        .error());
+                co_await failure;
+            }
+            --left_;
+            DataFrame frame = ints(next_first_, 4000);
+            next_first_ += 4000;
+            dataframe::Morsel m;
+            m.rows = 4000;
+            for (Series& c : frame.columns) m.columns.push_back(std::move(c));
+            co_return dstd::Optional<dataframe::Morsel>(std::move(m));
+        }
+
+       private:
+        int left_;
+        EndOf end_;
+        std::int64_t next_first_ = 0;
+    };
+
+    int batches_;
+    EndOf end_;
+};
 
 dstd::Vector<DataFrame> one(DataFrame frame) {
     dstd::Vector<DataFrame> v;
@@ -153,6 +272,13 @@ std::uint64_t dead_pid() {
 bool has_name(dstd::StringView dir, dstd::StringView name) {
     for (const dstd::String& n : names_in(dir))
         if (dstd::StringView(n) == name) return true;
+    return false;
+}
+
+bool has_staging(dstd::StringView dir) {
+    for (const dstd::String& n : names_in(dir))
+        if (dstd::StringView(n).find(".tmp-") != dstd::StringView::npos)
+            return true;
     return false;
 }
 
@@ -468,5 +594,184 @@ TEST_SUITE("trace.writer.output_writer") {
         auto empty = run(std::move(none), dstd::Vector<DataFrame>());
         REQUIRE(empty.has_value());
         CHECK(empty->rows == 0);
+    }
+
+    TEST_CASE("partitions are percent-encoded folders and read back whole") {
+        TestEnvironment env(0);
+        const dstd::String dir = env.dir() + "/out";
+        dstd::Vector<dstd::String> keys;
+        keys.push_back(dstd::String("a/b"));
+        keys.push_back(dstd::String("c d"));
+        keys.push_back(dstd::String("=%"));
+        keys.push_back(dstd::String("\xC3\xA9"));
+        keys.push_back(dstd::String(HIVE_DEFAULT_PARTITION));
+        auto summary = run(
+            keyed_to(dir),
+            one(keyed(dstd::Span<const dstd::String>(keys.data(), keys.size()),
+                      50)));
+        REQUIRE(summary.has_value());
+        CHECK(summary->rows == 50);
+        CHECK(summary->files.size() == 5);
+        const dstd::Vector<dstd::String> folders = names_in(dir);
+        CHECK(folders.size() == 5);
+        for (const dstd::StringView want :
+             {"k=%3D%25", "k=%5F_HIVE_DEFAULT_PARTITION__", "k=%C3%A9",
+              "k=a%2Fb", "k=c%20d"})
+            CHECK(has_name(dir, want));
+        std::int64_t total = 0;
+        for (const dstd::String& f : summary->files)
+            total += ok(trace::table::read_table(f)).frame.num_rows();
+        CHECK(total == 50);
+    }
+
+    TEST_CASE("a write past max_partitions fails at the first excess key") {
+        TestEnvironment env(0);
+        dstd::Vector<dstd::String> keys;
+        for (int k = 0; k < 6; ++k) keys.push_back(dstd::fmt<"g{}">(k));
+        OutputOptions o = keyed_to(env.dir() + "/out");
+        o.max_partitions = 5;
+        auto summary = run(
+            std::move(o),
+            one(keyed(dstd::Span<const dstd::String>(keys.data(), keys.size()),
+                      12)));
+        REQUIRE_FALSE(summary.has_value());
+        CHECK(summary.error().message().find("at least 6") !=
+              dstd::String::npos);
+        CHECK(names_in(env.dir()).empty());
+    }
+
+    TEST_CASE("more partitions than open files reopen parts for append") {
+        TestEnvironment env(0);
+        const dstd::String dir = env.dir() + "/out";
+        dstd::Vector<dstd::String> keys;
+        for (int k = 0; k < 12; ++k) keys.push_back(dstd::fmt<"g{}">(k));
+        OutputOptions o = keyed_to(dir);
+        o.max_open_files = 2;
+        o.member_size = 400;
+        auto summary = run(
+            std::move(o),
+            one(keyed(dstd::Span<const dstd::String>(keys.data(), keys.size()),
+                      1200)));
+        REQUIRE(summary.has_value());
+        CHECK(summary->files.size() == 12);
+        std::int64_t total = 0;
+        for (const dstd::String& f : summary->files)
+            total += ok(trace::table::read_table(f)).frame.num_rows();
+        CHECK(total == 1200);
+    }
+
+    TEST_CASE("partition buffers stay under their share of the budget") {
+        TestEnvironment env(0);
+        dstd::Vector<dstd::String> keys;
+        for (int k = 0; k < 200; ++k) keys.push_back(dstd::fmt<"g{}">(k));
+        OutputOptions o = keyed_to(env.dir() + "/out");
+        o.memory_budget = std::uint64_t{1} << 20;
+        auto summary = run(
+            std::move(o),
+            one(keyed(dstd::Span<const dstd::String>(keys.data(), keys.size()),
+                      60000)));
+        REQUIRE(summary.has_value());
+        CHECK(summary->rows == 60000);
+        CHECK(summary->peak_buffer_bytes > 0);
+        CHECK(summary->peak_buffer_bytes <= (std::uint64_t{1} << 18) + 256);
+    }
+
+    TEST_CASE(
+        "a write that fails while its index is being fed leaves nothing") {
+        TestEnvironment env(0);
+        const dstd::String path = env.dir() + "/bad.pfw.gz";
+        OutputOptions o = records_to(path);
+        o.build_index = true;
+        o.member_size = 2000;
+        o.known_rows = 5;
+        dstd::Vector<DataFrame> frames;
+        frames.push_back(ints(0, 3000));
+        CHECK_FALSE(run(std::move(o), std::move(frames)).has_value());
+        CHECK_FALSE(has_name(env.dir(), "bad.pfw.gz"));
+        CHECK_FALSE(has_name(env.dir(), ".dftindex"));
+    }
+
+    TEST_CASE("an index that cannot be written leaves the write a success") {
+        TestEnvironment env(0);
+        const dstd::String blocker = env.dir() + "/blocker";
+        {
+            auto made = dstd::File::open(dstd::PathView(blocker), [] {
+                dstd::OpenOptions o;
+                o.access = dstd::Access::ReadWrite;
+                o.creation = dstd::Creation::OnlyIfNew;
+                return o;
+            }());
+            REQUIRE(made.has_value());
+        }
+        const dstd::String path = env.dir() + "/ix.pfw.gz";
+        OutputOptions o = records_to(path);
+        o.build_index = true;
+        o.index_dir = blocker + "/index";
+        auto summary = run(std::move(o), one(ints(0, 3000)));
+        REQUIRE(summary.has_value());
+        CHECK(summary->files.size() == 1);
+        CHECK(summary->unindexed.size() == 1);
+        CHECK(ok(trace::table::read_table(path)).frame.num_rows() == 3000);
+    }
+
+    TEST_CASE("a bound write that fails with index messages in flight ends") {
+        TestEnvironment env(0);
+        for (int round = 0; round < 20; ++round) {
+            OutputOptions o = records_to(env.dir() + "/late.pfw.gz");
+            o.build_index = true;
+            o.member_size = 2000;
+            o.known_rows = 1;
+            dstd::Vector<DataFrame> frames;
+            frames.push_back(ints(0, 20000));
+            auto done = default_runtime().block_on(coro::named(
+                "bound_write",
+                write_frames_bound(std::move(o), std::move(frames))));
+            CHECK_FALSE(done.has_value());
+        }
+        CHECK_FALSE(has_name(env.dir(), "late.pfw.gz"));
+        CHECK_FALSE(has_staging(env.dir()));
+    }
+
+    TEST_CASE("a plan that ends with a failure or a stop joins its scope") {
+        TestEnvironment env(0);
+        for (const EndOf end : {EndOf::Failure, EndOf::Stop}) {
+            for (const char* partition : {"", "i"}) {
+                const dstd::String target = env.dir() + "/ends";
+                dstd::Vector<dstd::Pair<dstd::String, dstd::String>> options;
+                options.emplace_back("member_size", "4000");
+                if (*partition) options.emplace_back("partition_by", partition);
+                auto plan = trace::writer::output_sink_plan(
+                    dataframe::LazyFrame::scan(
+                        dstd::make_shared<EndingSource>(6, end)),
+                    OutputRows::Records,
+                    *partition ? target : target + ".pfw.gz",
+                    std::move(options));
+                REQUIRE(plan.has_value());
+                for (int round = 0; round < 5; ++round) {
+                    auto done = default_runtime().block_on(
+                        coro::named("ending_plan", plan->collect()));
+                    CHECK_FALSE(done.has_value());
+                }
+                CHECK_FALSE(has_name(env.dir(), "ends"));
+                CHECK_FALSE(has_name(env.dir(), "ends.pfw.gz"));
+                CHECK_FALSE(has_staging(env.dir()));
+            }
+        }
+    }
+
+    TEST_CASE("a records write indexes its file while it is written") {
+        TestEnvironment env(0);
+        const dstd::String path = env.dir() + "/ix.pfw.gz";
+        OutputOptions o = records_to(path);
+        o.build_index = true;
+        o.member_size = 2000;
+        dstd::Vector<DataFrame> frames;
+        frames.push_back(ints(0, 3000));
+        frames.push_back(ints(3000, 3000));
+        auto summary = run(std::move(o), std::move(frames));
+        REQUIRE(summary.has_value());
+        CHECK(has_name(env.dir(), ".dftindex"));
+        auto got = ok(trace::table::read_table(path));
+        CHECK(got.frame.num_rows() == 6000);
     }
 }

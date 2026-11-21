@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence, cast, overloa
 
 from ._sink import (
     DEFAULT_MAX_OPEN_FILES,
+    DEFAULT_MAX_PARTITIONS,
     DEFAULT_MODE,
     DEFAULT_PART_SIZE,
     SinkSummary,
@@ -53,6 +54,7 @@ class SinkVerbs:
         part_size: int = ...,
         partition_by: Sequence[str] | None = ...,
         max_open_files: int = ...,
+        max_partitions: int = ...,
         lazy: Literal[False] = ...,
     ) -> SinkSummary: ...
     @overload
@@ -65,6 +67,7 @@ class SinkVerbs:
         part_size: int = ...,
         partition_by: Sequence[str] | None = ...,
         max_open_files: int = ...,
+        max_partitions: int = ...,
         lazy: Literal[True],
     ) -> LazyResult[SinkSummary]: ...
 
@@ -77,6 +80,7 @@ class SinkVerbs:
         part_size: int = DEFAULT_PART_SIZE,
         partition_by: Sequence[str] | None = None,
         max_open_files: int = DEFAULT_MAX_OPEN_FILES,
+        max_partitions: int = DEFAULT_MAX_PARTITIONS,
         lazy: bool = False,
     ) -> SinkSummary | LazyResult[SinkSummary]:
         """Write the rows as a DFTracer trace and return a :class:`SinkSummary`;
@@ -92,7 +96,12 @@ class SinkVerbs:
         ``"error"`` refuses an existing ``path``, ``"overwrite"`` replaces it.
         The index of the files is built once under the output root unless
         ``options`` says otherwise. ``part_size`` is the rows of one part of a
-        folder. ``partition_by`` is not supported yet.
+        folder. ``partition_by`` names the columns whose values pick the Hive
+        ``key=value/`` folder of each row: names and values are percent-encoded,
+        a null is ``__HIVE_DEFAULT_PARTITION__``, and the key columns stay in
+        each part. It needs a folder path, and more than ``max_partitions`` (1024)
+        partitions raise.
+        ``max_open_files`` is the most part files open at once.
         ``lazy=True`` returns a :class:`LazyResult` for :func:`collect_all` that
         writes when it runs.
         """
@@ -108,6 +117,7 @@ class SinkVerbs:
                 part_size=part_size,
                 partition_by=partition_by,
                 max_open_files=max_open_files,
+                max_partitions=max_partitions,
                 **extra,
                 runtime=runtime,
             )
@@ -128,6 +138,7 @@ class SinkVerbs:
         part_size: int = ...,
         partition_by: Sequence[str] | None = ...,
         max_open_files: int = ...,
+        max_partitions: int = ...,
         lazy: Literal[False] = ...,
     ) -> SinkSummary: ...
     @overload
@@ -142,6 +153,7 @@ class SinkVerbs:
         part_size: int = ...,
         partition_by: Sequence[str] | None = ...,
         max_open_files: int = ...,
+        max_partitions: int = ...,
         lazy: Literal[True],
     ) -> LazyResult[SinkSummary]: ...
 
@@ -156,6 +168,7 @@ class SinkVerbs:
         part_size: int = DEFAULT_PART_SIZE,
         partition_by: Sequence[str] | None = None,
         max_open_files: int = DEFAULT_MAX_OPEN_FILES,
+        max_partitions: int = DEFAULT_MAX_PARTITIONS,
         lazy: bool = False,
     ) -> SinkSummary | LazyResult[SinkSummary]:
         """Write the rows as a ``dftu.table`` file (a header line and one typed
@@ -172,7 +185,12 @@ class SinkVerbs:
         ``"error"`` refuses an existing ``path``, ``"overwrite"`` replaces it.
         The index of the files is built once under the output root unless
         ``options`` says otherwise. ``part_size`` is the rows of one part of a
-        folder. ``partition_by`` is not supported yet.
+        folder. ``partition_by`` names the columns whose values pick the Hive
+        ``key=value/`` folder of each row: names and values are percent-encoded,
+        a null is ``__HIVE_DEFAULT_PARTITION__``, and the key columns stay in
+        each part. It needs a folder path, and more than ``max_partitions`` (1024)
+        partitions raise.
+        ``max_open_files`` is the most part files open at once.
         ``lazy=True`` returns a :class:`LazyResult` for :func:`collect_all` that
         writes when it runs.
         """
@@ -190,6 +208,7 @@ class SinkVerbs:
                 part_size=part_size,
                 partition_by=partition_by,
                 max_open_files=max_open_files,
+                max_partitions=max_partitions,
                 **extra,
                 runtime=runtime,
             )
@@ -293,6 +312,7 @@ class SessionSinkVerbs:
         part_size: int = DEFAULT_PART_SIZE,
         partition_by: Sequence[str] | None = None,
         max_open_files: int = DEFAULT_MAX_OPEN_FILES,
+        max_partitions: int = DEFAULT_MAX_PARTITIONS,
     ) -> Handle[SinkSummary]:
         """``viewer.sink_trace(path, ...)``, run with the session."""
         return self.collect(
@@ -303,6 +323,7 @@ class SessionSinkVerbs:
                 part_size=part_size,
                 partition_by=partition_by,
                 max_open_files=max_open_files,
+                max_partitions=max_partitions,
                 lazy=True,
             )
         )
@@ -319,6 +340,7 @@ class SessionSinkVerbs:
         part_size: int = DEFAULT_PART_SIZE,
         partition_by: Sequence[str] | None = None,
         max_open_files: int = DEFAULT_MAX_OPEN_FILES,
+        max_partitions: int = DEFAULT_MAX_PARTITIONS,
     ) -> Handle[SinkSummary]:
         """``viewer.sink_table(path, ...)``, run with the session."""
         return self.collect(
@@ -331,6 +353,7 @@ class SessionSinkVerbs:
                 part_size=part_size,
                 partition_by=partition_by,
                 max_open_files=max_open_files,
+                max_partitions=max_partitions,
                 lazy=True,
             )
         )
@@ -385,6 +408,7 @@ class WriteVerbs:
         part_size: int = DEFAULT_PART_SIZE,
         partition_by: Sequence[str] | None = None,
         max_open_files: int = DEFAULT_MAX_OPEN_FILES,
+        max_partitions: int = DEFAULT_MAX_PARTITIONS,
     ) -> SinkSummary:
         """Write this frame to ``path`` now as a DFTracer trace and return a
         :class:`SinkSummary`. The frame must keep the event envelope (``name``,
@@ -405,6 +429,7 @@ class WriteVerbs:
             part_size=part_size,
             partition_by=partition_by,
             max_open_files=max_open_files,
+            max_partitions=max_partitions,
         )
 
     def write_table(
@@ -418,6 +443,7 @@ class WriteVerbs:
         part_size: int = DEFAULT_PART_SIZE,
         partition_by: Sequence[str] | None = None,
         max_open_files: int = DEFAULT_MAX_OPEN_FILES,
+        max_partitions: int = DEFAULT_MAX_PARTITIONS,
     ) -> SinkSummary:
         """Write this frame to ``path`` now as a ``dftu.table`` file (a header
         line and one typed record per line) and return a :class:`SinkSummary`.
@@ -452,6 +478,7 @@ class WriteVerbs:
             part_size=part_size,
             partition_by=partition_by,
             max_open_files=max_open_files,
+            max_partitions=max_partitions,
         )
 
     def write(

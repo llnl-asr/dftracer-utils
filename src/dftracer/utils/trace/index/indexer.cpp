@@ -48,6 +48,39 @@ struct FormatEntry {
 
 }  // namespace
 
+static build::ChunkIndexerConfig make_bloom_config(
+    const IndexerOptions& options, const store::ExtensionMask& extensions) {
+    const BloomOptions bloom = options.bloom.value_or(BloomOptions{});
+    build::ChunkIndexerConfig c;
+    for (const auto& field : bloom.fields)
+        c.extra_dimensions.push_back(build::extra_dimension_name(field));
+    c.false_positive_rate = bloom.false_positive_rate;
+    c.path_budget = bloom.path_budget;
+    c.stats_share = bloom.stats_share;
+    c.auto_max_distinct = bloom.auto_max_distinct;
+    c.expected_entries_per_chunk = bloom.expected_entries_per_chunk;
+    c.extensions = extensions;
+    for (const SummaryChoice& choice : options.summaries) {
+        build::PathSummaries p;
+        p.path = build::extra_dimension_name(choice.path);
+        p.written = choice.path;
+        for (const dstd::String& name : choice.summaries)
+            if (const auto ext = store::parse_extension(name);
+                ext && store::PRUNING_EXTENSIONS.has(*ext))
+                p.kinds.add(*ext);
+        if (!p.kinds.empty() && !build::is_fixed_dimension(p.path) &&
+            std::find(c.extra_dimensions.begin(), c.extra_dimensions.end(),
+                      p.path) == c.extra_dimensions.end())
+            c.extra_dimensions.push_back(p.path);
+        c.path_summaries.push_back(std::move(p));
+    }
+    std::sort(c.path_summaries.begin(), c.path_summaries.end(),
+              [](const build::PathSummaries& a, const build::PathSummaries& b) {
+                  return a.path < b.path;
+              });
+    return c;
+}
+
 struct Indexer::Impl {
     dstd::Vector<dstd::String> paths;
     /// The scan from open_scanned(), used by the first call that needs sizes
@@ -62,36 +95,7 @@ struct Indexer::Impl {
     }
 
     build::ChunkIndexerConfig bloom_config() const {
-        const BloomOptions bloom = options.bloom.value_or(BloomOptions{});
-        build::ChunkIndexerConfig c;
-        for (const auto& field : bloom.fields)
-            c.extra_dimensions.push_back(build::extra_dimension_name(field));
-        c.false_positive_rate = bloom.false_positive_rate;
-        c.path_budget = bloom.path_budget;
-        c.stats_share = bloom.stats_share;
-        c.auto_max_distinct = bloom.auto_max_distinct;
-        c.expected_entries_per_chunk = bloom.expected_entries_per_chunk;
-        c.extensions = extensions;
-        for (const SummaryChoice& choice : options.summaries) {
-            build::PathSummaries p;
-            p.path = build::extra_dimension_name(choice.path);
-            p.written = choice.path;
-            for (const dstd::String& name : choice.summaries)
-                if (const auto ext = store::parse_extension(name);
-                    ext && store::PRUNING_EXTENSIONS.has(*ext))
-                    p.kinds.add(*ext);
-            if (!p.kinds.empty() && !build::is_fixed_dimension(p.path) &&
-                std::find(c.extra_dimensions.begin(), c.extra_dimensions.end(),
-                          p.path) == c.extra_dimensions.end())
-                c.extra_dimensions.push_back(p.path);
-            c.path_summaries.push_back(std::move(p));
-        }
-        std::sort(
-            c.path_summaries.begin(), c.path_summaries.end(),
-            [](const build::PathSummaries& a, const build::PathSummaries& b) {
-                return a.path < b.path;
-            });
-        return c;
+        return make_bloom_config(options, extensions);
     }
 
     // The traces grouped by index root, in open order within a root.
@@ -453,6 +457,26 @@ dstd::Result<void> Indexer::validate_options(Impl& impl) {
         return chosen;
     if (impl.options.bloom) return impl.bloom_config().validate();
     return {};
+}
+
+dstd::Result<build::ChunkIndexerConfig> index_chunk_config(
+    const IndexerOptions& options) {
+    store::ExtensionMask extensions;
+    for (const auto& name : options.extensions) {
+        auto ext = store::parse_extension(name);
+        if (!ext || !store::PRUNING_EXTENSIONS.has(*ext))
+            return common::make_error<
+                "not a pruning extension: {} (expected zonemap, bloom, counts "
+                "or postings)">(common::ErrorCode::InvalidArgument, name);
+        extensions.add(*ext);
+    }
+    if (auto chosen = validate_summaries(options, extensions); !chosen)
+        return chosen.error();
+    auto config = make_bloom_config(options, extensions);
+    if (options.bloom) {
+        if (auto valid = config.validate(); !valid) return valid.error();
+    }
+    return config;
 }
 
 dstd::Result<Indexer> Indexer::finish_open(dstd::SharedPtr<Impl> impl) {

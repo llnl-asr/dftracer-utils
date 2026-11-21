@@ -491,11 +491,43 @@ coro::CoroTask<ScanPlan> from_inputs(dstd::Vector<dstd::String> inputs,
         co_return failed_plan(dstd::make_shared<detail::ViewPlan>(),
                               expanded.error());
 
+    // A folder input holds one index at its root for the files below it,
+    // such as the parts of a partitioned output; a nearer folder with its own
+    // index store keeps its files.
+    dstd::Vector<dstd::String> folders;
+    if (index_dir.empty()) {
+        for (const auto& in : inputs) {
+            dstd::StringView trimmed(in);
+            while (trimmed.size() > 1 && trimmed.back() == '/')
+                trimmed.remove_suffix(1);
+            common::InputFileStat st;
+            if (common::stat_input(dstd::Path(dstd::String(trimmed)), st) &&
+                !st.is_regular_file)
+                folders.emplace_back(trimmed);
+        }
+    }
+    const auto index_root = [&](dstd::StringView path) -> dstd::String {
+        for (const dstd::String& folder : folders) {
+            if (!path.starts_with(folder) || path.size() <= folder.size() ||
+                path[folder.size()] != '/')
+                continue;
+            dstd::StringView at = path.substr(0, path.rfind('/'));
+            while (at.size() >= folder.size()) {
+                if (common::input_exists(
+                        trace::index::store_of(dstd::String(at))))
+                    return dstd::String(at);
+                const std::size_t slash = at.rfind('/');
+                if (slash == dstd::StringView::npos) break;
+                at = at.substr(0, slash);
+            }
+        }
+        return internal::determine_index_path(dstd::String(path), index_dir);
+    };
+
     dstd::Vector<ViewFile> files;
     files.reserve(expanded->files.size());
     for (auto& path : expanded->files) {
-        const dstd::String index =
-            internal::determine_index_path(path, index_dir);
+        const dstd::String index = index_root(path);
         ViewFile vf{std::move(path), dstd::String(index.data(), index.size())};
         vf.format = format;
         files.push_back(std::move(vf));

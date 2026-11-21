@@ -51,6 +51,13 @@ def _libs() -> tuple[types.ModuleType, types.ModuleType, types.ModuleType]:
     return np, pd, pa
 
 
+def _pandas_libs() -> tuple[types.ModuleType, types.ModuleType]:
+    import numpy as np
+    import pandas as pd
+
+    return np, pd
+
+
 # -- encoding ---------------------------------------------------------------
 
 
@@ -58,7 +65,7 @@ def _scalar(value: object) -> object:
     """The JSON value of one element of a set or list cell. A NaN or infinity
     element would read back as the string it is written as, so it is
     refused."""
-    np, pd, _ = _libs()
+    np, pd = _pandas_libs()
     if value is None or value is pd.NA or value is pd.NaT:
         return None
     if isinstance(value, np.generic):
@@ -87,7 +94,7 @@ def _object_cells(name: str, values: pd.Series) -> tuple[str | None, list[str | 
     if len(kinds) > 1:
         raise ValueError(f"column {name!r} mixes sets and lists")
     elem = kinds.pop() if kinds else None
-    _, pd, _ = _libs()
+    _, pd = _pandas_libs()
     cells: list[str | None] = []
     for v in values:
         if v is None or v is pd.NA or (isinstance(v, float) and math.isnan(v)):
@@ -113,7 +120,7 @@ def _object_cells(name: str, values: pd.Series) -> tuple[str | None, list[str | 
 def _category_labels(name: str, categories: pd.Index) -> tuple[list[object], str]:
     """The JSON labels of a category column and their kind: ``"str"``, ``"int"``
     or ``"float"``. Labels the format cannot carry are refused."""
-    np, pd, _ = _libs()
+    np, pd = _pandas_libs()
     dtype = categories.dtype
     if len(categories) == 0:
         return [], "str"
@@ -132,43 +139,6 @@ def _category_labels(name: str, categories: pd.Index) -> tuple[list[object], str
     if all(isinstance(c, str) for c in categories):
         return list(categories), "str"
     raise TypeError(f"column {name!r}: categories must be all str or all numbers")
-
-
-def _arrow_numeric(series: pd.Series) -> pa.Array:
-    np, pd, pa = _libs()
-    dtype = series.dtype
-    if isinstance(dtype, np.dtype):
-        return pa.array(series.to_numpy(), from_pandas=False)
-    if isinstance(dtype, pd.ArrowDtype):
-        arr = pa.array(series.array)
-        return arr.combine_chunks() if isinstance(arr, pa.ChunkedArray) else arr
-    numpy_dtype = getattr(dtype, "numpy_dtype", None)
-    if numpy_dtype is not None:
-        fill = False if numpy_dtype == np.dtype(bool) else 0
-        data = series.array.to_numpy(dtype=numpy_dtype, na_value=fill)
-        return pa.array(data, mask=series.isna().to_numpy(), from_pandas=False)
-    raise TypeError(f"dtype {dtype} cannot be stored in a table")
-
-
-def _check_dtype(name: str, dtype: object) -> None:
-    np, pd, pa = _libs()
-    if isinstance(dtype, np.dtype):
-        if dtype.kind in "iub" or (dtype.kind == "f" and dtype.itemsize in (4, 8)):
-            return
-    elif isinstance(dtype, pd.ArrowDtype):
-        t = dtype.pyarrow_dtype
-        if (
-            pa.types.is_integer(t)
-            or pa.types.is_boolean(t)
-            or pa.types.is_string(t)
-            or pa.types.is_large_string(t)
-        ) or (pa.types.is_floating(t) and not pa.types.is_float16(t)):
-            return
-    elif isinstance(dtype, (pd.CategoricalDtype, pd.StringDtype)):
-        return
-    elif getattr(dtype, "numpy_dtype", None) is not None and getattr(dtype, "kind", "") in "iufb":
-        return
-    raise TypeError(f"column {name!r} has dtype {dtype}, which a table cannot store")
 
 
 def _arrow_alias(name: str, dtype: pd.ArrowDtype) -> str:
@@ -190,99 +160,100 @@ def _dtype_text(dtype: object) -> str:
     """The dtype string of a header field. A StringDtype that has NA as its
     missing value names its storage, as ``string[pyarrow]`` or
     ``string[python]``."""
-    _, pd, _ = _libs()
+    _, pd = _pandas_libs()
     if isinstance(dtype, pd.StringDtype) and dtype.na_value is pd.NA:
         return f"string[{dtype.storage}]"
     return str(dtype)
 
 
-def _prepare(
-    df: pd.DataFrame, name: str, meta: Meta | None, keep_index: bool = False
-) -> tuple[Header, pa.Table, list[str]]:
-    np, pd, pa = _libs()
-    if not isinstance(df, pd.DataFrame):
-        raise TypeError(f"expected a pandas or dftracer.utils DataFrame, got {type(df).__name__}")
-    index = df.index
-    default = (
-        isinstance(index, pd.RangeIndex)
-        and index.name is None
-        and index.start == 0
-        and index.step == 1
-        and index.stop == len(df)
-    )
-    if default and not keep_index:
-        index_fields: list[str] = []
-        flat = df
-    else:
-        for level in index.names:
-            if level is not None and not isinstance(level, (str, int)):
-                raise TypeError(f"index level name {level!r} cannot be stored in a table")
-        index_fields = [
-            f"__index_level_{i}__" if n is None else str(n) for i, n in enumerate(index.names)
-        ]
-        clash = set(index_fields) & {str(c) for c in df.columns}
-        if clash or len(set(index_fields)) != len(index_fields):
-            raise ValueError(
-                f"table {name!r}: index level names {index_fields} collide with column names "
-                f"{sorted(clash)} or with each other"
-            )
-        flat = df.rename_axis(index_fields).reset_index()
-    columns = [str(c) for c in flat.columns]
-    if len(set(columns)) != len(columns):
-        raise ValueError(f"table {name!r}: duplicate field names {columns}")
-    if not columns and len(flat) > 0:
-        raise ValueError("a frame without columns cannot keep its row count")
+def _arrow_describable(dtype: pd.ArrowDtype) -> bool:
+    import pyarrow as pa
 
+    t = dtype.pyarrow_dtype
+    return bool(
+        pa.types.is_integer(t)
+        or pa.types.is_boolean(t)
+        or pa.types.is_string(t)
+        or pa.types.is_large_string(t)
+        or (pa.types.is_floating(t) and not pa.types.is_float16(t))
+    )
+
+
+def _pandas_field(name: str, series: pd.Series) -> tuple[dict[str, object], pd.Series] | None:
+    """The header field of one pandas column and the column to import (an object
+    column of sets or lists as the JSON text of its cells). None for a dtype a table cannot describe, which the frame's
+    schema then decides when it is written. Raises ``TypeError`` or
+    ``ValueError`` for a value the format refuses."""
+    np, pd = _pandas_libs()
+    dtype = series.dtype
+    field: dict[str, object] = {"name": name, "dtype": _dtype_text(dtype)}
+    if isinstance(dtype, pd.CategoricalDtype):
+        labels, _ = _category_labels(name, dtype.categories)
+        field["categories"] = labels
+        field["categories_dtype"] = str(dtype.categories.dtype)
+        field["ordered"] = bool(dtype.ordered)
+        return field, series
+    if dtype == np.dtype(object):
+        elem, cells = _object_cells(name, series)
+        if elem is None:
+            return field, series
+        field["elem"] = elem
+        return field, pd.Series(cells, index=series.index, dtype=object)
+    if isinstance(dtype, pd.StringDtype):
+        return field, series
+    if isinstance(dtype, pd.ArrowDtype):
+        if not _arrow_describable(dtype):
+            return None
+        field["arrow_type"] = _arrow_alias(name, dtype)
+        return field, series
+    if isinstance(dtype, np.dtype):
+        if dtype.kind in "iub" or (dtype.kind == "f" and dtype.itemsize in (4, 8)):
+            return field, series
+        return None
+    if getattr(dtype, "numpy_dtype", None) is not None and getattr(dtype, "kind", "") in "iufb":
+        return field, series
+    return None
+
+
+def _describe_pandas(
+    df: pd.DataFrame,
+    columns: list[tuple[str, pd.Series]],
+    levels: list[tuple[str, pd.Series]],
+) -> tuple[list[tuple[str, pd.Series]], Header | None]:
+    """The columns ``DataFrame.from_pandas`` imports for ``df`` and the table
+    header that describes them, built from the pandas dtypes with no Arrow
+    conversion, so ``write_table`` stores every dtype, category and set or list
+    cell and ``to_pandas`` gives ``df`` back. The header is None when one column
+    has a dtype a table cannot describe; the schema path then decides."""
+    for level in df.index.names if levels else ():
+        if level is not None and not isinstance(level, (str, int)):
+            raise TypeError(f"index level name {level!r} cannot be stored in a table")
     fields: list[dict[str, object]] = []
-    arrays: list[Any] = []
-    raw_columns: list[str] = []
-    for position, col in enumerate(columns):
-        series = flat.iloc[:, position]
-        dtype = series.dtype
-        field: dict[str, object] = {"name": col, "dtype": _dtype_text(dtype)}
-        if isinstance(dtype, pd.ArrowDtype):
-            field["arrow_type"] = _arrow_alias(col, dtype)
-        if isinstance(dtype, pd.CategoricalDtype):
-            labels, kind = _category_labels(col, dtype.categories)
-            field["categories"] = labels
-            field["categories_dtype"] = str(dtype.categories.dtype)
-            field["ordered"] = bool(dtype.ordered)
-            codes = series.cat.codes.to_numpy()
-            mask = codes < 0
-            if labels:
-                pa_type = {"str": pa.string(), "int": pa.int64(), "float": pa.float64()}[kind]
-                np_type = {"str": object, "int": "int64", "float": "float64"}[kind]
-                taken = dtype.categories.to_numpy(dtype=np_type)
-                values = taken.take(np.where(mask, 0, codes))
-                arrays.append(pa.array(values, mask=mask, type=pa_type, from_pandas=False))
-            else:
-                arrays.append(pa.nulls(len(series), type=pa.string()))
-        elif dtype == np.dtype(object):
-            elem, cells = _object_cells(col, series)
-            if elem:
-                field["elem"] = elem
-                raw_columns.append(col)
-            arrays.append(pa.array(cells, type=pa.string()))
-        elif isinstance(dtype, pd.StringDtype):
-            values = series.to_numpy(dtype=object)
-            arrays.append(
-                pa.array(values, mask=series.isna().to_numpy(), type=pa.string(), from_pandas=False)
-            )
-        else:
-            _check_dtype(col, dtype)
-            arrays.append(_arrow_numeric(series))
+    imported: list[tuple[str, pd.Series]] = []
+    describable = True
+    for name, series in columns + levels:
+        described = _pandas_field(name, series)
+        if described is None:
+            describable = False
+            imported.append((name, series))
+            continue
+        field, column = described
         fields.append(field)
+        imported.append((name, column))
+    if not describable:
+        return imported, None
+    index_fields = [n for n, _ in levels]
     header: Header = {
         "format": "dftu.table",
         "format_version": _ext.TABLE_FORMAT_VERSION,
-        "table": name,
-        "nrows": len(flat),
+        "table": "",
+        "nrows": len(df),
         "index": index_fields,
-        "index_names": [None if n is None else n for n in index.names] if index_fields else [],
+        "index_names": [None if n is None else n for n in df.index.names] if levels else [],
         "fields": fields,
-        "meta": meta or {},
+        "meta": {},
     }
-    return header, pa.Table.from_arrays(arrays, names=columns), raw_columns
+    return imported, header
 
 
 def _is_text(t: pa.DataType) -> bool:
@@ -345,21 +316,6 @@ def _prepare_native(df: DataFrame, name: str, meta: Meta | None) -> Header:
     }
 
 
-def _frame_from_pandas(
-    df: pd.DataFrame, name: str, meta: Meta | None = None, keep_index: bool = False
-) -> DataFrame:
-    """A native frame carrying the exact table header of a pandas frame, so
-    ``frame.write_table(path)`` stores every dtype, category, Arrow type and set or
-    list cell of ``df`` and ``frame.to_pandas()`` gives ``df`` back. A pandas
-    default ``RangeIndex`` is not stored unless ``keep_index``; any other index
-    becomes leading fields. Raises ``TypeError`` for a column the format cannot
-    carry and ``ValueError`` for duplicate column names, colliding index
-    names, infinite or above-int64 category labels, or a column that mixes
-    sets and lists."""
-    header, table, _ = _prepare(df, name, meta, keep_index)
-    return _with_header(DataFrame.from_arrow(table), header)
-
-
 def _write_header(
     df: DataFrame, name: str | None, stem: str, meta: Meta | None
 ) -> tuple[Header, list[str]]:
@@ -387,6 +343,8 @@ def _write_header(
 
 def _flat(column: pa.ChunkedArray) -> pa.Array:
     _, _, pa = _libs()
+    if pa.types.is_dictionary(column.type):
+        column = column.cast(column.type.value_type)
     if column.num_chunks == 1:
         return column.chunk(0)
     return pa.concat_arrays(column.chunks) if column.num_chunks else pa.array([], type=column.type)

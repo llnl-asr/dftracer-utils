@@ -365,9 +365,13 @@ struct Session {
     ExprPtr max;
     dstd::String as;
 };
-/// `sink "name" key "value" ...`: the rows go to the registered sink `name`,
-/// which ends the pipeline.
+/// `sink "name" key "value" ...`, `sink trace "path" key "value" ...` or
+/// `sink table "path" key "value" ...`: the rows go to the registered plugin
+/// sink `name`, or are written as a DFTracer trace or table at `name` (the
+/// path). It ends the pipeline.
 struct Sink {
+    enum class Kind : std::uint8_t { Plugin, Trace, Table };
+    Kind kind = Kind::Plugin;
     dstd::String name;
     dstd::Vector<dstd::Pair<dstd::String, dstd::String>> options;
 };

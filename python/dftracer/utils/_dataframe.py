@@ -503,16 +503,30 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         :meth:`Series.from_pandas`). A non-default index becomes columns after the
         data columns, named by its levels or ``__index_level_<i>__``, and the
         frame's row index (:meth:`index_names`); the default ``RangeIndex`` (``0 .. n-1``
-        with step 1) is no index, any other range is labels."""
+        with step 1) is no index, any other range is labels.
+
+        The frame also carries the table header its pandas dtypes describe (width,
+        nullable and Arrow dtypes, categories and their order, set and list
+        cells, built with no Arrow conversion), so :meth:`write_table` stores
+        them and ``to_pandas`` gives ``df`` back until a plan changes the
+        frame. A frame with a dtype a table cannot describe, such as a
+        datetime, carries none and is written from its schema."""
         columns = [(str(name), df[name]) for name in df.columns]
         if len({n for n, _ in columns}) != len(columns):
-            raise ValueError("from_pandas: column names are not unique")
+            raise ValueError("from_pandas: duplicate column names")
         levels = index_columns(df)
         names = [n for n, _ in levels]
         if len({n for n, _ in columns + levels}) != len(columns) + len(levels):
-            raise ValueError("from_pandas: an index level repeats a column name")
-        frame = _frame_of(columns + levels, Series.from_pandas)
-        return _bound(_ext.DataFrame.with_index(frame, names)) if names else frame
+            raise ValueError("from_pandas: an index level name collides with a column name")
+        from ._table import _describe_pandas
+
+        imported, header = _describe_pandas(df, columns, levels)
+        frame = _frame_of(imported, Series.from_pandas)
+        if names:
+            frame = _bound(_ext.DataFrame.with_index(frame, names))
+        if header is not None:
+            frame._table_header = header
+        return frame
 
     @classmethod
     def from_polars(cls, df: pl.DataFrame) -> DataFrame:
@@ -2064,7 +2078,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
     # END GENERATED aliases
 
 
-def _frame_of(columns: list[tuple[str, object]], read: Callable[[Any], Series]) -> DataFrame:
+def _frame_of(columns: Sequence[tuple[str, object]], read: Callable[[Any], Series]) -> DataFrame:
     """A frame of ``read(value)`` for each ``(name, value)``."""
     return DataFrame(
         _ext._dataframe_from_columns([n for n, _ in columns], [read(v) for _, v in columns])

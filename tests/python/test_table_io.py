@@ -9,6 +9,8 @@ import json
 import math
 import os
 import re
+import subprocess
+import sys
 
 import pytest
 
@@ -19,7 +21,6 @@ pa = pytest.importorskip("pyarrow")
 import dftracer.utils as dftu  # noqa: E402
 from dftracer.utils import DataFrame, TraceWriteOptions  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
-from dftracer.utils._table import _frame_from_pandas  # noqa: E402
 from dftracer.utils.trace import TraceViewer  # noqa: E402
 
 REFERENCE = os.environ.get("DFTRACER_UTILS_DFANALYZER_TABLE_REF")
@@ -30,7 +31,7 @@ U64_MAX = 2**64 - 1
 def save_table(df, path, *, name, meta=None, level=6):
     """Write a pandas or native frame as one table, replacing the target."""
     if isinstance(df, pd.DataFrame):
-        frame = _frame_from_pandas(df, name, meta)
+        frame = DataFrame.from_pandas(df)
     elif isinstance(df, DataFrame):
         frame = df
     else:
@@ -478,7 +479,7 @@ def test_a_failed_write_leaves_nothing(tmp_path):
 def test_a_folder_of_parts_round_trips(tmp_path):
     df = pd.DataFrame({"a": np.arange(10, dtype="int64"), "s": [f"v{i}" for i in range(10)]})
     folder = str(tmp_path / "parts")
-    summary = _frame_from_pandas(df, "t").write_table(folder, name="t", part_size=4)
+    summary = DataFrame.from_pandas(df).write_table(folder, name="t", part_size=4)
     assert (summary.rows, summary.part_count, summary.kind) == (10, 3, "records")
     files = sorted(f for f in os.listdir(folder) if f.startswith("part-"))
     assert files == ["part-00000.pfw.gz", "part-00001.pfw.gz", "part-00002.pfw.gz"]
@@ -487,7 +488,7 @@ def test_a_folder_of_parts_round_trips(tmp_path):
     back = read_pandas(folder)
     pd.testing.assert_frame_equal(back, df, **EQUAL)
     with pytest.raises(FileExistsError):
-        _frame_from_pandas(df, "t").write_table(folder, name="t", part_size=4)
+        DataFrame.from_pandas(df).write_table(folder, name="t", part_size=4)
 
 
 def test_folder_parts_must_agree(tmp_path):
@@ -590,7 +591,7 @@ def test_non_string_index_names_and_collisions(tmp_path):
     assert list(back.index.names) == [0] and back["v"].tolist() == [1, 2]
 
     clash = pd.DataFrame({"__index_level_0__": [1]}, index=pd.Index([5]))
-    with pytest.raises(ValueError, match="'t'.*collide"):
+    with pytest.raises(ValueError, match="collides"):
         save_table(clash, path, name="t")
     named = pd.DataFrame({"k": [1]}, index=pd.Index([5], name="k"))
     with pytest.raises(ValueError, match="collide"):
@@ -657,7 +658,7 @@ def test_a_partitioned_failure_leaves_nothing(tmp_path):
     folder = tmp_path / "parts"
     part = pd.DataFrame({"a": np.arange(4)}).assign(t=pd.to_timedelta(np.arange(4), unit="s"))
     with pytest.raises(TypeError):
-        _frame_from_pandas(part, "t").write_table(str(folder), part_size=2)
+        DataFrame.from_pandas(part).write_table(str(folder), part_size=2)
     assert not folder.exists() and os.listdir(tmp_path) == []
 
 
@@ -767,7 +768,7 @@ def test_a_folder_with_text_columns_restores_exactly(tmp_path):
 def test_a_folder_of_parts_keeps_a_string_category(tmp_path):
     df = pd.DataFrame({"a": np.arange(8, dtype="int64"), "c": pd.Categorical(list("abababab"))})
     folder = str(tmp_path / "parts")
-    _frame_from_pandas(df, "t").write_table(folder, name="t", part_size=4)
+    DataFrame.from_pandas(df).write_table(folder, name="t", part_size=4)
     back = load_table(folder).to_pandas()
     assert isinstance(back["c"].dtype, pd.CategoricalDtype)
     assert back["c"].astype(object).tolist() == list("abababab")
@@ -839,3 +840,39 @@ def test_a_native_frame_keeps_nan_apart_from_null_on_write(tmp_path):
     back = load_table(path)
     values = back["x"].to_list()
     assert values[0] == 1.0 and math.isnan(values[1]) and values[2] is None and values[3] == 2.5
+
+
+def test_from_pandas_describes_the_frame_without_pyarrow():
+    code = """
+import sys
+sys.modules["pyarrow"] = None
+import numpy as np
+import pandas as pd
+from dftracer.utils import DataFrame
+
+df = pd.DataFrame(
+    {
+        "i8": np.arange(3, dtype="int8"),
+        "u32": np.arange(3, dtype="uint32"),
+        "f32": np.arange(3, dtype="float32"),
+        "n": pd.array([1, None, 3], dtype="Int16"),
+        "b": pd.array([True, None, False], dtype="boolean"),
+        "s": ["a", None, "c"],
+        "c": pd.Categorical(["x", "y", None], categories=["y", "x"], ordered=True),
+        "sets": pd.Series([{1}, set(), None], dtype=object),
+    }
+)
+df.index = pd.Index([5, 6, 7], name="k")
+header = DataFrame.from_pandas(df)._table_header
+fields = {f["name"]: f for f in header["fields"]}
+assert header["index"] == ["k"] and header["nrows"] == 3
+assert fields["i8"]["dtype"] == "int8" and fields["u32"]["dtype"] == "uint32"
+assert fields["f32"]["dtype"] == "float32" and fields["n"]["dtype"] == "Int16"
+assert fields["b"]["dtype"] == "boolean"
+assert fields["c"]["categories"] == ["y", "x"] and fields["c"]["ordered"] is True
+assert fields["sets"]["elem"] == "set"
+dated = pd.DataFrame({"t": pd.to_datetime(["2020-01-01"])})
+assert not hasattr(DataFrame.from_pandas(dated), "_table_header")
+"""
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

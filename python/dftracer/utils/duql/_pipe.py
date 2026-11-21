@@ -319,13 +319,33 @@ class Pipe:
         return self._stage("call " + call.raw())
 
     def sink(self, name: str, **options: str) -> Pipe:
-        """Ends the pipeline by writing its rows to the sink ``name``, e.g.
-        ``sink("csv", path="out.csv")``. Every option is a string: the sink
+        """Ends the pipeline by writing its rows to the plugin sink ``name``,
+        e.g. ``sink("csv", path="out.csv")``. Every option is a string: the sink
         reads them as text. A sink is the last stage of a pipeline, so a stage
-        after it does not parse."""
+        after it does not parse. :meth:`sink_trace` and :meth:`sink_table` write
+        DFTracer files."""
         if not isinstance(name, str):
             raise TypeError(f"a sink name must be a str, not {type(name).__name__}")
-        text = "sink " + duql_string(name)
+        return self._sink_text("sink " + duql_string(name), options)
+
+    def sink_trace(self, path: str, **options: str) -> Pipe:
+        """Ends the pipeline by writing its rows as a DFTracer trace at
+        ``path``, e.g. ``sink_trace("out", partition_by="cat")``. The options
+        are the arguments of ``LazyFrame.sink_trace`` as strings, with
+        ``partition_by`` a comma separated list."""
+        if not isinstance(path, str):
+            raise TypeError(f"a sink path must be a str, not {type(path).__name__}")
+        return self._sink_text("sink trace " + duql_string(path), options)
+
+    def sink_table(self, path: str, **options: str) -> Pipe:
+        """Ends the pipeline by writing its rows as a ``dftu.table`` file at
+        ``path``; the options are those of :meth:`sink_trace` and ``name`` and
+        ``meta``."""
+        if not isinstance(path, str):
+            raise TypeError(f"a sink path must be a str, not {type(path).__name__}")
+        return self._sink_text("sink table " + duql_string(path), options)
+
+    def _sink_text(self, text: str, options: Mapping[str, str]) -> Pipe:
         for key, value in options.items():
             if not isinstance(value, str):
                 raise TypeError(f"sink option {key!r} must be a str, not {type(value).__name__}")

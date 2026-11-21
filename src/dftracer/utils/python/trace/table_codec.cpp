@@ -2,6 +2,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -28,10 +29,7 @@ namespace {
 // Streams the plan into the writer and commits it.
 dftracer::utils::coro::CoroTask<
     dftracer::utils::dstd::Result<trace::writer::OutputSummary>>
-sink_plan(dataframe::LazyFrame lf, trace::writer::OutputOptions options) {
-    auto opening = trace::writer::OutputWriter::open(std::move(options));
-    if (!opening) co_return opening.error();
-    trace::writer::OutputWriter out = std::move(*opening);
+sink_plan_write(dataframe::LazyFrame lf, trace::writer::OutputWriter *out) {
     auto gen = lf.stream(0);
     for (;;) {
         auto settled = co_await gen.settled_next();
@@ -41,20 +39,54 @@ sink_plan(dataframe::LazyFrame lf, trace::writer::OutputOptions options) {
         if (!*settled.value) break;
         auto &next_frame = **settled.value;
         if (!next_frame) co_return next_frame.error();
-        auto writing = out.write(*next_frame);
+        auto writing = out->write(*next_frame);
         auto written = co_await std::move(writing);
         if (!written) co_return written.error();
     }
-    auto closing = out.close();
+    auto closing = out->close();
     co_return co_await std::move(closing);
 }
 
+dftracer::utils::coro::CoroTask<
+    dftracer::utils::dstd::Result<trace::writer::OutputSummary>>
+sink_plan_run(dataframe::LazyFrame lf, trace::writer::OutputOptions options,
+              coro::Scope *scope) {
+    auto opening = trace::writer::OutputWriter::open(std::move(options));
+    if (!opening) co_return opening.error();
+    trace::writer::OutputWriter out = std::move(*opening);
+    out.bind_scope(*scope);
+    auto writing = sink_plan_write(std::move(lf), &out);
+    auto settled = co_await coro::settle(std::move(writing));
+    if (settled.error || settled.stopped || !*settled.value) {
+        auto aborting = out.abort();
+        co_await std::move(aborting);
+        if (settled.stopped) co_await coro::stop_here();
+        if (settled.error)
+            co_return dstd::Unexpected(std::move(*settled.error));
+        co_return std::move(*settled.value);
+    }
+    co_return std::move(*settled.value);
+}
+
+dftracer::utils::coro::CoroTask<
+    dftracer::utils::dstd::Result<trace::writer::OutputSummary>>
+sink_plan(dataframe::LazyFrame lf, trace::writer::OutputOptions options) {
+    auto running =
+        coro::with_scope([lf = std::move(lf), options = std::move(options)](
+                             coro::Scope &scope) mutable {
+            return sink_plan_run(std::move(lf), std::move(options), &scope);
+        });
+    co_return co_await std::move(running);
+}
+
 // _sink_output(plan, path, kind, mode, compress, level, member_size,
-//              part_size, build_index, header_args, raw_columns, known_rows,
-//              runtime) -> (root, rows, files)
+//              part_size, partition_by, max_open_files, max_partitions,
+//              build_index, header_args, raw_columns, known_rows, runtime)
+//              -> (root, rows, files)
 PyObject *sink_output_py(PyObject *, PyObject *args) {
     PyObject *plan_obj = nullptr;
     PyObject *raw_obj = nullptr;
+    PyObject *partition_obj = nullptr;
     PyObject *runtime_obj = nullptr;
     const char *path = nullptr;
     const char *kind = nullptr;
@@ -65,9 +97,12 @@ PyObject *sink_output_py(PyObject *, PyObject *args) {
     int build_index = 1;
     Py_ssize_t member_size = 0;
     Py_ssize_t part_size = 0;
+    Py_ssize_t max_open_files = 64;
+    Py_ssize_t max_partitions = 0;
     long long known_rows = -1;
-    if (!PyArg_ParseTuple(args, "OssspinnpzOLO", &plan_obj, &path, &kind, &mode,
-                          &compress, &level, &member_size, &part_size,
+    if (!PyArg_ParseTuple(args, "OssspinnOnnpzOLO", &plan_obj, &path, &kind,
+                          &mode, &compress, &level, &member_size, &part_size,
+                          &partition_obj, &max_open_files, &max_partitions,
                           &build_index, &header, &raw_obj, &known_rows,
                           &runtime_obj))
         return nullptr;
@@ -76,6 +111,11 @@ PyObject *sink_output_py(PyObject *, PyObject *args) {
     dstd::Vector<dstd::String> raw_names;
     if (!python::core::parse_string_seq(
             raw_obj, "raw_columns must be a sequence of str", raw_names))
+        return nullptr;
+    dstd::Vector<dstd::String> partition_names;
+    if (!python::core::parse_string_seq(
+            partition_obj, "partition_by must be a sequence of str",
+            partition_names))
         return nullptr;
     auto rt = runtime_from_arg(runtime_obj);
     if (!rt) return nullptr;
@@ -91,6 +131,9 @@ PyObject *sink_output_py(PyObject *, PyObject *args) {
     options.level = level;
     options.member_size = static_cast<std::size_t>(member_size);
     options.part_size = static_cast<std::size_t>(part_size);
+    options.partition_by = std::move(partition_names);
+    options.max_open_files = static_cast<std::size_t>(max_open_files);
+    options.max_partitions = static_cast<std::size_t>(max_partitions);
     options.build_index = build_index != 0;
     if (header) {
         options.header_args_json = dstd::String(header);
@@ -158,8 +201,10 @@ PyMethodDef COUNTERS_DEF = {
 PyMethodDef SINK_DEF = {
     "_sink_output", sink_output_py, METH_VARARGS,
     "_sink_output(plan, path, kind, mode, compress, level, member_size, "
-    "part_size, build_index, header_args, raw_columns, known_rows, runtime) "
-    "-> (root, rows, files)\n\nWrite a plan's rows as events or records."};
+    "part_size, partition_by, max_open_files, max_partitions, build_index, "
+    "header_args, "
+    "raw_columns, known_rows, runtime) -> (root, rows, files)\n\nWrite a "
+    "plan's rows as events or records."};
 
 }  // namespace
 

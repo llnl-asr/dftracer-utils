@@ -1046,11 +1046,22 @@ class Parser {
             }
             s.node = std::move(ss);
         } else if (kw == "sink") {
-            if (!at(Tok::String))
-                return fail(cur(), "Expected a quoted sink name after 'sink'");
+            Sink k;
+            if (at(Tok::Name) &&
+                (cur().text == "trace" || cur().text == "table")) {
+                k.kind = advance().text == "trace" ? Sink::Kind::Trace
+                                                   : Sink::Kind::Table;
+                if (!at(Tok::String))
+                    return fail(cur(),
+                                "Expected a quoted path after 'sink trace' "
+                                "or 'sink table'");
+            } else if (!at(Tok::String)) {
+                return fail(cur(),
+                            "Expected a quoted sink name after 'sink', or "
+                            "'trace' or 'table' and a quoted path");
+            }
             auto sink_name = string_value(advance());
             if (!sink_name) return dstd::Unexpected(sink_name.error());
-            Sink k;
             k.name = std::move(*sink_name);
             while (at(Tok::Name)) {
                 dstd::String key(advance().text);

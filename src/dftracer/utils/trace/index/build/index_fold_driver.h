@@ -348,8 +348,15 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
     /// every declared field, and they are as many as the header says. Complete
     /// once flush() has stepped every piece.
     bool table_rows_complete(std::uint64_t total_lines) const {
-        return table_ && dropped_lines_ == 0 && table_->nrows() >= 0 &&
-               table_rows_ == static_cast<std::uint64_t>(table_->nrows()) &&
+        return table_ && table_rows_complete(total_lines, table_->nrows());
+    }
+
+    /// The same for a header that holds `header_rows` as its row count, for a
+    /// writer that patches the header after the rows.
+    bool table_rows_complete(std::uint64_t total_lines,
+                             std::int64_t header_rows) const {
+        return table_ && dropped_lines_ == 0 && header_rows >= 0 &&
+               table_rows_ == static_cast<std::uint64_t>(header_rows) &&
                total_lines == table_rows_ + 1;
     }
 

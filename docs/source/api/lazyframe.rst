@@ -13,6 +13,8 @@ until ``collect`` (see :doc:`../columnar-engine` and :doc:`../quickstart`).
 
 .. autofunction:: dftracer.utils.scan_file
 
+.. autofunction:: dftracer.utils.concat
+
 See also
 --------
 

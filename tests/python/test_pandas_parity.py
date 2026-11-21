@@ -595,6 +595,10 @@ def _receiver(kind, letter, side):
 def _run(kind, method, letter, args, kwargs, side):
     recv = _receiver(kind, letter, side)
     kwargs = dict(kwargs)
+    # pandas sorts ties with numpy quicksort, whose tie order differs by
+    # platform; ours is stable, so ask pandas for the stable order.
+    if side == "pandas" and kind == "series" and method in ("argsort", "sort_values"):
+        kwargs.setdefault("kind", "stable")
     if kind == "groupby":
         recv = recv.groupby("k")
     target = recv.str if kind == "str" else recv

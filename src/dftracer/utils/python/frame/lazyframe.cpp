@@ -1038,7 +1038,10 @@ PyObject* LazyFrame_stream(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!rt) return nullptr;
     auto state = dftracer::utils::dstd::make_shared<
         python::trace::StreamingState<dataframe::DataFrame>>(
-        dftracer::utils::common::compute_memory_budget(0));
+        dftracer::utils::common::compute_memory_budget(
+            b->lf.memory_budget() == dftracer::utils::memory::NO_SPILL_BUDGET
+                ? 0
+                : b->lf.memory_budget()));
     auto* it = reinterpret_cast<python::trace::ArrowStreamingIteratorObject*>(
         python::trace::ArrowStreamingIteratorType.tp_new(
             &python::trace::ArrowStreamingIteratorType, nullptr, nullptr));

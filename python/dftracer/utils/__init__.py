@@ -32,14 +32,13 @@ from ._lazyframe import (  # noqa: F401
     LazyFrame,
     LazyResult,
     LazyScalar,
-    SinkSummary,
     collect_all,
     lazy,
     scan_file,
 )
 from ._public import set_home as _set_home
 from ._series import Series  # noqa: F401
-from ._table import TableWriter, read_table, write_table  # noqa: F401
+from ._sink import SinkSummary, TraceWriteOptions  # noqa: F401
 from ._tz import install_search_path as _install_tz_search_path
 
 try:
@@ -80,12 +79,10 @@ __all__ = [
     "LazyScalar",
     "BoundColumn",
     "SinkSummary",
+    "TraceWriteOptions",
     "DType",
     "TimeUnit",
     "GroupKey",
-    "read_table",
-    "write_table",
-    "TableWriter",
     "scan_file",
 ]
 

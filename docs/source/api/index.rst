@@ -33,7 +33,7 @@ The dftracer utilities Python package provides the following main modules:
 
 - :doc:`trace_viewer` - **TraceViewer**, the primary lazy, Arrow-first query API (filter, group_by, agg, collect)
 - :doc:`trace_writer` - **TraceWriter**, which writes DFTracer records to a gzip or plain trace file
-- :doc:`table` - **write_table**, **read_table** and **TableWriter**, which store a pandas frame as a typed gzip JSON-lines file
+- :doc:`table` - **DataFrame.write**, **LazyFrame.sink** and **TraceViewer.sink**, which store frames and plans as typed gzip JSON-lines files or DFTracer events
 - :doc:`duql` - The duql filter builder used by TraceViewer
 - :doc:`columnar` - The value-expression DSL (``col``/``F``/``lit``, ``Agg``, ``GroupBy``, ``eval_many``) over the DataFrame engine
 - :doc:`dataframe` - **DataFrame**, the columnar frame type (the relational and

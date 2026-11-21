@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Two kinds of version. The release version names a tagged state of the repo:
 # setuptools_scm hands it to scikit-build-core as SKBUILD_PROJECT_VERSION, and a
-# plain CMake build asks git. The interface versions (api, abi, index, duql) are
+# plain CMake build asks git. The interface versions (api, abi, index, table, duql) are
 # set by hand in the VERSION file and change only when that interface changes.
 # duql is MAJOR.MINOR: a query that declares a version needs the same major and
 # a minor no greater than the engine's.
@@ -66,6 +66,7 @@ function(dftracer_utils_interface_versions version_file out_include_dir)
   _dftracer_utils_version_line("${version_file}" api "${_xyz}" _api)
   _dftracer_utils_version_line("${version_file}" abi "${_xyz}" _abi)
   _dftracer_utils_version_line("${version_file}" index "[0-9]+" _index)
+  _dftracer_utils_version_line("${version_file}" table "[0-9]+\\.[0-9]+" _table)
   _dftracer_utils_version_line("${version_file}" duql "[0-9]+\\.[0-9]+" _duql)
 
   string(REPLACE "." ";" _api_parts "${_api}")
@@ -75,6 +76,9 @@ function(dftracer_utils_interface_versions version_file out_include_dir)
   string(REPLACE "." ";" _duql_parts "${_duql}")
   list(GET _duql_parts 0 _duql_major)
   list(GET _duql_parts 1 _duql_minor)
+  string(REPLACE "." ";" _table_parts "${_table}")
+  list(GET _table_parts 0 _table_major)
+  list(GET _table_parts 1 _table_minor)
   string(REPLACE "." ";" _abi_parts "${_abi}")
   list(GET _abi_parts 0 _abi_major)
   list(GET _abi_parts 1 _abi_minor)
@@ -118,6 +122,9 @@ function(dftracer_utils_interface_versions version_file out_include_dir)
 #define DFTRACER_UTILS_API_VERSION_PATCH ${_api_patch}
 #define DFTRACER_UTILS_API_VERSION_STRING \"${_api}\"
 #define DFTRACER_UTILS_INDEX_FORMAT_VERSION ${_index}
+#define DFTRACER_UTILS_TABLE_FORMAT_VERSION_MAJOR ${_table_major}
+#define DFTRACER_UTILS_TABLE_FORMAT_VERSION_MINOR ${_table_minor}
+#define DFTRACER_UTILS_TABLE_FORMAT_VERSION_STRING \"${_table}\"
 #define DFTRACER_UTILS_DUQL_VERSION_MAJOR ${_duql_major}
 #define DFTRACER_UTILS_DUQL_VERSION_MINOR ${_duql_minor}
 #define DFTRACER_UTILS_DUQL_VERSION_STRING \"${_duql}\"
@@ -137,5 +144,5 @@ function(dftracer_utils_interface_versions version_file out_include_dir)
       "${_abi}"
       PARENT_SCOPE)
   dftracer_utils_item("Interface      "
-                      "api=${_api} abi=${_abi} index=${_index} duql=${_duql}")
+                      "api=${_api} abi=${_abi} index=${_index} table=${_table} duql=${_duql}")
 endfunction()

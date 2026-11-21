@@ -228,9 +228,7 @@ def test_trace_viewer_reads_phase_counts(tmp_path):
             w.write_aggregated("agg", "POSIX", 3000 + i, {"count": 4}, 1, 2)
 
     def count(phase):
-        out = tmp_path / ("out_" + phase + ".json")
-        TraceViewer(str(path)).phase(phase).sink_json(str(out))
-        return len([line for line in read_lines(out) if line.startswith("{")])
+        return TraceViewer(str(path)).phase(phase).collect().height
 
     assert count("events") == 5
     assert count("counters") == 3

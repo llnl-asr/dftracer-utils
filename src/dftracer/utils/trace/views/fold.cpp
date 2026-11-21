@@ -3107,9 +3107,10 @@ coro::CoroTask<dstd::Result<void>> fuse_worker(FuseWorkerCtx ctx,
         }
 
         const std::uint64_t reserve =
-            ctx.units[i].end_byte > ctx.units[i].start_byte
-                ? ctx.units[i].end_byte - ctx.units[i].start_byte
-                : 0;
+            (ctx.units[i].end_byte > ctx.units[i].start_byte
+                 ? ctx.units[i].end_byte - ctx.units[i].start_byte
+                 : 0) *
+            common::constants::scan::UNIT_BYTES_PER_SPAN_BYTE;
         co_await ctx.budget_sem.acquire(reserve);
         ScanPermit permit{ctx.budget_sem, reserve};
         // A narrow() may land while this unit waits for the budget, and with

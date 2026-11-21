@@ -288,6 +288,14 @@ static constexpr std::size_t FILE_IO_BUFFER_SIZE =
 static constexpr std::size_t MAX_READ_DEPTH = 128;
 }  // namespace reader
 
+namespace scan {
+/// Bytes a scan unit holds while it runs, per uncompressed byte of its span:
+/// the text, the parsed events of a batch and the rows built from them. A
+/// unit is admitted against the plan's memory budget by this many times its
+/// span.
+static constexpr std::uint64_t UNIT_BYTES_PER_SPAN_BYTE = 8;
+}  // namespace scan
+
 }  // namespace dftracer::utils::common::constants
 
 #else  // C

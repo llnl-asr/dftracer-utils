@@ -119,6 +119,7 @@ dstd::Optional<Field> resolve(const RawField& raw) {
     }
     if (base == "float") {
         f.kind = Kind::Float;
+        if (suffixed) f.bits = 32;
         return f;
     }
     const auto numeric = [&](dstd::StringView prefix, Kind kind) {
@@ -137,9 +138,39 @@ dstd::Optional<Field> resolve(const RawField& raw) {
     if (base == "float16" || base == "float32" || base == "float64" ||
         base == "Float32" || base == "Float64") {
         f.kind = Kind::Float;
+        if (base == "float32" || base == "Float32") f.bits = 32;
         return f;
     }
     return dstd::nullopt;
+}
+
+// "MAJOR.MINOR" with the engine's major and a minor not above its own. The
+// integer 1 that DFAnalyzer's writer stamps reads as "1.0".
+bool version_readable(json::Value& v) {
+    std::int64_t major = 0;
+    std::int64_t minor = 0;
+    if (auto n = v.as_int()) {
+        major = *n;
+    } else if (auto s = v.as_string()) {
+        const dstd::StringView text = *s;
+        const auto dot = text.find('.');
+        if (dot == dstd::StringView::npos) return false;
+        const auto number = [](dstd::StringView t, std::int64_t& out) {
+            if (t.empty() || t.size() > 6) return false;
+            out = 0;
+            for (const char c : t) {
+                if (c < '0' || c > '9') return false;
+                out = out * 10 + (c - '0');
+            }
+            return true;
+        };
+        if (!number(text.substr(0, dot), major) ||
+            !number(text.substr(dot + 1), minor))
+            return false;
+    } else {
+        return false;
+    }
+    return major == FORMAT_VERSION_MAJOR && minor <= FORMAT_VERSION_MINOR;
 }
 
 }  // namespace
@@ -149,6 +180,7 @@ dstd::Result<Header> parse_header(json::Value& args) {
     dstd::Optional<dstd::Error> err;
     bool format_ok = false;
     bool version_ok = false;
+    dstd::String version_text;
     bool has_nrows = false;
     bool has_fields = false;
     dstd::Vector<RawField> raws;
@@ -159,12 +191,18 @@ dstd::Result<Header> parse_header(json::Value& args) {
             auto s = v.as_string();
             format_ok = s && *s == FORMAT;
         } else if (key == "format_version") {
-            auto n = v.as_int();
-            version_ok = n && *n == FORMAT_VERSION;
+            version_ok = version_readable(v);
+            if (!version_ok) version_text = dstd::String(v.raw());
         } else if (key == "table") {
             if (auto s = v.as_string()) h.table = dstd::String(*s);
         } else if (key == "nrows") {
             auto n = v.as_int();
+            if (n && *n == -1) {
+                err.emplace(ErrorCode::Parse,
+                            "table header nrows is -1: the writer did not "
+                            "finish the file");
+                return;
+            }
             if (!n || *n < 0) {
                 err.emplace(ErrorCode::Parse,
                             "table header nrows is not a count");
@@ -221,8 +259,10 @@ dstd::Result<Header> parse_header(json::Value& args) {
     if (!format_ok)
         return common::make_error(ErrorCode::Parse, "not a dftu.table header");
     if (!version_ok)
-        return common::make_error(ErrorCode::Parse,
-                                  "unknown dftu.table format_version");
+        return common::make_error<
+            "unknown dftu.table format_version {}: this engine reads "
+            "\"{}\"">(ErrorCode::Parse, dstd::StringView(version_text),
+                      FORMAT_VERSION);
     if (!has_nrows || !has_fields)
         return common::make_error(ErrorCode::Parse,
                                   "table header lacks nrows or fields");

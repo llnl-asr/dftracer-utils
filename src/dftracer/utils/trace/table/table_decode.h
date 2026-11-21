@@ -33,6 +33,10 @@ struct Buffer {
     void reserve(std::size_t n);
 };
 
+/// The engine type a field decodes to: the integer width and Float32 the
+/// header names, Float64 for the other floats, Int64 for category labels.
+dataframe::TypeId column_type(const Field& field);
+
 /// The rows of a run of lines, as columns.
 struct Decoded {
     dstd::Vector<dataframe::Series> columns;  ///< one per wanted field

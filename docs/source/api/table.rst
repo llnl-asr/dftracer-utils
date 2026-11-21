@@ -1,47 +1,74 @@
-:description: Reference for write_table, read_table and TableWriter, which store a DataFrame as a typed DFTracer gzip JSON-lines table file and read it back.
+.. meta::
+   :description: Reference for DataFrame.write and TraceViewer, which store a DataFrame as a typed DFTracer table file and read it back.
 
-Tables (write_table, read_table)
-================================
+Tables (DataFrame.write, TraceViewer)
+=====================================
 
-``write_table`` stores a dftracer.utils ``DataFrame`` (or a pandas frame) as one
-DFTracer-style file of JSON lines, and ``read_table`` reads it back as a
-dftracer.utils ``DataFrame``. The file is gzip when the path ends in ``.gz``,
-readable with ``zcat`` and ``jq``, and its members decode in parallel. Encoding
-and decoding run in C++, and ``read_table`` builds no pandas frame.
+``DataFrame.write`` stores a dftracer.utils ``DataFrame`` as DFTracer-style
+files of JSON lines, and ``TraceViewer(path).collect()`` reads them back as a
+dftracer.utils ``DataFrame``. A path ending in ``.pfw.gz`` is one gzip file,
+readable with ``zcat`` and ``jq``, whose members decode in parallel; ``.pfw``
+is plain text; any other path is a folder of ``part-NNNNN.pfw.gz`` files.
+Encoding and decoding run in C++.
 
 .. code-block:: python
 
-   from dftracer.utils import DataFrame, read_table, write_table
+   from dftracer.utils import DataFrame
+   from dftracer.utils.trace import TraceViewer
 
    df = DataFrame.from_dict(
        {"proc": ["a", "b", "a"], "calls": [3, 5, 7], "time": [0.5, 1.5, 2.0]}
    )
-   write_table(df, "frame.pfw.gz", name="frame", meta={"source": "demo"})
-   frame = read_table("frame.pfw.gz")
+   summary = df.write("frame.pfw.gz", name="frame", meta={"source": "demo"}, mode="overwrite")
+   frame = TraceViewer("frame.pfw.gz").collect()
    busy = frame.filter(frame["calls"] > 3)
    totals = frame.group_by("proc").sum()
 
 ``frame.to_pandas()`` with no arguments gives the exact pandas frame that was
-written, with its dtypes, categories, set and list cells and index, because the
-frame ``read_table`` returns carries the table header:
+written, with its dtypes, categories and index, because the frame a table read
+returns carries the table header, and ``write`` stores a header that keeps it.
 
 .. code-block:: python
 
    import pandas as pd
 
-   original = pd.DataFrame(
-       {"a": pd.array([1, None], dtype="Int64"), "s": pd.array(["x", None], dtype="string[python]")}
+   original = DataFrame.from_pandas(
+       pd.DataFrame({"a": pd.array([1, None], dtype="Int64"), "s": ["x", None]})
    )
-   write_table(original, "typed.pfw.gz", name="typed")
-   exact = read_table("typed.pfw.gz").to_pandas()
+   original.write("typed.pfw.gz", name="typed", mode="overwrite")
+   exact = TraceViewer("typed.pfw.gz").collect().to_pandas()
 
 A new frame (a filter, a join) has no header, and a frame changed in place
 (``df["a"] = ...``, ``df.loc[...] = ...``) drops it. ``to_pandas`` with an explicit ``arrow``, ``nullable`` or ``index``
 argument ignores the header too. Each of these behaves as ``to_pandas`` does
 for any frame.
 
-Columns of the frame ``read_table`` returns
--------------------------------------------
+Writing
+-------
+
+``write`` writes typed records: line 1 is the header and every other line is
+one row. ``LazyFrame.sink`` and ``TraceViewer.sink`` write a plan the same way
+without collecting it, and write DFTracer events instead when the plan keeps
+the event envelope (``name``, ``cat``, ``pid``, ``tid``, ``ts``, ``ph``, with
+``dur`` and ``args.<key>`` columns). The output is staged next to the target
+(``.<name>.tmp-<id>``), synced and renamed into place, so a failed write leaves
+nothing at the target; ``mode="error"`` refuses an existing target and
+``mode="overwrite"`` replaces it. A leftover staging path of a crashed write
+is removed by the next write of that target. ``part_size`` is the rows of one
+part of a folder. One index is built for all the files, after the rename; a
+crash between the two leaves data that readers scan. ``TraceWriteOptions``
+sets ``level``, ``member_size`` (0 is automatic, 4 MiB of text per gzip member)
+and ``build_index``.
+
+A streamed plan cannot know before it runs whether a column holds a null or how
+many rows it has. The header of a records ``sink`` therefore types integers
+and booleans as the nullable pandas dtypes and starts with ``nrows`` ``-1`` in a
+20-character slot, which the writer overwrites with the part's row count (and
+the CRC32 of the header member) before it syncs. A reader refuses a file whose
+slot still holds ``-1``. ``DataFrame.write`` knows both and writes them at once.
+
+Columns of the frame a table read returns
+-----------------------------------------
 
 The columns are the engine's types: Int64, Uint64, Float64, Bool and String,
 with a null for NA (a float NaN stays a value). A ``category`` column holds its
@@ -54,7 +81,7 @@ lists them.
 Writing a dftracer.utils frame
 ------------------------------
 
-A dftracer.utils frame is written from its columns, with no pandas step. A
+A dftracer.utils frame is written from its columns. A
 column keeps its width (``int32``, ``uint8``, ``float32``); a column that holds
 a null is written with a nullable dtype (``Int32``, ``Float64``, ``boolean``),
 so a null stays apart from NaN; a string column is written as ``object`` and a
@@ -66,7 +93,7 @@ File format
 -----------
 
 Line 1 is a ``ph`` 4 record. Its ``args`` hold ``format`` (``"dftu.table"``),
-``format_version`` (1), ``table``, ``nrows``, ``index`` (the index levels, as
+``format_version`` (the ``table`` line of ``VERSION``), ``table``, ``nrows``, ``index`` (the index levels, as
 fields), ``index_names``, ``fields`` and ``meta``. Each field has a ``name``
 and the exact pandas ``dtype``; a ``category`` field adds ``categories`` and
 ``ordered`` and ``categories_dtype`` (the dtype of the categories, restored
@@ -79,14 +106,22 @@ field adds ``arrow_type``, the text of its pyarrow type (``"string"``,
 ``StringDtype("pyarrow")``, which print alike. Every other line is a ``ph`` 3
 record whose ``args`` hold one row, in field order.
 
+``format_version`` is the string ``"MAJOR.MINOR"`` (the ``table`` line of
+``VERSION``, ``"1.0"`` today). A new optional header key raises the minor; a
+change that an old reader cannot read raises the major. A reader takes a file
+whose major equals its own and whose minor is not greater, and refuses any other
+value, a malformed string or an unknown major, naming the file's value and its
+own version. The integer ``1``, as DFAnalyzer's writer stamps it, reads as
+``"1.0"``.
+
 NA is ``null``. NaN, ``+inf`` and ``-inf`` are the strings ``"NaN"``,
 ``"Infinity"`` and ``"-Infinity"``, so a nullable float column keeps NaN apart
 from NA. Other floats are the shortest text that reads back to the same bits. A
 category cell is its label, and a set or list cell is a JSON array.
 
-For a pandas frame a default ``RangeIndex`` is not stored. Any other index becomes leading fields,
-and an unnamed level is stored as ``__index_level_<i>__`` and restored without
-a name. DFAnalyzer's checkpoint tables use the same format, and each side reads
+``DataFrame.from_pandas`` turns a pandas index into columns and the frame's row
+index; an unnamed level is stored as ``__index_level_<i>__`` and restored
+without a name. DFAnalyzer's checkpoint tables use the same format, and each side reads
 the other's files.
 
 What a table carries
@@ -94,33 +129,26 @@ What a table carries
 
 Carried: ``int8`` to ``int64``, ``uint8`` to ``uint64``, ``float32``,
 ``float64``, ``bool``, the nullable ``Int*``, ``UInt*``, ``Float32``,
-``Float64`` and ``boolean``, ``string``, Arrow-backed dtypes such as
-``string[pyarrow]`` and ``int64[pyarrow]``, ``object`` columns of ``str`` cells
-(or sets or lists of scalars), and ``category`` with all-string or all-numeric
-labels. Refused with ``TypeError``: datetime, timedelta, period and interval
-columns, an object column of anything else, and a NaN or infinity inside a set
-or list cell, boolean categories, and an ``ArrowDtype`` whose type
-``pyarrow.type_for_alias`` cannot rebuild. Refused with ``ValueError``: duplicate
-column names, index level names that collide with column names, category labels
-above ``2**63 - 1`` or infinite, and a column that mixes sets and lists. An
-index level name that is not a ``str`` is stored as its text and restored as
-given.
+``Float64`` and ``boolean``, strings, and dictionary-encoded string columns as
+``category``. A column of another Arrow type (timestamps, lists, structs) is
+refused with ``TypeError``. A table file written by another tool may also hold
+Arrow-backed dtypes, set and list columns and categories of numbers; a table
+read restores them and keeps them when the frame is written again.
 
-Folders and Dask
-----------------
+Folders
+-------
 
-``read_table`` of a folder reads every ``*.pfw.gz`` in it in name order and
-concatenates them; the parts must agree on their fields and index.
-``write_table`` of a Dask ``DataFrame`` writes such a folder, one file per
-partition (``part-00000.pfw.gz`` and on), each with its own header.
+A table read of a folder reads every ``*.pfw.gz`` in it in part-number order
+and concatenates them; the parts must agree on their fields and index.
+``write`` with ``part_size`` writes such a folder. A folder is always gzip:
+``TraceWriteOptions(compress=False)`` for a folder raises, and plain output is
+one ``.pfw`` file.
 
-Functions
----------
+Classes
+-------
 
-.. autofunction:: dftracer.utils.write_table
+.. autoclass:: dftracer.utils.SinkSummary
 
-.. autofunction:: dftracer.utils.read_table
+.. autoclass:: dftracer.utils.TraceWriteOptions
 
-.. autoclass:: dftracer.utils.TableWriter
-   :members:
-   :special-members: __enter__, __exit__
+.. automethod:: dftracer.utils.DataFrame.write

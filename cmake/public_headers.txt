@@ -147,6 +147,7 @@ dftracer/utils/dstd/scoped_fd.h
 dftracer/utils/dstd/shared_string.h
 dftracer/utils/dstd/shutdown.h
 dftracer/utils/dstd/singleton.h
+dftracer/utils/dstd/process.h
 dftracer/utils/dstd/span.h
 dftracer/utils/dstd/string.h
 dftracer/utils/dstd/string_arena.h

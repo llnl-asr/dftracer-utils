@@ -14,6 +14,7 @@ See :class:`~dftracer.utils.Series` for the column counterpart.
 from __future__ import annotations
 
 import datetime
+import os
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -51,6 +52,7 @@ from ._pandas_frame import FramePandasMixin
 from ._polars_frame import FramePolarsMixin
 from ._series import Series
 from ._series_index import default_name, positions, public_name, shown_name
+from ._sink import DEFAULT_MAX_OPEN_FILES, DEFAULT_MODE, DEFAULT_PART_SIZE
 from ._window_spec import norm_window_spec
 
 if TYPE_CHECKING:
@@ -64,8 +66,10 @@ if TYPE_CHECKING:
     from ._groupby import GroupBy
     from ._lazyframe import LazyFrame
     from ._loc import At, ILoc, Loc, Resampler
+    from ._sink import PathLike, SinkOption, SinkSummary, TraceWriteOptions
     from ._time_index import TimeResampler
     from .dftracer_utils_ext import Scalar
+    from .schemas import JsonValue
 
 
 # Finite value sets for the viewer builder args (kept as reusable aliases so the
@@ -263,7 +267,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
     gives the frame its labels, as pandas (see :func:`_with_series_labels`);
     :meth:`from_dict` takes the columns only."""
 
-    # The header a table file gave this frame; only read_table sets it, and
+    # The header a table file gave this frame; only a table read sets it, and
     # to_pandas() reads it (see _table.py).
     __slots__ = ("_table_header",)
     _table_header: Mapping[str, Any]
@@ -642,7 +646,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         pandas index, a MultiIndex for several levels; a level that
         :meth:`from_pandas` named ``__index_level_<i>__`` is unnamed again.
 
-        A frame that :func:`~dftracer.utils.read_table` returned is the one
+        A frame that :class:`~dftracer.utils.trace.TraceViewer` read from a table file is the one
         exception to the rules above: called with no arguments it gives the
         exact pandas frame its table header describes (dtypes, categories, set
         and list cells, Arrow-backed and string-storage dtypes, the index and
@@ -1685,6 +1689,59 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, _ext.DataFrame):
         """Start a deferred query over this batch. Ops are recorded and nothing
         runs until :meth:`LazyFrame.collect`."""
         return _ext.DataFrame.lazy(self)
+
+    def write(
+        self,
+        path: PathLike,
+        *,
+        format: str | None = None,
+        options: TraceWriteOptions | Mapping[str, SinkOption] | None = None,
+        name: str | None = None,
+        meta: Mapping[str, JsonValue] | None = None,
+        rows: Literal["events", "records"] | None = None,
+        mode: Literal["error", "overwrite"] = DEFAULT_MODE,
+        part_size: int = DEFAULT_PART_SIZE,
+        partition_by: Sequence[str] | None = None,
+        max_open_files: int = DEFAULT_MAX_OPEN_FILES,
+    ) -> SinkSummary:
+        """Write this frame to ``path`` now and return a :class:`SinkSummary`.
+
+        The rows are typed records (a ``dftu.table`` header and one row per
+        line) unless ``rows="events"`` writes the frame as DFTracer events;
+        :meth:`LazyFrame.sink` describes the path, the staging, the index and
+        the other arguments. The header holds the frame's row count and column
+        dtypes: a column that holds a null is written with a nullable dtype, a
+        dictionary column as ``category``, a string column as ``object``, and
+        a frame that a table read returned keeps its table header, so the file
+        reads back to the same pandas frame. ``name`` and ``meta`` replace the
+        ones the frame carries."""
+        from ._sink import output_stem, run_sink
+
+        header = None
+        raw: list[str] = []
+        if rows != "events" and format in (None, "dftracer"):
+            from ._table import _write_header
+
+            header, raw = _write_header(
+                self, name, output_stem(os.fspath(path)), dict(meta) if meta is not None else None
+            )
+        return run_sink(
+            self.lazy(),
+            path,
+            default_rows="records",
+            header=header,
+            known_rows=self.num_rows,
+            rows=rows,
+            raw_columns=tuple(raw),
+            name=name,
+            meta=meta,
+            mode=mode,
+            format=format,
+            options=options,
+            max_open_files=max_open_files,
+            partition_by=partition_by,
+            part_size=part_size,
+        )
 
     def sort_by_multi(
         self,

@@ -58,6 +58,8 @@ INPUT_FILE_PATTERNS: tuple[str, ...]
 _AggSpec = str | tuple[str, str, list[str]]
 # The plugin ABI version this extension accepts: (major << 16) | (minor << 8) | patch.
 PLUGIN_ABI_VERSION: int
+# The dftu.table format version "MAJOR.MINOR", from the VERSION file.
+TABLE_FORMAT_VERSION: str
 # The shard count of the aggregation key space, for callers that split it.
 NUM_SHARDS: int
 
@@ -1604,20 +1606,26 @@ def _dataframe_from_columns(
     """A native vec batch of the named native columns (no Arrow)."""
     ...
 
-def _write_table(
-    frame: PublicDataFrame,
+def _sink_output(
+    plan: PublicLazyFrame,
     path: str,
-    header_json: str,
-    raw_columns: Sequence[str],
+    rows: str,
+    mode: str,
+    compress: bool,
     level: int,
-    threads: int,
-) -> None:
-    """Write a native frame as a dftu.table file; ``header_json`` is the args of
-    the header record and a path ending in ``.gz`` is compressed."""
-    ...
-
-def _read_table(path: str, threads: int) -> tuple[PublicDataFrame, str]:
-    """Read a dftu.table file into a native frame and the args of its header."""
+    member_size: int,
+    part_size: int,
+    build_index: bool,
+    header_args: str | None,
+    raw_columns: Sequence[str],
+    known_rows: int,
+    runtime: RuntimeArg = None,
+) -> tuple[str, int, list[str]]:
+    """Run ``plan`` into ``path`` as ``rows`` ("events" or "records"): stage,
+    write, rename into place and index. Returns the root, the row count and the
+    written files. ``header_args`` is the args object of a records header
+    without its row count; ``known_rows`` is the row count when it is known
+    before the run, else -1."""
     ...
 
 def _table_read_counters(reset: bool) -> dict[str, int]:
@@ -1723,6 +1731,12 @@ class TraceViewer:
         ...
     def with_lazy(self, plan: PublicLazyFrame) -> Self:
         """This scan with ``plan`` (a LazyFrame over it) as its plan."""
+        ...
+    def _collect_counted(
+        self, runtime: RuntimeArg = None
+    ) -> tuple[PublicDataFrame, dict[str, int]]:
+        """The plan's rows and the counts of its scans (``events_scanned``,
+        ``chunks_scanned``, ``chunks_skipped``). Runs now."""
         ...
     def filter(self, dsl: object) -> Self:
         """Keep events matching a duql predicate (``str(dsl)``)."""
@@ -1836,9 +1850,6 @@ class TraceViewer:
         """Plan of a one-row frame whose ``partial`` column holds the
         serialized aggregation partial."""
         ...
-    def sink_json(self, path: str, /) -> PublicLazyFrame:
-        """Plan writing the selected events to ``path``; yields one stats row."""
-        ...
     def _index_records(
         self,
         shard_begin: int = 0,
@@ -1858,18 +1869,6 @@ class TraceViewer:
     ) -> dict[str, object]:
         """Persist this query as a materialized view. Runs now; returns the
         scan stats."""
-        ...
-    def export_trace(
-        self,
-        path: str,
-        compress: bool = True,
-        index: bool = False,
-        member_size: int = 0,
-        level: int = 6,
-        part_size: int = 0,
-        runtime: RuntimeArg = None,
-    ) -> dict[str, object]:
-        """Write a trace file now; returns the scan stats."""
         ...
     def merge_partials(self, partials: Sequence[bytes], /) -> PublicDataFrame:
         """Merge aggregate partials with this aggregation. No scan."""

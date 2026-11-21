@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdio.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
@@ -368,6 +369,28 @@ Expected<void, Error> rename(PathView from, PathView to) {
         return Unexpected(errno_error(errno, from.str(), to.str()));
     }
     return {};
+}
+
+Expected<bool, Error> rename_no_replace(PathView from, PathView to) {
+    const PathCString source(from.str());
+    const PathCString target(to.str());
+#if defined(__APPLE__)
+    const int status =
+        ::renamex_np(source.c_str(), target.c_str(), RENAME_EXCL);
+#else
+    const int status = ::renameat2(AT_FDCWD, source.c_str(), AT_FDCWD,
+                                   target.c_str(), RENAME_NOREPLACE);
+#endif
+    if (status == 0) return true;
+    const int error = errno;
+    if (error == EEXIST) return false;
+    if (error == EINVAL || error == ENOSYS || error == ENOTSUP) {
+        return Unexpected(Error(
+            Condition::Unsupported,
+            make_message(from.str(), to.str(),
+                         "the file system cannot rename without replacing")));
+    }
+    return Unexpected(errno_error(error, from.str(), to.str()));
 }
 
 Expected<void, Error> copy_file(PathView from, PathView to, CopyMode mode) {

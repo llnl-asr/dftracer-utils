@@ -747,6 +747,7 @@ DataFrame.with_column | python-semantics | frame method written in Python over n
 DataFrame.with_columns | python-semantics | frame method written in Python over native calls
 DataFrame.with_index | python-semantics | native method of the binding, sets the row index of the frame, not one registry op
 DataFrame.with_row_index | python-semantics | frame method written in Python over native calls
+DataFrame.write | python-semantics | frame method written in Python over the native sink writer
 DataFrame.write_csv | conversion | write_csv gives the data in another form
 DataFrame.write_ipc | conversion | write_ipc gives the data in another form
 DataFrame.write_parquet | conversion | write_parquet gives the data in another form

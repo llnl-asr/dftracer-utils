@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     _R = TypeVar("_R")
 
 if TYPE_CHECKING:
-    from .._lazyframe import LazyFrame, SinkSummary, Value
+    from .._lazyframe import LazyFrame, Value
 
 
 class LazyOps(_ext.TraceViewer):
@@ -408,17 +408,6 @@ class LazyOps(_ext.TraceViewer):
         or raises its error, and releases the GIL while it waits.
         """
         return self.lazy().collect_async(batch_size)
-
-    def sink(self, name: str, **options: str) -> SinkSummary:
-        """Write the pipeline's rows to the sink a plugin registered as ``name``
-        and return the totals.
-
-        Every option is a string, e.g. ``lf.sink("csv.write", path="out.csv")``; a
-        value that is not a ``str`` raises ``TypeError``. The plan runs on the
-        whole pipeline, so this call does the work of :meth:`collect` with no
-        frame kept in memory. An unknown name raises with the registered names.
-        """
-        return self.lazy().sink(name, **options)
 
     def __arrow_c_stream__(self, requested_schema: object | None = None) -> object:
         """Stream the query through the Arrow C Stream Interface: one batch per

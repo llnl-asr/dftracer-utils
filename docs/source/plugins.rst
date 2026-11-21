@@ -2398,7 +2398,7 @@ A sink name is the plugin's own name, such as ``toy`` from plugin ``toy``, or
 
 .. code-block:: python
 
-   summary = lf.sink("csv.write", path="out.csv")   # SinkSummary(rows, batches)
+   summary = lf.sink("out.csv", format="csv.write")   # SinkSummary(root, rows, kind, part_count)
 
 .. code-block:: text
 

@@ -94,6 +94,25 @@ struct TraceWriterOptions {
 /// "Infinity" and "-Infinity", because JSON has no number for them.
 void write_double(json::Writer& w, double v);
 
+/// Append one record line, with its '\n', to `out`. These are the formats
+/// that TraceWriter::write_event, write_counter, write_aggregated and
+/// write_metadata write.
+void format_event(dstd::String& out, dstd::StringView name,
+                  dstd::StringView cat, std::uint64_t ts, std::uint64_t dur,
+                  std::uint64_t pid, std::uint64_t tid, Args args = {},
+                  RecordExtras extras = {});
+void format_counter(dstd::String& out, dstd::StringView name,
+                    dstd::StringView cat, std::uint64_t ts, std::uint64_t pid,
+                    std::uint64_t tid, Args args = {},
+                    RecordExtras extras = {});
+void format_aggregated(dstd::String& out, dstd::StringView name,
+                       dstd::StringView cat, std::uint64_t ts,
+                       std::uint64_t pid, std::uint64_t tid, Args args = {},
+                       RecordExtras extras = {});
+void format_metadata(dstd::String& out, dstd::StringView name,
+                     std::uint64_t pid, std::uint64_t tid, Args args = {},
+                     RecordExtras extras = {});
+
 /// Writes DFTracer records, one JSON line each, with "ph" as its integer.
 /// Field order follows DFTracer: an event is
 /// `id? name cat type? pid tid ts dur ph args?`, a counter or aggregated row

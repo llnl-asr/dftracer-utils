@@ -117,6 +117,7 @@ set(DFTRACER_UTILS_DSTD_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/fs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/os.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/path.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/process.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/shared_string.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/shutdown.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/string_intern.cpp
@@ -477,6 +478,7 @@ set(DFTRACER_UTILS_TRACE_SOURCES
 
     # Writer
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/writer/trace_writer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/writer/output_writer.cpp
 
     # Table codec
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/table/table_header.cpp

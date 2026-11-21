@@ -313,12 +313,10 @@ _TOP_LEVEL = frozenset(
         "LazyScalar",
         "BoundColumn",
         "SinkSummary",
+        "TraceWriteOptions",
         "DType",
         "TimeUnit",
         "GroupKey",
-        "read_table",
-        "write_table",
-        "TableWriter",
         "scan_file",
     }
 )

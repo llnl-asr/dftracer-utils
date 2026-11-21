@@ -6,7 +6,8 @@ the table, the row count, the index levels and every field with its exact
 pandas dtype. Every other line is a ph 3 record holding one row in its args.
 The file reads with ``zcat`` and ``jq``, and DFAnalyzer's checkpoint tables use
 the same format. Encoding and decoding run in C++; this module maps pandas
-frames to and from the native frame.
+frames to and from the native frame and makes the headers that
+``DataFrame.write`` and the sinks store.
 """
 
 from __future__ import annotations
@@ -15,13 +16,12 @@ import json
 import math
 import os
 import re
-import shutil
-import tempfile
 import types
-from typing import TYPE_CHECKING, Any, Protocol, Sequence, Union, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Union
 
 from . import dftracer_utils_ext as _ext
 from ._dataframe import DataFrame, _bound
+from ._sink import _raw_columns
 
 if TYPE_CHECKING:
     import numpy as np
@@ -37,24 +37,8 @@ if TYPE_CHECKING:
     Column = Union["np.ndarray[Any, Any]", "pd.api.extensions.ExtensionArray", "pd.Series"]
     Dtype = Union["np.dtype[Any]", "pd.api.extensions.ExtensionDtype"]
 
-FORMAT = "dftu.table"
-FORMAT_VERSION = 1
 _FLOAT_TEXT = {"NaN": math.nan, "Infinity": math.inf, "-Infinity": -math.inf}
 _INT64_MAX = 2**63 - 1
-
-
-@runtime_checkable
-class _Computable(Protocol):
-    def compute(self) -> pd.DataFrame: ...
-
-
-@runtime_checkable
-class _Partitioned(Protocol):
-    """A Dask ``DataFrame``: partitions that compute to pandas frames."""
-
-    npartitions: int
-
-    def get_partition(self, n: int) -> _Computable: ...
 
 
 def _libs() -> tuple[types.ModuleType, types.ModuleType, types.ModuleType]:
@@ -289,8 +273,8 @@ def _prepare(
             arrays.append(_arrow_numeric(series))
         fields.append(field)
     header: Header = {
-        "format": FORMAT,
-        "format_version": FORMAT_VERSION,
+        "format": "dftu.table",
+        "format_version": _ext.TABLE_FORMAT_VERSION,
         "table": name,
         "nrows": len(flat),
         "index": index_fields,
@@ -348,8 +332,8 @@ def _prepare_native(df: DataFrame, name: str, meta: Meta | None) -> Header:
         fields.append(field)
     index_fields = list(df.index_names())
     return {
-        "format": FORMAT,
-        "format_version": FORMAT_VERSION,
+        "format": "dftu.table",
+        "format_version": _ext.TABLE_FORMAT_VERSION,
         "table": name,
         "nrows": df.num_rows,
         "index": index_fields,
@@ -361,93 +345,41 @@ def _prepare_native(df: DataFrame, name: str, meta: Meta | None) -> Header:
     }
 
 
-def write_table(
-    df: DataFrame | pd.DataFrame | _Partitioned,
-    path: PathLike,
-    *,
-    name: str,
-    meta: Meta | None = None,
-    level: int = 6,
-    threads: int = 0,
-) -> None:
-    """Write ``df`` to ``path`` as one typed table named ``name``.
-
-    ``df`` is a dftracer.utils ``DataFrame``, which writes straight from its
-    columns, or a pandas ``DataFrame``. A path ending in ``.gz`` is written as
-    a multi-member gzip file, any other path as plain text. The row index of a
-    dftracer.utils frame becomes the header's index. A pandas default
-    ``RangeIndex`` is not stored; any other pandas index becomes leading
-    fields, an unnamed level as ``__index_level_<i>__`` that :func:`read_table`
-    restores without a name; a level name that is not a str is stored as its
-    text and restored as given. A dftracer.utils column that holds a null is
-    written with a nullable dtype, so a null stays apart from NaN, and a string
-    column as ``object``. ``meta`` is a JSON-serializable dict kept in the
-    header. A NaN in a pandas object column is written as null and reads back as
-    ``None``.
-
-    A Dask ``DataFrame`` writes the folder ``path`` with one file per
-    partition, ``part-00000.pfw.gz`` and on, each a full table.
-
-    Raises ``TypeError`` for a column the format cannot carry (datetime,
-    timedelta, an object column of anything but str, sets or lists) and
-    ``ValueError`` for duplicate column names, index level names that collide
-    with column names, infinite or above-int64 category labels, or a column
-    that mixes sets and lists.
-    """
-    path = os.fspath(path)
-    if isinstance(df, _Partitioned):
-        _write_partitions(df, path, name, meta, level, threads)
-        return
-    _write_one(df, path, name, meta, level, threads, False)
+def _frame_from_pandas(
+    df: pd.DataFrame, name: str, meta: Meta | None = None, keep_index: bool = False
+) -> DataFrame:
+    """A native frame carrying the exact table header of a pandas frame, so
+    ``frame.write(path)`` stores every dtype, category, Arrow type and set or
+    list cell of ``df`` and ``frame.to_pandas()`` gives ``df`` back. A pandas
+    default ``RangeIndex`` is not stored unless ``keep_index``; any other index
+    becomes leading fields. Raises ``TypeError`` for a column the format cannot
+    carry and ``ValueError`` for duplicate column names, colliding index
+    names, infinite or above-int64 category labels, or a column that mixes
+    sets and lists."""
+    header, table, _ = _prepare(df, name, meta, keep_index)
+    return _with_header(DataFrame.from_arrow(table), header)
 
 
-def _write_one(
-    df: DataFrame | pd.DataFrame,
-    path: str,
-    name: str,
-    meta: Meta | None,
-    level: int,
-    threads: int,
-    keep_index: bool,
-) -> None:
-    if isinstance(df, DataFrame):
-        header = _prepare_native(df, name, meta)
-        _ext._write_table(df, path, json.dumps(header, allow_nan=False), [], level, threads)
-        return
-    header, table, raw_columns = _prepare(df, name, meta, keep_index)
-    frame = DataFrame.from_arrow(table)
-    _ext._write_table(frame, path, json.dumps(header, allow_nan=False), raw_columns, level, threads)
-
-
-def _write_partitions(
-    df: _Partitioned, folder: str, name: str, meta: Meta | None, level: int, threads: int
-) -> None:
-    """Writes the parts into a sibling folder and renames it into place at the
-    end, so a failed partition leaves nothing behind."""
-    if os.path.exists(folder) and (not os.path.isdir(folder) or os.listdir(folder)):
-        raise FileExistsError(f"{folder} already exists and is not an empty folder")
-    parent = os.path.dirname(os.path.abspath(folder))
-    os.makedirs(parent, exist_ok=True)
-    staging = tempfile.mkdtemp(prefix=os.path.basename(folder) + ".", suffix=".tmp", dir=parent)
-    try:
-        for i in range(df.npartitions):
-            part = df.get_partition(i).compute()
-            # Every part stores its index, so the parts agree on their fields.
-            _write_one(
-                part,
-                os.path.join(staging, f"part-{i:05d}.pfw.gz"),
-                name,
-                meta,
-                level,
-                threads,
-                True,
-            )
-        if os.path.isdir(folder):
-            os.rmdir(folder)
-        os.rename(staging, folder)
-    except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
+def _write_header(
+    df: DataFrame, name: str | None, stem: str, meta: Meta | None
+) -> tuple[Header, list[str]]:
+    """The header ``df.write`` stores, and its raw columns: the header the frame
+    carries while it still describes the frame's columns and Arrow types, else
+    one made from the frame's schema."""
+    carried = getattr(df, "_table_header", None)
+    if carried is not None:
+        own = _result_header(df, carried)
+        if own is not None:
+            table = df.to_arrow()
+            fields: list[dict[str, Any]] = own["fields"]
+            columns = [_flat(table.column(i)) for i in range(len(fields))]
+            if all(_fits(str(f["name"]), a, f) for f, a in zip(fields, columns)):
+                own = {**own, "table": name or own.get("table") or stem}
+                if meta is not None:
+                    own["meta"] = meta
+                return own, _raw_columns(own)
+    header = _prepare_native(df, name or stem, meta)
+    return header, []
 
 
 # -- decoding ---------------------------------------------------------------
@@ -736,154 +668,3 @@ def _carry_header(frame: DataFrame, header: Header | None) -> DataFrame:
         return frame
     own = _result_header(frame, header)
     return frame if own is None else _with_header(frame, own)
-
-
-def read_table(path: PathLike | Sequence[PathLike]) -> DataFrame:
-    """Read a table written by :func:`write_table` into a dftracer.utils frame.
-
-    This is ``TraceViewer(path).collect()`` for a table file, a folder of table
-    parts, a glob or a list of them: one reader serves them all.
-
-    The columns are the engine's native types: Int64, Uint64, Float64, Bool and
-    String, with a null for NA (NaN stays a float value). A category column
-    holds its labels as plain values, and a set or list column holds the JSON
-    text of each cell, because the engine has no list type; ``to_pandas()``
-    restores both. The header's index levels are the frame's row index
-    (:meth:`DataFrame.index_names`).
-
-    The frame carries its table header, so ``read_table(path).to_pandas()``
-    with no arguments gives the exact pandas frame that was written: its
-    dtypes, categories, set and list cells and index. A new frame
-    (a filter, a join) has no header, a frame changed in place drops it, and an explicit ``arrow``,
-    ``nullable`` or ``index`` argument of ``to_pandas`` ignores it.
-
-    The parts of a folder are read in part-number order and must agree on their
-    field names, dtypes, ordered, elem, arrow_type and index names; unordered
-    categories are unified in first-seen order.
-
-    Raises ``DFTUtilsParseError`` for another format, an unknown
-    ``format_version``, a row that misses a field or holds a value its dtype
-    cannot take, or a row count that differs from the header's;
-    ``DFTUtilsCompressionError`` for corrupt gzip data; and ``ValueError`` for
-    the parts of a folder that disagree. ``to_pandas()`` raises ``ValueError``
-    for a cell that is no category label or a set or list cell that is no JSON
-    array.
-    """
-    from .trace._viewer import TraceViewer
-
-    viewer = TraceViewer(path if not isinstance(path, os.PathLike) else os.fspath(path))
-    if not viewer._is_table():
-        if isinstance(path, (str, os.PathLike)) and os.path.isdir(path):
-            raise ValueError(f"{path} holds no dftu.table files")
-        raise _ext.DFTUtilsParseError(f"{path} is not a dftu.table file")
-    return viewer.collect()
-
-
-class TableWriter:
-    """Writes several frames of one schema as one table file.
-
-    Use it as a context manager: ``write`` adds a frame, and leaving the block
-    writes the file, whose header holds the total row count. The format keeps
-    the header on line 1 and the native writer fixes the row count when the
-    file starts, so the frames are held in memory until ``close``. Leaving the
-    block by an exception writes nothing.
-    """
-
-    def __init__(
-        self,
-        path: PathLike,
-        *,
-        name: str,
-        meta: Meta | None = None,
-        level: int = 6,
-        threads: int = 0,
-    ) -> None:
-        self._path = os.fspath(path)
-        self._name = name
-        self._meta = meta
-        self._level = level
-        self._threads = threads
-        self._frames: list[DataFrame | pd.DataFrame] = []
-        self._schema: tuple[object, ...] | None = None
-        self._closed = False
-
-    def write(self, df: DataFrame | pd.DataFrame) -> None:
-        """Add ``df``, whose columns, types and index levels match the first frame's."""
-        if self._closed:
-            raise ValueError("write to a closed TableWriter")
-        _, pd, _ = _libs()
-        if isinstance(df, DataFrame):
-            schema: tuple[object, ...] = (
-                "native",
-                tuple(df.index_names()),
-                tuple((f.name, str(f.type)) for f in df.to_arrow().schema),
-            )
-        elif isinstance(df, pd.DataFrame):
-            schema = (
-                "pandas",
-                tuple(df.index.names),
-                tuple(map(str, df.columns)),
-                tuple(df.dtypes),
-            )
-        else:
-            raise TypeError(
-                f"expected a pandas or dftracer.utils DataFrame, got {type(df).__name__}"
-            )
-        if self._schema is None:
-            self._schema = schema
-        elif schema != self._schema:
-            raise ValueError(
-                "the frame's kind, columns, types or index levels differ from the first frame's"
-            )
-        self._frames.append(df)
-
-    def close(self) -> None:
-        """Write the file. Raises ``ValueError`` when no frame was written."""
-        if self._closed:
-            return
-        self._closed = True
-        if not self._frames:
-            raise ValueError("no frame was written")
-        _, pandas, _ = _libs()
-        frames, self._frames = self._frames, []
-        first = frames[0]
-        whole: DataFrame | pd.DataFrame
-        if isinstance(first, DataFrame):
-            native = cast("list[DataFrame]", frames)
-            names = first.index_names()
-            if len(native) == 1:
-                whole = first
-            else:
-                flat = [_bound(_ext.DataFrame.with_index(f, [])) for f in native]
-                whole = flat[0].concat(*flat[1:])
-                if names:
-                    whole = _bound(_ext.DataFrame.with_index(whole, names))
-        else:
-            kept = not (isinstance(first.index, pandas.RangeIndex) and first.index.name is None)
-            whole = (
-                first
-                if len(frames) == 1
-                else pandas.concat(cast("list[pd.DataFrame]", frames), ignore_index=not kept)
-            )
-        write_table(
-            whole,
-            self._path,
-            name=self._name,
-            meta=self._meta,
-            level=self._level,
-            threads=self._threads,
-        )
-
-    def discard(self) -> None:
-        """Drop the frames without writing a file."""
-        self._closed = True
-        self._frames = []
-
-    def __enter__(self) -> TableWriter:
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        if exc_type is None:
-            self.close()
-        else:
-            self.discard()

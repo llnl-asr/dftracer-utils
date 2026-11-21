@@ -6,8 +6,8 @@
 
 namespace dftracer::utils::python::trace {
 
-// Registers _write_table and _read_table, the private entry points of the
-// table file codec.
+// Registers _sink_output and _table_read_counters, the private entry points of
+// the table file codec.
 int init_table_codec(PyObject *m);
 
 }  // namespace dftracer::utils::python::trace

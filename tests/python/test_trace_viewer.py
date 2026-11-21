@@ -742,42 +742,46 @@ class TestTraceViewer:
             assert 0 < tbl.height < 400
             assert set(tbl["cat"].to_list()) == {"STDIO"}
 
-    def test_export_events_gzip_reindexes(self, tmp_path):
+    def test_sink_events_gzip_reindexes(self, tmp_path):
         with Environment(lines=300) as env:
             gz = _indexed(env)
             out = str(tmp_path / "events.pfw.gz")
-            TraceViewer(gz).filter('cat == "STDIO"').export_trace(out)
-            # The exported trace is a valid, re-indexable dftracer trace.
+            summary = TraceViewer(gz).filter('cat == "STDIO"').sink(out)
+            assert summary.kind == "events" and 0 < summary.rows < 300
+            # The written trace is a valid trace with an index beside it.
             with dftu_utils.index.Indexer(files=[out], index_dir=str(tmp_path)) as ix:
                 ix.ensure()
             reread = TraceViewer(out, index_dir=str(tmp_path)).statistics()
-            assert 0 < reread["duration_count"] < 300
+            assert reread["duration_count"] == summary.rows
 
-    def test_export_aggregation_gzip(self, tmp_path):
+    def test_sink_aggregation_gzip(self, tmp_path):
         with Environment(lines=200) as env:
             gz = _indexed(env)
             out = str(tmp_path / "agg.pfw.gz")
-            TraceViewer(gz).group_by("cat").time_bucket(1000).agg("count").export_trace(out)
+            agg = TraceViewer(gz).group_by("cat").time_bucket(1000).agg("count")
+            summary = agg.sink(out)
+            assert summary.kind == "records"
             with gzip.open(out, "rt") as fh:
-                events = [json.loads(line) for line in fh if line.strip()]
-            assert events and all(e.get("ph") == 2 for e in events)  # ph=2 counters
+                records = [json.loads(line) for line in fh if line.strip()]
+            assert records[0]["ph"] == 4 and all(r["ph"] == 3 for r in records[1:])
+            assert len(records) == agg.collect().height + 1
 
-    def test_export_aggregation_gzip_matches_plain(self, tmp_path):
+    def test_sink_aggregation_gzip_matches_plain(self, tmp_path):
         with Environment(lines=200) as env:
             gz = _indexed(env)
             agg = TraceViewer(gz).group_by("cat").time_bucket(1000).agg("count")
             packed = str(tmp_path / "agg.pfw.gz")
             plain = str(tmp_path / "agg.pfw")
-            agg.export_trace(packed)
-            agg.export_trace(plain, compress=False)
+            agg.sink(packed)
+            agg.sink(plain)
             with gzip.open(packed, "rb") as fh:
                 assert fh.read() == open(plain, "rb").read()
 
-    def test_export_plain_ndjson(self, tmp_path):
+    def test_sink_plain_ndjson(self, tmp_path):
         with Environment(lines=100) as env:
             gz = _indexed(env)
             out = str(tmp_path / "plain.pfw")
-            TraceViewer(gz).export_trace(out, compress=False)
+            TraceViewer(gz).sink(out)
             lines = [line for line in open(out) if line.strip()]
             assert len(lines) == 100
 
@@ -924,13 +928,13 @@ class TestTraceViewer:
                 )
         with dftu_utils.index.Indexer(files=[gz], index_dir=str(tmp_path)) as ix:
             ix.ensure()
-        out = str(tmp_path / "posix.pfw")
+        out = str(tmp_path / "posix.pfw.gz")
         tv = dftu_utils.trace.TraceViewer(gz, index_dir=str(tmp_path))
         with tv.session() as s:
             by_cat = s.collect(tv.group_by("cat").agg("count", "mean:dur"))
             by_rank = s.collect(tv.group_by("rank").agg("count"))
             posix = s.collect(tv.filter('cat == "POSIX"').group_by("cat").agg("count"))
-            exported = s.sink_json(tv.filter('cat == "POSIX"'), out)
+            exported = s.sink(tv.filter('cat == "POSIX"'), out)
 
         cat = by_cat.result().to_pandas().set_index("cat")
         rank = by_rank.result().to_pandas().set_index("rank")
@@ -942,8 +946,9 @@ class TestTraceViewer:
         # per-plan filter is independent of the other plans.
         assert list(pox.index) == ["posix"] and pox.loc["posix", "count"] == 3
         # the sink streamed just its matching events over the same scan.
-        assert exported.result()["events_matched"] == 3
-        lines = [json.loads(line) for line in open(out) if line.strip()]
+        assert exported.result().rows == 3
+        with gzip.open(out, "rt") as fh:
+            lines = [json.loads(line) for line in fh if line.strip()]
         assert len(lines) == 3 and all(e["cat"] == "POSIX" for e in lines)
 
         # per-plan sort_by/limit apply to that plan only.

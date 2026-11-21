@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/common/worker_share.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/string.h>
@@ -288,6 +289,11 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     // the host it is loaded into.
     if (PyModule_AddIntConstant(m, "PLUGIN_ABI_VERSION",
                                 DFTRACER_UTILS_PLUGIN_ABI_VERSION) < 0)
+        return NULL;
+    // The dftu.table format the writers and readers speak.
+    if (PyModule_AddStringConstant(m, "TABLE_FORMAT_VERSION",
+                                   DFTRACER_UTILS_TABLE_FORMAT_VERSION_STRING) <
+        0)
         return NULL;
     {
         const auto& patterns =

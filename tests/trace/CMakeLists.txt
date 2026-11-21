@@ -115,6 +115,7 @@ set(TRACE_TEST_SOURCES
 
     # Writer
     writer/test_trace_writer.cpp
+    writer/test_output_writer.cpp
 
     # Table codec
     table/test_table_codec.cpp

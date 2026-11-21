@@ -909,19 +909,8 @@ coro::CoroTask<MorselResult> TableCursor::next(std::int64_t max_rows) {
     }
 }
 
-dataframe::DataType type_of(Kind kind) {
-    switch (kind) {
-        case Kind::Int:
-            return dataframe::scalar(TypeId::Int64);
-        case Kind::UInt:
-            return dataframe::scalar(TypeId::Uint64);
-        case Kind::Float:
-            return dataframe::scalar(TypeId::Float64);
-        case Kind::Bool:
-            return dataframe::scalar(TypeId::Bool);
-        default:
-            return dataframe::scalar(TypeId::String);
-    }
+dataframe::DataType type_of(const detail::Field& f) {
+    return dataframe::scalar(detail::column_type(f));
 }
 
 bool answers_index(const detail::Field& f) {
@@ -949,7 +938,7 @@ class TableSource final : public dataframe::Source {
     Schema schema() const override {
         Schema s;
         for (const detail::Field& f : (*files_)[0].header.fields)
-            s.fields.push_back(dataframe::Field{f.name, type_of(f.kind), true});
+            s.fields.push_back(dataframe::Field{f.name, type_of(f), true});
         return s;
     }
 

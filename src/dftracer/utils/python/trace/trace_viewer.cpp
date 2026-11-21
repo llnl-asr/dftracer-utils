@@ -34,7 +34,6 @@
 #include <dftracer/utils/python/frame/dataframe.h>
 #include <dftracer/utils/python/frame/lazyframe.h>
 #include <dftracer/utils/python/plugins/plugin_host.h>
-#include <dftracer/utils/python/trace/gzip_sink.h>
 #include <dftracer/utils/python/trace/trace_viewer.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/record_schema.h>
@@ -167,18 +166,6 @@ trace::views::ProgressFn progress_from(PyObject* obj) {
         PyGILState_Release(g);
     };
 }
-
-class FileSink : public trace::views::ExportSink {
-   public:
-    explicit FileSink(FILE* f) : f_(f) {}
-    void write(dftracer::utils::dstd::StringView data) override {
-        std::fwrite(data.data(), 1, data.size(), f_.get());
-    }
-    void flush() override { std::fflush(f_.get()); }
-
-   private:
-    dftracer::utils::dstd::ScopedFile f_;
-};
 
 // "fn(key)" or "fn(key, 'a', 'b')" -> transform + inner key text; false when
 // `t` is not a call, leaving `t` to parse as a plain key.
@@ -435,6 +422,32 @@ PyObject* tv_lazy(PyObject* self, PyObject*) {
     return guard([&] {
         return python::frame::wrap_lazyframe(LazyFrame(tv_of(self).lazy()));
     });
+}
+
+// _collect_counted(runtime=None) -> (DataFrame, {events_scanned,
+// chunks_scanned, chunks_skipped}): the plan's rows and what its scans did.
+PyObject* tv_collect_counted(PyObject* self, PyObject* args, PyObject* kwds) {
+    PyObject* runtime_arg = nullptr;
+    if (!parse_kw<"|O">(args, kwds, {"runtime"}, &runtime_arg)) return nullptr;
+    auto counter = dstd::make_shared<trace::views::ScanCounter>();
+    const LazyFrame plan = LazyFrame(tv_of(self).count_scans(counter).lazy());
+    DataFrame out;
+    if (!run_on(runtime_arg, [&] { return plan.collect(0); }, out))
+        return nullptr;
+    PyObject* frame = python::frame::wrap_dataframe(std::move(out));
+    if (!frame) return nullptr;
+    PyObject* counts = Py_BuildValue(
+        "{s:K,s:K,s:K}", "events_scanned",
+        static_cast<unsigned long long>(counter->events_scanned.load()),
+        "chunks_scanned",
+        static_cast<unsigned long long>(counter->chunks_scanned.load()),
+        "chunks_skipped",
+        static_cast<unsigned long long>(counter->chunks_skipped.load()));
+    if (!counts) {
+        Py_DECREF(frame);
+        return nullptr;
+    }
+    return Py_BuildValue("(NN)", frame, counts);
 }
 
 PyObject* tv_with_lazy(PyObject* self, PyObject* arg) {
@@ -885,21 +898,6 @@ PyObject* tv_aggregate_partial(PyObject* self, PyObject*) {
     });
 }
 
-PyObject* tv_sink_json(PyObject* self, PyObject* arg) {
-    const char* path = as_utf8(arg);
-    if (!path) return nullptr;
-    FILE* f = std::fopen(path, "wb");
-    if (!f) {
-        PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-        return nullptr;
-    }
-    auto sink = dftracer::utils::dstd::make_shared<FileSink>(f);
-    return guard([&] {
-        return python::frame::wrap_lazyframe(checked(LazyFrame(
-            tv_of(self).sink_json(sink, trace::views::LAZY).plans().front())));
-    });
-}
-
 PyObject* tv_index_records(PyObject* self, PyObject* args, PyObject* kwds) {
     int shard_begin = 0, shard_end = 0;
     PyObject* progress = nullptr;
@@ -963,63 +961,6 @@ PyObject* tv_materialize(PyObject* self, PyObject* args, PyObject* kwds) {
             stats))
         return nullptr;
     return stats_dict(stats);
-}
-
-// A trace of the aggregation (counter events) when the viewer aggregates, else
-// of the selected events.
-PyObject* tv_export_trace(PyObject* self, PyObject* args, PyObject* kwds) {
-    const char* path = nullptr;
-    int compress = 1;
-    int index = 0;
-    long long member_size = 0;
-    int level = 6;
-    long long part_size = 0;
-    PyObject* runtime_arg = nullptr;
-    if (!parse_kw<"s|ppLiLO">(args, kwds,
-                              {"path", "compress", "index", "member_size",
-                               "level", "part_size", "runtime"},
-                              &path, &compress, &index, &member_size, &level,
-                              &part_size, &runtime_arg))
-        return nullptr;
-    return guard([&]() -> PyObject* {
-        const View& t = tv_of(self);
-        ExportStats stats;
-        if (t.aggregates()) {
-            dftracer::utils::dstd::UniquePtr<trace::views::ExportSink> sink;
-            dftracer::utils::python::trace::GzipSink* gzip = nullptr;
-            if (compress) {
-                auto made = dftracer::utils::dstd::make_unique<
-                    dftracer::utils::python::trace::GzipSink>(path, level);
-                gzip = made.get();
-                sink = std::move(made);
-            } else {
-                FILE* f = std::fopen(path, "wb");
-                if (!f) {
-                    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-                    return nullptr;
-                }
-                sink = dftracer::utils::dstd::make_unique<FileSink>(f);
-            }
-            const bool ok = run_on(
-                runtime_arg, [&] { return t.sink_counters(*sink); }, stats);
-            if (ok && gzip != nullptr) gzip->close();
-            sink.reset();
-            if (!ok) return nullptr;
-            return stats_dict(stats);
-        }
-        trace::views::TraceWriteOptions opts;
-        opts.output_path = path;
-        opts.member_size = static_cast<std::size_t>(member_size);
-        opts.compress = compress != 0;
-        opts.level = level;
-        opts.build_index = index != 0;
-        opts.part_size = static_cast<std::size_t>(part_size);
-        if (!run_on(
-                runtime_arg, [&] { return t.sink_trace(std::move(opts)); },
-                stats))
-            return nullptr;
-        return stats_dict(stats);
-    });
 }
 
 PyObject* tv_merge_partials(PyObject* self, PyObject* arg) {
@@ -1176,6 +1117,9 @@ PyObject* plugin_results_py(PyObject*, PyObject* host) {
 
 PyMethodDef tv_methods[] = {
     {"lazy", tv_lazy, METH_NOARGS, "The plan as a LazyFrame."},
+    {"_collect_counted", DFTU_PYCFUNCTION(tv_collect_counted),
+     METH_VARARGS | METH_KEYWORDS,
+     "The plan's rows and the counts of its scans (runs now)."},
     {"with_lazy", tv_with_lazy, METH_O,
      "This scan with `plan` (a LazyFrame over it) as its plan."},
     {"filter", tv_filter, METH_O, "Keep events matching a duql predicate."},
@@ -1233,15 +1177,11 @@ PyMethodDef tv_methods[] = {
      METH_VARARGS | METH_KEYWORDS, "Plan of a one-row 'partial' frame."},
     {"aggregate_partial", tv_aggregate_partial, METH_NOARGS,
      "Plan of a one-row 'partial' frame."},
-    {"sink_json", tv_sink_json, METH_O,
-     "Plan writing the selected events to `path`; yields one stats row."},
     {"_index_records", DFTU_PYCFUNCTION(tv_index_records),
      METH_VARARGS | METH_KEYWORDS,
      "The aggregation index's record families as a tuple (runs now)."},
     {"materialize", DFTU_PYCFUNCTION(tv_materialize),
      METH_VARARGS | METH_KEYWORDS, "Persist this query (runs now)."},
-    {"export_trace", DFTU_PYCFUNCTION(tv_export_trace),
-     METH_VARARGS | METH_KEYWORDS, "Write a trace file (runs now)."},
     {"merge_partials", tv_merge_partials, METH_O,
      "Merge aggregate partials with this aggregation."},
     {"materialize_partials", DFTU_PYCFUNCTION(tv_materialize_partials),

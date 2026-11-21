@@ -267,15 +267,14 @@ class TestTerminals:
         out = agg.merge_partials([agg.aggregate_partial().collect()])
         assert _rows(out, ["name", "count"]) == _rows(agg.collect(), ["name", "count"])
 
-    def test_sink_json_eager_and_lazy(self, tv, tmp_path):
-        path = str(tmp_path / "posix.json")
-        stats = tv.filter('cat == "POSIX"').sink_json(path)
-        assert stats["events_matched"] == 16
-        with open(path) as f:
-            assert len(f.readlines()) == 16
-        lazy = tv.filter('cat == "APP"').sink_json(str(tmp_path / "app.json"), lazy=True)
+    def test_sink_eager_and_lazy(self, tv, tmp_path):
+        path = str(tmp_path / "posix.pfw.gz")
+        summary = tv.filter('cat == "POSIX"').sink(path)
+        assert (summary.rows, summary.kind, summary.part_count) == (16, "events", 1)
+        assert TraceViewer(path).collect().height == 16
+        lazy = tv.filter('cat == "APP"').sink(str(tmp_path / "app.pfw.gz"), lazy=True)
         assert isinstance(lazy, LazyResult)
-        assert lazy.collect()["events_matched"] == 16
+        assert lazy.collect().rows == 16
 
     def test_statistics(self, tv):
         stats = tv.statistics()
@@ -301,33 +300,32 @@ class TestTerminals:
 
 class TestCollectAll:
     def test_mixed_roots_in_order(self, tv, tmp_path):
-        path = str(tmp_path / "app.json")
+        path = str(tmp_path / "app.pfw.gz")
         fg, both, stats, rows, mean = dft.collect_all(
             [
                 tv.flamegraph(),
                 tv.containment(),
-                tv.filter('cat == "APP"').sink_json(path, lazy=True),
+                tv.filter('cat == "APP"').sink(path, lazy=True),
                 tv.filter('cat == "POSIX"'),
                 tv["dur"].mean(),
             ]
         )
         assert _rows(fg, ["name", "level"]) == _rows(both.flamegraph, ["name", "level"])
         assert both.call_tree.height == 32
-        assert stats["events_matched"] == 16
+        assert stats.rows == 16
         assert rows.height == 16
         assert mean == 425.0
 
     def test_session(self, tv, tmp_path):
-        path = str(tmp_path / "posix.json")
+        path = str(tmp_path / "posix.pfw.gz")
         with tv.session() as s:
             by_name = s.collect(tv.group_by("name").agg("count"))
             both = s.collect(tv.containment())
-            written = s.sink_json(tv.filter('cat == "POSIX"'), path)
+            written = s.sink(tv.filter('cat == "POSIX"'), path)
         assert by_name.result().height == 4
         assert both.result().call_tree.height == 32
-        assert written.result()["events_matched"] == 16
-        with open(path) as f:
-            assert len(f.readlines()) == 16
+        assert written.result().rows == 16
+        assert TraceViewer(path).collect().height == 16
         with pytest.raises(RuntimeError):
             s.collect(tv)
 

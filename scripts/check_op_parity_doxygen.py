@@ -535,6 +535,8 @@ PY_ALLOWLIST = {
         "map",
     },
     "DataFrame": {
+        # Writes the frame as DFTracer files through the sink writer.
+        "write",
         "share",
         "index_names",
         "with_index",

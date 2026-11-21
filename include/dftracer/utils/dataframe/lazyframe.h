@@ -701,6 +701,8 @@ class LazyFrame {
     /// 0 (the default) means "auto": ~1/3 of available memory. Pass
     /// memory::NO_SPILL_BUDGET to disable spilling.
     LazyFrame memory_budget(std::uint64_t bytes) const;
+    /// The budget set by @ref memory_budget; 0 is auto.
+    std::uint64_t memory_budget() const noexcept { return memory_budget_; }
     /// Explicitly set the budget to ~1/3 of available memory (same as the
     /// default); sugar for readers who want spilling stated at the call site.
     LazyFrame auto_spill() const;

@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <type_traits>
 #include <utility>
 
 namespace dftracer::utils::trace::table::detail {
@@ -462,22 +463,65 @@ void pack_bits(const std::uint8_t* flags, std::size_t n, std::uint8_t* out) {
         if (flags[i]) out[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
 }
 
-TypeId type_of(Kind kind) {
-    switch (kind) {
+template <class T>
+Series narrow_column(TypeId type, const std::uint64_t* words, std::size_t n,
+                     const std::uint8_t* validity) {
+    dstd::Vector<T> values(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        if constexpr (std::is_same_v<T, float>)
+            values[i] = static_cast<float>(std::bit_cast<double>(words[i]));
+        else
+            values[i] = static_cast<T>(words[i]);
+    }
+    return Series::flat(type, values.data(), static_cast<std::int64_t>(n),
+                        validity);
+}
+
+Series number_column(TypeId type, const std::uint64_t* words, std::size_t n,
+                     const std::uint8_t* validity) {
+    switch (type) {
+        case TypeId::Int8:
+            return narrow_column<std::int8_t>(type, words, n, validity);
+        case TypeId::Int16:
+            return narrow_column<std::int16_t>(type, words, n, validity);
+        case TypeId::Int32:
+            return narrow_column<std::int32_t>(type, words, n, validity);
+        case TypeId::Uint8:
+            return narrow_column<std::uint8_t>(type, words, n, validity);
+        case TypeId::Uint16:
+            return narrow_column<std::uint16_t>(type, words, n, validity);
+        case TypeId::Uint32:
+            return narrow_column<std::uint32_t>(type, words, n, validity);
+        case TypeId::Float32:
+            return narrow_column<float>(type, words, n, validity);
+        default:
+            return Series::flat(type, words, static_cast<std::int64_t>(n),
+                                validity);
+    }
+}
+
+}  // namespace
+
+TypeId column_type(const Field& field) {
+    switch (field.kind) {
         case Kind::Int:
-            return TypeId::Int64;
+            return field.bits == 8    ? TypeId::Int8
+                   : field.bits == 16 ? TypeId::Int16
+                   : field.bits == 32 ? TypeId::Int32
+                                      : TypeId::Int64;
         case Kind::UInt:
-            return TypeId::Uint64;
+            return field.bits == 8    ? TypeId::Uint8
+                   : field.bits == 16 ? TypeId::Uint16
+                   : field.bits == 32 ? TypeId::Uint32
+                                      : TypeId::Uint64;
         case Kind::Float:
-            return TypeId::Float64;
+            return field.bits == 32 ? TypeId::Float32 : TypeId::Float64;
         case Kind::Bool:
             return TypeId::Bool;
         default:
             return TypeId::String;
     }
 }
-
-}  // namespace
 
 dstd::Result<Decoded> decode_lines(const Header& header,
                                    dstd::Span<const std::size_t> wanted,
@@ -547,7 +591,7 @@ dstd::Result<Decoded> decode_lines(const Header& header,
     std::size_t nparts_strings = 0;
     for (std::size_t k = 0; k < ncols; ++k) {
         columns[k].valid.resize(nrows);
-        if (type_of(header.fields[wanted[k]].kind) == TypeId::String)
+        if (column_type(header.fields[wanted[k]]) == TypeId::String)
             part_of[k] = nparts_strings++;
         else
             columns[k].words.resize(nrows);
@@ -577,7 +621,7 @@ dstd::Result<Decoded> decode_lines(const Header& header,
             for (std::int64_t k = first; k < last; ++k) {
                 const auto i = static_cast<std::size_t>(k);
                 Column& c = columns[i];
-                const TypeId type = type_of(header.fields[wanted[i]].kind);
+                const TypeId type = column_type(header.fields[wanted[i]]);
                 dstd::Vector<std::uint8_t> bits((nrows + 7) / 8);
                 bool any_null = false;
                 for (std::size_t r = 0; r < nrows && !any_null; ++r)
@@ -596,9 +640,8 @@ dstd::Result<Decoded> decode_lines(const Header& header,
                         type, packed.data(), static_cast<std::int64_t>(nrows),
                         validity);
                 } else if (type != TypeId::String) {
-                    out.columns[i] = Series::flat(
-                        type, c.words.data(), static_cast<std::int64_t>(nrows),
-                        validity);
+                    out.columns[i] =
+                        number_column(type, c.words.data(), nrows, validity);
                 } else {
                     const std::size_t p = part_of[i];
                     std::size_t bytes = 0;

@@ -117,15 +117,12 @@ dstd::Result<void> TraceWriter::begin_line() {
     return {};
 }
 
-dstd::Result<void> TraceWriter::write_event(dstd::StringView name,
-                                            dstd::StringView cat,
-                                            std::uint64_t ts, std::uint64_t dur,
-                                            std::uint64_t pid,
-                                            std::uint64_t tid, Args args,
-                                            RecordExtras extras) {
-    if (auto begun = begin_line(); !begun) return begun.error();
+void format_event(dstd::String& out, dstd::StringView name,
+                  dstd::StringView cat, std::uint64_t ts, std::uint64_t dur,
+                  std::uint64_t pid, std::uint64_t tid, Args args,
+                  RecordExtras extras) {
     {
-        json::Writer w(buf_);
+        json::Writer w(out);
         w.begin_object();
         write_id(w, extras);
         w.member("name", name);
@@ -139,16 +136,14 @@ dstd::Result<void> TraceWriter::write_event(dstd::StringView name,
         write_args(w, args);
         w.end_object();
     }
-    buf_ += '\n';
-    return {};
+    out += '\n';
 }
 
-dstd::Result<void> TraceWriter::write_counter(
-    dstd::StringView name, dstd::StringView cat, std::uint64_t ts,
-    std::uint64_t pid, std::uint64_t tid, Args args, RecordExtras extras) {
-    if (auto begun = begin_line(); !begun) return begun.error();
+void format_counter(dstd::String& out, dstd::StringView name,
+                    dstd::StringView cat, std::uint64_t ts, std::uint64_t pid,
+                    std::uint64_t tid, Args args, RecordExtras extras) {
     {
-        json::Writer w(buf_);
+        json::Writer w(out);
         w.begin_object();
         write_id(w, extras);
         w.member("name", name);
@@ -161,16 +156,15 @@ dstd::Result<void> TraceWriter::write_counter(
         write_args(w, args);
         w.end_object();
     }
-    buf_ += '\n';
-    return {};
+    out += '\n';
 }
 
-dstd::Result<void> TraceWriter::write_aggregated(
-    dstd::StringView name, dstd::StringView cat, std::uint64_t ts,
-    std::uint64_t pid, std::uint64_t tid, Args args, RecordExtras extras) {
-    if (auto begun = begin_line(); !begun) return begun.error();
+void format_aggregated(dstd::String& out, dstd::StringView name,
+                       dstd::StringView cat, std::uint64_t ts,
+                       std::uint64_t pid, std::uint64_t tid, Args args,
+                       RecordExtras extras) {
     {
-        json::Writer w(buf_);
+        json::Writer w(out);
         w.begin_object();
         write_id(w, extras);
         w.member("name", name);
@@ -183,17 +177,14 @@ dstd::Result<void> TraceWriter::write_aggregated(
         write_args(w, args);
         w.end_object();
     }
-    buf_ += '\n';
-    return {};
+    out += '\n';
 }
 
-dstd::Result<void> TraceWriter::write_metadata(dstd::StringView name,
-                                               std::uint64_t pid,
-                                               std::uint64_t tid, Args args,
-                                               RecordExtras extras) {
-    if (auto begun = begin_line(); !begun) return begun.error();
+void format_metadata(dstd::String& out, dstd::StringView name,
+                     std::uint64_t pid, std::uint64_t tid, Args args,
+                     RecordExtras extras) {
     {
-        json::Writer w(buf_);
+        json::Writer w(out);
         w.begin_object();
         write_id(w, extras);
         w.member("name", name);
@@ -205,7 +196,42 @@ dstd::Result<void> TraceWriter::write_metadata(dstd::StringView name,
         write_args(w, args);
         w.end_object();
     }
-    buf_ += '\n';
+    out += '\n';
+}
+
+dstd::Result<void> TraceWriter::write_event(dstd::StringView name,
+                                            dstd::StringView cat,
+                                            std::uint64_t ts, std::uint64_t dur,
+                                            std::uint64_t pid,
+                                            std::uint64_t tid, Args args,
+                                            RecordExtras extras) {
+    if (auto begun = begin_line(); !begun) return begun.error();
+    format_event(buf_, name, cat, ts, dur, pid, tid, args, extras);
+    return {};
+}
+
+dstd::Result<void> TraceWriter::write_counter(
+    dstd::StringView name, dstd::StringView cat, std::uint64_t ts,
+    std::uint64_t pid, std::uint64_t tid, Args args, RecordExtras extras) {
+    if (auto begun = begin_line(); !begun) return begun.error();
+    format_counter(buf_, name, cat, ts, pid, tid, args, extras);
+    return {};
+}
+
+dstd::Result<void> TraceWriter::write_aggregated(
+    dstd::StringView name, dstd::StringView cat, std::uint64_t ts,
+    std::uint64_t pid, std::uint64_t tid, Args args, RecordExtras extras) {
+    if (auto begun = begin_line(); !begun) return begun.error();
+    format_aggregated(buf_, name, cat, ts, pid, tid, args, extras);
+    return {};
+}
+
+dstd::Result<void> TraceWriter::write_metadata(dstd::StringView name,
+                                               std::uint64_t pid,
+                                               std::uint64_t tid, Args args,
+                                               RecordExtras extras) {
+    if (auto begun = begin_line(); !begun) return begun.error();
+    format_metadata(buf_, name, pid, tid, args, extras);
     return {};
 }
 

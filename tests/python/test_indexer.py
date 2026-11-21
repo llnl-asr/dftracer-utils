@@ -972,7 +972,8 @@ class TestBloomFields:
             return ix.ensure()
 
     def _scan(self, trace, tmp_path, dsl):
-        return dftu_utils.trace.TraceViewer(trace).filter(dsl).sink_json(str(tmp_path / "out.json"))
+        frame, counts = dftu_utils.trace.TraceViewer(trace).filter(dsl)._collect_counted()
+        return {**counts, "events_matched": frame.height}
 
     def test_indexed_fields_skip_chunks(self, tmp_path):
         trace = _member_trace(str(tmp_path / "t.pfw.gz"))
@@ -1086,8 +1087,7 @@ class TestExtensions:
         )
 
     def _matched(self, trace, tmp_path, dsl):
-        out = str(tmp_path / "out.json")
-        return dftu_utils.trace.TraceViewer(trace).filter(dsl).sink_json(out)["events_matched"]
+        return dftu_utils.trace.TraceViewer(trace).filter(dsl)._collect_counted()[0].height
 
     def test_manifest_lists_every_extension(self, tmp_path):
         trace = _member_trace(str(tmp_path / "t.pfw.gz"))

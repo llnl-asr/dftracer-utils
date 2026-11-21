@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Test cases for the private table codec (_write_table, _read_table)."""
+"""Test cases for the table reader behind TraceViewer and the table writer behind DataFrame.write."""
 
 import gzip
 import importlib.util
@@ -14,8 +14,10 @@ np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 pa = pytest.importorskip("pyarrow")
 
-from dftracer.utils import DataFrame  # noqa: E402
+from dftracer.utils import DataFrame, TraceWriteOptions  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
+from dftracer.utils._sink import run_sink  # noqa: E402
+from dftracer.utils.trace import TraceViewer  # noqa: E402
 
 DATA = os.path.join(os.path.dirname(__file__), "data")
 REFERENCE = os.environ.get("DFTRACER_UTILS_DFANALYZER_TABLE_REF")
@@ -27,7 +29,7 @@ def header(nrows, fields, table="t"):
     return json.dumps(
         {
             "format": "dftu.table",
-            "format_version": 1,
+            "format_version": _ext.TABLE_FORMAT_VERSION,
             "table": table,
             "nrows": nrows,
             "index": [],
@@ -36,6 +38,26 @@ def header(nrows, fields, table="t"):
             "meta": {},
         }
     )
+
+
+def save_table(frame, path, hdr, raw_columns, level, member_size):
+    """Write ``frame`` as a table with the header ``hdr`` through the sink writer."""
+    return run_sink(
+        frame.lazy(),
+        path,
+        header=json.loads(hdr),
+        known_rows=frame.num_rows,
+        raw_columns=tuple(raw_columns),
+        mode="overwrite",
+        default_rows="records",
+        options=TraceWriteOptions(level=level, member_size=member_size, build_index=False),
+    )
+
+
+def read(path):
+    """The frame TraceViewer reads from a table file and its table header."""
+    frame = TraceViewer(path).collect()
+    return frame, frame._table_header
 
 
 def sample():
@@ -89,9 +111,9 @@ def load_reference():
 def test_round_trip_keeps_values_and_masks(tmp_path, name):
     table, hdr = sample()
     path = str(tmp_path / name)
-    _ext._write_table(DataFrame.from_arrow(table), path, hdr, ["raw"], 6, 0)
-    frame, back_header = _ext._read_table(path, 0)
-    assert back_header == hdr
+    save_table(DataFrame.from_arrow(table), path, hdr, ["raw"], 6, 0)
+    frame, back_header = read(path)
+    assert back_header == json.loads(hdr)
     got = frame.to_arrow()
     assert got.column_names == table.column_names
     for col in table.column_names:
@@ -101,7 +123,7 @@ def test_round_trip_keeps_values_and_masks(tmp_path, name):
 def test_every_line_is_json_with_integer_ph(tmp_path):
     table, hdr = sample()
     path = str(tmp_path / "t.pfw.gz")
-    _ext._write_table(DataFrame.from_arrow(table), path, hdr, ["raw"], 1, 2)
+    save_table(DataFrame.from_arrow(table), path, hdr, ["raw"], 1, 2)
     lines = lines_of(path)
     assert len(lines) == table.num_rows + 1
     records = [json.loads(line) for line in lines]
@@ -113,26 +135,42 @@ def test_every_line_is_json_with_integer_ph(tmp_path):
     assert records[3]["args"]["f"] is None
 
 
-def test_header_must_match_the_frame(tmp_path):
-    table, hdr = sample()
-    with pytest.raises(Exception):
-        _ext._write_table(
-            DataFrame.from_arrow(table), str(tmp_path / "x.pfw"), header(3, []), [], 6, 0
-        )
-
-
-def test_unknown_version_is_refused(tmp_path):
+def _version_file(tmp_path, version):
     path = tmp_path / "v.pfw"
-    bad = json.loads(header(0, []))
-    bad["format_version"] = 2
-    path.write_text(json.dumps({"ph": 4, "args": bad}) + "\n")
-    with pytest.raises(Exception, match="format_version"):
-        _ext._read_table(str(path), 0)
+    args = json.loads(header(0, []))
+    args["format_version"] = version
+    path.write_text(json.dumps({"ph": 4, "name": "dftu.table", "args": args}) + "\n")
+    return str(path)
+
+
+def test_the_engines_major_with_a_lower_or_equal_minor_reads(tmp_path):
+    major, minor = (int(p) for p in _ext.TABLE_FORMAT_VERSION.split("."))
+    for version in (f"{major}.{minor}", f"{major}.0", major):
+        frame, _ = read(_version_file(tmp_path, version))
+        assert frame.num_rows == 0
+
+
+@pytest.mark.parametrize("delta", ["higher_minor", "other_major", "lower_major"])
+def test_another_major_or_a_higher_minor_is_refused(tmp_path, delta):
+    major, minor = (int(p) for p in _ext.TABLE_FORMAT_VERSION.split("."))
+    version = {
+        "higher_minor": f"{major}.{minor + 1}",
+        "other_major": f"{major + 1}.0",
+        "lower_major": f"{major - 1}.0",
+    }[delta]
+    with pytest.raises(Exception, match="unknown dftu.table format_version") as err:
+        read(_version_file(tmp_path, version))
+    assert version in str(err.value) and _ext.TABLE_FORMAT_VERSION in str(err.value)
+
+
+@pytest.mark.parametrize("version", ["1", "1.x", "1.0.0", "", None, 1.5, [1, 0]])
+def test_a_malformed_version_is_refused(tmp_path, version):
+    with pytest.raises(Exception, match="unknown dftu.table format_version"):
+        read(_version_file(tmp_path, version))
 
 
 def test_reads_a_dfanalyzer_v1_file():
-    frame, hdr = _ext._read_table(os.path.join(DATA, "dfanalyzer_table_v1.pfw.gz"), 0)
-    args = json.loads(hdr)
+    frame, args = read(os.path.join(DATA, "dfanalyzer_table_v1.pfw.gz"))
     assert args["index_names"] == [None, "lvl"]
     got = frame.to_arrow()
     assert got.column_names == [f["name"] for f in args["fields"]]
@@ -166,7 +204,7 @@ def test_dfanalyzer_reads_our_file(tmp_path):
             "s": pa.array(df["s"]),
         }
     )
-    _ext._write_table(DataFrame.from_arrow(table), path, header(3, fields), [], 6, 0)
+    save_table(DataFrame.from_arrow(table), path, header(3, fields), [], 6, 0)
     back = ref.read_table(path)
     pd.testing.assert_frame_equal(back.drop(columns="f"), df.drop(columns="f"), check_dtype=True)
     assert str(back["f"].dtype) == "Float64"
@@ -184,7 +222,7 @@ def test_we_read_dfanalyzer_written_file(tmp_path):
     )
     path = str(tmp_path / "ref.pfw.gz")
     ref.write_table(df, path, "t")
-    frame, hdr = _ext._read_table(path, 0)
+    frame, hdr = read(path)
     got = frame.to_arrow()
     assert got.column_names == ["__index_level_0__", "lvl", "i", "f"]
     assert got.column("i").to_pylist() == [1, None, 3]

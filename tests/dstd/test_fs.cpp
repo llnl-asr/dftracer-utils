@@ -207,6 +207,31 @@ TEST_CASE("rename") {
     CHECK(missing.error().is(dstd::Condition::NotFound));
 }
 
+TEST_CASE("rename_no_replace never replaces") {
+    dftu_utils_test::ScopedTestDir dir("dstd_fs_rename_no_replace");
+    dir.create_file("a.txt", "new");
+    dir.create_file("b.txt", "old");
+
+    auto refused = dstd::fs::rename_no_replace(in(dir, "a.txt").view(),
+                                               in(dir, "b.txt").view());
+    REQUIRE(refused.has_value());
+    CHECK_FALSE(*refused);
+    CHECK(read_text(in(dir, "a.txt")) == "new");
+    CHECK(read_text(in(dir, "b.txt")) == "old");
+
+    auto moved = dstd::fs::rename_no_replace(in(dir, "a.txt").view(),
+                                             in(dir, "c.txt").view());
+    REQUIRE(moved.has_value());
+    CHECK(*moved);
+    CHECK_FALSE(dstd::fs::exists(in(dir, "a.txt").view()).value());
+    CHECK(read_text(in(dir, "c.txt")) == "new");
+
+    auto missing = dstd::fs::rename_no_replace(in(dir, "nope").view(),
+                                               in(dir, "d.txt").view());
+    REQUIRE_FALSE(missing.has_value());
+    CHECK(missing.error().is(dstd::Condition::NotFound));
+}
+
 TEST_CASE("copy_file honours the mode") {
     dftu_utils_test::ScopedTestDir dir("dstd_fs_copy");
     dir.create_file("from.txt", "hello");

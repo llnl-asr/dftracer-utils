@@ -1,4 +1,4 @@
-:description: Store a DataFrame as a typed DFTracer JSON-lines table file with write_table, read it back with read_table, and get the exact pandas frame with to_pandas().
+:description: Store a DataFrame as a typed DFTracer JSON-lines table file with DataFrame.write, read it back with TraceViewer, and get the exact pandas frame with to_pandas().
 
 Save a frame as a table file
 ============================
@@ -14,7 +14,8 @@ Write and read
 
 .. code-block:: python
 
-   from dftracer.utils import DataFrame, read_table, write_table
+   from dftracer.utils import DataFrame
+   from dftracer.utils.trace import TraceViewer
 
    df = DataFrame.from_dict(
        {
@@ -23,14 +24,17 @@ Write and read
            "time": [0.5, 1.5, 2.0, 0.25],
        }
    )
-   write_table(df, "profile.pfw.gz", name="profile", meta={"run": 1})
-   profile = read_table("profile.pfw.gz")
+   df.write("profile.pfw.gz", name="profile", meta={"run": 1}, mode="overwrite")
+   profile = TraceViewer("profile.pfw.gz").collect()
 
-A path ending in ``.gz`` is a multi-member gzip file, which ``read_table``
-decodes in parallel. ``read_table(path)`` is ``TraceViewer(path).collect()``:
-to filter a table before it is in memory, or to read it from an index, use
-:class:`~dftracer.utils.trace.TraceViewer` itself (see :doc:`/api/trace_viewer`). ``read_table`` returns a dftracer.utils ``DataFrame``, so
-the rest of the engine works on it directly:
+A path ending in ``.pfw.gz`` is a multi-member gzip file, which a read decodes
+in parallel; ``.pfw`` is plain text; any other path is a folder of
+``part-NNNNN.pfw.gz`` files. The write is staged beside the target and renamed
+into place, so a failed write leaves nothing. To filter a table before it is in
+memory, or to read it from its index, use
+:class:`~dftracer.utils.trace.TraceViewer` itself (see :doc:`/api/trace_viewer`).
+``collect()`` returns a dftracer.utils ``DataFrame``, so the rest of the engine
+works on it directly:
 
 .. code-block:: python
 
@@ -40,10 +44,9 @@ the rest of the engine works on it directly:
 Get the exact pandas frame
 --------------------------
 
-The frame ``read_table`` returns carries its table header. ``to_pandas()`` with
+The frame a table read returns carries its table header. ``to_pandas()`` with
 no arguments uses it to give the pandas frame that was written, with its
-dtypes, categories, set and list cells and index. NA and NaN stay apart in a
-nullable float column.
+dtypes, categories and index. NA and NaN stay apart in a nullable float column.
 
 .. code-block:: python
 
@@ -60,8 +63,8 @@ nullable float column.
        },
        index=pd.Index(["a", "b", "c"], name="proc"),
    )
-   write_table(original, "typed.pfw.gz", name="typed")
-   exact = read_table("typed.pfw.gz").to_pandas()
+   DataFrame.from_pandas(original).write("typed.pfw.gz", name="typed", mode="overwrite")
+   exact = TraceViewer("typed.pfw.gz").collect().to_pandas()
 
 A new frame (a filter, a join) has no header, and a frame changed in place
 (``df["a"] = ...``, ``df.loc[...] = ...``) drops it. ``to_pandas`` with an explicit ``arrow``, ``nullable`` or ``index``
@@ -79,32 +82,17 @@ Line 1 is the header with the dtype of every field. Each other line is one row
 in ``args``. See :doc:`../../api/table` for the format and what a table cannot
 carry.
 
-Append frames
--------------
+Write a plan without collecting it
+----------------------------------
 
-``TableWriter`` takes frames of one schema and writes one file when the block
-ends. It holds the frames in memory until then, because line 1 states the total
-row count.
-
-.. code-block:: python
-
-   from dftracer.utils import TableWriter
-
-   with TableWriter("chunks.pfw.gz", name="chunks") as w:
-       for part in (df, df):
-           w.write(part)
-
-A block that ends by an exception writes nothing.
-
-Dask
-----
-
-``write_table`` of a Dask ``DataFrame`` writes a folder with one table file per
-partition, and ``read_table`` of that folder reads them back in part-number order.
+``LazyFrame.sink`` and ``TraceViewer.sink`` write a plan as it streams, in
+parts of ``part_size`` rows when you ask for them.
 
 .. code-block:: python
 
-   import dask.dataframe as dd
+   from dftracer.utils import col
 
-   write_table(dd.from_pandas(original, npartitions=2), "parts", name="profile")
-   whole = read_table("parts")
+   summary = profile.lazy().filter(col("calls") > 2).sink(
+       "busy", part_size=2, mode="overwrite"
+   )
+   whole = TraceViewer("busy").collect()

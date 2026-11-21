@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_TABLE_TABLE_HEADER_H
 #define DFTRACER_UTILS_TRACE_TABLE_TABLE_HEADER_H
 
+#include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/string.h>
@@ -13,7 +14,12 @@
 namespace dftracer::utils::trace::table::detail {
 
 inline constexpr dstd::StringView FORMAT = "dftu.table";
-inline constexpr std::int64_t FORMAT_VERSION = 1;
+inline constexpr std::int64_t FORMAT_VERSION_MAJOR =
+    DFTRACER_UTILS_TABLE_FORMAT_VERSION_MAJOR;
+inline constexpr std::int64_t FORMAT_VERSION_MINOR =
+    DFTRACER_UTILS_TABLE_FORMAT_VERSION_MINOR;
+inline constexpr dstd::StringView FORMAT_VERSION =
+    DFTRACER_UTILS_TABLE_FORMAT_VERSION_STRING;
 
 /// How the cells of a field are read from and written to JSON.
 enum class Kind : std::uint8_t {
@@ -28,7 +34,7 @@ enum class Kind : std::uint8_t {
 struct Field {
     dstd::String name;
     Kind kind = Kind::String;
-    unsigned bits = 64;    ///< width of an integer dtype
+    unsigned bits = 64;    ///< width of an integer or float dtype
     bool nulls_ok = true;  ///< false for a numpy integer or bool dtype
     // What parts of one table must share, as the header spells it.
     dstd::String dtype;

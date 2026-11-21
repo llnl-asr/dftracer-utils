@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 from .._dataframe import DataFrame, PhaseArg, TimeUnitArg
 from .._enums import coerce_bytes, coerce_duration
+from .._sink import TraceWriteOptions
 from ..dftracer_utils_ext import NUM_SHARDS
 from ..trace._index_records import IndexRecords
 from ..trace._viewer import TraceViewer
@@ -162,7 +163,9 @@ def _dv_write_task(
     build_index: bool,
 ) -> dict[str, str]:
     """Worker: export this shard to one re-indexable .pfw.gz."""
-    _make_viewer(files, index_dir, plan).export_trace(output_path, compress=True, index=build_index)
+    _make_viewer(files, index_dir, plan).sink(
+        output_path, options=TraceWriteOptions(build_index=build_index), mode="overwrite"
+    )
     return {"path": output_path}
 
 
@@ -172,17 +175,14 @@ def _dv_materialize_shard_task(
     plan: _Plan,
     subdir: str,
     checkpoint_size: int,
-    part_size: int,
 ) -> str:
     """Worker: materialize this shard's filtered events into a rank subdir of
     the view's parts dir, indexed in the view root that holds them all."""
     os.makedirs(subdir, exist_ok=True)
-    _make_viewer(files, index_dir, plan).export_trace(
+    _make_viewer(files, index_dir, plan).sink(
         os.path.join(subdir, "part.pfw.gz"),
-        compress=True,
-        index=True,
-        member_size=checkpoint_size,
-        part_size=part_size,
+        options=TraceWriteOptions(build_index=True, member_size=checkpoint_size),
+        mode="overwrite",
     )
     return subdir
 
@@ -538,8 +538,8 @@ class DaskTraceViewer:
                 break
             cursor = pg.next_cursor
 
-    def export_trace(self, output_dir: str, *, build_index: bool = False) -> dict[str, list[str]]:
-        """Export per-shard re-indexable ``<output_dir>/part-<n>.pfw.gz`` files."""
+    def sink(self, output_dir: str, *, build_index: bool = False) -> dict[str, list[str]]:
+        """Write per-shard ``<output_dir>/part-<n>.pfw.gz`` files, one per shard."""
         client = self._resolve_client()
         os.makedirs(output_dir, exist_ok=True)
         futures = [
@@ -567,10 +567,11 @@ class DaskTraceViewer:
         into its own subdir of the shared MV directory (a self-contained part +
         index), then the coordinator writes one manifest over the full base set.
         A later matching read reuses it. Needs a views anchor - a shared index
-        location or views_root(). checkpoint_size/part_size accept unit strings
-        (e.g. "4MB")."""
+        location or views_root(). checkpoint_size accepts a unit string
+        (e.g. "4MB"); part_size must stay 0."""
         checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
-        part_size = coerce_bytes(part_size, "part_size")
+        if coerce_bytes(part_size, "part_size"):
+            raise ValueError("part_size is not supported: each shard writes one part")
         client = self._resolve_client()
         coord = _make_viewer(self._files, self._index_dir, self._plan)
         mv_dir = coord.materialize_dir()
@@ -584,7 +585,6 @@ class DaskTraceViewer:
                 self._plan,
                 os.path.join(mv_dir, "parts", f"shard-{n}"),
                 checkpoint_size,
-                part_size,
                 pure=False,
             )
             for n, s in enumerate(self._shards())
@@ -634,8 +634,8 @@ def distributed_write_trace(
     build_index: bool = False,
     client: Client | None = None,
 ) -> dict[str, list[str]]:
-    """Thin wrapper over ``DaskTraceViewer(...).filter(view).export_trace(...)``."""
+    """Thin wrapper over ``DaskTraceViewer(...).filter(view).sink(...)``."""
     dv = DaskTraceViewer(files, index_dir, client=client, files_per_task=files_per_task)
     if view:
         dv = dv.filter(view)
-    return dv.export_trace(output_dir, build_index=build_index)
+    return dv.sink(output_dir, build_index=build_index)

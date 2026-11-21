@@ -66,6 +66,11 @@ Expected<bool, Error> remove(PathView path);
 /// Children are removed by name relative to the held directory.
 Expected<std::uint64_t, Error> remove_all(PathView path);
 Expected<void, Error> rename(PathView from, PathView to);
+/// Renames from to to only when to does not exist, in one step, so a file
+/// that appears at to meanwhile is never replaced. True when renamed, false
+/// when to exists. A kernel or file system that cannot do it is an error with
+/// Condition::Unsupported; there is no fallback.
+Expected<bool, Error> rename_no_replace(PathView from, PathView to);
 Expected<void, Error> copy_file(PathView from, PathView to, CopyMode mode);
 /// Copies a directory tree, a symlink as a symlink and a file with copy_file.
 /// from may also be a single file or symlink. With FailIfExists every entry

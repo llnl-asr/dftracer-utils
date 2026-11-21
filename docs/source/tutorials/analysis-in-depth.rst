@@ -532,13 +532,13 @@ Expected output:
    DataFrame Table
 
 To write rows back out as a trace, use the viewer instead of the frame.
-``export_trace`` writes the selected events as a gzip trace and ``sink_json``
-writes them as NDJSON. Both return the scan stats:
+``TraceViewer.sink`` writes the selected events as an indexed gzip trace and
+returns a ``SinkSummary``:
 
 .. code-block:: python
 
-   stats = TraceViewer("app.pfw.gz").filter('name == "read"').export_trace("reads.pfw.gz")
-   print(stats["events_matched"])
+   summary = TraceViewer("app.pfw.gz").filter('name == "read"').sink("reads.pfw.gz")
+   print(summary.rows)
 
 Expected output:
 
@@ -562,7 +562,7 @@ What you learned
 - Write the query as duql text or with the Python duql builder, and derive
   columns inside the query.
 - Convert to pandas / Arrow at the edge in Python, or write the selected
-  events with ``export_trace``.
+  events with ``sink``.
   C++ already holds the native frame.
 
 For the full frame and column reference, see :doc:`../guides/data/dataframe` and

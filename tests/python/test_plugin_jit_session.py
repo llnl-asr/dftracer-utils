@@ -110,7 +110,7 @@ def test_session_attach_same_set_twice_folds_it_once_each(tmp_path):
 
 @pytest.mark.skipif(not HAS_CXX, reason="no C++ compiler available for the jit backend")
 def test_session_attach_handle_read_before_execute_triggers_it(tmp_path):
-    # Session Handles (collect/sink_json/.../attach) all share one contract: a
+    # Session Handles (collect/sink/.../attach) all share one contract: a
     # read before an explicit execute() triggers it rather than raising, so
     # `attached.result()` alone - with no `with` block and no s.execute() call
     # - still resolves correctly.

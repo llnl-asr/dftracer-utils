@@ -32,6 +32,39 @@
 
 namespace dftracer::utils::fileio {
 
+dstd::Vector<std::uint8_t> gzip_stored_member(dstd::StringView bytes) {
+    const std::size_t blocks = std::max<std::size_t>(
+        1, (bytes.size() + GZIP_STORED_BLOCK_MAX - 1) / GZIP_STORED_BLOCK_MAX);
+    dstd::Vector<std::uint8_t> out;
+    out.reserve(10 + 5 * blocks + bytes.size() + 8);
+    const std::uint8_t head[10] = {0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff};
+    out.insert(out.end(), head, head + 10);
+    std::size_t at = 0;
+    for (std::size_t b = 0; b < blocks; ++b) {
+        const std::size_t n =
+            std::min(GZIP_STORED_BLOCK_MAX, bytes.size() - at);
+        const auto len = static_cast<std::uint16_t>(n);
+        const auto nlen = static_cast<std::uint16_t>(~len);
+        out.push_back(b + 1 == blocks ? 1 : 0);
+        out.push_back(static_cast<std::uint8_t>(len & 0xff));
+        out.push_back(static_cast<std::uint8_t>(len >> 8));
+        out.push_back(static_cast<std::uint8_t>(nlen & 0xff));
+        out.push_back(static_cast<std::uint8_t>(nlen >> 8));
+        out.insert(
+            out.end(), reinterpret_cast<const std::uint8_t*>(bytes.data()) + at,
+            reinterpret_cast<const std::uint8_t*>(bytes.data()) + at + n);
+        at += n;
+    }
+    const std::uint32_t crc =
+        compress::gzip_crc32(0, bytes.data(), bytes.size());
+    const auto size = static_cast<std::uint32_t>(bytes.size());
+    for (int i = 0; i < 4; ++i)
+        out.push_back(static_cast<std::uint8_t>(crc >> (8 * i)));
+    for (int i = 0; i < 4; ++i)
+        out.push_back(static_cast<std::uint8_t>(size >> (8 * i)));
+    return out;
+}
+
 dstd::String gzip_part_path(dstd::StringView base, int idx, bool multi) {
     if (!multi) return dstd::String(base);
     const std::size_t pos = base.rfind(".pfw");
@@ -244,7 +277,9 @@ struct GzipLineWriter::Impl {
     coro::CoroTask<bool> write_extra(dstd::String bytes, bool header) {
         if (bytes.empty()) co_return true;
         dstd::Vector<std::uint8_t> comp;
-        if (opts.compress) {
+        if (opts.compress && header && opts.part_header_stored) {
+            comp = gzip_stored_member(bytes);
+        } else if (opts.compress) {
             auto c = take_compressor();
             const bool ok = c->valid() && c->compress_member_into(
                                               comp, bytes.data(), bytes.size());

@@ -15,15 +15,15 @@ import pytest
 
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
-pytest.importorskip("pyarrow")
+pa = pytest.importorskip("pyarrow")
 
 import dftracer.utils as dftu  # noqa: E402
-from dftracer.utils import DataFrame, col, read_table, write_table  # noqa: E402
+from dftracer.utils import DataFrame, col  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as ext  # noqa: E402
 from dftracer.utils.index import Indexer  # noqa: E402
 from dftracer.utils.trace import TraceViewer  # noqa: E402
 
-from .test_table_io import EQUAL, matrix, sets_equal_nan  # noqa: E402
+from .test_table_io import EQUAL, load_table, matrix, save_table, sets_equal_nan  # noqa: E402
 
 REFUSED = [
     ("phase", ("any",)),
@@ -37,7 +37,6 @@ REFUSED = [
     ("containment", ()),
     ("index_records", ()),
     ("statistics", ()),
-    ("sink_json", ("x.json",)),
     ("materialize", ()),
     ("duql", ("where i > 1",)),
     ("memory_budget", (1 << 20,)),
@@ -71,10 +70,10 @@ def same(a, b):
     )
 
 
-def test_a_table_reads_as_the_old_read_table_on_the_full_matrix(tmp_path):
+def test_a_table_reads_back_equal_on_the_full_matrix(tmp_path):
     df = matrix()
     path = str(tmp_path / "t.pfw.gz")
-    write_table(df, path, name="t")
+    save_table(df, path, name="t")
     tv = TraceViewer(path)
     frame = tv.collect()
     assert isinstance(frame, DataFrame)
@@ -84,7 +83,7 @@ def test_a_table_reads_as_the_old_read_table_on_the_full_matrix(tmp_path):
     sets_equal_nan(exact["sets"].tolist(), df["sets"].tolist())
     sets_equal_nan(exact["lists"].tolist(), df["lists"].tolist())
     assert list(exact.dtypes.astype(str)) == list(df.dtypes.astype(str))
-    assert list(read_table(path).to_pandas().columns) == list(df.columns)
+    assert list(load_table(path).to_pandas().columns) == list(df.columns)
     assert tv.columns == list(df.columns)
     assert set(tv.schema) == set(df.columns)
 
@@ -95,7 +94,7 @@ def test_a_table_with_an_index_keeps_it(tmp_path):
         index=pd.MultiIndex.from_arrays([[0, 1, 2], ["a", "b", "c"]], names=[None, "lvl"]),
     )
     path = str(tmp_path / "t.pfw.gz")
-    write_table(df, path, name="t")
+    save_table(df, path, name="t")
     frame = TraceViewer(path).collect()
     assert frame.index_names() == ["__index_level_0__", "lvl"]
     pd.testing.assert_frame_equal(frame.to_pandas(), df, **EQUAL)
@@ -104,7 +103,7 @@ def test_a_table_with_an_index_keeps_it(tmp_path):
 def test_a_zero_row_table_keeps_its_columns(tmp_path):
     df = pd.DataFrame({"i": pd.Series([], dtype="int64"), "s": pd.Series([], dtype=object)})
     path = str(tmp_path / "t.pfw.gz")
-    write_table(df, path, name="t")
+    save_table(df, path, name="t")
     frame = TraceViewer(path).collect()
     assert frame.num_rows == 0 and frame.columns == ["i", "s"]
 
@@ -117,7 +116,7 @@ def test_a_folder_and_a_list_read_the_parts_in_part_number_order(tmp_path):
         df = pd.DataFrame(
             {"i": [n, n], "c": pd.Categorical([f"c{n}", "z"], categories=[f"c{n}", "z"])}
         )
-        write_table(df, str(folder / f"part-{n:05d}.pfw.gz"), name="t")
+        save_table(df, str(folder / f"part-{n:05d}.pfw.gz"), name="t")
         parts.append(df)
     want = [0, 0, 1, 1, 2, 2, 9, 9, 10, 10, 11, 11]
     by_folder = TraceViewer(str(folder)).collect()
@@ -135,21 +134,21 @@ def test_a_folder_and_a_list_read_the_parts_in_part_number_order(tmp_path):
 
 def test_unnumbered_names_in_a_folder_keep_their_given_order(tmp_path):
     a, b = tmp_path / "b.pfw.gz", tmp_path / "a.pfw.gz"
-    write_table(pd.DataFrame({"i": [1]}), str(a), name="t")
-    write_table(pd.DataFrame({"i": [2]}), str(b), name="t")
+    save_table(pd.DataFrame({"i": [1]}), str(a), name="t")
+    save_table(pd.DataFrame({"i": [2]}), str(b), name="t")
     assert TraceViewer([str(a), str(b)]).collect()["i"].to_list() == [1, 2]
 
 
 def test_parts_that_disagree_raise_before_any_row(tmp_path):
-    write_table(pd.DataFrame({"a": [1]}), str(tmp_path / "part-0.pfw.gz"), name="t")
-    write_table(pd.DataFrame({"a": [1.5]}), str(tmp_path / "part-1.pfw.gz"), name="t")
+    save_table(pd.DataFrame({"a": [1]}), str(tmp_path / "part-0.pfw.gz"), name="t")
+    save_table(pd.DataFrame({"a": [1.5]}), str(tmp_path / "part-1.pfw.gz"), name="t")
     with pytest.raises(ValueError, match="differ"):
         TraceViewer(str(tmp_path))
 
 
 def test_tables_and_traces_together_raise_naming_each(tmp_path):
     table = str(tmp_path / "t.pfw.gz")
-    write_table(pd.DataFrame({"a": [1]}), table, name="t")
+    save_table(pd.DataFrame({"a": [1]}), table, name="t")
     trace = str(tmp_path / "x.pfw")
     with open(trace, "w") as f:
         f.write('[\n{"name":"n","cat":"c","pid":1,"tid":1,"ts":1,"dur":1,"ph":"X"}\n')
@@ -160,10 +159,11 @@ def test_tables_and_traces_together_raise_naming_each(tmp_path):
 
 def test_a_claimed_header_that_is_wrong_raises_and_never_reads_as_a_trace(tmp_path):
     path = str(tmp_path / "t.pfw")
-    write_table(pd.DataFrame({"a": [1]}), path, name="t")
+    save_table(pd.DataFrame({"a": [1]}), path, name="t")
     text = open(path).read()
     bad = tmp_path / "v.pfw"
-    bad.write_text(text.replace('"format_version": 1', '"format_version": 2', 1))
+    bad.write_text(text.replace('"format_version":"1.0"', '"format_version":"2.0"', 1))
+    assert bad.read_text() != text
     with pytest.raises(ext.DFTUtilsError, match="format_version"):
         TraceViewer(str(bad))
     cut = tmp_path / "c.pfw"
@@ -179,7 +179,7 @@ def test_a_claimed_header_that_is_wrong_raises_and_never_reads_as_a_trace(tmp_pa
 @pytest.mark.parametrize("name,args", REFUSED)
 def test_trace_ops_are_refused_on_a_table(tmp_path, name, args):
     path = str(tmp_path / "t.pfw.gz")
-    write_table(pd.DataFrame({"i": [1, 2, 3]}), path, name="t")
+    save_table(pd.DataFrame({"i": [1, 2, 3]}), path, name="t")
     tv = TraceViewer(path)
     with pytest.raises(ext.DFTUtilsValueError, match=name):
         getattr(tv, name)(*args)
@@ -190,7 +190,7 @@ def test_the_table_ops_run(tmp_path):
         {"i": np.arange(10), "g": ["a", "b"] * 5, "c": pd.Categorical(["x", "y"] * 5)}
     )
     path = str(tmp_path / "t.pfw.gz")
-    write_table(df, path, name="t")
+    save_table(df, path, name="t")
     tv = TraceViewer(path)
     assert tv.filter(col("i") > 6).collect()["i"].to_list() == [7, 8, 9]
     assert tv.select("i").columns == ["i"]
@@ -215,7 +215,7 @@ def test_collect_carries_a_header_for_the_result_only_while_columns_are_the_tabl
         }
     )
     path = str(tmp_path / "t.pfw.gz")
-    write_table(df, path, name="t")
+    save_table(df, path, name="t")
     tv = TraceViewer(path)
     out = tv.filter(col("i") > 4).select("n", "c").collect()
     assert out._table_header["nrows"] == 3
@@ -254,7 +254,7 @@ def edge_table(request, tmp_path_factory):
     root = tmp_path_factory.mktemp("edge")
     df = edge_frame(nulls=request.param)
     path = str(root / "t.pfw.gz")
-    write_table(df, path, name="t")
+    save_table(df, path, name="t")
     plain = root / "copy"
     plain.mkdir()
     shutil.copy(path, plain / "t.pfw.gz")
@@ -294,7 +294,7 @@ def big_int_table(tmp_path_factory):
         }
     )
     path = str(root / "t.pfw.gz")
-    write_table(df, path, name="t")
+    save_table(df, path, name="t")
     plain = root / "copy"
     plain.mkdir()
     shutil.copy(path, plain / "t.pfw.gz")
@@ -346,7 +346,7 @@ def full_table(tmp_path_factory):
         }
     )
     path = str(root / "t.pfw.gz")
-    write_table(df, path, name="t")
+    save_table(df, path, name="t")
     return df, path, None
 
 
@@ -363,7 +363,8 @@ def test_a_selective_filter_inflates_fewer_chunks_than_a_full_scan(full_table):
     assert one["chunks_read"] < total
     tv.filter(col("i") >= 0).collect()
     every = counters()
-    assert every["chunks_read"] == total and every["chunks_skipped"] == 0
+    # The header member holds no rows, so even a keep-everything filter skips it.
+    assert every["chunks_read"] == total - 1 and every["chunks_skipped"] == 1
 
 
 def test_a_stale_missing_or_other_index_scans(tmp_path, full_table):
@@ -400,7 +401,7 @@ def test_a_filtered_read_streams_in_bounded_memory(tmp_path):
         {"i": np.arange(n), "f": np.arange(n) / 7.0, "s": [f"value-{x % 977}" for x in range(n)]}
     )
     path = str(tmp_path / "big.pfw.gz")
-    write_table(df, path, name="t")
+    save_table(df, path, name="t")
     script = textwrap.dedent(
         """
         import resource, sys
@@ -438,7 +439,7 @@ def test_a_filtered_read_streams_in_bounded_memory(tmp_path):
 
 def test_an_unfiltered_read_uses_the_direct_decode(tmp_path):
     path = str(tmp_path / "t.pfw.gz")
-    write_table(pd.DataFrame({"i": np.arange(1000)}), path, name="t")
+    save_table(pd.DataFrame({"i": np.arange(1000)}), path, name="t")
     counters()
     TraceViewer(path).collect()
     got = counters()
@@ -448,21 +449,20 @@ def test_an_unfiltered_read_uses_the_direct_decode(tmp_path):
     assert got["streamed_files"] == 1 and got["direct_files"] == 0
 
 
-def test_read_table_and_a_viewer_give_the_same_frame(tmp_path):
+def test_a_viewer_collects_the_frame_of_a_table(tmp_path):
     df = matrix()
     path = str(tmp_path / "t.pfw.gz")
-    write_table(df, path, name="t")
-    a = read_table(path)
+    save_table(df, path, name="t")
+    a = load_table(path)
     b = TraceViewer(path).collect()
     assert a._table_header == b._table_header
     assert json.dumps(a.to_dict(), default=str) == json.dumps(b.to_dict(), default=str)
-    assert dftu.read_table is read_table
 
 
 def test_a_filter_that_keeps_no_row_keeps_the_columns(tmp_path):
     df = pd.DataFrame({"i": np.arange(5), "s": list("abcde")})
     path = str(tmp_path / "t.pfw.gz")
-    write_table(df, path, name="t")
+    save_table(df, path, name="t")
     out = TraceViewer(path).filter(col("i") > 100).collect()
     assert out.num_rows == 0 and out.columns == ["i", "s"]
     pd.testing.assert_frame_equal(out.to_pandas(), df.iloc[:0].reset_index(drop=True), **EQUAL)
@@ -471,7 +471,7 @@ def test_a_filter_that_keeps_no_row_keeps_the_columns(tmp_path):
 def test_an_empty_result_keeps_its_typed_columns_on_every_terminal(tmp_path):
     df = pd.DataFrame({"i": np.arange(50), "s": [f"v{x}" for x in range(50)]})
     path = str(tmp_path / "t.pfw.gz")
-    write_table(df, path, name="t")
+    save_table(df, path, name="t")
     none = col("i") > 10**6
     plan = TraceViewer(path).filter(none)
     for batch in (0, 4):
@@ -696,7 +696,7 @@ def test_a_table_with_many_nulls_still_prunes(tmp_path):
     path = str(tmp_path / "t.pfw.gz")
     df = edge_frame()
     assert df["f"].isna().sum() > 10_000
-    write_table(df, path, name="t")
+    save_table(df, path, name="t")
     Indexer(path).build()
     counters()
     got = TraceViewer(path).filter(col("i") == 12345).collect().to_pandas()
@@ -741,3 +741,101 @@ def test_ordered_categories_must_have_the_same_labels_in_the_same_order(tmp_path
     _category_part(str(loose / "part-0.pfw.gz"), ["a", "b"], False, "a")
     _category_part(str(loose / "part-1.pfw.gz"), ["b", "c"], False, "c")
     assert TraceViewer(str(loose)).collect().num_rows == 2
+
+
+def narrow_frame():
+    bounds = {
+        "int8": (-(2**7), 2**7 - 1),
+        "int16": (-(2**15), 2**15 - 1),
+        "int32": (-(2**31), 2**31 - 1),
+        "uint8": (0, 2**8 - 1),
+        "uint16": (0, 2**16 - 1),
+        "uint32": (0, 2**32 - 1),
+    }
+    cols = {}
+    for name, (lo, hi) in bounds.items():
+        cols[name] = np.array([lo, lo + 1, 0 if lo < 0 else 1, hi - 1, hi, 3] * 5, dtype=name)
+        nullable = name.replace("uint", "UInt") if name[0] == "u" else name.replace("int", "Int")
+        cols["N" + nullable] = pd.array([lo, None, hi, 1, None, 2] * 5, dtype=nullable)
+    cols["float32"] = np.array([0.1, -2.5, 3.4e38, 1e-45, math.nan, 7.0] * 5, dtype="float32")
+    cols["Float32"] = pd.array([0.1, None, 2.5, -0.0, 4.0, 1e30] * 5, dtype="Float32")
+    cols["arrow_i16"] = pd.array([1, None, 3, 4, 5, 6] * 5, dtype=pd.ArrowDtype(pa.int16()))
+    return pd.DataFrame(cols)
+
+
+@pytest.mark.parametrize("indexed", [False, True], ids=["scan", "indexed"])
+def test_narrow_dtypes_keep_their_width_through_read_and_sink(tmp_path, indexed):
+    df = narrow_frame()
+    path = str(tmp_path / "n.pfw.gz")
+    save_table(df, path, name="n")
+    if indexed:
+        Indexer(path).build()
+    frame = TraceViewer(path).collect()
+    want = {
+        "int8": dftu.DType.INT8,
+        "int16": dftu.DType.INT16,
+        "int32": dftu.DType.INT32,
+        "uint8": dftu.DType.UINT8,
+        "uint16": dftu.DType.UINT16,
+        "uint32": dftu.DType.UINT32,
+        "float32": dftu.DType.FLOAT32,
+        "Float32": dftu.DType.FLOAT32,
+        "NInt8": dftu.DType.INT8,
+        "NUInt32": dftu.DType.UINT32,
+        "arrow_i16": dftu.DType.INT16,
+    }
+    for name, dtype in want.items():
+        assert frame[name].type == dtype, name
+    assert TraceViewer(path).schema["int8"] == dftu.DType.INT8
+    pd.testing.assert_frame_equal(frame.to_pandas(), df, **EQUAL)
+    out = str(tmp_path / "out.pfw.gz")
+    TraceViewer(path).sink(out)
+    carried = {f["name"]: f["dtype"] for f in header_fields(path)}
+    written = {f["name"]: f["dtype"] for f in header_fields(out)}
+    assert written == carried
+    pd.testing.assert_frame_equal(TraceViewer(out).collect().to_pandas(), df, **EQUAL)
+
+
+def header_fields(path):
+    with gzip.open(path, "rt", encoding="utf-8") as f:
+        return json.loads(f.readline())["args"]["fields"]
+
+
+def test_a_value_outside_the_declared_width_is_a_decode_error(tmp_path):
+    df = pd.DataFrame({"i": np.array([1, 2, 3], dtype="int8"), "u": np.array([1, 2, 3], "uint8")})
+    path = tmp_path / "t.pfw"
+    save_table(df, str(path), name="t")
+    text = path.read_text()
+    for field, bad in (("i", "300"), ("i", "-129"), ("u", "256")):
+        edited = text.replace(f'"{field}":3', f'"{field}":{bad}', 1)
+        assert edited != text
+        broken = tmp_path / f"{field}{bad}.pfw"
+        broken.write_text(edited)
+        with pytest.raises(Exception, match=rf"row 2, field {field}: outside the integer dtype"):
+            TraceViewer(str(broken)).collect()
+
+
+@pytest.mark.parametrize("name", ["int8", "int16", "int32", "uint8", "uint16", "uint32"])
+def test_filters_at_the_bounds_of_a_narrow_column_agree_indexed_and_scanned(tmp_path, name):
+    df = narrow_frame()[[name]]
+    plain = str(tmp_path / "plain" / "t.pfw.gz")
+    idx = str(tmp_path / "idx" / "t.pfw.gz")
+    save_table(df, plain, name="t")
+    save_table(df, idx, name="t")
+    Indexer(idx).build()
+    lo, hi = int(df[name].min()), int(df[name].max())
+    c = col(name)
+    for predicate, mask in (
+        (c == lo, df[name] == lo),
+        (c == hi, df[name] == hi),
+        (c < lo, df[name] < lo),
+        (c > hi, df[name] > hi),
+        (c >= hi, df[name] >= hi),
+        (c <= lo, df[name] <= lo),
+        (c == hi + 1, df[name] == hi + 1),
+        (c == lo - 1, df[name] == lo - 1),
+        (c.is_in([lo, hi, hi + 1]), df[name].isin([lo, hi, hi + 1])),
+    ):
+        scanned = TraceViewer(plain).filter(predicate).collect()
+        indexed = TraceViewer(idx).filter(predicate).collect()
+        assert scanned[name].to_list() == indexed[name].to_list() == df[name][mask].tolist()

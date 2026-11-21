@@ -245,7 +245,12 @@ TEST_SUITE("trace::table codec") {
             REQUIRE(write_table(sample.frame, path, sample.header, opts));
             auto back = dftu_utils_test::ok(read_table(path));
             CHECK(same_frame(sample.frame, back.frame));
-            CHECK(back.header_json == sample.header);
+            // The writer puts nrows first, in a fixed-width slot.
+            dstd::String want = sample.header;
+            const dstd::StringView nrows = "\"nrows\":6,";
+            want.erase(want.find(nrows), nrows.size());
+            want.insert(1, "\"nrows\":6                   ,");
+            CHECK(back.header_json == want);
         }
     }
 
@@ -556,6 +561,24 @@ TEST_SUITE("trace::table codec") {
             {"unknown format_version",
              header_line(header_json(1, fields, "2")) + row1,
              common::ErrorCode::Parse},
+            {"a higher minor than the engine's",
+             header_line(header_json(1, fields, "\"1.1\"")) + row1,
+             common::ErrorCode::Parse},
+            {"another major",
+             header_line(header_json(1, fields, "\"2.0\"")) + row1,
+             common::ErrorCode::Parse},
+            {"a major below the engine's",
+             header_line(header_json(1, fields, "\"0.0\"")) + row1,
+             common::ErrorCode::Parse},
+            {"a version with no minor",
+             header_line(header_json(1, fields, "\"1\"")) + row1,
+             common::ErrorCode::Parse},
+            {"a malformed version",
+             header_line(header_json(1, fields, "\"1.x\"")) + row1,
+             common::ErrorCode::Parse},
+            {"a version with three parts",
+             header_line(header_json(1, fields, "\"1.0.0\"")) + row1,
+             common::ErrorCode::Parse},
             {"another format",
              header_line(header_json(1, fields, "1", "other")) + row1,
              common::ErrorCode::Parse},
@@ -594,6 +617,21 @@ TEST_SUITE("trace::table codec") {
         }
         auto missing = read_table(env.dir() + "/missing.pfw");
         REQUIRE_FALSE(missing.has_value());
+    }
+
+    TEST_CASE("the reader takes the engine's major with a minor not above it") {
+        TestEnvironment env(0);
+        const dstd::String fields[] = {field_json("x", "int64")};
+        const dstd::String row1 = "{\"args\":{\"x\":1}}\n";
+        for (const char* version : {"\"1.0\"", "1"}) {
+            CAPTURE(dstd::StringView(version));
+            const dstd::String path = env.dir() + "/ok.pfw";
+            write_text(path,
+                       header_line(header_json(1, fields, version)) + row1);
+            auto r = read_table(path);
+            REQUIRE(r.has_value());
+            CHECK(r->frame.num_rows() == 1);
+        }
     }
 
     TEST_CASE("blank lines between rows are skipped") {

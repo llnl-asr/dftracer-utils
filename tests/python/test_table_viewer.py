@@ -413,9 +413,13 @@ def test_a_filtered_read_streams_in_bounded_memory(tmp_path):
             out = tv.filter(col("i") == 777).collect()
         else:
             out = tv.collect()
-        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        if sys.platform != "darwin":
-            peak *= 1024
+        # On Linux ru_maxrss also holds the peak of the process that spawned
+        # this one, so read this image's own high-water mark.
+        if sys.platform == "darwin":
+            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        else:
+            with open("/proc/self/status") as status:
+                peak = next(int(l.split()[1]) for l in status if l.startswith("VmHWM:")) * 1024
         print(out.num_rows, peak)
         """
     )
@@ -611,9 +615,13 @@ def test_a_very_compressible_table_stays_under_the_budget(tmp_path):
             out = plan.select("i").collect()
         else:
             out = plan.filter(col("i") < 0).collect()
-        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        if sys.platform != "darwin":
-            peak *= 1024
+        # On Linux ru_maxrss also holds the peak of the process that spawned
+        # this one, so read this image's own high-water mark.
+        if sys.platform == "darwin":
+            peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        else:
+            with open("/proc/self/status") as status:
+                peak = next(int(l.split()[1]) for l in status if l.startswith("VmHWM:")) * 1024
         print(out.num_rows, peak)
         """
     )

@@ -193,10 +193,12 @@ class Col:
         return self._in("not in", values)
 
     def _in(self, op: str, values: Sequence[Value] | Query | Col) -> Col:
-        if isinstance(values, Query):
-            return _wrap(f"{self._text} {op} ({values.inline()})")
+        # Col first: before Python 3.12 the Query check calls Col.__getattr__,
+        # which answers for any name, so a Col passes it.
         if isinstance(values, Col):
             return _wrap(f"{self._text} {op} {values._text}")
+        if isinstance(values, Query):
+            return _wrap(f"{self._text} {op} ({values.inline()})")
         return _wrap(f"{self._text} {op} {value_text(values)}")
 
     def between(self, low: Value, high: Value) -> Col:

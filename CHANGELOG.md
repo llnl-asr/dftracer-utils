@@ -952,6 +952,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `col(...).is_in(param("p"))` and `not_in` on Python 3.11 and older: the duql builder wrote the parameter as a sub-query, and the query did not parse.
 - Keep a `collect` of event traces under its `memory_budget` when the trace has many small members: each scan unit is admitted by 20 MiB plus its uncompressed span, where it was admitted by eight times its span. A small budget no longer runs many small units at once past the budget, and a large member no longer runs alone when several fit.
 - Store a float category column whose labels include `inf` or `-inf` in a table: `write_table` refused it, and the labels are now `"Infinity"` and `"-Infinity"`, as float cells are.
 - Give freed memory back to the operating system when the work stops. An idle worker now trims its heap after each 256 ms of idle time, even when the pool keeps waking it to retire other workers, and the trim also releases cached large blocks. A thread that exits gives back its idle pages, where they stayed resident until another thread took its heap. Six `group_by(...).agg(...)` steps over 2 million rows and 200000 groups left 33 to 45 MB more resident memory 0.6 s after each step; they now leave 14 to 26 MB.

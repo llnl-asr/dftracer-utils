@@ -739,16 +739,6 @@ BufferView window_bits(const BufferView& bits, std::int64_t offset,
     return out;
 }
 
-template <class Off>
-BufferView rebased_offsets(const dftu_series& col, std::int64_t offset,
-                           std::int64_t len) {
-    const Off* src = reinterpret_cast<const Off*>(col.offsets.data()) + offset;
-    auto out = new_buffer(static_cast<std::size_t>(len + 1) * sizeof(Off));
-    Off* dst = reinterpret_cast<Off*>(writable(out));
-    for (std::int64_t i = 0; i <= len; ++i) dst[i] = src[i] - src[0];
-    return out;
-}
-
 dftu_series* slice_unnamed(const dftu_series* col, std::int64_t offset,
                            std::int64_t len) {
     if (!col) return nullptr;
@@ -813,23 +803,20 @@ dftu_series* slice_unnamed(const dftu_series* col, std::int64_t offset,
         out->data = window_bits(col->data, offset, len, true);
     } else if (text) {
         const bool wide = col->wide_offsets();
-        std::int64_t lo = 0, hi = 0;
-        if (wide) {
-            const auto* o =
-                reinterpret_cast<const std::int64_t*>(col->offsets.data());
-            lo = o[offset];
-            hi = o[offset + len];
-            out->offsets = rebased_offsets<std::int64_t>(*col, offset, len);
-        } else {
-            const auto* o =
-                reinterpret_cast<const std::int32_t*>(col->offsets.data());
-            lo = o[offset];
-            hi = o[offset + len];
-            out->offsets = rebased_offsets<std::int32_t>(*col, offset, len);
-        }
+        const std::size_t off_width =
+            wide ? sizeof(std::int64_t) : sizeof(std::int32_t);
+        std::int64_t hi = 0;
+        if (wide)
+            hi = reinterpret_cast<const std::int64_t*>(
+                col->offsets.data())[offset + len];
+        else
+            hi = reinterpret_cast<const std::int32_t*>(
+                col->offsets.data())[offset + len];
+        out->offsets =
+            window(col->offsets, static_cast<std::size_t>(offset) * off_width,
+                   static_cast<std::size_t>(len + 1) * off_width);
         out->data = col->data.block()
-                        ? window(col->data, static_cast<std::size_t>(lo),
-                                 static_cast<std::size_t>(hi - lo))
+                        ? window(col->data, 0, static_cast<std::size_t>(hi))
                         : BufferView{};
     } else {
         out->data = window(col->data, static_cast<std::size_t>(offset) * w,

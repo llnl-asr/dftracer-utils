@@ -138,16 +138,16 @@ std::size_t columns_bytes(dstd::Span<const Series> cols) {
                 static_cast<std::size_t>(dftu_series_buffer_bytes(c.handle()));
         } else if (is_wide_offset_type(t)) {  // LargeString / LargeBinary
             const std::int64_t* offs = c.offsets64();
-            total +=
-                static_cast<std::size_t>(n + 1) * sizeof(std::int64_t) +
-                (n > 0 && offs != nullptr ? static_cast<std::size_t>(offs[n])
-                                          : 0);
+            total += static_cast<std::size_t>(n + 1) * sizeof(std::int64_t) +
+                     (n > 0 && offs != nullptr
+                          ? static_cast<std::size_t>(offs[n] - offs[0])
+                          : 0);
         } else if (t == TypeId::String || t == TypeId::Binary) {
             const std::int32_t* offs = dftu_series_offsets(c.handle());
-            total +=
-                static_cast<std::size_t>(n + 1) * sizeof(std::int32_t) +
-                (n > 0 && offs != nullptr ? static_cast<std::size_t>(offs[n])
-                                          : 0);
+            total += static_cast<std::size_t>(n + 1) * sizeof(std::int32_t) +
+                     (n > 0 && offs != nullptr
+                          ? static_cast<std::size_t>(offs[n] - offs[0])
+                          : 0);
         } else if (t == TypeId::FixedSizeBinary) {
             total +=
                 static_cast<std::size_t>(n) *
@@ -266,6 +266,20 @@ void put_series_trailer(dstd::String& out, const Series& s) {
     put_bytes(out, name.data(), name.size());
 }
 
+// Offsets are written from 0, so a slice that shares its parent's buffers
+// costs only its own bytes.
+template <class Off>
+void put_offsets_and_data(dstd::String& out, const Off* offs, std::int64_t n,
+                          const std::uint8_t* data) {
+    const Off base = n > 0 ? offs[0] : Off{0};
+    const std::int64_t nbytes = n > 0 ? offs[n] - base : 0;
+    put_pod<std::int64_t>(out, nbytes);
+    for (std::int64_t i = 0; i <= n; ++i)
+        put_pod<Off>(out, n > 0 ? static_cast<Off>(offs[i] - base) : Off{0});
+    if (nbytes > 0)
+        put_bytes(out, data + base, static_cast<std::size_t>(nbytes));
+}
+
 }  // namespace
 
 dstd::Result<void> put_series(dstd::String& out, const Series& s_in) {
@@ -338,21 +352,13 @@ dstd::Result<void> put_series(dstd::String& out, const Series& s_in) {
             out, dftu_series_data(s.handle()),
             static_cast<std::size_t>(n) * static_cast<std::size_t>(width));
     } else if (is_wide_offset_type(t)) {  // LargeString / LargeBinary
-        const std::int64_t* offs = s.offsets64();
-        const std::int64_t nbytes = n > 0 ? offs[n] : 0;
-        put_pod<std::int64_t>(out, nbytes);
-        put_bytes(out, offs,
-                  static_cast<std::size_t>(n + 1) * sizeof(std::int64_t));
-        put_bytes(out, dftu_series_data(s.handle()),
-                  static_cast<std::size_t>(nbytes));
+        put_offsets_and_data(
+            out, s.offsets64(), n,
+            static_cast<const std::uint8_t*>(dftu_series_data(s.handle())));
     } else if (!byte_width(t)) {  // String / Binary
-        const std::int32_t* offs = dftu_series_offsets(s.handle());
-        const std::int64_t nbytes = n > 0 ? offs[n] : 0;
-        put_pod<std::int64_t>(out, nbytes);
-        put_bytes(out, offs,
-                  static_cast<std::size_t>(n + 1) * sizeof(std::int32_t));
-        put_bytes(out, dftu_series_data(s.handle()),
-                  static_cast<std::size_t>(nbytes));
+        put_offsets_and_data(
+            out, dftu_series_offsets(s.handle()), n,
+            static_cast<const std::uint8_t*>(dftu_series_data(s.handle())));
     } else {
         const std::size_t bytes = buffer_bytes(t, n);
         put_bytes(out, dftu_series_data(s.handle()), bytes);
@@ -594,6 +600,7 @@ struct Piece {
 struct ColumnPlan {
     Series flat;
     Piece validity, offsets, data;
+    BufferView rebased_offsets;
 };
 
 }  // namespace
@@ -633,17 +640,28 @@ dstd::Result<dstd::Vector<Series>> PartFile::append(
                   cp.validity.owned.size());
         }
         std::size_t nbytes;
-        if (is_wide_offset_type(t)) {
-            const std::int64_t* offs = s.offsets64();
+        const std::uint8_t* data =
+            static_cast<const std::uint8_t*>(dftu_series_data(s.handle()));
+        const auto place_offsets = [&](const auto* offs) {
+            using Off = std::remove_const_t<
+                std::remove_pointer_t<std::remove_reference_t<decltype(offs)>>>;
             place(cp.offsets, offs,
-                  static_cast<std::size_t>(n + 1) * sizeof(std::int64_t));
-            nbytes = static_cast<std::size_t>(offs[n]);
+                  static_cast<std::size_t>(n + 1) * sizeof(Off));
+            const Off base = offs[0];
+            nbytes = static_cast<std::size_t>(offs[n] - base);
+            if (base == 0) return;
+            cp.rebased_offsets =
+                new_buffer(static_cast<std::size_t>(n + 1) * sizeof(Off));
+            Off* dst = reinterpret_cast<Off*>(writable(cp.rebased_offsets));
+            for (std::int64_t k = 0; k <= n; ++k) dst[k] = offs[k] - base;
+            cp.offsets.src = dst;
+            data += base;
+        };
+        if (is_wide_offset_type(t)) {
+            place_offsets(s.offsets64());
         } else if (!byte_width(t) && t != TypeId::FixedSizeBinary &&
                    t != TypeId::Decimal128 && t != TypeId::Decimal256) {
-            const std::int32_t* offs = dftu_series_offsets(s.handle());
-            place(cp.offsets, offs,
-                  static_cast<std::size_t>(n + 1) * sizeof(std::int32_t));
-            nbytes = static_cast<std::size_t>(offs[n]);
+            place_offsets(dftu_series_offsets(s.handle()));
         } else if (t == TypeId::FixedSizeBinary) {
             nbytes =
                 static_cast<std::size_t>(n) *
@@ -651,7 +669,7 @@ dstd::Result<dstd::Vector<Series>> PartFile::append(
         } else {
             nbytes = buffer_bytes(t, n);
         }
-        place(cp.data, dftu_series_data(s.handle()), nbytes);
+        place(cp.data, data, nbytes);
     }
 
     const long page_size = ::sysconf(_SC_PAGESIZE);

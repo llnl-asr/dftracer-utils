@@ -209,6 +209,22 @@ dftu_series* make_string(
     return out;
 }
 
+// Gives `out` the offsets of the rows of `v` for a data buffer that holds
+// only the bytes [lo, hi) of v's own: shared when lo is 0, rebased otherwise.
+template <class Off>
+void window_offsets(const dftu_series& v, dftu_series& out, std::int64_t lo) {
+    if (lo == 0) {
+        offsets_of<Off>(out) = offsets_of<Off>(v);
+        return;
+    }
+    const Off* src = reinterpret_cast<const Off*>(offsets_of<Off>(v).data());
+    auto buf = new_buffer(static_cast<std::size_t>(v.length + 1) * sizeof(Off));
+    Off* dst = reinterpret_cast<Off*>(writable(buf));
+    for (std::int64_t i = 0; i <= v.length; ++i)
+        dst[i] = static_cast<Off>(src[i] - lo);
+    offsets_of<Off>(out) = std::move(buf);
+}
+
 // Fold that keeps offsets/validity and rewrites only the (byte-length
 // preserving) data buffer. Fast path SIMD for a FLAT input, preserving the
 // source's own offset width and buffer (no copy of the offsets); a
@@ -225,12 +241,19 @@ dftu_series* ascii_fold_w(const dftu_series* v, std::uint8_t lo,
         out->length = v->length;
         out->null_count = v->null_count;
         out->validity = v->validity;
-        offsets_of<Off>(*out) = offsets_of<Off>(*v);  // byte lengths unchanged
-        const std::size_t data_size = v->data.block() ? v->data.size() : 0;
+        const Off* offs =
+            reinterpret_cast<const Off*>(offsets_of<Off>(*v).data());
+        const std::int64_t base = v->length != 0 ? offs[0] : 0;
+        const std::size_t data_size =
+            v->data.block() && v->length != 0
+                ? static_cast<std::size_t>(offs[v->length] - base)
+                : 0;
+        window_offsets<Off>(*v, *out, base);
         out->data = new_buffer(data_size);
         if (data_size != 0)
-            dataframe::strsimd::ascii_fold(v->data.data(), writable(out->data),
-                                           data_size, lo, hi, add);
+            dataframe::strsimd::ascii_fold(v->data.data() + base,
+                                           writable(out->data), data_size, lo,
+                                           hi, add);
         return out;
     }
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> parts(
@@ -1077,11 +1100,13 @@ dftu_series* case_impl(const dftu_series* v, dataframe::strsimd::CaseKind kind,
         out->null_count = v->null_count;
         out->validity = v->validity;
         using Off = std::remove_const_t<std::remove_pointer_t<decltype(f.off)>>;
-        offsets_of<Off>(*out) = offsets_of<Off>(*v);  // byte lengths unchanged
-        const std::size_t data_size = v->data.block() ? v->data.size() : 0;
+        const std::int64_t base = f.lo();
+        const std::size_t data_size =
+            v->data.block() ? static_cast<std::size_t>(f.hi() - base) : 0;
+        window_offsets<Off>(*v, *out, base);
         out->data = new_buffer(data_size);
         if (data_size == 0) return out;
-        const std::uint8_t* in = v->data.data();
+        const std::uint8_t* in = v->data.data() + base;
         std::uint8_t* o = writable(out->data);
         dataframe::strsimd::case_map(
             capitalize ? dataframe::strsimd::CaseKind::Lower : kind, in, o,
@@ -1091,7 +1116,7 @@ dftu_series* case_impl(const dftu_series* v, dataframe::strsimd::CaseKind kind,
             // lower, whatever sat before it in the buffer.
             for (std::int64_t i = 0; i < f.n; ++i) {
                 if (f.len(i) <= 0) continue;
-                const std::int64_t s = f.off[i];
+                const std::int64_t s = f.off[i] - base;
                 o[s] = dstd::is_ascii_lower(static_cast<char>(in[s]))
                            ? static_cast<std::uint8_t>(in[s] - 32)
                            : in[s];

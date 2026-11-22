@@ -312,6 +312,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make a slice of a String or Binary column zero copy: it shares the parent offsets and bytes, so its offsets may start above 0 (slicing 1 million rows went from about 86 us to under 0.1 us).
+  Spill files, pickled frames and Arrow IPC output still write offsets that start at 0 and only the slice bytes.
 - Make `tz_localize` to UTC or a zone fixed at UTC a label change with no copy.
 - Make a left or right `align` on row labels about 2 times faster by reusing the kept frame and the cached label hash.
 - Sort by two or more integer keys, such as `sort_index` on a two-level index, in one pass when their value ranges fit in 64 bits together, about 2 times faster.

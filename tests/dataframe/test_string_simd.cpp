@@ -603,6 +603,29 @@ TEST_SUITE("string simd") {
         }
     }
 
+    TEST_CASE("a case map of a tail slice holds only the slice bytes") {
+        dstd::Vector<dstd::String> values;
+        for (int i = 0; i < 10000; ++i)
+            values.push_back(dstd::String(200, 'a') + dstd::fmt<"{}">(i));
+        const Series big = Series::strings(values);
+        const Series tail = big.slice(9990, 10);
+        REQUIRE(dftu_series_offsets(tail.handle())[0] != 0);
+        for (int kind : {0, 1, 2}) {
+            Series out{kind == 0
+                           ? dftu_series_to_uppercase(tail.handle())
+                           : dftu_series_str_case(
+                                 tail.handle(), kind == 1 ? DFTU_STR_TITLE_CASE
+                                                          : DFTU_STR_SWAPCASE)};
+            REQUIRE(out.valid());
+            CHECK(dftu_series_buffer_bytes(out.handle()) < 3000);
+            for (std::int64_t i = 0; i < 10; ++i) {
+                const dstd::StringView got = out.string_at(i);
+                CHECK(got.size() == values[9990 + i].size());
+                CHECK(got[0] == 'A');
+            }
+        }
+    }
+
     TEST_CASE("output past the int32 offsets is refused, not wrapped") {
         const Rows in{Row{dstd::String(1 << 20, 'a')},
                       Row{dstd::String(1 << 20, 'b')}};

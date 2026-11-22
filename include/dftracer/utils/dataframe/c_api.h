@@ -170,6 +170,10 @@ DFTU_EXPORT dftu_series* dftu_series_new_string_view(
 
 /** Create a FLAT variable-width column (String or Binary) copying `n` values.
  * `offsets` has n+1 int32 entries into `data`; `data` holds offsets[n] bytes.
+ * A String or Binary column made by dftu_series_slice has offsets that may
+ * start above 0 and share the parent's data: value i is
+ * data[offsets[i] .. offsets[i+1]], and a reader must not assume
+ * offsets[0] == 0.
  * `validity` is an Arrow-layout bitmap (1 = valid) or NULL for no nulls.
  * Returns NULL for another dtype or a negative `offsets[n]` (offsets that
  * wrapped past INT32_MAX). */
@@ -360,11 +364,12 @@ DFTU_EXPORT dftu_series* dftu_series_share(const dftu_series* col);
  * view with the values, nulls, type and type parameters of a gather of those
  * rows. Fixed-width, Bool, String, Binary and their Large forms are windowed
  * in place; VIEW, DICTIONARY and SELECTION columns keep their layout and share
- * their blobs, child or base. A string slice copies only its rebased offsets;
- * a bit-packed Bool or validity range off a byte boundary is repacked. The
- * result is owned by the caller (free with dftu_series_free) and keeps the
- * base buffers alive after `col` is freed. NULL for a NULL `col` and for a
- * LIST, MAP, STRUCT or CONSTANT column. */
+ * their blobs, child or base. A string slice copies nothing: it shares the
+ * parent's offsets and data, so its offsets may start above 0; a bit-packed
+ * Bool or validity range off a byte boundary is repacked. The result is owned
+ * by the caller (free with dftu_series_free) and keeps the base buffers alive
+ * after `col` is freed. NULL for a NULL `col` and for a LIST, MAP, STRUCT or
+ * CONSTANT column. */
 DFTU_EXPORT dftu_series* dftu_series_slice(const dftu_series* col,
                                            int64_t offset, int64_t len);
 

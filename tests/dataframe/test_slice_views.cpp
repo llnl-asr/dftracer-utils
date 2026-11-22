@@ -278,11 +278,9 @@ TEST_SUITE("slice views") {
             Series base = strings_of(rows_for(true), type);
             Series got{dftu_series_slice(base.handle(), 3, 7)};
             const char* lo = base.data<char>();
-            const char* hi = lo + base.offsets()[N];
             const char* p = got.data<char>();
-            CHECK(p >= lo);
-            CHECK(p <= hi);
-            CHECK(p == lo + base.offsets()[3]);
+            CHECK(p == lo);
+            CHECK(got.offsets() == base.offsets() + 3);
         }
     }
 

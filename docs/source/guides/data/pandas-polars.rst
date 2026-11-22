@@ -196,6 +196,10 @@ when both sides are indexed on exactly their join keys, and ``concat`` and
 the same rules, so ``collect()`` has the index the eager op gives. An unindexed
 frame stays unindexed under every rule.
 
+``DataFrame.join`` with no key is the pandas join on the row labels, and ``merge`` takes ``left_index`` and ``right_index``.
+See :doc:`joins` for the suffixes and the result index.
+``LazyFrame.join`` stays keyed, as in Polars.
+
 ``select`` keeps the index names whose columns it keeps: ``select("k", "v")`` on
 a frame indexed by ``k`` and ``j`` keeps ``k`` as the index and drops ``j`` from
 the names. The index follows the rule of each op, never "all or nothing".

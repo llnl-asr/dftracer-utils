@@ -128,6 +128,55 @@ A join that matches nulls is run by the host: it is not offered to a source's
 join pushdown, and the build keys do not narrow the left scan (they leave out
 their nulls, which a left null key must still reach).
 
+Join on row labels (pandas)
+---------------------------
+
+A ``DataFrame.join`` with no ``on``, ``left_on`` or ``right_on`` is the pandas join on the row index.
+It matches the row labels of both frames, all levels of a MultiIndex.
+A frame with no index uses its row positions.
+``how`` is ``"left"`` by default, and can be ``"right"``, ``"inner"``, ``"outer"`` or ``"full"`` (the same as ``"outer"``).
+A keyless ``how="cross"`` is still the cross join.
+The result keeps the joined index.
+Its names are the left frame's, and the right frame's for ``how="right"``.
+When one frame has several levels and the level names differ, the levels are matched by name, not by position.
+Names that no level shares raise ``ValueError``.
+The result levels are the left frame's levels, then the right frame's levels that are not shared (the right frame's first for ``how="right"``).
+A frame with one level against a frame with several walks the several-level frame in its own order and drops the unmatched rows of the one-level frame, as pandas does.
+Equal labels expand many-to-many: a label that repeats on both sides gives every pair of rows.
+Equal labels of different number types match by value, and the index takes the common type.
+``how="outer"`` sorts the rows by label, even when the labels are equal.
+The left frame's columns come first, then the right frame's.
+
+A column name on both sides needs ``suffixes``.
+``suffixes=(left, right)`` is added to the names that both frames have.
+The default is ``("", "")``, so a repeated name raises ``ValueError``, as in pandas.
+A side that is ``None`` or empty keeps its names.
+At least one side must have a suffix when a name repeats.
+A name that only one frame has never gets a suffix.
+``suffixes`` is only for a join on row labels, and ``suffix`` is only for a keyed join.
+Passing the wrong one raises ``TypeError``.
+A keyed join keeps its defaults: ``how="inner"`` and ``suffix="_right"``.
+
+``merge`` takes ``left_index`` and ``right_index`` for the same job.
+With both set, it is the join on row labels, with the ``merge`` suffixes (``("_x", "_y")`` by default).
+With one set, the row labels of that frame are matched against the key columns of the other frame.
+Use ``left_index=True, right_on=...`` or ``left_on=..., right_index=True``.
+The result takes the index of the frame that gives the key columns.
+A row with no match in that frame has a null label.
+When the frame whose index is the key has several levels, such a row gets the last label of the frame that gives the key columns instead, as pandas does.
+A key column holds the key of the side that has the row.
+A combination that pandas refuses raises ``ValueError``, such as ``left_index`` with ``left_on``.
+Passing ``nulls_equal`` with ``left_index`` or ``right_index`` raises ``TypeError``, because row labels always match.
+
+.. code-block:: python
+
+   joined = left.join(right, how="inner", suffixes=("_l", "_r"))
+   same = left.merge(right, how="inner", left_index=True, right_index=True)
+   mixed = left.merge(right, left_index=True, right_on="fid")
+
+``LazyFrame.join`` stays keyed, as in Polars.
+It has no row labels to join on.
+
 Join lazily
 -----------
 

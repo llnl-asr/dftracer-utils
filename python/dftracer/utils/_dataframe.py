@@ -46,6 +46,7 @@ from ._convert import (
 from ._enums import DType, rule_to_units
 from ._eval import Columnar
 from ._expr import Agg, Expr, Lit, Named, SelectItem, col, resolve_selectors, when
+from ._label_join import LABEL_HOWS, Suffixes, check_how, index_merge, label_join
 from ._levels import LevelArg, pick_levels
 from ._pandas_frame import FramePandasMixin
 from ._polars_frame import FramePolarsMixin
@@ -322,17 +323,21 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         ``RangeIndex``)."""
         names = self.index_names()
         if not names:
-            return Series.from_list(list(range(len(self))))
+            return self._row_numbers()
         if len(names) == 1:
             return _ext.DataFrame.__getitem__(self, names[0])
         return _bound(_ext.DataFrame.with_index(_ext.DataFrame.select(self, *names), []))
+
+    def _row_numbers(self) -> Series:
+        """The row positions as an Int64 Series, built natively."""
+        return _ext.DataFrame.with_row_index(self, "__dftu_pos__")["__dftu_pos__"]
 
     def index_levels(self) -> list[Series]:
         """The index columns, one Series per level; the row positions when no
         index is set."""
         names = self.index_names()
         if not names:
-            return [Series.from_list(list(range(len(self))))]
+            return [self._row_numbers()]
         return [_ext.DataFrame.__getitem__(self, name) for name in names]
 
     def set_index(self, names: str | Sequence[str], *, append: bool = False) -> DataFrame:
@@ -1213,13 +1218,15 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         self,
         other: DataFrame,
         on: int | str | Sequence[str] | None = None,
-        how: JoinHow = "inner",
+        how: JoinHow | None = None,
         left_on: str | Sequence[str] | None = None,
         right_on: str | Sequence[str] | None = None,
-        suffix: str = "_right",
+        suffix: str | None = None,
         nulls_equal: bool = False,
+        suffixes: Suffixes | None = None,
     ) -> DataFrame:
-        """Hash join with ``other``.
+        """Hash join with ``other``; with no ``on``, ``left_on`` or ``right_on``
+        and ``how`` not ``"cross"``, the pandas join on row labels (below).
 
         ``on`` names the key column(s) shared by both frames (a str, a list of
         names, or an int count of the leading columns); ``left_on`` /
@@ -1241,7 +1248,31 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         ``"nest"`` adds one list column named ``suffix`` holding every
         matching row of ``other`` as a struct. Both compare keys by value
         (``1 == 1.0``, ``"4" != 4``). See :meth:`merge` for the pandas
-        argument order."""
+        argument order.
+
+        With no key (and ``how`` ``"left"``, ``"right"``, ``"inner"``,
+        ``"outer"`` or ``"full"``) this is the pandas join on the row index:
+        the rows are matched on their labels (all levels of a MultiIndex; the
+        row positions of a frame with no index) and ``how`` defaults to
+        ``"left"``. The result keeps the joined index and its names. A column
+        name on both sides needs ``suffixes=(left, right)``, which default to
+        ``("", "")`` and so raise ``ValueError``; a ``None`` or empty side
+        keeps its names. ``suffixes`` is only for this join and ``suffix`` only
+        for a keyed one; the other is a ``TypeError``. A keyed join defaults to
+        ``how="inner"``."""
+        keyless = on is None and left_on is None and right_on is None
+        if keyless and (how is None or how in LABEL_HOWS):
+            if suffix is not None:
+                raise TypeError(
+                    "join: 'suffix' is for a keyed join; a join on row labels takes 'suffixes'"
+                )
+            if nulls_equal:
+                raise TypeError("join: 'nulls_equal' is for a keyed join; row labels always match")
+            return label_join(self, other, how or "left", suffixes or ("", ""))
+        if suffixes is not None:
+            raise TypeError("join: 'suffixes' is only for a join on row labels; use 'suffix'")
+        how = how or "inner"
+        suffix = "_right" if suffix is None else suffix
         if isinstance(on, bool):
             raise TypeError("join: 'on' must be a key name/list or an int count")
         if isinstance(on, int):
@@ -1269,14 +1300,47 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         on: str | Sequence[str] | None = None,
         left_on: str | Sequence[str] | None = None,
         right_on: str | Sequence[str] | None = None,
-        suffixes: tuple[str, str] = ("_x", "_y"),
+        suffixes: Suffixes = ("_x", "_y"),
         nulls_equal: bool = False,
+        left_index: bool = False,
+        right_index: bool = False,
     ) -> DataFrame:
         """pandas ``merge``: :meth:`join` with ``right`` first, then ``how``.
         With no key given, joins on the columns both frames share. A non-key
         column present on both sides is suffixed on BOTH sides with
         ``suffixes``, as pandas does. A null key does not match another null
-        key unless ``nulls_equal=True``, which is the pandas rule."""
+        key unless ``nulls_equal=True``, which is the pandas rule.
+
+        ``left_index`` / ``right_index`` use that frame's row labels as the
+        key. Both: the join on row labels of :meth:`join`. One, with the other
+        frame's ``right_on`` / ``left_on`` columns: the result takes the index
+        of the frame whose columns are the key (null on the rows with no
+        match), and a key column holds the key of whichever side has the row,
+        as pandas. A combination pandas refuses is a ``ValueError``."""
+        if left_index or right_index:
+            if nulls_equal:
+                raise TypeError(
+                    "merge: 'nulls_equal' is for a keyed merge; row labels always match"
+                )
+            if on is not None and (left_index or right_index):
+                raise ValueError(
+                    'Can only pass argument "on" OR "left_index" and "right_index", '
+                    "not a combination of both."
+                )
+            if left_index and left_on is not None:
+                raise ValueError('Can only pass argument "left_on" OR "left_index" not both.')
+            if right_index and right_on is not None:
+                raise ValueError('Can only pass argument "right_on" OR "right_index" not both.')
+            if left_index and right_index:
+                check_how(how, "merge")
+                return label_join(self, right, how, suffixes)
+            if left_index:
+                if right_on is None:
+                    raise ValueError("Must pass right_on or right_index=True")
+                return index_merge(self, right, how, None, as_names(right_on), suffixes)
+            if left_on is None:
+                raise ValueError("Must pass left_on or left_index=True")
+            return index_merge(self, right, how, as_names(left_on), None, suffixes)
         if on is None and left_on is None and right_on is None:
             shared = [c for c in self._names() if c in right]
             if not shared:
@@ -1289,15 +1353,15 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         collide = [c for c in self._names() if c in right and c not in lkeys and c not in rkeys]
         left = self
         if collide:
-            left = self.rename({c: c + suffixes[0] for c in collide})
-            right = right.rename({c: c + suffixes[1] for c in collide})
+            left = self.rename({c: c + (suffixes[0] or "") for c in collide})
+            right = right.rename({c: c + (suffixes[1] or "") for c in collide})
         return left.join(
             right,
             on=on,
             how=how,
             left_on=left_on,
             right_on=right_on,
-            suffix=suffixes[1],
+            suffix=suffixes[1] or "",
             nulls_equal=nulls_equal,
         )
 

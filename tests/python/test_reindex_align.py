@@ -900,8 +900,8 @@ def test_series_align_with_repeated_or_unsorted_labels_matches_pandas(join):
     check(lambda: (_s([1, 2, 2, 9]), _s([2, 4, 9], "w")), lambda a, b: a.align(b, join=join))
 
 
-@pytest.mark.parametrize("join", ["left", "right"])
-def test_frame_align_promotes_int_labels_to_float_on_both_sides(join):
+@pytest.mark.parametrize("join", ["left", "right", "inner", "outer"])
+def test_frame_align_keeps_the_kept_side_label_type(join):
     check(
         lambda: (
             pd.DataFrame({"x": [1, 2, 3]}, index=pd.Index([1, 2, 3], name="k")),
@@ -909,3 +909,18 @@ def test_frame_align_promotes_int_labels_to_float_on_both_sides(join):
         ),
         lambda p, q: p.align(q, join=join),
     )
+
+
+@pytest.mark.parametrize("join", ["left", "right", "inner", "outer"])
+def test_align_keeps_large_int_labels_exact(join):
+    big = 2**53 + 1
+    check(lambda: (_s([big, 5]), _s([float(2**53), 7.5], "w")), lambda a, b: a.align(b, join=join))
+    check(
+        lambda: (_s([big, 5]).to_frame(), _s([float(2**53), 7.5], "w").to_frame()),
+        lambda a, b: a.align(b, join=join),
+    )
+
+
+@pytest.mark.parametrize("join", ["left", "right", "inner", "outer"])
+def test_series_align_on_equal_labels_of_other_types_keeps_each_type(join):
+    check(lambda: (_s([1, 2, 3]), _s([1.0, 2.0, 3.0], "w")), lambda a, b: a.align(b, join=join))

@@ -804,6 +804,13 @@ dstd::Result<LabelJoin> join_labels(dstd::Vector<Level> la,
         return invalid_argument<
             "cannot align a row index of {} levels with one of {}">(la.size(),
                                                                     lb.size());
+    // A left join keeps the labels of the left side as they are and a right
+    // join those of the right side, as pandas 3.1 does; inner and outer take
+    // the common type.
+    dstd::Vector<Series> kept;
+    if (how == JoinHow::Left || how == JoinHow::Right)
+        for (const Level& l : how == JoinHow::Left ? la : lb)
+            kept.push_back(l.column.share());
     std::size_t bad = 0;
     if (!promote_levels(la, lb, bad))
         return invalid_argument<
@@ -822,6 +829,16 @@ dstd::Result<LabelJoin> join_labels(dstd::Vector<Level> la,
     if (how == JoinHow::Right) {
         std::swap(joined->left, joined->right);
         joined->left_whole = false;
+    }
+    const dstd::Vector<std::int64_t>& rows =
+        how == JoinHow::Left ? joined->left : joined->right;
+    for (std::size_t i = 0; i < kept.size(); ++i) {
+        if (joined->levels[i].type() == kept[i].type()) continue;
+        joined->levels[i] =
+            joined->left_whole ? std::move(kept[i]) : kept[i].take(rows);
+        if (!joined->levels[i].valid())
+            return invalid_argument<
+                "cannot align: the labels cannot be gathered">();
     }
     return joined;
 }
@@ -931,9 +948,16 @@ dstd::Result<AlignedSeries> align_labels(const Series& a, const Series& b,
                                          JoinHow how) {
     auto joined = join_labels(levels_of(a), levels_of(b), how);
     if (!joined) return joined.error();
-    if (joined->same)
+    if (joined->same) {
+        // Equal labels of other types stay as each side has them, as in pandas.
+        const dstd::Vector<Series> la = label_levels(a);
+        const dstd::Vector<Series> lb = label_levels(b);
+        for (std::size_t i = 0; i < la.size() && la.size() == lb.size(); ++i)
+            if (la[i].type() != lb[i].type())
+                return AlignedSeries{a.share(), b.share()};
         return a.has_index() ? AlignedSeries{a.share(), b.with_index_of(a)}
                              : AlignedSeries{a.share(), b.without_index()};
+    }
     dstd::Vector<dstd::StringView> views;
     for (const dstd::String& name : joined->names) views.emplace_back(name);
     Series left = joined->left_whole
@@ -1002,15 +1026,9 @@ dstd::Result<AlignedFrames> align_rows(const DataFrame& a, const DataFrame& b,
     auto right =
         gathered_frame(b, joined->right, joined->names, joined->levels, fill);
     if (!right) return dstd::Unexpected<dstd::Error>(right.error());
-    // A left join that kept every row of `a` in order, on labels of the type
-    // `a` already has, leaves `a` as it is.
-    if (joined->left_whole && !a.index_names().empty()) {
-        const dstd::Span<const dstd::SharedString> own = a.index_names();
-        bool same_types = own.size() == joined->levels.size();
-        for (std::size_t i = 0; same_types && i < own.size(); ++i)
-            same_types = a.column(own[i]).type() == joined->levels[i].type();
-        if (same_types) return AlignedFrames{a.share(), std::move(*right)};
-    }
+    // A left join that kept every row of `a` in order leaves `a` as it is.
+    if (joined->left_whole && !a.index_names().empty())
+        return AlignedFrames{a.share(), std::move(*right)};
     auto left =
         gathered_frame(a, joined->left, joined->names, joined->levels, fill);
     if (!left) return dstd::Unexpected<dstd::Error>(left.error());

@@ -4,6 +4,7 @@ dftracer_utils_ext.pyi lists the same members as the compiled classes."""
 
 import ast
 import gc
+import sys
 import weakref
 from pathlib import Path
 
@@ -114,6 +115,9 @@ def _stub_members(name):
 @pytest.mark.parametrize("name", _TYPES)
 def test_stub_and_runtime_list_the_same_members(name):
     stub = _stub_members(name)
+    if sys.version_info < (3, 12):
+        # The buffer protocol has no __buffer__ method before Python 3.12.
+        stub.discard("__buffer__")
     runtime = set(dir(getattr(_ext, name)))
     assert sorted(stub - runtime) == [], f"{name}: in the stub, not in the class"
     public = {m for m in runtime - stub if not (m.startswith("__") and m.endswith("__"))}

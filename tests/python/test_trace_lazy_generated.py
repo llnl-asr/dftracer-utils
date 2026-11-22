@@ -15,9 +15,12 @@ _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _ROOT / "scripts" / "gen_trace_lazy.py"
 _COMMITTED = _ROOT / "python" / "dftracer" / "utils" / "trace" / "_lazy.py"
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("uvx") is None, reason="uvx not available to format the output"
-)
+pytestmark = [
+    pytest.mark.skipif(
+        shutil.which("uvx") is None, reason="uvx not available to format the output"
+    ),
+    pytest.mark.skipif(sys.version_info < (3, 9), reason="gen_trace_lazy.py needs ast.unparse"),
+]
 
 
 def _generate(out: Path) -> None:

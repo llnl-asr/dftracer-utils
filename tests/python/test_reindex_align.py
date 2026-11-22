@@ -13,11 +13,12 @@ pd = pytest.importorskip("pandas")
 
 from dftracer.utils import DataFrame, Series  # noqa: E402
 
+from .common import skip_below_pandas3  # noqa: E402
+
 pytestmark = pytest.mark.filterwarnings("ignore::FutureWarning", "ignore::DeprecationWarning")
 
-PANDAS3 = int(pd.__version__.split(".")[0]) >= 3
 PANDAS31 = tuple(int(p) for p in pd.__version__.split(".")[:2]) >= (3, 1)
-PANDAS30 = PANDAS3 and not PANDAS31
+PANDAS30 = not PANDAS31
 NAN = float("nan")
 
 INDEXES = {
@@ -123,6 +124,7 @@ def _wrap(x):
 
 def check(make, call, *, dtypes=True):
     """Run ``call`` on the pandas objects ``make()`` builds and on ours."""
+    skip_below_pandas3()
     pandas_objects = make()
     ref = _run(lambda: call(*pandas_objects))
     ours = _run(lambda: call(*[_wrap(x) for x in make()]))
@@ -386,7 +388,6 @@ def test_frame_reindex_fill_value(fill):
     check(make, lambda d: d.reindex([20, 40], columns=["b", "q"], fill_value=fill))
 
 
-@pytest.mark.skipif(not PANDAS3, reason="pandas 2 widens a text column to object")
 def test_frame_reindex_fill_value_text_column():
     check(
         lambda: (pd.DataFrame({"c": ["x", "y"]}, index=[1, 2]),),

@@ -145,6 +145,7 @@ def test_total_seconds_agrees_on_a_duration_and_an_int_column():
 
 
 def test_tz_localize_and_tz_convert_agree_across_series_and_expr():
+    pytest.importorskip("zoneinfo")  # a zoned value needs zoneinfo
     s = _ts_series()
     utc_series = s.dt.tz_localize("UTC")
     frame = dft.DataFrame({"x": s})

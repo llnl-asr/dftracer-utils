@@ -19,6 +19,7 @@ pd = pytest.importorskip("pandas")
 
 from dftracer.utils import DataFrame, Series  # noqa: E402
 
+from .common import skip_below_pandas3  # noqa: E402
 from .parity_common import R, compare, load_findings, norm_pandas, resolve  # noqa: E402
 
 # pandas 2 warns about behaviours it deprecates (argsort over NA, apply over
@@ -613,6 +614,7 @@ def _run(kind, method, letter, args, kwargs, side):
 
 @pytest.mark.parametrize("kind,method,letter,args,kwargs", PARAMS)
 def test_matches_pandas(kind, method, letter, args, kwargs):
+    skip_below_pandas3()
     theirs_err = ours_err = None
     try:
         theirs = _run(kind, method, letter, args, kwargs, "pandas")

@@ -12,10 +12,11 @@ pd = pytest.importorskip("pandas")
 
 from dftracer.utils import DataFrame, Series  # noqa: E402
 
+from .common import skip_below_pandas3  # noqa: E402
+
 pytestmark = pytest.mark.filterwarnings("ignore::FutureWarning", "ignore::DeprecationWarning")
 
 NAN = float("nan")
-PANDAS3 = int(pd.__version__.split(".")[0]) >= 3
 
 
 def _frame(index, **cols):
@@ -99,31 +100,14 @@ def _same(x, y):
 
 
 def _check(fn, pandas_obj, ours_obj):
+    skip_below_pandas3()
     _same(_outcome(fn, ours_obj), _outcome(fn, pandas_obj))
-
-
-LEVEL_FREE_SORTS = {
-    "sort desc",
-    "sort plain",
-    "sort ignore plain",
-    "sort na first all",
-    "sort asc list",
-}
 
 
 def _skip_known(form, name):
     """The pandas behaviors that differ between its versions, or are bugs."""
     if form[0] == "sort asc list" and name in ("one", "none"):
         pytest.skip("pandas ignores a list of flags on a single level")
-    if form[0] == "sort asc list" and name == "three" and not PANDAS3:
-        pytest.skip("pandas 2 takes a short list of flags where pandas 3 raises")
-    if (
-        not PANDAS3
-        and name == "none"
-        and form[0].startswith("sort")
-        and form[0] not in LEVEL_FREE_SORTS
-    ):
-        pytest.skip("pandas 2 raises AssertionError for level= on a default index")
 
 
 FRAME_FORMS = [
@@ -274,7 +258,7 @@ def test_prefix_of_every_label_type():
     labels = {
         "int": [1, 2, 3],
         "float": [1.5, NAN, 3.0],
-        "str": ["a", None, "c"] if PANDAS3 else ["a", "b", "c"],
+        "str": ["a", None, "c"],
         "bool": [True, False, True],
         "ts": pd.to_datetime(["2020-01-01", None, "2020-01-03"]),
     }

@@ -217,6 +217,7 @@ def test_the_expr_rows_evaluate_like_the_series_methods():
         assert _nan_equal(got.to_list(), want.to_list()), row.name
 
 
+@pytest.mark.skipif(sys.version_info < (3, 9), reason="gen_pyi.py needs ast.unparse")
 def test_committed_declarations_equal_the_generated_ones():
     run = subprocess.run(
         [sys.executable, str(_ROOT / "scripts" / "gen_pyi.py"), "--check"],

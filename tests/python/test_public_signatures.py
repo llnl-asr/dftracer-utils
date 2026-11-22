@@ -67,7 +67,9 @@ def _mentions(node):
             pass
     if _is_callable_subscript(node):
         # The parameters of a callable are part of the signature; its result is not.
-        elts = getattr(node.slice, "elts", [])
+        # Python 3.8 wraps a subscript in ast.Index.
+        sl = node.slice.value if type(node.slice).__name__ == "Index" else node.slice
+        elts = getattr(sl, "elts", [])
         for child in [node.value, *elts[:-1]]:
             found += _mentions(child)
     else:

@@ -14,6 +14,8 @@ pd = pytest.importorskip("pandas")
 
 from dftracer.utils import DataFrame, Series  # noqa: E402
 
+from .common import skip_below_pandas3  # noqa: E402
+
 pytestmark = pytest.mark.filterwarnings("ignore::FutureWarning", "ignore::DeprecationWarning")
 
 NAN = float("nan")
@@ -30,7 +32,6 @@ def _vg(values, step, skip=()):
     return [v for v in values if v not in skip][::step]
 
 
-PANDAS3 = int(pd.__version__.split(".")[0]) >= 3
 PANDAS30 = pd.__version__.startswith("3.0.")
 STAMPS = [
     "2024-01-01 00:10:00",
@@ -131,6 +132,7 @@ def _same(x, y):
 
 
 def _check(fn, pandas_obj, ours_obj):
+    skip_below_pandas3()
     _same(_outcome(fn, ours_obj), _outcome(fn, pandas_obj))
 
 
@@ -204,12 +206,11 @@ def test_resample_closed_and_label(name, rule, closed, label):
 
 
 def _skip_pandas_day(name, rule):
-    """A day of a naive index is 24 hours from the origin in pandas 2 and 3.1;
-    pandas 3.0 bins calendar days there and ignores origin and offset, and
-    pandas 2 does the 24 hour tick for a zone-aware index where pandas 3.1 bins
-    calendar days. Ours is pandas 3.1."""
-    if rule == "1D" and (PANDAS30 or (not PANDAS3 and name == "utc")):
-        pytest.skip("pandas 2 and 3.0 bin a day of this index another way than 3.1")
+    """A day of a naive index is 24 hours from the origin in pandas 3.1;
+    pandas 3.0 bins calendar days there and ignores origin and offset. Ours is
+    pandas 3.1."""
+    if rule == "1D" and PANDAS30:
+        pytest.skip("pandas 3.0 bins a day of this index another way than 3.1")
 
 
 ORIGINS = [
@@ -656,6 +657,7 @@ FRACTIONS = [
 
 @pytest.mark.parametrize("unit", _vg(["ns", "us"], 2))
 def test_fractional_times_compare_at_microseconds_as_pandas(unit):
+    skip_below_pandas3()
     stamps = [
         "2024-01-01 09:30:00",
         "2024-01-01 09:30:00.000000001",

@@ -7,6 +7,9 @@ import json
 import pytest
 
 pd = pytest.importorskip("pandas")
+
+from .common import skip_below_pandas3  # noqa: E402
+
 pa = pytest.importorskip("pyarrow")
 
 from dftracer.utils import DataFrame, col  # noqa: E402
@@ -603,6 +606,7 @@ _FRAME_PAIRS = {
 
 @pytest.mark.parametrize("case", list(_FRAME_PAIRS))
 def test_frame_combine_first_and_update_match_pandas_by_row_label(case):
+    skip_below_pandas3()
     a, b = _FRAME_PAIRS[case]
     want = _outcome(lambda: a.combine_first(b))
     got = _outcome(lambda: DataFrame.from_pandas(a).combine_first(DataFrame.from_pandas(b)))
@@ -639,6 +643,7 @@ _SERIES_PAIRS = {
 
 @pytest.mark.parametrize("case", list(_SERIES_PAIRS))
 def test_series_combine_first_and_update_match_pandas_by_label(case):
+    skip_below_pandas3()
     a, b = _SERIES_PAIRS[case]
 
     def ours(p):

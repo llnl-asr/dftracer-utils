@@ -11,6 +11,9 @@ import random
 import pytest
 
 pd = pytest.importorskip("pandas")
+
+from .common import skip_below_pandas3  # noqa: E402
+
 zoneinfo = pytest.importorskip("zoneinfo")
 
 from dftracer.utils import DataFrame, Series  # noqa: E402
@@ -273,7 +276,7 @@ def test_tz_localize_each_option_row_by_row(zone, ambiguous, nonexistent):
         got = _try(ours(one).dt.tz_localize, zone, ambiguous=flag, nonexistent=nonexistent)
         if isinstance(want, Exception):
             assert isinstance(got, Exception), f"{t}: pandas raised {want!r}, ours returned"
-            if PANDAS3:
+            if PANDAS3:  # pandas 2 raises a pytz error, not a ValueError
                 assert isinstance(got, ValueError) == isinstance(want, ValueError)
             continue
         assert not isinstance(got, Exception), f"{t}: ours raised {got!r}"
@@ -382,8 +385,7 @@ def _frame(zone, ticks=None):
 def _same(x, y):
     if isinstance(y, Exception):
         assert isinstance(x, Exception), f"ours returned, pandas raised {y!r}"
-        if PANDAS3:
-            assert isinstance(x, ValueError) == isinstance(y, ValueError)
+        assert isinstance(x, ValueError) == isinstance(y, ValueError)
         return
     assert not isinstance(x, Exception), f"ours raised {x!r}"
     x = x.to_pandas() if hasattr(x, "to_pandas") else x
@@ -400,6 +402,7 @@ def _same(x, y):
 
 
 def _check(fn, p, o):
+    skip_below_pandas3()
     _same(_try(lambda: fn(o)), _try(lambda: fn(p)))
 
 
@@ -434,8 +437,6 @@ def test_resample_origin_keywords_on_a_zone(zone, rule, origin):
 @pytest.mark.parametrize("label", [None, "left", "right"])
 @pytest.mark.parametrize("rule", _valgrind_first(["1D", "W", "ME", "1h"]))
 def test_resample_closed_and_label_on_new_york(rule, closed, label):
-    if rule == "1D" and closed == "right" and not PANDAS3:
-        pytest.skip("pandas 2 closes a day of a zone-aware index on the right another way than 3.1")
     zone = "America/New_York"
     start = pd.Timestamp("2024-03-08", tz="UTC").value // 1000
     ticks = [start + i * 1_800_000_000 for i in range(0, 48 * 5)]

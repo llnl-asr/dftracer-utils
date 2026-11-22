@@ -13,9 +13,10 @@ pd = pytest.importorskip("pandas")
 
 from dftracer.utils import DataFrame, Series  # noqa: E402
 
+from .common import skip_below_pandas3  # noqa: E402
+
 pytestmark = pytest.mark.filterwarnings("ignore::FutureWarning", "ignore::DeprecationWarning")
 
-PANDAS3 = int(pd.__version__.split(".")[0]) >= 3
 NAN = float("nan")
 DAY = dt.datetime(2024, 1, 1)
 VALUES = {
@@ -55,10 +56,8 @@ def _norm(v):
     return v
 
 
-def _compare(ours, ref, text_index=False, ordered=True):
-    """``ordered=False`` is for the frame cases on pandas 2, whose group-by puts
-    tied rows and the rows with a null key in another order than pandas 3: the
-    rows and counts are compared, and the counts must stay in order."""
+def _compare(ours, ref, text_index=False):
+    skip_below_pandas3()
     assert isinstance(ours, Series)
     got = ours.to_pandas()
     assert got.name == ref.name
@@ -67,16 +66,8 @@ def _compare(ours, ref, text_index=False, ordered=True):
     if ref.index.nlevels == 1:
         index = [i[0] if isinstance(i, tuple) else i for i in index]
     labels = [_norm(i) for i in got.index.tolist()]
-    if ordered:
-        assert labels == [_norm(i) for i in index]
-        assert got.tolist() == pytest.approx(ref.tolist())
-        return
-    want = {_norm(i): v for i, v in zip(index, ref.tolist())}
-    assert len(labels) == len(want)
-    assert {k: pytest.approx(v) for k, v in want.items()} == dict(zip(labels, got.tolist()))
-    counts = got.tolist()
-    if ref.is_monotonic_increasing or ref.is_monotonic_decreasing:
-        assert counts == sorted(counts, reverse=ref.is_monotonic_decreasing)
+    assert labels == [_norm(i) for i in index]
+    assert got.tolist() == pytest.approx(ref.tolist())
 
 
 @pytest.mark.parametrize("kwargs", KWARGS, ids=str)
@@ -208,7 +199,7 @@ FRAME_KWARGS = [
 def test_frame_value_counts_matches_pandas(subset, kwargs):
     ours = DataFrame.from_pandas(pd.DataFrame(FRAME)).value_counts(subset, **kwargs)
     ref = pd.DataFrame(FRAME).value_counts(subset, **kwargs)
-    _compare(ours, ref, ordered=PANDAS3)
+    _compare(ours, ref)
 
 
 def test_a_frame_with_complete_rows():
@@ -284,7 +275,6 @@ def test_a_key_column_may_have_any_name(name, kwargs):
         _compare(
             ours.value_counts(subset, **kwargs),
             ref.value_counts(subset, **kwargs),
-            ordered=PANDAS3,
         )
     named = Series.from_list(raw[name]).rename(name)
     _compare(named.value_counts(**kwargs), pd.Series(raw[name], name=name).value_counts(**kwargs))
@@ -324,7 +314,7 @@ def test_a_frame_counts_negative_zero_and_nans_as_pandas():
     ref = pd.DataFrame(raw)
     ours = DataFrame.from_pandas(ref)
     for kwargs in ({}, {"dropna": False}):
-        _compare(ours.value_counts(**kwargs), ref.value_counts(**kwargs), ordered=PANDAS3)
+        _compare(ours.value_counts(**kwargs), ref.value_counts(**kwargs))
 
 
 def test_group_by_keys_negative_zero_and_nans_as_pandas_and_polars():

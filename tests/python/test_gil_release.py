@@ -12,7 +12,8 @@ import pytest
 
 import dftracer.utils as dft
 
-ROWS = 10_000_000
+# 1 MiB stays in cache, so two threads do not share memory bandwidth.
+ROWS = 131_072
 
 
 def _run(fn, threads, reps):

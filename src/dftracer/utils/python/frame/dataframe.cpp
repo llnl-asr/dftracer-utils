@@ -2170,7 +2170,7 @@ int init_dataframe(PyObject* m) {
     DataFrame_as_sequence.sq_contains = DataFrame_contains;
     DataFrameType = {};
     DataFrameType.ob_base = {PyObject_HEAD_INIT(nullptr) 0};
-    DataFrameType.tp_name = "dftracer_utils_ext.DataFrame";
+    DataFrameType.tp_name = "dftracer.utils.dftracer_utils_ext.DataFrame";
     DataFrameType.tp_basicsize = sizeof(DataFrameObject);
     DataFrameType.tp_weaklistoffset = WEAKLIST_OFFSET;
     DataFrameType.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE;

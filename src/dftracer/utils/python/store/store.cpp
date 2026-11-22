@@ -905,7 +905,7 @@ void fill_type(PyTypeObject &type, const char *name, destructor dealloc,
 
 int dftracer::utils::python::store::init_store(PyObject *m) {
     fill_type<StoreObject>(
-        StoreType, "dftracer_utils_ext.Store",
+        StoreType, "dftracer.utils.dftracer_utils_ext.Store",
         reinterpret_cast<destructor>(Store_dealloc),
         "Store(path)\n"
         "--\n"
@@ -916,22 +916,24 @@ int dftracer::utils::python::store::init_store(PyObject *m) {
     StoreType.tp_new = Store_new;
     StoreType.tp_init = reinterpret_cast<initproc>(Store_init);
 
-    fill_type<NamespaceObject>(NamespaceType,
-                               "dftracer_utils_ext.StoreNamespace",
-                               reinterpret_cast<destructor>(Namespace_dealloc),
-                               "A namespace registered with Store.namespace.",
-                               NULL, Namespace_getsetters);
+    fill_type<NamespaceObject>(
+        NamespaceType, "dftracer.utils.dftracer_utils_ext.StoreNamespace",
+        reinterpret_cast<destructor>(Namespace_dealloc),
+        "A namespace registered with Store.namespace.", NULL,
+        Namespace_getsetters);
 
-    fill_type<BatchObject>(BatchType, "dftracer_utils_ext.StoreBatch",
+    fill_type<BatchObject>(BatchType,
+                           "dftracer.utils.dftracer_utils_ext.StoreBatch",
                            reinterpret_cast<destructor>(Batch_dealloc),
                            "The writes of one commit.", Batch_methods);
 
-    fill_type<SnapshotObject>(SnapshotType, "dftracer_utils_ext.StoreSnapshot",
-                              reinterpret_cast<destructor>(Snapshot_dealloc),
-                              "A point-in-time view of a store.",
-                              Snapshot_methods);
+    fill_type<SnapshotObject>(
+        SnapshotType, "dftracer.utils.dftracer_utils_ext.StoreSnapshot",
+        reinterpret_cast<destructor>(Snapshot_dealloc),
+        "A point-in-time view of a store.", Snapshot_methods);
 
-    fill_type<CursorObject>(CursorType, "dftracer_utils_ext.StoreCursor",
+    fill_type<CursorObject>(CursorType,
+                            "dftracer.utils.dftracer_utils_ext.StoreCursor",
                             reinterpret_cast<destructor>(Cursor_dealloc),
                             "An iterator of (key, value) over a scan.");
     CursorType.tp_iter = PyObject_SelfIter;

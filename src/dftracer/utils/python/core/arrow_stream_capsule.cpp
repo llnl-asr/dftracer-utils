@@ -254,7 +254,7 @@ static PyMethodDef ArrowBatchStream_methods[] = {
 
 PyTypeObject ArrowBatchStreamType = {
     .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-        "dftracer_utils_ext._ArrowBatchStream",
+        "dftracer.utils.dftracer_utils_ext._ArrowBatchStream",
     .tp_basicsize = sizeof(ArrowBatchStreamObject),
     .tp_dealloc = (destructor)ArrowBatchStream_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT,

@@ -1876,7 +1876,9 @@ def col(name: str) -> Expr:
     return Col(name)
 
 
-def lit(value: Scalar | str) -> Expr:
+# typing.get_type_hints evaluates the annotation, and Python 3.9 has no `|` on
+# a Union alias.
+def lit(value: Union[Scalar, str]) -> Expr:  # noqa: UP007
     """A scalar literal (kept distinct from a column name, Polars-style)."""
     return Lit(value)
 
@@ -2598,6 +2600,13 @@ def _udf_origin(fn: Callable[..., Any]) -> str:
     return f"{code.co_filename}:{code.co_firstlineno}"
 
 
+def _alias_args(hint: object) -> tuple[Any, ...]:
+    # numpy on Python 3.8 builds npt.NDArray with its own alias class, which
+    # typing.get_args does not know, so read __args__ as well.
+    args = typing.get_args(hint)
+    return args if args else tuple(getattr(hint, "__args__", ()))
+
+
 def _batch_result_dtype(fn: Callable[..., Any], returns: object) -> str:
     """The result dtype name of a batch UDF from ``returns=`` or the return
     annotation (``np.ndarray`` needs ``returns=``; ``npt.NDArray[np.float64]`` names it)."""
@@ -2611,11 +2620,11 @@ def _batch_result_dtype(fn: Callable[..., Any], returns: object) -> str:
             hint = typing.get_type_hints(fn).get("return")
         except Exception:
             hint = getattr(fn, "__annotations__", {}).get("return")
-        args = typing.get_args(hint)
+        args = _alias_args(hint)
         if len(args) == 1:
             returns = args[0]
         elif len(args) == 2:
-            inner = typing.get_args(args[1])
+            inner = _alias_args(args[1])
             if inner:
                 returns = inner[0]
     if returns is None:

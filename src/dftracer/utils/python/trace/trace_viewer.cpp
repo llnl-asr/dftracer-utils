@@ -1354,7 +1354,7 @@ PyMethodDef ltv_methods[] = {
 
 PyTypeObject LiveTraceViewerType = [] {
     PyTypeObject t{.ob_base = PyVarObject_HEAD_INIT(nullptr, 0)};
-    t.tp_name = "dftracer_utils_ext._LiveTraceViewer";
+    t.tp_name = "dftracer.utils.dftracer_utils_ext._LiveTraceViewer";
     t.tp_basicsize = sizeof(LiveTraceViewerObject);
     t.tp_dealloc = reinterpret_cast<destructor>(ltv_dealloc);
     t.tp_flags = Py_TPFLAGS_DEFAULT;
@@ -1367,7 +1367,7 @@ PyTypeObject LiveTraceViewerType = [] {
 
 PyTypeObject TraceViewerType = [] {
     PyTypeObject t{.ob_base = PyVarObject_HEAD_INIT(nullptr, 0)};
-    t.tp_name = "dftracer_utils_ext.TraceViewer";
+    t.tp_name = "dftracer.utils.dftracer_utils_ext.TraceViewer";
     t.tp_basicsize = sizeof(TraceViewerObject);
     t.tp_weaklistoffset = WEAKLIST_OFFSET;
     t.tp_dealloc = reinterpret_cast<destructor>(tv_dealloc);

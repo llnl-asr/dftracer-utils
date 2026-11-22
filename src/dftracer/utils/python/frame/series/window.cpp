@@ -230,10 +230,10 @@ PyMethodDef window_functions[] = {
 }  // namespace
 
 int init_windows(PyObject* m) {
-    make_window_type(RollingType, "dftracer_utils_ext.Rolling",
+    make_window_type(RollingType, "dftracer.utils.dftracer_utils_ext.Rolling",
                      "A trailing window of a Series: Series.rolling(n).",
                      Rolling_methods);
-    make_window_type(EwmType, "dftracer_utils_ext.Ewm",
+    make_window_type(EwmType, "dftracer.utils.dftracer_utils_ext.Ewm",
                      "An exponentially weighted window of a Series: "
                      "Series.ewm(alpha).",
                      Ewm_methods);

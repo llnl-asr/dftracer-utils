@@ -938,7 +938,7 @@ static PyGetSetDef Indexer_getsetters[] = {{NULL, NULL, NULL, NULL, NULL}};
 
 PyTypeObject IndexerType = {
     .ob_base = PyVarObject_HEAD_INIT(nullptr, 0).tp_name =
-        "dftracer_utils_ext.Indexer",
+        "dftracer.utils.dftracer_utils_ext.Indexer",
     .tp_basicsize = sizeof(IndexerObject),
     .tp_dealloc = (destructor)Indexer_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,

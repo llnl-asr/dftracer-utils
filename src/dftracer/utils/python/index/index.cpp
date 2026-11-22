@@ -275,7 +275,7 @@ PyMethodDef Index_methods[] = {
 
 PyTypeObject IndexType = {
     .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-        "dftracer_utils_ext.Index",
+        "dftracer.utils.dftracer_utils_ext.Index",
     .tp_basicsize = sizeof(IndexObject),
     .tp_dealloc = (destructor)Index_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT,

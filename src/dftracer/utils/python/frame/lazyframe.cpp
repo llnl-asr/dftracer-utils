@@ -1396,7 +1396,7 @@ namespace dftracer::utils::python::frame {
 int init_lazyframe(PyObject* m) {
     LazyFrameType = {};
     LazyFrameType.ob_base = {PyObject_HEAD_INIT(nullptr) 0};
-    LazyFrameType.tp_name = "dftracer_utils_ext.LazyFrame";
+    LazyFrameType.tp_name = "dftracer.utils.dftracer_utils_ext.LazyFrame";
     LazyFrameType.tp_basicsize = sizeof(LazyFrameObject);
     LazyFrameType.tp_weaklistoffset = WEAKLIST_OFFSET;
     LazyFrameType.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE;

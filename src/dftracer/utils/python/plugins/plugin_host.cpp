@@ -472,7 +472,7 @@ PyMethodDef ph_methods[] = {
 
 PyTypeObject PluginHostType = {
     .ob_base = PyVarObject_HEAD_INIT(nullptr, 0).tp_name =
-        "dftracer_utils_ext.Plugins",
+        "dftracer.utils.dftracer_utils_ext.Plugins",
     .tp_basicsize = sizeof(PluginHostObject),
     .tp_dealloc = (destructor)ph_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT,

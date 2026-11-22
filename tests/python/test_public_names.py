@@ -5,9 +5,11 @@ a re-exported import, and each is in the API reference or listed here with a
 reason."""
 
 import importlib
+import importlib.util
 import inspect
 import pkgutil
 import re
+import sys
 import types
 import typing
 from pathlib import Path
@@ -191,7 +193,19 @@ _PUBLIC_MODULES = _public_modules()
 _MODULES_WITH_ALL = list(_PUBLIC_MODULES)
 
 
+# A module that imports its names lazily from an optional dependency.
+_LAZY_DEPENDENCIES = {"dftracer.utils.dask": "dask"}
+
+
+def _missing_dependency(name):
+    dep = _LAZY_DEPENDENCIES.get(name)
+    return dep if dep is not None and importlib.util.find_spec(dep) is None else None
+
+
 def _import(name):
+    dep = _missing_dependency(name)
+    if dep is not None:
+        pytest.skip(f"{name} needs the optional dependency {dep}")
     try:
         return importlib.import_module(name)
     except ImportError as exc:
@@ -333,7 +347,7 @@ def test_the_top_level_all_is_the_exact_allow_list():
 def test_no_public_name_is_exported_from_two_public_modules():
     homes: dict = {}
     for name in _MODULES_WITH_ALL:
-        if name in _COMPATIBILITY_NAMESPACES:
+        if name in _COMPATIBILITY_NAMESPACES or _missing_dependency(name):
             continue
         module = _import(name)
         for attr in module.__all__:
@@ -398,8 +412,7 @@ def test_docs_name_only_public_homes():
     assert not bad, "docs point at a path that is not a public home:\n" + "\n".join(bad[:60])
 
 
-# The one native module. Its classes are static types whose __module__ cannot
-# change, and no page tells a user to import from it.
+# The one native module. No page tells a user to import from it.
 _NATIVE_MODULE = "dftracer_utils_ext"
 
 
@@ -443,12 +456,23 @@ def test_every_public_function_reports_its_home_and_a_class_its_own_module(name)
         elif isinstance(obj, type) and origin.startswith("dftracer"):
             # A class keeps its defining module so typing.get_type_hints reads
             # its annotations there; that module must be ours and must hold it.
-            owner = importlib.import_module(
-                "dftracer.utils.dftracer_utils_ext" if origin == "dftracer_utils_ext" else origin
-            )
+            owner = importlib.import_module(origin)
             if getattr(owner, obj.__name__, None) is not obj:
                 wrong.append(f"{attr}: class is not in {origin}")
     assert not wrong, f"{name}: {wrong}"
+
+
+def test_every_native_type_reports_an_imported_module():
+    # typing.get_type_hints on Python 3.8 and 3.9 looks up each base class's
+    # __module__ in sys.modules and raises KeyError when it is missing.
+    from dftracer.utils import dftracer_utils_ext as ext
+
+    bad = sorted(
+        f"{name}: {obj.__module__}"
+        for name, obj in vars(ext).items()
+        if isinstance(obj, type) and obj.__module__ not in sys.modules
+    )
+    assert not bad, bad
 
 
 def test_get_type_hints_works_on_the_public_classes_and_functions():

@@ -1143,7 +1143,7 @@ int init_series(PyObject* m) {
     using namespace series_detail;
     SeriesType = {};
     SeriesType.ob_base = {PyObject_HEAD_INIT(nullptr) 0};
-    SeriesType.tp_name = "dftracer_utils_ext.Series";
+    SeriesType.tp_name = "dftracer.utils.dftracer_utils_ext.Series";
     SeriesType.tp_basicsize = sizeof(SeriesObject);
     SeriesType.tp_weaklistoffset = WEAKLIST_OFFSET;
     SeriesType.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE;

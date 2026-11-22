@@ -545,7 +545,7 @@ PyMethodDef TraceWriter_methods[] = {
 
 PyTypeObject TraceWriterType = {
     .ob_base = PyVarObject_HEAD_INIT(nullptr, 0).tp_name =
-        "dftracer_utils_ext.TraceWriter",
+        "dftracer.utils.dftracer_utils_ext.TraceWriter",
     .tp_basicsize = sizeof(TraceWriterObject),
     .tp_dealloc = reinterpret_cast<destructor>(TraceWriter_dealloc),
     .tp_flags = Py_TPFLAGS_DEFAULT,

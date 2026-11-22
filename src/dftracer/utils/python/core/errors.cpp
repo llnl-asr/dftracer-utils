@@ -22,11 +22,11 @@ PyObject *g_dft_aggregation_error = nullptr;
 
 namespace {
 
-// Create exception "dftracer_utils_ext.<short_name>", register it on m, and
-// keep a strong ref in *slot.
+// Create exception "dftracer.utils.dftracer_utils_ext.<short_name>", register
+// it on m, and keep a strong ref in *slot.
 int add_exc(PyObject *m, const char *short_name, PyObject *base,
             PyObject **slot) {
-    dstd::String qualified("dftracer_utils_ext.");
+    dstd::String qualified("dftracer.utils.dftracer_utils_ext.");
     qualified.append(short_name);
     PyObject *exc = PyErr_NewException(qualified.c_str(), base, nullptr);
     if (exc == nullptr) return -1;

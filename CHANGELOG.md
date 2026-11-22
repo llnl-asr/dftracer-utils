@@ -955,6 +955,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `typing.get_type_hints` on `DataFrame`, `Series`, `LazyFrame`, the other native classes and `lit` on Python 3.8 and 3.9.
+  The native types now report their module as `dftracer.utils.dftracer_utils_ext`.
+- Fix `jit` plugins loaded with `importlib.util.module_from_spec` on Python 3.8 and 3.9, which failed with a `KeyError`.
+- Fix `@dft.udf(batch=True)` on Python 3.8, which did not read the dtype of an `npt.NDArray[...]` return annotation.
+- Point a `@jit.series` error at the decorator line on Python 3.10 and older, as on newer versions.
+- Raise the `TimeoutError` that names `DFTRACER_UTILS_DASK_WORKER_TIMEOUT` when no Dask worker joins on Python 3.10 and older.
+  Dask raised its own `asyncio.TimeoutError` there.
 - Keep the label type of the left side in a left `align` and of the right side in a right `align`, as pandas 3.1 does.
   Labels above 2^53 stay exact, and two Series with equal labels of other types keep their own label types.
 - Keep the name of a pandas `RangeIndex` through `DataFrame.from_pandas`, `Series.from_pandas`, `DataFrame.from_arrow` and back.

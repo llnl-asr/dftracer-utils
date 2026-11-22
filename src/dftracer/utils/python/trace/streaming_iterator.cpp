@@ -111,7 +111,7 @@ static PyMethodDef ArrowStreamingIterator_methods[] = {
 
 PyTypeObject ArrowStreamingIteratorType = {
     .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-        "dftracer_utils_ext._ArrowStreamingIterator",
+        "dftracer.utils.dftracer_utils_ext._ArrowStreamingIterator",
     .tp_basicsize = sizeof(ArrowStreamingIteratorObject),
     .tp_dealloc = (destructor)ArrowStreamingIterator_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT,

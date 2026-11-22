@@ -576,11 +576,17 @@ def polars_to_native(s: pl.Series) -> Series:
 def index_columns(df: pd.DataFrame) -> list[tuple[str, pd.Series]]:
     """The columns a non-default pandas index adds, as ``(name, pandas.Series)``,
     named by the level or ``__index_level_<i>__``. The default ``RangeIndex``
-    ``0 .. n-1`` adds none; a range that starts elsewhere or steps is labels."""
+    ``0 .. n-1`` with no name adds none; a range that has a name, starts
+    elsewhere or steps is labels."""
     import pandas as pd
 
     index = df.index
-    if isinstance(index, pd.RangeIndex) and index.start == 0 and index.step == 1:
+    if (
+        isinstance(index, pd.RangeIndex)
+        and index.start == 0
+        and index.step == 1
+        and index.name is None
+    ):
         return []
     return [
         (

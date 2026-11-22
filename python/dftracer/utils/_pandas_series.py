@@ -183,6 +183,91 @@ def valid_edge(mask: Series, first: bool) -> int | None:
     return len(flags) - 1 - flags.reverse().arg_max()
 
 
+def present_edge(s: Series, first: bool) -> int | None:
+    """The position of the first (or last) present value of ``s``, ``None``
+    when it has none; a column with no nulls answers without a scan."""
+    nulls = s.null_count
+    if nulls == len(s):
+        return None
+    if nulls == 0:
+        return 0 if first else len(s) - 1
+    return valid_edge(s.notna(), first)
+
+
+def edge_label(labels: object, pos: int | None) -> object | None:
+    """The row label at ``pos`` of an index as ``.index`` gives it: a Series
+    of labels, a frame of levels (a tuple, as pandas), or positions when there
+    is none."""
+    from ._dataframe import DataFrame
+    from ._pandas_frame import column_series
+    from ._series import Series
+
+    if pos is None:
+        return None
+    if isinstance(labels, Series):
+        return labels.iloc[pos]
+    if isinstance(labels, DataFrame):
+        return tuple(column_series(labels, n).iloc[pos] for n in labels.columns)
+    return pos
+
+
+def present_or(s: Series, other: Series, kept: DType | None = None) -> Series:
+    """``s`` where it has a value, else ``other``, for two Series on the same
+    labels, as pandas ``combine_first``: two number types meet as Float64, and
+    an all-null side of another kind takes the other's type. The result goes
+    back to ``kept`` (the type both had before align) when it has no nulls."""
+    if s.dtype != other.dtype:
+        if s.dtype.is_numeric and other.dtype.is_numeric:
+            s = s.cast("Float64")
+            other = other.cast("Float64")
+        elif other.null_count == len(other):
+            other = other.cast(s.dtype)
+        elif s.null_count == len(s):
+            s = s.cast(other.dtype)
+    out = s.where(s.notna(), other)
+    if kept is not None and out.dtype != kept and out.null_count == 0:
+        out = out.cast(kept)
+    return out
+
+
+def realigned(aligned: Series, before: Series) -> Series:
+    """A column one side alone has, on the aligned rows: back in its own type
+    when align added no null, as pandas."""
+    if aligned.dtype != before.dtype and aligned.null_count == before.null_count:
+        return aligned.cast(before.dtype)
+    return aligned
+
+
+def kept_by_update(out: Series, kept: DType) -> Series:
+    """``out`` in ``kept``, the type of the frame or Series that ``update``
+    writes into, as pandas, which refuses a value that type cannot hold."""
+    if out.dtype == kept:
+        return out
+    back = out.cast(kept)
+    if (back.cast(out.dtype) != out).fillna(False).any():
+        raise TypeError(f"Invalid value for dtype '{kept.name.lower()}'")
+    return back
+
+
+def has_duplicate_labels(obj: object) -> bool:
+    """Whether the row labels of a Series or a frame repeat (positions never
+    do)."""
+    from ._dataframe import DataFrame
+    from ._series import Series
+
+    labels = getattr(obj, "index", None)
+    if isinstance(labels, (Series, DataFrame)):
+        return bool(labels.duplicated().any())
+    return False
+
+
+def kept_type(a: Series | None, b: Series | None) -> DType | None:
+    """The type to give a combined column back: the one both sides had."""
+    if a is None or b is None or a.dtype != b.dtype:
+        return None
+    return a.dtype
+
+
 class Omitted:
     """The type of ``OMITTED``: ``replace``'s ``value`` when the caller gave none."""
 
@@ -638,11 +723,15 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
     def _rows_where(self, mask: Series) -> Series:
         return self._s().filter(mask)
 
-    def first_valid_index(self) -> int | None:
-        return valid_edge(self._s().notna(), first=True)
+    def first_valid_index(self) -> object | None:
+        """The label of the first present value (``None`` when there is
+        none)."""
+        s = self._s()
+        return edge_label(s.index, present_edge(s, first=True))
 
-    def last_valid_index(self) -> int | None:
-        return valid_edge(self._s().notna(), first=False)
+    def last_valid_index(self) -> object | None:
+        s = self._s()
+        return edge_label(s.index, present_edge(s, first=False))
 
     def asof(self, where: int) -> object:
         """The last present value at or before position ``where`` (pandas
@@ -661,15 +750,23 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         return s.filter(keep).corr(shifted.filter(keep))
 
     def combine_first(self, other: Series) -> Series:
-        """This Series with nulls filled from ``other`` (positional)."""
-        s = self._s()
-        return s.where(s.notna(), other)
+        """The pandas ``combine_first``: both on the union of their labels, with
+        this Series' value where it has one and ``other``'s elsewhere."""
+        mine = self._s()
+        if has_duplicate_labels(mine) or has_duplicate_labels(other):
+            raise ValueError("cannot reindex on an axis with duplicate labels")
+        s, o = mine.align(other, join="outer")
+        return present_or(s, cast("Series", o), kept_type(mine, other))
 
     def update(self, other: Series) -> Series:
-        """``other``'s present values over this Series (positional; pandas
-        ``update`` mutates, this returns the new Series)."""
-        s = self._s()
-        return other.where(other.notna(), s)
+        """``other`` on this Series' labels, and its present values over this
+        Series' (pandas ``update`` mutates, this returns the new Series)."""
+        mine = self._s()
+        if has_duplicate_labels(other):
+            raise ValueError("cannot reindex on an axis with duplicate labels")
+        s, o = mine.align(other, join="left")
+        out = kept_by_update(present_or(cast("Series", o), s), mine.dtype)
+        return out.rename(mine.name)
 
     def drop(self, positions: int | Sequence[int]) -> Series:
         """Every element except those at ``positions`` (the positional index),

@@ -330,8 +330,8 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         values, a zoned ``datetime64`` as a zoned timestamp. An Arrow-backed
         column imports through pyarrow. The name is ``s.name`` when that is a
         ``str``; any other name (``None``, an int, a tuple) is dropped. An index
-        other than the default ``RangeIndex`` becomes the row labels (a
-        ``MultiIndex`` one level each; an unnamed level is named
+        other than the default ``RangeIndex`` (``0 .. n-1`` with no name) becomes
+        the row labels (a ``MultiIndex`` one level each; an unnamed level is named
         ``__index_level_<i>__``)."""
         out = cls._from_pandas_values(s)
         labels = pandas_labels(s)

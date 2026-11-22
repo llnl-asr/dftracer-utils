@@ -504,7 +504,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         :meth:`Series.from_pandas`). A non-default index becomes columns after the
         data columns, named by its levels or ``__index_level_<i>__``, and the
         frame's row index (:meth:`index_names`); the default ``RangeIndex`` (``0 .. n-1``
-        with step 1) is no index, any other range is labels.
+        with step 1 and no name) is no index, any other range is labels.
 
         The frame also carries the table header its pandas dtypes describe (width,
         nullable and Arrow dtypes, categories and their order, set and list
@@ -2195,7 +2195,8 @@ def _dataframe_from_arrow(table: pa.Table) -> DataFrame:
     """Import a pyarrow Table into a native DataFrame wrapper, with the row
     index its schema metadata names: ``dftracer.utils.index``, else the
     ``index_columns`` of its pandas metadata (a default ``RangeIndex``, ``0 .. n-1``
-    with step 1, is none; another range becomes an index column of its values)."""
+    with step 1 and no name, is none; another range becomes an index column of
+    its values)."""
     frame = DataFrame(_arrow_native("_dataframe_from_arrow")(table))
     names = _arrow_index_names(table.schema.metadata, frame)
     if not names:
@@ -2208,7 +2209,8 @@ def _dataframe_from_arrow(table: pa.Table) -> DataFrame:
 
 def _range_index(metadata: Mapping[bytes, bytes] | None, frame: DataFrame) -> DataFrame:
     """``frame`` indexed by the range its pandas metadata stores in place of a
-    column (``{"kind": "range", ...}``), unless it is the default ``0 .. n-1``."""
+    column (``{"kind": "range", ...}``), unless it is the default ``0 .. n-1``
+    with no name."""
     if not metadata or b"dftracer.utils.index" in metadata:
         return frame
     import json
@@ -2220,9 +2222,9 @@ def _range_index(metadata: Mapping[bytes, bytes] | None, frame: DataFrame) -> Da
     start, step = spec.get("start"), spec.get("step")
     if spec.get("kind") != "range" or not isinstance(start, int) or not isinstance(step, int):
         return frame
-    if (start == 0 and step == 1) or step == 0:
-        return frame
     name = spec.get("name")
+    if (start == 0 and step == 1 and name is None) or step == 0:
+        return frame
     name = default_name(0) if name is None else str(name)
     if name in frame._names():
         return frame

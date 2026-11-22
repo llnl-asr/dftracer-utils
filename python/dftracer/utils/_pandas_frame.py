@@ -32,7 +32,14 @@ from ._levels import (
     sort_plan,
     sorted_positions,
 )
-from ._pandas_series import OMITTED, Omitted, replace_in, replace_pairs, valid_edge
+from ._pandas_series import (
+    OMITTED,
+    Omitted,
+    edge_label,
+    present_edge,
+    replace_in,
+    replace_pairs,
+)
 from ._reshape import stack_frame, unstack_frame
 from ._series import Series
 from ._series_index import (
@@ -926,17 +933,11 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         return self._valid_edge(first=False)
 
     def _valid_edge(self, first: bool) -> object | None:
-        any_valid = None
-        for name in self.columns:
-            m = self._col(name).notna()
-            any_valid = m if any_valid is None else any_valid.logical(1, m)
-        if any_valid is None:
+        edges = [present_edge(self._col(name), first) for name in self.columns]
+        found = [p for p in edges if p is not None]
+        if not found:
             return None
-        pos = valid_edge(any_valid, first)
-        if pos is None:
-            return None
-        labels = self._frame().index
-        return labels[pos] if isinstance(labels, Series) else pos
+        return edge_label(self._frame().index, min(found) if first else max(found))
 
     def select_dtypes(
         self, include: Sequence[object] | None = None, exclude: Sequence[object] | None = None
@@ -1167,26 +1168,47 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         return self.transpose()
 
     def combine_first(self, other: DataFrame) -> DataFrame:
-        """This frame with nulls filled from ``other``'s same-named columns
-        (positional)."""
+        """The pandas ``combine_first``: both frames on the union of their row
+        labels and columns, with this frame's value where it has one and
+        ``other``'s elsewhere."""
+        from ._pandas_series import kept_type, present_or, realigned
+
+        frame = self._frame()
+        mine, theirs = frame.align(other, join="outer")
+        theirs = cast("DataFrame", theirs)
+        names = [*frame.columns, *(n for n in other.columns if n not in frame)]
+        mine = mine[names]
         out: dict[str, Series] = {}
-        for name in self.columns:
-            if name in other:
-                s = self._col(name)
-                out[name] = s.where(s.notna(), column_series(other, name))
-        return self._rebuild(out)
+        for name in names:
+            if name not in other:
+                out[name] = realigned(column_series(mine, name), column_series(frame, name))
+            elif name not in frame:
+                out[name] = realigned(column_series(theirs, name), column_series(other, name))
+            else:
+                kept = kept_type(column_series(frame, name), column_series(other, name))
+                out[name] = present_or(column_series(mine, name), column_series(theirs, name), kept)
+        return mine._rebuild(out)
 
     def update(self, other: DataFrame) -> None:
-        """Overwrite this handle's values with ``other``'s present values in
-        the same-named columns (positional; the handle is rebound)."""
+        """The pandas ``update``: ``other`` on this frame's row labels, and its
+        present values over this frame's in the columns both have (the handle is
+        rebound)."""
+        from ._pandas_series import has_duplicate_labels, kept_by_update, present_or
+
+        frame = self._frame()
+        if has_duplicate_labels(other):
+            raise ValueError("Update not allowed with duplicate indexes on other.")
+        mine, theirs = frame.align(other, join="left", axis=0)
+        theirs = cast("DataFrame", theirs)
         out: dict[str, Series] = {}
-        for name in self.columns:
-            if name in other:
-                o = column_series(other, name)
-                out[name] = o.where(o.notna(), self._col(name))
+        for name in mine.columns:
+            s = column_series(mine, name)
+            if name in theirs:
+                s = kept_by_update(present_or(column_series(theirs, name), s), s.dtype)
+            out[name] = s
         from ._loc import rebind
 
-        rebind(self._frame(), self._rebuild(out))
+        rebind(self._frame(), mine._rebuild(out))
 
     def dot(self, other: Series | DataFrame) -> Series | DataFrame:
         """Matrix product with a Series (one value per column) or a frame

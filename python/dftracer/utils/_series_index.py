@@ -251,13 +251,18 @@ def rename_levels(s: Series, new_names: list[str]) -> Series:
 
 def pandas_labels(s: pd.Series) -> tuple[list[str], list[Series]] | None:
     """The levels of a pandas Series' index; ``None`` for the default
-    ``RangeIndex``."""
+    ``RangeIndex`` (``0 .. n-1`` with no name)."""
     import pandas as pd
 
     from ._series import Series
 
     index = s.index
-    if isinstance(index, pd.RangeIndex) and index.start == 0 and index.step == 1:
+    if (
+        isinstance(index, pd.RangeIndex)
+        and index.start == 0
+        and index.step == 1
+        and index.name is None
+    ):
         return None
     names = [internal_name(index.names[i], i) for i in range(index.nlevels)]
     levels = [

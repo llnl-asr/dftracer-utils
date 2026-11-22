@@ -952,6 +952,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Keep the name of a pandas `RangeIndex` through `DataFrame.from_pandas`, `Series.from_pandas`, `DataFrame.from_arrow` and back.
+  A named range was dropped as the default index, and `DataFrame.from_pandas` now refuses one whose name is also a column name, as it does for any other index.
+- Match rows by label in `DataFrame.combine_first`, `DataFrame.update`, `Series.combine_first` and `Series.update`, as pandas does: they matched rows by position and raised on frames with different row labels. They keep the column order, the integer dtypes and the duplicate-label errors of pandas.
+- Give the row label from `Series.first_valid_index` and `Series.last_valid_index`, and a tuple from a frame with a two-level index: they gave the position.
 - Fix `col(...).is_in(param("p"))` and `not_in` on Python 3.11 and older: the duql builder wrote the parameter as a sub-query, and the query did not parse.
 - Keep a `collect` of event traces under its `memory_budget` when the trace has many small members: each scan unit is admitted by 20 MiB plus its uncompressed span, where it was admitted by eight times its span. A small budget no longer runs many small units at once past the budget, and a large member no longer runs alone when several fit.
 - Store a float category column whose labels include `inf` or `-inf` in a table: `write_table` refused it, and the labels are now `"Infinity"` and `"-Infinity"`, as float cells are.

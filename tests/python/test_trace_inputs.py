@@ -365,6 +365,10 @@ class TestTwoFoldersOneIndexRoot:
 
 
 class TestPathParsing:
+    @pytest.mark.skipif(
+        bool(os.environ.get("DFTRACER_UTILS_VALGRIND")),
+        reason="a time limit cannot hold under valgrind",
+    )
     def test_a_hundred_thousand_distinct_paths_construct_quickly(self):
         with Environment() as env:
             paths = [f"{env.temp_dir}/some/long/dir/trace-{i:08d}.pfw.gz" for i in range(100_000)]

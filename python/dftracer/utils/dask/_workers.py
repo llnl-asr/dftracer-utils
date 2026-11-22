@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 import weakref
@@ -49,7 +50,9 @@ def _wait_for_workers(client: Client) -> None:
         try:
             wait(1, timeout=timeout)
             return
-        except TimeoutError:
+        # Before Python 3.11, dask raises asyncio.TimeoutError, which is not
+        # the builtin TimeoutError.
+        except (TimeoutError, asyncio.TimeoutError):
             pass
     scheduler = getattr(getattr(client, "scheduler", None), "address", None)
     raise TimeoutError(

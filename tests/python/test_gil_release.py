@@ -31,6 +31,10 @@ def _run(fn, threads, reps):
     bool(os.environ.get("DFTRACER_UTILS_VALGRIND")),
     reason="valgrind runs one thread at a time, so two threads cannot beat one",
 )
+@pytest.mark.skipif(
+    bool(os.environ.get("DFTRACER_UTILS_COVERAGE")),
+    reason="coverage counters are shared memory written on every loop step, so two threads contend",
+)
 def test_two_threads_run_sum_in_parallel():
     s = dft.Series(np.arange(ROWS, dtype=np.int64))
     expected = int(np.arange(ROWS, dtype=np.int64).sum())

@@ -208,7 +208,7 @@ run_python_tests() {
 	fi
 
 	local pytest_status=0
-	PYTHONPATH="${PWD}/python" pytest tests/python -v || pytest_status=$?
+	DFTRACER_UTILS_COVERAGE=1 PYTHONPATH="${PWD}/python" pytest tests/python -v || pytest_status=$?
 
 	# Clean up symlinks
 	rm -f "python/dftracer/utils/$(basename "$ext_so")" "$pth_file"

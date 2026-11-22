@@ -8,6 +8,7 @@ RUN_TY ?= 0
 BUILD_GENERATOR := $(shell command -v ninja >/dev/null 2>&1 && echo "Ninja" || echo "Unix Makefiles")
 BUILD_TOOL := $(shell command -v ninja >/dev/null 2>&1 && echo "ninja" || echo "make")
 NUM_JOBS := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+# ctest gets -j $(NUM_JOBS): before CMake 3.29 the presets' "jobs": 0 starts every test at once.
 
 # Default target
 help:
@@ -62,7 +63,7 @@ test:
 	@echo "Building and running tests..."
 	@cmake --preset tests
 	@cmake --build --preset tests
-	@ctest --preset tests $(CTEST_ARGS)
+	@ctest --preset tests -j $(NUM_JOBS) $(CTEST_ARGS)
 
 # Run tests with coverage (requires coverage build)
 test-coverage:
@@ -97,7 +98,7 @@ test-single:
 	@echo "Building and running tests with a single library..."
 	@cmake --preset tests-single
 	@cmake --build --preset tests-single $(if $(BUILD_JOBS),-j $(BUILD_JOBS))
-	@ctest --preset tests-single $(CTEST_ARGS)
+	@ctest --preset tests-single -j $(NUM_JOBS) $(CTEST_ARGS)
 	@rm -rf .venv_test_single
 	@python3 -m venv .venv_test_single
 	@.venv_test_single/bin/pip install --upgrade pip setuptools wheel

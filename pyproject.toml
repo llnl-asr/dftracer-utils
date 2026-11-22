@@ -197,6 +197,14 @@ allowed-unresolved-imports = [
   "distributed", "distributed.**",
 ]
 
+# Its Future[...] ignores fire only with distributed 2024.8 (Python 3.9), which
+# has no generic Future.
+[[tool.ty.overrides]]
+include = ["python/dftracer/utils/dask/_viewer.py"]
+
+[tool.ty.overrides.rules]
+unused-ignore-comment = "ignore"
+
 # The public classes override native methods whose engine form takes codes
 # (cast, compare, rolling, ...) with the user-shaped spelling, until those
 # methods take the user-shaped arguments natively.

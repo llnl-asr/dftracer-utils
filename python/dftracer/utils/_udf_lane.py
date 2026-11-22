@@ -9,7 +9,10 @@ caller sees, and the native side prefixes the UDF name.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    import numpy.typing as npt
 
 
 class _Column:
@@ -49,7 +52,7 @@ def call(
     """
     import numpy as np
 
-    args = []
+    args: list[npt.NDArray[Any]] = []
     for dtype, ptr, keep in specs:
         if rows == 0:
             args.append(np.empty(0, dtype=np.bool_ if dtype == "bool" else dtype))

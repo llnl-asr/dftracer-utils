@@ -56,6 +56,7 @@ from ._window_spec import norm_window_spec
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
     import pandas as pd
     import polars as pl
     import pyarrow as pa
@@ -567,7 +568,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
     @classmethod
     def from_numpy(
         cls,
-        arr: np.ndarray | dict[str, np.ndarray],
+        arr: npt.NDArray[np.generic] | dict[str, npt.NDArray[np.generic]],
         columns: Sequence[str],
     ) -> DataFrame:
         """Import NumPy columns into a frame.
@@ -695,7 +696,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         else:
             import pandas as pd
 
-            def one(name: str) -> pd.Series | np.ndarray | ExtensionArray:
+            def one(name: str) -> pd.Series | npt.NDArray[np.generic] | ExtensionArray:
                 col = _ext.DataFrame.__getitem__(self, name)
                 values = _pandas_nullable(col) if nullable else None
                 return values if values is not None else _pandas_default(col)

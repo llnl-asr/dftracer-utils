@@ -51,6 +51,7 @@ from ._time_index import TimeIndexMixin
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
     import pyarrow as pa
     from numpy import generic
     from pandas._libs.missing import NAType
@@ -437,7 +438,7 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         return 1
 
     @property
-    def values(self) -> np.ndarray:
+    def values(self) -> npt.NDArray[np.generic]:
         return self._s().to_numpy()
 
     @property

@@ -15,7 +15,7 @@ under the alias name. The adapters are the only hand-written alias code.
 under ``if TYPE_CHECKING:``, so a type checker sees them.
 """
 
-from typing import Dict, Iterator, Mapping, NamedTuple
+from typing import Dict, Iterator, Mapping, NamedTuple, Tuple
 
 
 class Alias(NamedTuple):
@@ -26,16 +26,12 @@ class Alias(NamedTuple):
     adapter: bool = False
 
 
-def _pandas(
-    cls: str, pairs: Mapping[str, str], adapters: "tuple[str, ...]" = ()
-) -> Iterator[Alias]:
+def _pandas(cls: str, pairs: Mapping[str, str], adapters: Tuple[str, ...] = ()) -> Iterator[Alias]:
     for alias, target in pairs.items():
         yield Alias(cls, alias, target, "pandas", alias in adapters)
 
 
-def _polars(
-    cls: str, pairs: Mapping[str, str], adapters: "tuple[str, ...]" = ()
-) -> Iterator[Alias]:
+def _polars(cls: str, pairs: Mapping[str, str], adapters: Tuple[str, ...] = ()) -> Iterator[Alias]:
     for alias, target in pairs.items():
         yield Alias(cls, alias, target, "polars", alias in adapters)
 

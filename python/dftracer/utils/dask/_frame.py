@@ -20,6 +20,7 @@ import inspect
 import math
 from typing import (
     TYPE_CHECKING,
+    Any,
     Callable,
     List,
     Literal,
@@ -38,7 +39,7 @@ from .._series import Series
 from ._workers import _require_workers
 
 if TYPE_CHECKING:
-    from dask.distributed import Client, Future
+    from dask.distributed import Client
     from pandas import DataFrame as PandasFrame
     from typing_extensions import ParamSpec
 
@@ -457,7 +458,7 @@ class DaskFrame:
         """Release the partitions' futures."""
         if self._client is not None:
             for p in self._parts:
-                cast("Future[DataFrame]", p).release()
+                cast(Any, p).release()
         self._parts = []
 
     def _need_parts(self, what: str) -> None:

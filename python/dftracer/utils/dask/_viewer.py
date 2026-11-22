@@ -407,22 +407,23 @@ class DaskTraceViewer:
         partials = [p for p in client.gather(futures) if p]
         return TraceViewer.merge_flamegraph_partials(partials)
 
+    # distributed 2024.8, the last release for Python 3.9, has no generic Future.
     @overload
     def index_record_futures(
         self, map_fn: None = ..., progress: Optional[str] = ...
-    ) -> List[Future[IndexRecords[pa.Table]]]: ...
+    ) -> List[Future[IndexRecords[pa.Table]]]: ...  # type: ignore[type-arg, unused-ignore]  # ty: ignore[invalid-type-form]
     @overload
     def index_record_futures(
         self,
         map_fn: Callable[[IndexRecords[pa.Table]], _T],
         progress: Optional[str] = ...,
-    ) -> List[Future[_T]]: ...
+    ) -> List[Future[_T]]: ...  # type: ignore[type-arg, unused-ignore]  # ty: ignore[invalid-type-form]
 
     def index_record_futures(
         self,
         map_fn: Optional[Callable[[IndexRecords[pa.Table]], object]] = None,
         progress: Optional[str] = None,
-    ) -> List[Future[Any]]:
+    ) -> List[Future[Any]]:  # type: ignore[type-arg, unused-ignore]  # ty: ignore[invalid-type-form]
         """The index records read as one ungathered future per worker.
 
         The aggregation tier is index-wide, so each worker reads a disjoint range

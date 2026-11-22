@@ -55,6 +55,7 @@ from ._value_counts import frame_value_counts, native_counts
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
     from typing_extensions import Concatenate, ParamSpec, Self
 
     from ._apply import Row
@@ -605,11 +606,11 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         return [self._frame().index, list(self.columns)]
 
     @property
-    def values(self) -> np.ndarray:
+    def values(self) -> npt.NDArray[np.generic]:
         """The frame as a 2-D NumPy array (``to_numpy``)."""
         return self.to_numpy()
 
-    def to_numpy(self) -> np.ndarray:
+    def to_numpy(self) -> npt.NDArray[np.generic]:
         import numpy as np
 
         return np.column_stack([self._col(c).to_numpy() for c in self.columns])

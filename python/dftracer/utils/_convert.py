@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from types import ModuleType
 
     import numpy as np
+    import numpy.typing as npt
     import pandas as pd
     import polars as pl
     import pyarrow as pa
@@ -116,7 +117,7 @@ _PYTHON_OBJECT_TYPES = (
 )
 
 
-def _temporal_numpy(native: Series, dtype: DType) -> np.ndarray:
+def _temporal_numpy(native: Series, dtype: DType) -> npt.NDArray[Any]:
     """A date, timestamp or duration column as ``datetime64`` or ``timedelta64``
     (UTC values for a zoned timestamp), with ``NaT`` for null."""
     import numpy as np
@@ -131,7 +132,7 @@ def _temporal_numpy(native: Series, dtype: DType) -> np.ndarray:
     return np.array(memoryview(phys)).view(f"{kind}[{unit}]")
 
 
-def _object_numpy(values: Sequence[object]) -> np.ndarray:
+def _object_numpy(values: Sequence[object]) -> npt.NDArray[Any]:
     import numpy as np
 
     out = np.empty(len(values), dtype=object)
@@ -148,13 +149,13 @@ def _parts(
     return native._np_parts(nullable, na)
 
 
-def _frombuffer(data: bytes | bytearray | memoryview, dtype: str) -> np.ndarray:
+def _frombuffer(data: bytes | bytearray | memoryview, dtype: str) -> npt.NDArray[Any]:
     import numpy as np
 
     return np.frombuffer(data, dtype=dtype)
 
 
-def _native_numpy(native: Series) -> np.ndarray:
+def _native_numpy(native: Series) -> npt.NDArray[Any]:
     """The native column as a NumPy array without pyarrow; TypeError for a
     type with no native conversion."""
     import numpy as np
@@ -231,7 +232,7 @@ def _polars_native(native: Series, pl: ModuleType) -> pl.Series:
     return result
 
 
-def _pandas_values(native: Series) -> pd.Series | np.ndarray:
+def _pandas_values(native: Series) -> pd.Series | npt.NDArray[Any]:
     """The column as a pandas Series or NumPy array built without pyarrow: a
     zoned timestamp gets its zone, everything else its NumPy array."""
     import pandas as pd
@@ -284,7 +285,7 @@ def _pandas_categorical(native: Series) -> pd.Categorical:
     return pd.Categorical(values)
 
 
-def _pandas_default(native: Series) -> pd.Series | np.ndarray | ExtensionArray:
+def _pandas_default(native: Series) -> pd.Series | npt.NDArray[Any] | ExtensionArray:
     """The default ``to_pandas`` column: ``pd.Categorical`` for a dictionary
     column, pandas' nullable dtype for an integer, bool or (where the default
     string dtype is ``object``) string column that holds nulls, and the NumPy
@@ -397,7 +398,7 @@ def _retype(native: Series, dtype: DType, unit: str = "us", zone: str = "") -> S
     return _ext._series_retype(native, int(dtype), UNIT_CODES[unit], zone)
 
 
-def _objects(values: Sequence[object], mask: np.ndarray | None) -> Series:
+def _objects(values: Sequence[object], mask: npt.NDArray[Any] | None) -> Series:
     items = list(values)
     if mask is not None:
         items = [None if m else v for v, m in zip(items, mask.tolist())]
@@ -406,7 +407,7 @@ def _objects(values: Sequence[object], mask: np.ndarray | None) -> Series:
     return _ext._series_from_list(items)
 
 
-def _temporal(a: np.ndarray, mask: np.ndarray | None, zone: str = "") -> Series:
+def _temporal(a: npt.NDArray[Any], mask: npt.NDArray[Any] | None, zone: str = "") -> Series:
     import numpy as np
 
     unit = np.datetime_data(a.dtype)[0]
@@ -433,15 +434,17 @@ def _temporal(a: np.ndarray, mask: np.ndarray | None, zone: str = "") -> Series:
     return _retype(native, DType.TIMESTAMP, unit, zone)
 
 
-def numpy_to_native(a: np.ndarray, mask: np.ndarray | None = None) -> Series:
+def numpy_to_native(a: npt.NDArray[Any], mask: npt.NDArray[Any] | None = None) -> Series:
     """A 1-D NumPy array (or masked array) as a native column; ``mask`` is true
     where null."""
     import numpy as np
 
     if isinstance(a, np.ma.MaskedArray):
-        hidden = np.ma.getmaskarray(a)
+        # np.ma.getmaskarray and np.ma.getdata have no annotations in older
+        # numpy; the mask is nomask (a scalar False) when nothing is hidden.
+        hidden = np.zeros(a.shape, dtype=np.bool_) | a.mask
         mask = hidden if mask is None else (mask | hidden)
-        a = np.ma.getdata(a)
+        a = a.data
     a = np.asarray(a)
     if a.ndim != 1:
         raise TypeError("expected a 1-D array")
@@ -471,7 +474,7 @@ def _zone_name(tz: str | tzinfo | None) -> str:
     return str(tz)
 
 
-def _dictionary(codes: np.ndarray, categories: list[str]) -> Series | None:
+def _dictionary(codes: npt.NDArray[Any], categories: list[str]) -> Series | None:
     """A dictionary column from integer codes (negative for null) and their
     strings, built through pyarrow so no string is made per row; None without
     pyarrow or an Arrow-enabled extension."""

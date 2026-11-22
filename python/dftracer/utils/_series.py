@@ -73,6 +73,7 @@ from ._value_counts import series_value_counts
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
     import pandas as pd
     import polars as pl
     import pyarrow as pa
@@ -364,7 +365,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         return out
 
     @classmethod
-    def from_numpy(cls, a: np.ndarray) -> Series:
+    def from_numpy(cls, a: npt.NDArray[np.generic]) -> Series:
         """Import a NumPy array with no pyarrow: a 1-D C-contiguous fixed-width
         numeric array borrows the array's buffer; other numbers, bools,
         ``datetime64``, ``timedelta64``, text, bytes and object arrays are
@@ -447,7 +448,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             out.index = pandas_index(self)
         return out
 
-    def to_numpy(self) -> np.ndarray:
+    def to_numpy(self) -> npt.NDArray[np.generic]:
         """This column as a NumPy array, built natively with no pyarrow.
 
         A flat, non-null, fixed-width numeric column is a zero-copy view of the
@@ -480,7 +481,9 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             out = _polars_native(self, pl)
         return out.alias(self.name or "")
 
-    def __array__(self, dtype: np.dtype | None = None, copy: bool | None = None) -> np.ndarray:
+    def __array__(
+        self, dtype: np.dtype[np.generic] | None = None, copy: bool | None = None
+    ) -> npt.NDArray[np.generic]:
         """NumPy array protocol, so ``np.asarray(series)`` works."""
         import numpy as np
 

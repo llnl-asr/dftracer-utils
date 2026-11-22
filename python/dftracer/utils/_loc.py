@@ -27,6 +27,7 @@ from ._series import Series
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
     import pyarrow as pa
 
     from ._dataframe import DataFrame
@@ -384,7 +385,7 @@ def rows_by_label(labels: Labels, key: object) -> Rows:
     if isinstance(key, builtins.slice):
         return _label_slice(labels, key)
     if _is_integer_array(key):
-        return rows_by_label(labels, Series.from_numpy(cast("np.ndarray", key)))
+        return rows_by_label(labels, Series.from_numpy(cast("npt.NDArray[np.generic]", key)))
     if _is_labels_list(key):
         values = list(cast("Sequence[object]", key))
         if _bool_list(values):

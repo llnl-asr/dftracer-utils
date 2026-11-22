@@ -780,6 +780,15 @@ dstd::Result<LabelJoin> join_rows(dstd::Span<const Level> la,
         out.levels.push_back(result.columns[i].share());
     out.left = positions_of(result.columns[k]);
     out.right = positions_of(result.columns[k + 1]);
+    if (how == JoinHow::Left && static_cast<std::int64_t>(out.left.size()) ==
+                                    la.front().column.length()) {
+        out.left_whole = true;
+        for (std::size_t i = 0; i < out.left.size(); ++i)
+            if (out.left[i] != static_cast<std::int64_t>(i)) {
+                out.left_whole = false;
+                break;
+            }
+    }
     return out;
 }
 
@@ -943,17 +952,68 @@ dstd::Result<AlignedSeries> align_labels(const Series& a, const Series& b,
     return AlignedSeries{std::move(left), std::move(right)};
 }
 
+namespace {
+
+// A left align of `a` on `b` when both have labels of one type and no null
+// label: the rows of `b` for the labels of `a`, through the cached hash of `b`,
+// with `a` as it is. No value when it does not apply, or when `b` repeats a
+// label (the join meets every row of a repeated label).
+dstd::Optional<AlignedFrames> left_by_reindex(const DataFrame& a,
+                                              const DataFrame& b,
+                                              const Series& fill) {
+    if (a.index_names().empty() || b.index_names().empty())
+        return dstd::nullopt;
+    const dstd::Vector<Level> la = frame_levels(a);
+    const dstd::Vector<Level> lb = frame_levels(b);
+    if (la.size() != lb.size()) return dstd::nullopt;
+    dstd::Vector<Series> keys;
+    dstd::Vector<Series> levels;
+    dstd::Vector<dstd::String> names;
+    for (std::size_t i = 0; i < la.size(); ++i) {
+        if (la[i].column.type() != lb[i].column.type() ||
+            la[i].column.null_count() > 0 || lb[i].column.null_count() > 0)
+            return dstd::nullopt;
+        keys.push_back(la[i].column.share());
+        levels.push_back(lb[i].column.share());
+        names.push_back(la[i].name);
+    }
+    if (same_levels(la, lb)) return AlignedFrames{a.share(), b.share()};
+    auto pos = reindex_labels(b.row_index ? b.row_index->cache.get() : nullptr,
+                              levels, b.num_rows(), keys, ReindexOptions{});
+    if (!pos) return dstd::nullopt;
+    auto right = gathered_frame(b, *pos, names, keys, fill);
+    if (!right) return dstd::nullopt;
+    return AlignedFrames{a.share(), std::move(*right)};
+}
+
+}  // namespace
+
 dstd::Result<AlignedFrames> align_rows(const DataFrame& a, const DataFrame& b,
                                        JoinHow how, const Series& fill) {
+    if (how == JoinHow::Left) {
+        if (auto fast = left_by_reindex(a, b, fill)) return std::move(*fast);
+    } else if (how == JoinHow::Right) {
+        if (auto fast = left_by_reindex(b, a, fill))
+            return AlignedFrames{std::move(fast->right), std::move(fast->left)};
+    }
     auto joined = join_labels(frame_levels(a), frame_levels(b), how);
     if (!joined) return joined.error();
     if (joined->same) return AlignedFrames{a.share(), b.share()};
-    auto left =
-        gathered_frame(a, joined->left, joined->names, joined->levels, fill);
-    if (!left) return dstd::Unexpected<dstd::Error>(left.error());
     auto right =
         gathered_frame(b, joined->right, joined->names, joined->levels, fill);
     if (!right) return dstd::Unexpected<dstd::Error>(right.error());
+    // A left join that kept every row of `a` in order, on labels of the type
+    // `a` already has, leaves `a` as it is.
+    if (joined->left_whole && !a.index_names().empty()) {
+        const dstd::Span<const dstd::SharedString> own = a.index_names();
+        bool same_types = own.size() == joined->levels.size();
+        for (std::size_t i = 0; same_types && i < own.size(); ++i)
+            same_types = a.column(own[i]).type() == joined->levels[i].type();
+        if (same_types) return AlignedFrames{a.share(), std::move(*right)};
+    }
+    auto left =
+        gathered_frame(a, joined->left, joined->names, joined->levels, fill);
+    if (!left) return dstd::Unexpected<dstd::Error>(left.error());
     return AlignedFrames{std::move(*left), std::move(*right)};
 }
 

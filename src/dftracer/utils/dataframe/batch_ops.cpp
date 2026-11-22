@@ -46,6 +46,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <type_traits>
 
 dftu_series* dftu_chunk_results(
     dftracer::utils::dstd::Vector<dftu_series*>& parts) {
@@ -1514,6 +1515,92 @@ bool permutation_order(const Series& c, bool descending, std::int64_t n,
     return true;
 }
 
+template <class F>
+bool with_int_data(const Series& c, F&& f) {
+    if (!c.is_flat()) return false;
+    switch (c.type()) {
+        case TypeId::Int8:
+            return f(c.data<std::int8_t>());
+        case TypeId::Int16:
+            return f(c.data<std::int16_t>());
+        case TypeId::Int32:
+            return f(c.data<std::int32_t>());
+        case TypeId::Int64:
+            return f(c.data<std::int64_t>());
+        case TypeId::Uint8:
+            return f(c.data<std::uint8_t>());
+        case TypeId::Uint16:
+            return f(c.data<std::uint16_t>());
+        case TypeId::Uint32:
+            return f(c.data<std::uint32_t>());
+        case TypeId::Uint64:
+            return f(c.data<std::uint64_t>());
+        default:
+            return false;
+    }
+}
+
+// The row order of a multi-key sort of integer keys whose value ranges fit
+// together in 64 bits: each key becomes its offset from the end it sorts from
+// (a null one step past the end it goes to), the offsets pack first key
+// highest, and one stable argsort of the packed codes is the order.
+bool packed_order(dstd::Span<const Series* const> keys,
+                  dstd::Span<const std::uint8_t> desc,
+                  dstd::Span<const std::uint8_t> nulls_last, std::int64_t n,
+                  dstd::Vector<std::int64_t>& order) {
+    if (keys.size() < 2 || n == 0) return false;
+    dstd::Vector<std::uint64_t> codes(static_cast<std::size_t>(n), 0);
+    unsigned used = 0;
+    for (std::size_t k = 0; k < keys.size(); ++k) {
+        const Series& c = *keys[k];
+        const bool has_nulls = c.null_count() > 0;
+        const bool down = desc[k] != 0;
+        const bool null_high = nulls_last[k] != 0;
+        const bool ok = with_int_data(c, [&](const auto* p) {
+            using T = std::remove_cv_t<std::remove_pointer_t<decltype(p)>>;
+            bool any = false;
+            T lo{};
+            T hi{};
+            for (std::int64_t i = 0; i < n; ++i) {
+                if (has_nulls && c.is_null(i)) continue;
+                if (!any || p[i] < lo) lo = p[i];
+                if (!any || p[i] > hi) hi = p[i];
+                any = true;
+            }
+            const std::uint64_t span =
+                static_cast<std::uint64_t>(hi) - static_cast<std::uint64_t>(lo);
+            if (has_nulls && span == std::numeric_limits<std::uint64_t>::max())
+                return false;
+            const std::uint64_t top = span + (has_nulls ? 1 : 0);
+            const unsigned width = static_cast<unsigned>(std::bit_width(top));
+            if (used + width > 64) return false;
+            used += width;
+            const std::uint64_t shift_values = has_nulls && !null_high ? 1 : 0;
+            const std::uint64_t null_code = null_high ? top : 0;
+            for (std::int64_t i = 0; i < n; ++i) {
+                std::uint64_t code;
+                if (has_nulls && c.is_null(i)) {
+                    code = null_code;
+                } else {
+                    const auto v = static_cast<std::uint64_t>(p[i]);
+                    code = (down ? static_cast<std::uint64_t>(hi) - v
+                                 : v - static_cast<std::uint64_t>(lo)) +
+                           shift_values;
+                }
+                std::uint64_t& out = codes[static_cast<std::size_t>(i)];
+                out = width == 64 ? code : (out << width) | code;
+            }
+            return true;
+        });
+        if (!ok) return false;
+    }
+    const Series packed = Series::flat(TypeId::Uint64, codes.data(), n);
+    const Series perm = packed.argsort(false, true);
+    const std::int64_t* p = perm.data<std::int64_t>();
+    std::copy(p, p + n, order.begin());
+    return true;
+}
+
 // The row order of a multi-key sort as one stable argsort per key, last key
 // first: each pass sorts the key as the previous passes left it, so ties keep
 // the order the later keys gave. A pass uses the single-key argsort, which is
@@ -1524,6 +1611,7 @@ bool radix_order(dstd::Span<const Series* const> keys,
                  dstd::Span<const std::uint8_t> desc,
                  dstd::Span<const std::uint8_t> nulls_last, std::int64_t n,
                  dstd::Vector<std::int64_t>& order) {
+    if (packed_order(keys, desc, nulls_last, n, order)) return true;
     dstd::Vector<Series> passes(keys.size());
     for (std::size_t i = 0; i < keys.size(); ++i) {
         const Series& c = *keys[i];

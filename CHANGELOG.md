@@ -310,6 +310,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make `tz_localize` to UTC or a zone fixed at UTC a label change with no copy.
+- Make a left or right `align` on row labels about 2 times faster by reusing the kept frame and the cached label hash.
+- Sort by two or more integer keys, such as `sort_index` on a two-level index, in one pass when their value ranges fit in 64 bits together, about 2 times faster.
 - Write the original event lines in `TraceViewer.sink_trace` when the viewer holds only its own events (no column op, select, row window or `partition_by`), so a top-level or nested key that no column carries stays in the output.
 - Write C++ `View::sink_trace`, `dftracer_view --merge` and row materialize through the same output writer as the Python sinks: the output is staged beside the target and renamed over it, a failed write leaves the target as it was, and the index is built while the files are written in about half the memory.
   `TraceWriteOptions::part_size` now makes `output_path` a folder of `part-NNNNN.pfw.gz` files, `worker_count` 0 uses every core, and a missing parent folder is created.

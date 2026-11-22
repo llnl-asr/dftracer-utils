@@ -619,7 +619,21 @@ def test_frame_align_fill_value(fill, axis):
     )
 
 
-@pytest.mark.parametrize("kind", ["unique", "dup", "dups mono", "same", "perm"])
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "unique",
+        "dup",
+        "dups mono",
+        "dups unsorted",
+        "same",
+        "perm",
+        "subset",
+        "decreasing",
+        "text",
+        "nan",
+    ],
+)
 @pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
 def test_frame_align_row_labels(kind, join):
     a, b = PAIRS[kind]
@@ -884,3 +898,14 @@ def test_series_align_of_sorted_unique_integer_labels_matches_pandas(join):
 def test_series_align_with_repeated_or_unsorted_labels_matches_pandas(join):
     check(lambda: (_s([5, 1, 3, 9]), _s([3, 4, 5], "w")), lambda a, b: a.align(b, join=join))
     check(lambda: (_s([1, 2, 2, 9]), _s([2, 4, 9], "w")), lambda a, b: a.align(b, join=join))
+
+
+@pytest.mark.parametrize("join", ["left", "right"])
+def test_frame_align_promotes_int_labels_to_float_on_both_sides(join):
+    check(
+        lambda: (
+            pd.DataFrame({"x": [1, 2, 3]}, index=pd.Index([1, 2, 3], name="k")),
+            pd.DataFrame({"y": [4, 5, 6]}, index=pd.Index([1.0, 2.0, 4.0], name="k")),
+        ),
+        lambda p, q: p.align(q, join=join),
+    )

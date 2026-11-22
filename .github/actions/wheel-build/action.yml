@@ -86,6 +86,12 @@ runs:
       run: |
         for f in cmake ninja; do brew list --versions "$f" >/dev/null || brew install "$f"; done
 
+    # The tests run uvx. A Linux wheel is tested in the manylinux image, which
+    # has uv; a macOS wheel is tested on the runner.
+    - name: Set up uv (macOS)
+      if: runner.os == 'macOS'
+      uses: astral-sh/setup-uv@v8.0.0
+
     - name: Build and test wheel
       uses: pypa/cibuildwheel@v3.3.0
       env:

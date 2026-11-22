@@ -12,7 +12,7 @@ per-event loop in the emitted code.
 from __future__ import annotations
 
 import ast
-from typing import Any, Callable, Iterable, NoReturn
+from typing import Any, Callable, Iterable, NoReturn, cast
 
 from .._c_text import c_str_literal
 from .._eval import ARITH_CODE, COMPARE_CODE
@@ -104,13 +104,13 @@ def _fail(reason: str, node: ast.AST | None) -> NoReturn:
     raise err
 
 
-def _unwrap(node: ast.expr) -> ast.expr:
+def _unwrap(node: ast.AST) -> ast.expr:
     index = getattr(ast, "Index", None)
     if index is not None and isinstance(node, index):
         value = getattr(node, "value", node)
         assert isinstance(value, ast.expr)
         return value
-    return node
+    return cast(ast.expr, node)
 
 
 class _V:

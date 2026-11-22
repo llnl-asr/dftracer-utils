@@ -1010,7 +1010,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         a null: left out with ``dropna`` (the default), and one group with the
         null keys without it, as pandas; :meth:`group_by` keeps NaN as its own
         group, as Polars."""
-        given = [by] if isinstance(by, (str, Series)) else list(by)
+        given: list[str | Series] = [by] if isinstance(by, (str, Series)) else list(by)
         source = self
         hidden = [n for n in _ext.DataFrame.index_names(self) if n not in given]
         if hidden:
@@ -1936,7 +1936,9 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         null keys as their own group (polars), the key null in the result."""
         from ._groupby import GroupBy
 
-        given = [] if key is None else [key] if isinstance(key, (str, Series)) else list(key)
+        given: list[str | Series] = (
+            [] if key is None else [key] if isinstance(key, (str, Series)) else list(key)
+        )
         if not given:
             whole = GroupBy(self, [])
             return whole.agg(*aggs) if aggs else whole

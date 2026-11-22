@@ -651,7 +651,7 @@ class GroupBy(GroupTransforms[DataFrame]):
         if numeric_only:
             names = [c for c in names if c in value_cols]
         if isinstance(other, Series):
-            pairs = {c: other for c in value_cols}
+            pairs: dict[str, Series] = {c: other for c in value_cols}
         else:
             have = set(other.columns)
             pairs = {c: self._col(other, c) for c in value_cols if c in have}

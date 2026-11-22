@@ -108,7 +108,7 @@ def frame_value_counts(
     for k in keys:
         cleaned = cleaned.with_column(k, _no_nan(drop_levels(cleaned[k])))
     if dropna:
-        present = None
+        present: Series | None = None
         for k in keys:
             m = cleaned[k].is_not_null()
             present = m if present is None else present & m

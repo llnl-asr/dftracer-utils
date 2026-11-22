@@ -25,5 +25,5 @@ def runtime_threads(worker: Worker, host_worker_counts: dict[str, int], total_cp
     if own:
         return max(1, min(int(own), total_cpus))
     host = worker.address.split("://")[-1].rsplit(":", 1)[0]
-    n_local = host_worker_counts.get(host) or max(host_worker_counts.values(), default=1)
+    n_local = host_worker_counts.get(host) or max([1, *host_worker_counts.values()])
     return max(1, total_cpus // n_local)

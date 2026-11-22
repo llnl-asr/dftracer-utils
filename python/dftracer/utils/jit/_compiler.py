@@ -39,12 +39,12 @@ if TYPE_CHECKING:
 _AST_INDEX = getattr(ast, "Index", None)
 
 
-def unwrap_index(node: ast.expr) -> ast.expr:
+def unwrap_index(node: ast.AST) -> ast.expr:
     # _AST_INDEX is resolved at runtime, so the type checker cannot narrow node
     # to ast.Index here; read .value dynamically.
     if _AST_INDEX is not None and isinstance(node, _AST_INDEX):
-        return cast(ast.expr, getattr(node, "value", node))
-    return node
+        node = getattr(node, "value", node)
+    return cast(ast.expr, node)
 
 
 # per-field default (0 / DFTU_STR_NONE), matching dftu_jit_resolve/accessors.
@@ -2852,7 +2852,7 @@ class Compiler:
         subs: list[ast.expr] = []
         cur: ast.expr = node
         while isinstance(cur, ast.Subscript):
-            subs.append(cur.slice)
+            subs.append(unwrap_index(cur.slice))
             cur = cur.value
         subs.reverse()
         base = cur
@@ -3112,7 +3112,7 @@ class Compiler:
             _reject(f"unknown value component .{name} for self.{attr}")
         return names.index(name)
 
-    def _keys(self, sl: ast.expr) -> list[ast.expr]:
+    def _keys(self, sl: ast.AST) -> list[ast.expr]:
         sl = unwrap_index(sl)
         if isinstance(sl, ast.Tuple):
             return builtins.list(sl.elts)

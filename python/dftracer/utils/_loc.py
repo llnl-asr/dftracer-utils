@@ -16,7 +16,7 @@ from __future__ import annotations
 import builtins
 import datetime
 import sys
-from typing import TYPE_CHECKING, Sequence, cast
+from typing import TYPE_CHECKING, Any, Sequence, cast
 
 from . import dftracer_utils_ext as _ext
 from ._agg import AggForm, AggKeyword, reduce_specs
@@ -477,8 +477,10 @@ def columns_by_name(names: list[str], key: object, new_ok: bool = False) -> tupl
             raise KeyError(f"loc: no column named {key!r}")
         return [key], True
     if isinstance(key, builtins.slice):
-        lo = 0 if key.start is None else names.index(key.start)
-        hi = len(names) - 1 if key.stop is None else names.index(key.stop)
+        start: Any = key.start
+        stop: Any = key.stop
+        lo = 0 if start is None else names.index(start)
+        hi = len(names) - 1 if stop is None else names.index(stop)
         return list(names[lo : hi + 1]), False
     if isinstance(key, (list, tuple)):
         out = [str(k) for k in key]

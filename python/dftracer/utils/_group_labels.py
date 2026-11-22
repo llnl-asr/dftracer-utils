@@ -223,15 +223,17 @@ def apply_pieces(g: GroupBy, results: list[tuple[object, object]]) -> DataFrame 
     pieces: list[DataFrame] = []
     names: list[str] = []
     for label, result in results:
+        body: dict[str, Series]
         if isinstance(result, Series):
             level_names, levels = names_of(result), levels_of(result)
             body = {VALUE: drop_levels(result)}
+            length = len(result)
         else:
             assert isinstance(result, DataFrame)
             level_names = list(_ext.DataFrame.index_names(result))
             levels = [_column(result, n) for n in level_names]
             body = {c: _column(result, c) for c in result.columns}
-        length = len(result)
+            length = len(result)
         if not level_names:
             level_names, levels = [default_name(0)], [positions(length)]
         parts = label if isinstance(label, tuple) else (label,)

@@ -20,6 +20,8 @@ from __future__ import annotations
 import ast
 import io
 import math
+import operator
+import sys
 import textwrap
 import tokenize
 from typing import Any, Callable, Sequence, cast
@@ -32,10 +34,10 @@ from ._expr import Expr, Select, col, lit
 _AST_INDEX = getattr(ast, "Index", None)
 
 
-def _unwrap_index(node: ast.expr) -> ast.expr:
+def _unwrap_index(node: ast.AST) -> ast.expr:
     if _AST_INDEX is not None and isinstance(node, _AST_INDEX):
-        return cast("ast.expr", getattr(node, "value", node))
-    return node
+        node = getattr(node, "value", node)
+    return cast("ast.expr", node)
 
 
 class TranspileError(Exception):
@@ -250,10 +252,10 @@ class _Lowering:
             return cast(
                 "Expr",
                 {
-                    "+": lambda a, b: a + b,
-                    "-": lambda a, b: a - b,
-                    "*": lambda a, b: a * b,
-                    "/": lambda a, b: a / b,
+                    "+": operator.add,
+                    "-": operator.sub,
+                    "*": operator.mul,
+                    "/": operator.truediv,
                 }[op](left, right),
             )
         both_int = self.is_int(n.left) and self.is_int(n.right)
@@ -661,11 +663,16 @@ class _Columns(ast.NodeTransformer):
     def visit_Name(self, node: ast.Name) -> ast.AST:
         if node.id not in self.columns:
             raise KeyError(f"no column named {node.id!r}")
-        field = ast.Subscript(
-            value=ast.Name(id=_ROW, ctx=ast.Load()),
-            slice=ast.Constant(value=node.id),
-            ctx=ast.Load(),
-        )
+        key = ast.Constant(value=node.id)
+        if sys.version_info >= (3, 9):
+            field = ast.Subscript(
+                value=ast.Name(id=_ROW, ctx=ast.Load()), slice=key, ctx=ast.Load()
+            )
+        else:
+            assert _AST_INDEX is not None
+            field = ast.Subscript(
+                value=ast.Name(id=_ROW, ctx=ast.Load()), slice=_AST_INDEX(value=key), ctx=ast.Load()
+            )
         return ast.copy_location(field, node)
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -706,7 +713,7 @@ def _boolean_precedence(source: str) -> str:
                 tokens.append((tok.type, tok.string))
     except tokenize.TokenError as e:
         raise SyntaxError(str(e.args[0])) from None
-    return tokenize.untokenize(tokens)
+    return str(tokenize.untokenize(tokens))
 
 
 def _reject_at(source: str) -> None:

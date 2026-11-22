@@ -158,7 +158,7 @@ ADAPTERS = {
     "LazyFrame": ("sort_values",),
 }
 
-PANDAS: "tuple[Alias, ...]" = (
+PANDAS: Tuple[Alias, ...] = (
     *_pandas("Series", _SERIES, ADAPTERS["Series"]),
     *_pandas("Expr", _EXPR, ADAPTERS["Expr"]),
     *_pandas("DataFrame", _DATAFRAME, ADAPTERS["DataFrame"]),
@@ -167,7 +167,7 @@ PANDAS: "tuple[Alias, ...]" = (
     *_pandas("LazyGroupBy", _GROUPBY),
 )
 
-POLARS: "tuple[Alias, ...]" = (
+POLARS: Tuple[Alias, ...] = (
     *_polars(
         "Series",
         {"alias": "rename", "clone": "copy", "limit": "head", "not_": "__invert__"},
@@ -187,10 +187,10 @@ POLARS: "tuple[Alias, ...]" = (
     ),
 )
 
-ALIASES: "tuple[Alias, ...]" = PANDAS + POLARS
+ALIASES: Tuple[Alias, ...] = PANDAS + POLARS
 
 
-def install(name: str, cls: type, faces: "tuple[str, ...]" = ("pandas", "polars")) -> None:
+def install(name: str, cls: type, faces: Tuple[str, ...] = ("pandas", "polars")) -> None:
     """Give class ``cls`` (called ``name`` in the tables) its aliases of the
     given ``faces``: each identity alias becomes the canonical attribute under
     the alias name; an adapter must already be defined in the class body (a

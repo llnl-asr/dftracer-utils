@@ -259,7 +259,7 @@ class FramePolarsMixin:
             if subset
             else list(f._polars_names())
         )
-        keep = None
+        keep: Series | None = None
         for c in names:
             s = column_series(f, c)
             if not is_numeric_series(s):

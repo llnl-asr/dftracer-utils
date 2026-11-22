@@ -8,7 +8,7 @@ annotation, ``e: Event``, is what lets the body be checked (it is optional).
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Callable, DefaultDict, Dict, List, Optional, Set, Tuple, Union
+from typing import Callable, DefaultDict, Dict, List, Optional, Set, Tuple, Type, Union
 
 from typing_extensions import assert_type
 
@@ -28,32 +28,32 @@ from dftracer.utils.jit import (
 from dftracer.utils.plugins import JSONValue
 
 total = jit.map(key=(jit.i64,), value=jit.sum())
-assert_type(total, Map[tuple[int], Sum])
+assert_type(total, Map[Tuple[int], Sum])
 
 # A bare single-component key infers the same 1-tuple Map surface.
 bare = jit.map(key=jit.i64, value=jit.sum())
-assert_type(bare, Map[tuple[int], Sum])
+assert_type(bare, Map[Tuple[int], Sum])
 
 hits = jit.map(key=(jit.i64,), value=jit.count())
-assert_type(hits, Map[tuple[int], Counter])
+assert_type(hits, Map[Tuple[int], Counter])
 
 dur_var = jit.map(key=(jit.i64,), value=jit.variance())
-assert_type(dur_var, Map[tuple[int], Variance])
+assert_type(dur_var, Map[Tuple[int], Variance])
 
 hot = jit.map(key=(jit.i64,), value=jit.argmax(of=jit.str_))
-assert_type(hot, Map[tuple[int], ArgMax[Str]])
+assert_type(hot, Map[Tuple[int], ArgMax[Str]])
 
 hot_k = jit.map(key=(jit.i64,), value=jit.topk(3, of=jit.str_))
-assert_type(hot_k, Map[tuple[int], TopK[Str]])
+assert_type(hot_k, Map[Tuple[int], TopK[Str]])
 
 freq_k = jit.map(key=(jit.i64,), value=jit.approx_topk(5, of=jit.str_))
-assert_type(freq_k, Map[tuple[int], ApproxTopK[Str]])
+assert_type(freq_k, Map[Tuple[int], ApproxTopK[Str]])
 
 samp_k = jit.map(key=(jit.i64,), value=jit.sample(10, of=jit.i64))
-assert_type(samp_k, Map[tuple[int], Sample[int]])
+assert_type(samp_k, Map[Tuple[int], Sample[int]])
 
 two_key = jit.map(key=(jit.i64, jit.str_), value=jit.count())
-assert_type(two_key, Map[tuple[int, Str], Counter])
+assert_type(two_key, Map[Tuple[int, Str], Counter])
 
 
 @jit.plugin
@@ -277,8 +277,8 @@ shippable: bool = pkg.shippable(Packaged)
 so_path: str = pkg.build(Packaged)
 so_path2: str = jit.build(Packaged, out=None)
 class_path: str = jit.compile_class(Packaged)
-provided: dict[str, str] = jit.provided_names(Packaged)
-renamed: dict[str, str] = jit.plugin_result_names(Packaged)
+provided: Dict[str, str] = jit.provided_names(Packaged)
+renamed: Dict[str, str] = jit.plugin_result_names(Packaged)
 is_plugin: bool = jit.is_jit_plugin(Packaged)
 
 # jit.series: an Expr over its column arguments, called and registered.
@@ -300,7 +300,7 @@ def scaled(dur: Expr) -> Expr:
 
 
 series_ops: Tuple[Callable[..., Union[int, float, object]], ...] = (doubled, shifted, scaled)
-op_names: list[str] = jit.ops.list()
+op_names: List[str] = jit.ops.list()
 
 # jit.op: a one-argument transform, piped, compiled and run.
 
@@ -315,7 +315,7 @@ assert_type(piped, jit.Op)
 compiled: str = jit.compile_op(piped)
 ran = jit.run_op(piped, 3)
 fusable: bool = jit.can_fuse(piped)
-op_error: type[jit.JitError] = jit.JitOpError
+op_error: Type[jit.JitError] = jit.JitOpError
 
 # A plugin's runtime config is a frozen dataclass named by ``config: Cfg``; the
 # body reads each field as ``self.config.<field>`` with the dataclass type.
@@ -345,7 +345,7 @@ class Configured:
 
 checked_config: Optional[Dict[str, JSONValue]] = jit.plugin_config(Configured, {"threshold": 3})
 
-jit_error: type[Exception] = jit.JitError
+jit_error: Type[Exception] = jit.JitError
 
 
 # Plain-container scan state: the merge across worker slices is inferred from
@@ -360,7 +360,7 @@ class PlainState:
     names: Set[str] = set()
     order: List[int] = []
     hi: DefaultDict[int, int] = defaultdict(int)
-    lo: dict[int, int] = {}
+    lo: Dict[int, int] = {}
     runs: jit.Store[int, int]
     weights: jit.Store[Tuple[int, str], float]
 

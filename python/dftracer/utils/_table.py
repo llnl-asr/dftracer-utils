@@ -17,7 +17,7 @@ import math
 import os
 import re
 import types
-from typing import TYPE_CHECKING, Any, Callable, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Union
 
 from . import dftracer_utils_ext as _ext
 from ._dataframe import DataFrame, _bound
@@ -31,10 +31,10 @@ if TYPE_CHECKING:
     from ._enums import DType
 
     PathLike = Union[str, "os.PathLike[str]"]
-    JsonValue = Union[None, bool, int, float, str, list["JsonValue"], dict[str, "JsonValue"]]
-    Meta = dict[str, JsonValue]
-    SetType = Callable[[list[JsonValue]], object]
-    Header = dict[str, Any]
+    JsonValue = Union[None, bool, int, float, str, List["JsonValue"], Dict[str, "JsonValue"]]
+    Meta = Dict[str, JsonValue]
+    SetType = Callable[[List[JsonValue]], object]
+    Header = Dict[str, Any]
     Column = Union["np.ndarray[Any, Any]", "pd.api.extensions.ExtensionArray", "pd.Series"]
     Dtype = Union["np.dtype[Any]", "pd.api.extensions.ExtensionDtype"]
 

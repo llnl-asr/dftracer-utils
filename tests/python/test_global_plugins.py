@@ -13,6 +13,8 @@ same score on the same file) and ``chunked_format_plugin``
 (``chunked_format.rows``, claims a ``CHK1`` file at 90).
 """
 
+from __future__ import annotations
+
 import os
 import subprocess
 import sys

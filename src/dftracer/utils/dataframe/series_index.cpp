@@ -805,11 +805,14 @@ dstd::Result<LabelJoin> join_labels(dstd::Vector<Level> la,
             "cannot align a row index of {} levels with one of {}">(la.size(),
                                                                     lb.size());
     // A left join keeps the labels of the left side as they are and a right
-    // join those of the right side, as pandas 3.1 does; inner and outer take
-    // the common type.
+    // join those of the right side, as pandas 3.1 does. An inner join of
+    // several levels keeps the left side's too: pandas takes them from the left
+    // index, as its tuple labels have one type. The rest take the common type.
+    const bool keep_left =
+        how == JoinHow::Left || (how == JoinHow::Inner && la.size() > 1);
     dstd::Vector<Series> kept;
-    if (how == JoinHow::Left || how == JoinHow::Right)
-        for (const Level& l : how == JoinHow::Left ? la : lb)
+    if (keep_left || how == JoinHow::Right)
+        for (const Level& l : keep_left ? la : lb)
             kept.push_back(l.column.share());
     std::size_t bad = 0;
     if (!promote_levels(la, lb, bad))
@@ -831,7 +834,7 @@ dstd::Result<LabelJoin> join_labels(dstd::Vector<Level> la,
         joined->left_whole = false;
     }
     const dstd::Vector<std::int64_t>& rows =
-        how == JoinHow::Left ? joined->left : joined->right;
+        keep_left ? joined->left : joined->right;
     for (std::size_t i = 0; i < kept.size(); ++i) {
         if (joined->levels[i].type() == kept[i].type()) continue;
         joined->levels[i] =

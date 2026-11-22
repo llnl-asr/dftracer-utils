@@ -925,3 +925,22 @@ def test_align_keeps_large_int_labels_exact(join):
 @pytest.mark.parametrize("join", ["left", "right", "inner", "outer"])
 def test_series_align_on_equal_labels_of_other_types_keeps_each_type(join):
     check(lambda: (_s([1, 2, 3]), _s([1.0, 2.0, 3.0], "w")), lambda a, b: a.align(b, join=join))
+
+
+def _two_levels(numbers, values):
+    return pd.Series(
+        values,
+        index=pd.MultiIndex.from_arrays([numbers, list("xyz")[: len(numbers)]], names=["k", "s"]),
+    )
+
+
+@pytest.mark.parametrize("join", ["left", "right", "inner", "outer"])
+@pytest.mark.parametrize("flip", [False, True])
+def test_align_of_several_levels_keeps_the_pandas_level_type(join, flip):
+    def make():
+        a = _two_levels([1, 2, 3], [1.0, 2.0, 3.0])
+        b = _two_levels([1.0, 2.0, 4.0], [4.0, 5.0, 6.0])
+        return (b, a) if flip else (a, b)
+
+    check(make, lambda a, b: a.align(b, join=join))
+    check(lambda: tuple(s.to_frame("v") for s in make()), lambda a, b: a.align(b, join=join))

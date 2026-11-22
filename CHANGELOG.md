@@ -964,6 +964,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Dask raised its own `asyncio.TimeoutError` there.
 - Keep the label type of the left side in a left `align` and of the right side in a right `align`, as pandas 3.1 does.
   Labels above 2^53 stay exact, and two Series with equal labels of other types keep their own label types.
+- Keep the label types of the left side in an inner `align` of a row index with several levels, as pandas 3.1 does.
 - Keep the name of a pandas `RangeIndex` through `DataFrame.from_pandas`, `Series.from_pandas`, `DataFrame.from_arrow` and back.
   A named range was dropped as the default index, and `DataFrame.from_pandas` now refuses one whose name is also a column name, as it does for any other index.
 - Match rows by label in `DataFrame.combine_first`, `DataFrame.update`, `Series.combine_first` and `Series.update`, as pandas does: they matched rows by position and raised on frames with different row labels. They keep the column order, the integer dtypes and the duplicate-label errors of pandas.

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/scope.h>
@@ -47,6 +48,13 @@
 #include <utility>
 
 namespace dftracer::utils::trace::views::detail {
+
+std::uint64_t unit_reserve_bytes(const ScanUnit& unit) {
+    const std::uint64_t span =
+        unit.end_byte > unit.start_byte ? unit.end_byte - unit.start_byte : 0;
+    return common::constants::scan::UNIT_FIXED_BYTES +
+           span * common::constants::scan::UNIT_BYTES_PER_SPAN_BYTE;
+}
 
 std::size_t checkpoint_size_or_default(std::size_t s) {
     return s != 0 ? s

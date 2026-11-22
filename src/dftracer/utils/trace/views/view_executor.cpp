@@ -642,8 +642,8 @@ coro::CoroTask<dstd::Result<LineExport>> run_export_lines(
     dstd::Optional<dstd::Error> scan_error;
     dstd::Optional<dstd::Error> write_error;
     dstd::Optional<writer::OutputSummary> summary;
-    // As fuse does: a unit reserves its span times the inflate factor, from
-    // the scan's share of the sink budget.
+    // As fuse does: a unit reserves unit_reserve_bytes from the scan's share
+    // of the sink budget.
     coro::AsyncSemaphore budget(scan_budget);
     auto ch = coro::make_channel<LineBatch>(2 * producer_count + 1);
     // One producer that every scan task shares. It is made before the
@@ -659,11 +659,7 @@ coro::CoroTask<dstd::Result<LineExport>> run_export_lines(
         dftracer::utils::json::RecordParser proj_parser;
         for (std::size_t i = w; i < units.size(); i += producer_count) {
             if (stopping()) co_return;
-            const std::uint64_t reserve =
-                (units[i].end_byte > units[i].start_byte
-                     ? units[i].end_byte - units[i].start_byte
-                     : 0) *
-                common::constants::scan::UNIT_BYTES_PER_SPAN_BYTE;
+            const std::uint64_t reserve = unit_reserve_bytes(units[i]);
             auto acquiring = budget.acquire(reserve);
             co_await acquiring;
             auto hold = dstd::make_shared<UnitHold>(&budget, reserve);

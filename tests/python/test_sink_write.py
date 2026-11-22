@@ -551,7 +551,7 @@ def test_a_records_sink_holds_memory_bounded_by_the_budget(tmp_path):
     assert after - before < produced // 2
 
 
-def _write_events_trace(path, rows):
+def _write_events_trace(path, rows, member_lines=50_000):
     import zlib
 
     line = (
@@ -572,7 +572,7 @@ def _write_events_trace(path, rows):
     with open(path, "wb") as f:
         left = rows
         while left > 0:
-            n = min(left, 50_000)
+            n = min(left, member_lines)
             c = zlib.compressobj(1, zlib.DEFLATED, 31)
             f.write(c.compress((line * n).encode()) + c.flush())
             left -= n
@@ -636,6 +636,49 @@ def test_a_stream_held_by_a_slow_consumer_stays_bounded_by_the_budget(tmp_path):
     assert count == rows
     assert rows * line_size > 8 * _SINK_BUDGET
     assert after - before < _EVENTS_PEAK_FACTOR * _SINK_BUDGET
+
+
+_COLLECT_SCRIPT = textwrap.dedent(
+    """
+    import resource, sys
+    from dftracer.utils import DataFrame
+    from dftracer.utils.trace import TraceViewer
+    path, budget = sys.argv[1:3]
+    def peak():
+        if sys.platform == "darwin":
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        with open("/proc/self/status") as status:
+            return next(int(l.split()[1]) for l in status if l.startswith("VmHWM:")) * 1024
+    DataFrame.from_dict({"i": [1]}).to_pandas()
+    before = peak()
+    rows = len(TraceViewer(path).lazy().memory_budget(int(budget)).collect())
+    print(rows, before, peak())
+    """
+)
+
+# A unit holds read buffers, a batch of parsed events and row builders however
+# small its span, so many small units in flight pass the budget unless each is
+# admitted by that fixed cost.
+_SMALL_UNIT_PEAK_FACTOR = 4
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="peak memory is read with resource")
+def test_a_collect_of_small_units_stays_bounded_by_the_budget(tmp_path):
+    rows = 3_000_000
+    src = str(tmp_path / "ev.pfw.gz")
+    line_size = _write_events_trace(src, rows, member_lines=4_000)
+    # Index in this process, so the child measures the scan alone.
+    TraceViewer(src).lazy().head(1).collect()
+    got = subprocess.run(
+        [sys.executable, "-I", "-c", _COLLECT_SCRIPT, src, str(_SINK_BUDGET)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    count, before, after = int(got[0]), int(got[1]), int(got[2])
+    assert count == rows
+    assert 4_000 * line_size < _SINK_BUDGET // 32
+    assert after - before < _SMALL_UNIT_PEAK_FACTOR * _SINK_BUDGET
 
 
 def test_a_plan_with_no_schema_before_it_runs_streams_without_collecting(tmp_path):

@@ -831,7 +831,9 @@ def _cfg_kind(tp: object) -> tuple[str, bool] | None:
 def type_hints(obj: type) -> dict[str, object]:
     try:
         return get_type_hints(obj)
-    except (NameError, TypeError):
+    # Python 3.9 and older raise KeyError for a class whose module is not in
+    # sys.modules, such as one loaded with importlib.util.module_from_spec.
+    except (NameError, TypeError, KeyError):
         return own_annotations(obj)
 
 

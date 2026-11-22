@@ -227,6 +227,26 @@ def class_error(cls: type, reason: str, attr: str | None = None) -> JitError:
         return JitError(reason)
 
 
+def decorator_error(fn: Callable[..., Any], decorator: str, reason: str) -> JitError:
+    """A JitError located at the ``@...decorator(`` line above ``fn``. Before
+    Python 3.11 a frame that applies a decorator reports the ``def`` line, so
+    the error goes to that decorator there."""
+    code = getattr(fn, "__code__", None)
+    if sys.version_info >= (3, 11) or code is None:
+        return JitError(reason)
+    file, line = code.co_filename, code.co_firstlineno
+    while True:
+        source = linecache.getline(file, line).rstrip("\n")
+        if not source.lstrip().startswith("@"):
+            return JitError(reason)
+        if f"{decorator}(" in source:
+            break
+        line += 1
+    err = JitError(reason, locate=False)
+    err._set_location(file, line, source.index("@") + 2, source)
+    return err
+
+
 class _Located:
     """The parts a runtime failure of a compiled plugin carries: the message
     and the ``file:line:col`` of the ``raise`` (or the call that failed)."""

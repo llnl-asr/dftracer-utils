@@ -15,7 +15,7 @@ from typing import (
 )
 
 from .._expr import Expr, col
-from .._jit_errors import JitError, Source, class_error
+from .._jit_errors import JitError, Source, class_error, decorator_error
 from . import _channels, _flow
 from . import ops as _ops
 from ._batch import HELPERS, lower_batch
@@ -596,10 +596,10 @@ def series_impl(
         raise JitError("@jit.series must decorate a named function")
     params = builtins.list(inspect.signature(fn).parameters.values())
     if builtins.any(p.kind not in (p.POSITIONAL_OR_KEYWORD, p.POSITIONAL_ONLY) for p in params):
-        raise JitError("@jit.series takes only positional column arguments")
+        raise decorator_error(fn, "series", "@jit.series takes only positional column arguments")
     n = len(params)
     if n == 0:
-        raise JitError("@jit.series needs at least one column argument")
+        raise decorator_error(fn, "series", "@jit.series needs at least one column argument")
     built = fn(*[col(f"__x{i}__") for i in range(n)])
     if not isinstance(built, Expr):
         raise JitError("@jit.series body must return a column expression built from its arguments")

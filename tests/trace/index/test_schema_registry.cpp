@@ -84,7 +84,7 @@ std::size_t count_rows(dstd::StringView trace, dstd::StringView index_dir,
 
 TEST_SUITE("SchemaRegistry") {
     TEST_CASE("a YAML spec declares typed fields and derives the rest") {
-        const auto& s = dftu_utils_test::ok_ref(trace::index::register_schema(
+        const auto& s = *dftu_utils_test::ok(trace::index::register_schema(
             "id: yaml_a\n"
             "# Fields.\n"
             "fields:\n"
@@ -118,7 +118,7 @@ TEST_SUITE("SchemaRegistry") {
     TEST_CASE(
         "index.never_index is derived, hashed and refused where it "
         "conflicts") {
-        const auto& s = dftu_utils_test::ok_ref(trace::index::register_schema(
+        const auto& s = *dftu_utils_test::ok(trace::index::register_schema(
             "id: yaml_never\n"
             "fields:\n"
             "  zz_nv_status: {type: int}\n"
@@ -138,11 +138,10 @@ TEST_SUITE("SchemaRegistry") {
         fewer.never_index.pop_back();
         CHECK(fewer.params_hash() != s.params_hash());
 
-        const auto& child =
-            dftu_utils_test::ok_ref(trace::index::register_schema(
-                "id: yaml_never_child\nextends: yaml_never\n"
-                "index: {never_index: [zz_nv_a]}\n",
-                "yaml_never_child.yaml"));
+        const auto& child = *dftu_utils_test::ok(trace::index::register_schema(
+            "id: yaml_never_child\nextends: yaml_never\n"
+            "index: {never_index: [zz_nv_a]}\n",
+            "yaml_never_child.yaml"));
         CHECK(child.never_index ==
               dstd::Vector<dstd::String>{"zz_nv_a", "zz_nv_blob", "zz_nv_z"});
 
@@ -193,13 +192,13 @@ TEST_SUITE("SchemaRegistry") {
 
     TEST_CASE("the genesis built-in never indexes its sketches") {
         const auto& g =
-            dftu_utils_test::ok_ref(trace::index::get_schema("genesis"));
+            *dftu_utils_test::ok(trace::index::get_schema("genesis"));
         CHECK(g.never_index ==
               dstd::Vector<dstd::String>{"dur.sketch", "v.sketch"});
     }
 
     TEST_CASE("index.stats_share and index.path_budget override the build") {
-        const auto& s = dftu_utils_test::ok_ref(trace::index::register_schema(
+        const auto& s = *dftu_utils_test::ok(trace::index::register_schema(
             "id: yaml_share\nfields: {zz_probe_a: {type: int}}\n"
             "index: {stats_share: 0.2, path_budget: 50}\n",
             "yaml_share.yaml"));
@@ -213,10 +212,9 @@ TEST_SUITE("SchemaRegistry") {
         CHECK(dftu_utils_test::ok(trace::index::schemas_json())
                   .find("\"stats_share\":0.2") != dstd::String::npos);
 
-        const auto& unset =
-            dftu_utils_test::ok_ref(trace::index::register_schema(
-                "id: yaml_share_unset\nfields: {zz_probe_b: {type: int}}\n",
-                "yaml_share_unset.yaml"));
+        const auto& unset = *dftu_utils_test::ok(trace::index::register_schema(
+            "id: yaml_share_unset\nfields: {zz_probe_b: {type: int}}\n",
+            "yaml_share_unset.yaml"));
         CHECK_FALSE(unset.stats_share);
         CHECK(trace::index::build::for_schema(
                   trace::index::build::ChunkIndexerConfig{}, unset)
@@ -232,7 +230,7 @@ TEST_SUITE("SchemaRegistry") {
 
     TEST_CASE("a built-in's hash changes only when it sets an override") {
         const auto& dft =
-            dftu_utils_test::ok_ref(trace::index::get_schema("dftracer"));
+            *dftu_utils_test::ok(trace::index::get_schema("dftracer"));
         REQUIRE(dft.builtin);
         CHECK_FALSE(dft.stats_share);
         CHECK_FALSE(dft.path_budget);
@@ -248,7 +246,7 @@ TEST_SUITE("SchemaRegistry") {
     }
 
     TEST_CASE("a JSON spec and a SchemaSpec reach the same schema") {
-        const auto& s = dftu_utils_test::ok_ref(trace::index::register_schema(
+        const auto& s = *dftu_utils_test::ok(trace::index::register_schema(
             R"({"id":"json_a","fields":{"status":{"type":"int"},)"
             R"("upstream":{"type":"string","always_index":true}}})",
             "json_a.json"));
@@ -268,7 +266,7 @@ TEST_SUITE("SchemaRegistry") {
     }
 
     TEST_CASE("extending dftracer keeps its decoder, roles and source") {
-        const auto& s = dftu_utils_test::ok_ref(trace::index::register_schema(
+        const auto& s = *dftu_utils_test::ok(trace::index::register_schema(
             "id: ext_dft\nextends: dftracer\n"
             "fields: {step: {type: int, path: args.step}}\n"
             "source: |\n"
@@ -277,7 +275,7 @@ TEST_SUITE("SchemaRegistry") {
             "  steps = where step > 0\n",
             "ext_dft.yaml"));
         const auto& dft =
-            dftu_utils_test::ok_ref(trace::index::get_schema("dftracer"));
+            *dftu_utils_test::ok(trace::index::get_schema("dftracer"));
         CHECK(s.decoder == trace::index::Decoder::Dftracer);
         CHECK(s.require ==
               dstd::Vector<dstd::String>{"ph", "name", "ts", "args.step"});
@@ -298,7 +296,7 @@ TEST_SUITE("SchemaRegistry") {
             "id: base_a\nfields: {lat_a: {type: float}, op_a: {type: "
             "string}}\n",
             "base.yaml"));
-        const auto& s = dftu_utils_test::ok_ref(trace::index::register_schema(
+        const auto& s = *dftu_utils_test::ok(trace::index::register_schema(
             "id: child_a\nextends: base_a\n"
             "fields: {lat_a: {type: float, optional: true}}\n",
             "child.yaml"));
@@ -359,9 +357,8 @@ TEST_SUITE("SchemaRegistry") {
     }
 
     TEST_CASE("one id has one definition") {
-        const auto& first =
-            dftu_utils_test::ok_ref(trace::index::register_schema(
-                "id: twice\nfields: {a: {type: int}}\n", "one.yaml"));
+        const auto& first = *dftu_utils_test::ok(trace::index::register_schema(
+            "id: twice\nfields: {a: {type: int}}\n", "one.yaml"));
         CHECK(&dftu_utils_test::ok_ref(trace::index::register_schema(
                   "id: twice\nfields: {a: {type: int}}\n", "again.yaml")) ==
               &first);
@@ -384,7 +381,7 @@ TEST_SUITE("SchemaRegistry") {
 
     TEST_CASE("the built-ins are declared with fields") {
         const auto& dft =
-            dftu_utils_test::ok_ref(trace::index::get_schema("dftracer"));
+            *dftu_utils_test::ok(trace::index::get_schema("dftracer"));
         CHECK(dft.builtin);
         CHECK(dft.require == dstd::Vector<dstd::String>{"ph", "name", "ts"});
         CHECK(dft.roles.time == "ts");
@@ -393,7 +390,7 @@ TEST_SUITE("SchemaRegistry") {
         CHECK(dft.roles.phase == "ph");
         CHECK(dft.always_index.empty());
         const auto& generic =
-            dftu_utils_test::ok_ref(trace::index::get_schema("generic"));
+            *dftu_utils_test::ok(trace::index::get_schema("generic"));
         CHECK(generic.fields.empty());
         CHECK(generic.require.empty());
     }
@@ -401,7 +398,7 @@ TEST_SUITE("SchemaRegistry") {
     TEST_CASE(
         "the genesis built-in is path-decoded with a stored runs row set") {
         const auto& g =
-            dftu_utils_test::ok_ref(trace::index::get_schema("genesis"));
+            *dftu_utils_test::ok(trace::index::get_schema("genesis"));
         CHECK(g.builtin);
         CHECK(g.decoder == trace::index::Decoder::Path);
         CHECK(g.require == dstd::Vector<dstd::String>{"gtype", "run"});
@@ -882,8 +879,7 @@ runs = where gtype == "run" | select run, app, system, unique_input, nodes, ppn,
         for (const auto& [id, old] :
              {dstd::Pair<dstd::String, dstd::String>{"dftracer", dft_old},
               dstd::Pair<dstd::String, dstd::String>{"genesis", genesis_old}}) {
-            const auto& s =
-                dftu_utils_test::ok_ref(trace::index::get_schema(id));
+            const auto& s = *dftu_utils_test::ok(trace::index::get_schema(id));
             CHECK(s.source ==
                   dftu_utils_test::ok(trace::index::merge_source({}, old, id)));
             trace::index::RecordSchema before = s;

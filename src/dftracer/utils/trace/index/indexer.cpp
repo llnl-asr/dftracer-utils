@@ -31,6 +31,7 @@
 #include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/index/tables.h>
+#include <dftracer/utils/trace/index/write_feed.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>

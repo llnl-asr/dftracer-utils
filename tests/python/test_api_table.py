@@ -441,8 +441,9 @@ def test_duplicate_code_does_not_grow():
     run = subprocess.run(
         [
             "uvx",
+            # pylint 4 needs 3.10; a bare uvx can pick a cached older one.
             "--python",
-            sys.executable,
+            ">=3.10",
             f"pylint=={_PYLINT_VERSION}",
             "--disable=all",
             "--enable=duplicate-code",

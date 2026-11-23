@@ -2,6 +2,7 @@
 #include <dftracer/utils/arrow/internal.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hex.h>
 #include <dftracer/utils/dstd/shared_string.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -220,10 +221,9 @@ void append_json_string(dstd::String& out, dstd::StringView s) {
                 break;
             default:
                 if (static_cast<unsigned char>(c) < 0x20) {
-                    static constexpr char HEX[] = "0123456789abcdef";
                     out += "\\u00";
-                    out += HEX[(c >> 4) & 0xF];
-                    out += HEX[c & 0xF];
+                    out += dstd::HEX_LOWER[(c >> 4) & 0xF];
+                    out += dstd::HEX_LOWER[c & 0xF];
                 } else {
                     out += c;
                 }

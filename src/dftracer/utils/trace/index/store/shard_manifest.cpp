@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hex.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
@@ -36,9 +37,10 @@ void append_escaped(dstd::String& out, dstd::StringView s) {
                 out += "\\t";
                 break;
             default:
-                if (static_cast<unsigned char>(c) < 0x20) {
-                    out +=
-                        dstd::fmt<"\\u{:04x}">(static_cast<unsigned char>(c));
+                if (const auto u = static_cast<unsigned char>(c); u < 0x20) {
+                    out += "\\u00";
+                    out += dstd::HEX_LOWER[u >> 4];
+                    out += dstd::HEX_LOWER[u & 15];
                 } else {
                     out.push_back(c);
                 }

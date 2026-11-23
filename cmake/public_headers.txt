@@ -128,6 +128,7 @@ dftracer/utils/dstd/hash/value_hash.h
 dftracer/utils/dstd/hash/xxh3.h
 dftracer/utils/dstd/hash_map.h
 dftracer/utils/dstd/hasher.h
+dftracer/utils/dstd/hex.h
 dftracer/utils/dstd/int128.h
 dftracer/utils/dstd/intern_cache.h
 dftracer/utils/dstd/list.h

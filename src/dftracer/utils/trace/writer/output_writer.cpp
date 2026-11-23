@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/hex.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/process.h>
@@ -320,7 +321,6 @@ constexpr std::size_t MAX_RELATIVE_PATH_BYTES = 768;
 // system treats specially. A leading dot would hide the folder.
 void percent_encode(dstd::String& out, dstd::StringView in,
                     bool encode_leading_dot) {
-    static constexpr char HEX[] = "0123456789ABCDEF";
     for (std::size_t i = 0; i < in.size(); ++i) {
         const auto c = static_cast<unsigned char>(in[i]);
         const bool plain = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
@@ -331,8 +331,8 @@ void percent_encode(dstd::String& out, dstd::StringView in,
             out += static_cast<char>(c);
         } else {
             out += '%';
-            out += HEX[c >> 4];
-            out += HEX[c & 15];
+            out += dstd::HEX_UPPER[c >> 4];
+            out += dstd::HEX_UPPER[c & 15];
         }
     }
 }

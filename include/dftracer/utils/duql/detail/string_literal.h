@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DUQL_DETAIL_STRING_LITERAL_H
 #define DFTRACER_UTILS_DUQL_DETAIL_STRING_LITERAL_H
 
+#include <dftracer/utils/dstd/hex.h>
 #include <dftracer/utils/dstd/string.h>
 
 namespace dftracer::utils::duql::detail {
@@ -10,7 +11,6 @@ namespace dftracer::utils::duql::detail {
 /// quotes, with `\\`, `\"`, `\n`, `\t`, `\r` and `\u00XX` for the other
 /// control bytes. Other bytes, UTF-8 included, pass through.
 inline dstd::String quote_string(dstd::StringView v) {
-    static constexpr char HEX[] = "0123456789abcdef";
     dstd::String out;
     out.reserve(v.size() + 2);
     out += '"';
@@ -35,8 +35,8 @@ inline dstd::String quote_string(dstd::StringView v) {
             default:
                 if (b < 0x20 || b == 0x7f) {
                     out += "\\u00";
-                    out += HEX[b >> 4];
-                    out += HEX[b & 0xf];
+                    out += dstd::HEX_LOWER[b >> 4];
+                    out += dstd::HEX_LOWER[b & 0xf];
                 } else {
                     out += ch;
                 }

@@ -20,6 +20,7 @@
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hex.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
@@ -195,7 +196,6 @@ void print(dstd::Span<const Row> rows) {
 struct OldJsonEscape {
     static std::size_t bound(dstd::StringView s) { return 6 * s.size(); }
     static char* write(char* d, dstd::StringView s) {
-        static constexpr char HEX[] = "0123456789abcdef";
         for (const char c : s) {
             const unsigned char u = static_cast<unsigned char>(c);
             switch (c) {
@@ -217,8 +217,8 @@ struct OldJsonEscape {
                         *d++ = 'u';
                         *d++ = '0';
                         *d++ = '0';
-                        *d++ = HEX[u >> 4];
-                        *d++ = HEX[u & 15];
+                        *d++ = dstd::HEX_LOWER[u >> 4];
+                        *d++ = dstd::HEX_LOWER[u & 15];
                     } else {
                         *d++ = c;
                     }

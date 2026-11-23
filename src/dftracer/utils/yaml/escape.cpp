@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dstd/hex.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/yaml/escape.h>
 
@@ -101,7 +102,6 @@ std::size_t escaped_yaml_size(dstd::StringView s) {
 }
 
 char* escape_yaml_to(char* dst, dstd::StringView s) {
-    static constexpr char HEX[] = "0123456789abcdef";
     const char* const end = s.data() + s.size();
     const char* run = s.data();
     const char* p = run;
@@ -134,10 +134,10 @@ char* escape_yaml_to(char* dst, dstd::StringView s) {
             *dst++ = LETTER[u];
         } else {
             *dst++ = 'u';
-            *dst++ = HEX[(code >> 12) & 15];
-            *dst++ = HEX[(code >> 8) & 15];
-            *dst++ = HEX[(code >> 4) & 15];
-            *dst++ = HEX[code & 15];
+            *dst++ = dstd::HEX_LOWER[(code >> 12) & 15];
+            *dst++ = dstd::HEX_LOWER[(code >> 8) & 15];
+            *dst++ = dstd::HEX_LOWER[(code >> 4) & 15];
+            *dst++ = dstd::HEX_LOWER[code & 15];
         }
         p += length;
         run = p;

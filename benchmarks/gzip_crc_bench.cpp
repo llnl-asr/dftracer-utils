@@ -9,6 +9,7 @@
 //   gzip_crc_bench [uncompressed_MB] [rounds]
 
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/hex.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -31,12 +32,11 @@ constexpr std::size_t OUT_CHUNK = 1u << 20;
 
 dftracer::utils::dstd::String hex_lines(std::size_t bytes) {
     std::mt19937 rng(11);
-    static const char HEX[] = "0123456789abcdef";
     dftracer::utils::dstd::String s;
     s.reserve(bytes + 128);
     while (s.size() < bytes) {
         s += "{\"id\":\"";
-        for (int i = 0; i < 64; ++i) s += HEX[rng() & 15];
+        for (int i = 0; i < 64; ++i) s += dstd::HEX_LOWER[rng() & 15];
         s += "\",\"name\":\"read\",\"dur\":42}\n";
     }
     return s;

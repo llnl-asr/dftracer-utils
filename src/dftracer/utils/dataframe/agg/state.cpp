@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_i64/u64/f64
 #include <dftracer/utils/dataframe/internal/float_key.h>
+#include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/sketch.h>  // DDSketch, sketch_bucket_keys
 #include <dftracer/utils/dstd/base64.h>
@@ -420,18 +421,18 @@ struct PlainKey {
         if (codes) return dvals[static_cast<std::size_t>(codes[i])];
         if (views) {
             const std::uint8_t* v = views + static_cast<std::size_t>(i) * 16;
-            std::int32_t size;
-            std::memcpy(&size, v, sizeof(size));
-            const auto n = static_cast<std::size_t>(size);
-            if (size <= 12)
-                return dstd::StringView(reinterpret_cast<const char*>(v + 4),
-                                        n);
-            std::int32_t index, offset;
-            std::memcpy(&index, v + 8, sizeof(index));
-            std::memcpy(&offset, v + 12, sizeof(offset));
-            if (static_cast<std::size_t>(index) >= blob_data.size()) return {};
+            const auto decoded = decode_view(v);
+            const auto n = static_cast<std::size_t>(decoded.size);
+            if (decoded.size <= 12)
+                return dstd::StringView(
+                    reinterpret_cast<const char*>(decoded.inline_data), n);
+            if (static_cast<std::size_t>(decoded.buffer_index) >=
+                blob_data.size())
+                return {};
             return dstd::StringView(
-                blob_data[static_cast<std::size_t>(index)] + offset, n);
+                blob_data[static_cast<std::size_t>(decoded.buffer_index)] +
+                    decoded.offset,
+                n);
         }
         if (off64)
             return dstd::StringView(

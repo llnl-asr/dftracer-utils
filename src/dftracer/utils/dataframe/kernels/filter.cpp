@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/internal/filter_simd.h>
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
 #include <dftracer/utils/dataframe/internal/scalar.h>
+#include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/parallel.h>
@@ -19,6 +20,7 @@
 #include <memory>
 
 using dftracer::utils::dataframe::BufferView;
+using dftracer::utils::dataframe::decode_view;
 using dftracer::utils::dataframe::Encoding;
 using dftracer::utils::dataframe::is_wide_offset_type;
 using dftracer::utils::dataframe::narrow_varwidth_type;
@@ -792,12 +794,10 @@ static dftu_series* gather_chunked_text(const dftu_series& base, const Idx* idx,
                                                 static_cast<std::size_t>(r) *
                                                     VIEW_BYTES,
                                             VIEW_BYTES);
-                                std::int32_t size;
-                                std::memcpy(&size, d, sizeof(size));
-                                if (size > VIEW_INLINE) {
-                                    std::int32_t index;
-                                    std::memcpy(&index, d + 8, sizeof(index));
-                                    index += src.blob_base;
+                                const auto decoded = decode_view<false>(d);
+                                if (decoded.size > VIEW_INLINE) {
+                                    const std::int32_t index =
+                                        decoded.buffer_index + src.blob_base;
                                     std::memcpy(d + 8, &index, sizeof(index));
                                 }
                             } else {
@@ -1127,16 +1127,15 @@ dftu_series* materialize_view(const dftu_series& v) {
     for (std::int64_t i = 0; i < n; ++i) {
         put_offset(i);
         if (!valid(i)) continue;
-        const std::int32_t size = size_of(i);
         const std::uint8_t* view =
             views + static_cast<std::size_t>(i) * VIEW_BYTES;
-        const std::uint8_t* src = view + 4;
-        if (size > INLINE_BYTES) {
-            std::int32_t index, offset;
-            std::memcpy(&index, view + 8, sizeof(index));
-            std::memcpy(&offset, view + 12, sizeof(offset));
-            src = (*v.blobs)[static_cast<std::size_t>(index)].data() + offset;
-        }
+        const auto decoded = decode_view(view);
+        const std::int32_t size = decoded.size;
+        const std::uint8_t* src = decoded.inline_data;
+        if (size > INLINE_BYTES)
+            src = (*v.blobs)[static_cast<std::size_t>(decoded.buffer_index)]
+                      .data() +
+                  decoded.offset;
         if (size > 0)
             std::memcpy(dst + pos, src, static_cast<std::size_t>(size));
         pos += static_cast<std::uint32_t>(size);

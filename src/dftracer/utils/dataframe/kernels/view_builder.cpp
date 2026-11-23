@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -131,13 +132,10 @@ void ViewBuilder::append_view_row(const dftu_series& c, std::int64_t row) {
         c.data.data() + static_cast<std::size_t>(row) * VIEW_BYTES;
     std::uint8_t* v = new_view();
     std::memcpy(v, src, VIEW_BYTES);
-    std::int32_t size;
-    std::memcpy(&size, src, sizeof(size));
-    if (size <= INLINE_MAX) return;
-    std::int32_t index;
-    std::memcpy(&index, src + 8, sizeof(index));
-    const std::int32_t mapped =
-        cached_buffer((*c.blobs)[static_cast<std::size_t>(index)]);
+    const auto decoded = decode_view<false>(src);
+    if (decoded.size <= INLINE_MAX) return;
+    const std::int32_t mapped = cached_buffer(
+        (*c.blobs)[static_cast<std::size_t>(decoded.buffer_index)]);
     std::memcpy(v + 8, &mapped, sizeof(mapped));
 }
 
@@ -221,12 +219,10 @@ void ViewBuilder::append_column(const dftu_series& col) {
     std::memcpy(dst, src, static_cast<std::size_t>(n) * VIEW_BYTES);
     for (std::int64_t i = 0; i < n; ++i) {
         std::uint8_t* v = dst + static_cast<std::size_t>(i) * VIEW_BYTES;
-        std::int32_t size;
-        std::memcpy(&size, v, sizeof(size));
-        if (size <= INLINE_MAX) continue;
-        std::int32_t index;
-        std::memcpy(&index, v + 8, sizeof(index));
-        const std::int32_t mapped = remap[static_cast<std::size_t>(index)];
+        const auto decoded = decode_view<false>(v);
+        if (decoded.size <= INLINE_MAX) continue;
+        const std::int32_t mapped =
+            remap[static_cast<std::size_t>(decoded.buffer_index)];
         std::memcpy(v + 8, &mapped, sizeof(mapped));
     }
     if (col.validity.block() && col.null_count > 0)

@@ -382,6 +382,14 @@ add_test(NAME no_printf_format_self
          COMMAND
            sh -c
            "printf '%s\\n' 'snprintf(buf, n, \"%d\", v);' 'std::to_string(n)' 'std::ostringstream os;' | grep -cE '(^|[^A-Za-z0-9_])(v?sn?printf)[[:space:]]*\\(|(^|[^A-Za-z0-9_])std::to_string[[:space:]]*\\(|ostringstream|istringstream|stringstream' > /dev/null")
+# The Arrow string view layout (size, inline bytes, buffer index, offset) is
+# decoded only by decode_view(), so a layout fix lands in one place.
+add_test(
+  NAME one_view_decode
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE 'memcpy[[:space:]]*\\([[:space:]]*&[^,]+,[^,]*\\+[[:space:]]*12[[:space:]]*,' \"$0/include/dftracer/utils/dataframe\" \"$0/src/dftracer/utils/dataframe\" \"$0/src/dftracer/utils/arrow\" --include='*.h' --include='*.cpp' --include='*.inl' | grep -vE '^[^:]*/dftracer/utils/dataframe/internal/string_reader\\.h:'); if [ -n \"$bad\" ]; then echo \"hand-written Arrow view decode; use decode_view() from dataframe/internal/string_reader.h:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
 add_test(
   NAME store_no_upward
   COMMAND

@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/borrow_release_pin.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -159,15 +160,14 @@ dftu_series* dftu_series_new_string_view(
     for (std::int64_t i = 0; i < n; ++i) {
         if (validity != nullptr && !((validity[i >> 3] >> (i & 7)) & 1))
             continue;
-        std::int32_t size;
-        std::memcpy(&size, v + i * VIEW_BYTES, sizeof(size));
-        if (size < 0) return nullptr;
-        if (size <= VIEW_INLINE_BYTES) continue;
-        std::int32_t index, offset;
-        std::memcpy(&index, v + i * VIEW_BYTES + 8, sizeof(index));
-        std::memcpy(&offset, v + i * VIEW_BYTES + 12, sizeof(offset));
-        if (index < 0 || index >= n_buffers || offset < 0 ||
-            static_cast<std::int64_t>(offset) + size > sizes[index])
+        const auto decoded =
+            dftracer::utils::dataframe::decode_view(v + i * VIEW_BYTES);
+        if (decoded.size < 0) return nullptr;
+        if (decoded.size <= VIEW_INLINE_BYTES) continue;
+        if (decoded.buffer_index < 0 || decoded.buffer_index >= n_buffers ||
+            decoded.offset < 0 ||
+            static_cast<std::int64_t>(decoded.offset) + decoded.size >
+                sizes[decoded.buffer_index])
             return nullptr;
     }
 
@@ -485,22 +485,22 @@ const char* dftu_series_string_at(const dftu_series* col, std::int64_t i,
                 if (dftu_series_is_null(col, i) || !col->data.block())
                     return nullptr;
                 const std::uint8_t* view = col->data.data() + i * VIEW_BYTES;
-                std::int32_t size;
-                std::memcpy(&size, view, sizeof(size));
-                *len = size;
-                if (size <= VIEW_INLINE_BYTES)
-                    return reinterpret_cast<const char*>(view + 4);
-                std::int32_t index, offset;
-                std::memcpy(&index, view + 8, sizeof(index));
-                std::memcpy(&offset, view + 12, sizeof(offset));
+                const auto decoded =
+                    dftracer::utils::dataframe::decode_view(view);
+                *len = decoded.size;
+                if (decoded.size <= VIEW_INLINE_BYTES)
+                    return reinterpret_cast<const char*>(decoded.inline_data);
                 if (!col->blobs ||
-                    static_cast<std::size_t>(index) >= col->blobs->size()) {
+                    static_cast<std::size_t>(decoded.buffer_index) >=
+                        col->blobs->size()) {
                     *len = 0;
                     return nullptr;
                 }
                 return reinterpret_cast<const char*>(
-                    (*col->blobs)[static_cast<std::size_t>(index)].data() +
-                    offset);
+                    (*col->blobs)[static_cast<std::size_t>(
+                                      decoded.buffer_index)]
+                        .data() +
+                    decoded.offset);
             }
             case Encoding::Selection: {
                 if (!col->child() || !col->data.block()) return nullptr;

@@ -130,6 +130,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `dftracer.utils.formats.json` and `dftracer.utils.formats.yaml`, which read and write JSON and YAML files with the native parsers.
+  `read_records` reads a large file in batches of bounded memory, a `Value` reads the parsed text with no copy, `Value.mutable()` edits a record and `Writer` writes plain or gzip files.
 - Add a native row index to `DataFrame` and a native row label to `Series`, with pandas behavior.
   Label lookup, `reindex`, `align`, `loc`, `xs`, `droplevel`, `swaplevel`, `reorder_levels`, `sort_index(level=)`, `stack` and `unstack` use the labels.
   Arithmetic between two Series aligns on the labels, and Arrow IPC and the C stream interface carry the index names in the schema metadata key `dftracer.utils.index`.

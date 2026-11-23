@@ -38,6 +38,7 @@ no behavior.
 
 from __future__ import annotations
 
+import enum
 import sys
 import types
 from typing import Generic, Protocol, Tuple, TypedDict, TypeVar, overload

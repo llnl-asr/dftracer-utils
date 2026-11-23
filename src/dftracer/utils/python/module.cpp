@@ -18,6 +18,7 @@
 #include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/method.h>
+#include <dftracer/utils/python/formats/bind.h>
 #include <dftracer/utils/python/frame/columnar_eval.h>
 #include <dftracer/utils/python/frame/dataframe.h>
 #include <dftracer/utils/python/frame/lazyframe.h>
@@ -331,6 +332,7 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (dftracer::utils::python::runtime::init_task_handle(m) < 0) return NULL;
     if (dftracer::utils::python::runtime::init_runtime(m) < 0) return NULL;
     if (dftracer::utils::python::store::init_store(m) < 0) return NULL;
+    if (dftracer::utils::python::formats::init_formats(m) < 0) return NULL;
     if (dftracer::utils::python::core::init_arrow_batch_capsule(m) < 0)
         return NULL;
     if (dftracer::utils::python::trace::init_arrow_streaming_iterator(m) < 0)

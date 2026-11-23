@@ -71,3 +71,55 @@ TEST_CASE("DomValue::find reads a member by name") {
     CHECK(!doc->root().find("missing").has_value());
     CHECK(!c->find("x").has_value());
 }
+
+TEST_CASE("DomParser gives each text a document that outlives the next parse") {
+    json::DomParser parser;
+    dstd::Vector<json::DomDocument> docs;
+    const char* texts[] = {
+        R"({"name":"first","n":1,"big":18446744073709551615,"f":1.5})",
+        R"({"x":[1,"two",{"deep":"three"},[]],"empty":{}})", R"([7,8,9])",
+        R"({"s":"café \"q\" \\ \n"})"};
+    for (const char* text : texts) {
+        auto doc = parser.parse(text);
+        REQUIRE(doc.has_value());
+        docs.push_back(std::move(*doc));
+    }
+    // A kept document holds what its text needs, not what the parser sized.
+    for (const json::DomDocument& doc : docs) CHECK(doc.bytes() < 400);
+    // A longer text parsed last must not disturb the shorter ones kept.
+    auto longer = parser.parse(
+        R"({"k":"a much longer string than any of the earlier texts hold","m":[1,2,3,4,5,6,7,8,9,10]})");
+    REQUIRE(longer.has_value());
+    CHECK(longer->root().find("k")->as_string().size() == 55);
+
+    CHECK(docs[0].root().find("name")->as_string() == "first");
+    CHECK(docs[0].root().find("n")->as_int() == 1);
+    CHECK(docs[0].root().find("big")->as_uint() == 18446744073709551615ULL);
+    CHECK(docs[0].root().find("f")->as_double() == 1.5);
+    const auto x = docs[1].root().find("x");
+    REQUIRE(x.has_value());
+    dstd::Vector<json::DomValue::Type> types;
+    x->for_each_element([&](json::DomValue e) { types.push_back(e.type()); });
+    REQUIRE(types.size() == 4);
+    CHECK(types[1] == json::DomValue::Type::String);
+    CHECK(types[2] == json::DomValue::Type::Object);
+    CHECK(docs[1].root().find("x")->type() == json::DomValue::Type::Array);
+    CHECK(docs[2].root().type() == json::DomValue::Type::Array);
+    std::int64_t sum = 0;
+    docs[2].root().for_each_element(
+        [&](json::DomValue e) { sum += e.as_int(); });
+    CHECK(sum == 24);
+    CHECK(docs[3].root().find("s")->as_string() == "caf\xc3\xa9 \"q\" \\ \n");
+}
+
+TEST_CASE("DomParser refuses what DomDocument refuses and stays usable") {
+    json::DomParser parser;
+    auto bad = parser.parse("{\"a\": 1,}");
+    REQUIRE(!bad.has_value());
+    CHECK(bad.error().message().starts_with("1:9:"));
+    CHECK(!parser.parse("7").has_value());
+    CHECK(!parser.parse("").has_value());
+    auto good = parser.parse(R"({"a":2})");
+    REQUIRE(good.has_value());
+    CHECK(good->root().find("a")->as_int() == 2);
+}

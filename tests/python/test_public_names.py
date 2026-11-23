@@ -128,6 +128,16 @@ _DIRECTIVE = (
 )
 
 
+_QUALIFIED_DIRECTIVE = (
+    r"^\s*\.\. (?:py:)?(?:auto)?(?:class|function|exception|data|attribute|decorator)"
+    r"::\s*(?:dftracer\.utils\.)?{module}\.{name}\b"
+)
+
+
+def _short_module(name):
+    return re.escape(name[len("dftracer.utils.") :] if name != "dftracer.utils" else "")
+
+
 def _public_names():
     return {
         name
@@ -259,11 +269,17 @@ def test_every_name_in_a_module_all_is_documented_or_listed(name):
         and not (name in _DOCUMENTED_BY_DOCSTRING and inspect.getdoc(getattr(module, attr)))
     ]
     assert not missing, f"{name}: not in docs/source and not listed: {missing}"
+    # A listed name is stale only when a directive names it under this module,
+    # because another module may document a class of the same short name.
     stale = [
         attr
         for attr in listed
         if attr not in module.__all__
-        or re.search(_DIRECTIVE.format(name=re.escape(attr)), text, re.MULTILINE)
+        or re.search(
+            _QUALIFIED_DIRECTIVE.format(module=_short_module(name), name=re.escape(attr)),
+            text,
+            re.MULTILINE,
+        )
     ]
     assert not stale, f"{name}: drop from the not-in-API list: {stale}"
 

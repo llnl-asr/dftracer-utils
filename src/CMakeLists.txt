@@ -3275,6 +3275,20 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/plugins/plugin_host.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime/runtime.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime/runtime.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/bind.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/bind.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/emit.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/format.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/mutable_value.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/mutable_value.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/records.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/records.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/text_source.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/text_source.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/value.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/value.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/writer.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/writer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/store/store.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/store/store.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime/task_handle.cpp

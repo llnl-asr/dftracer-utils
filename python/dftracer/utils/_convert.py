@@ -496,6 +496,20 @@ def _arrow_dictionary(s: pl.Series) -> Series | None:
     return _ext._series_from_arrow(s.to_arrow())
 
 
+def _pyarrow_strings(s: pd.Series) -> Series:
+    """A pandas ``str`` column that pyarrow holds (the pandas 3 default), with
+    its text buffer shared, not one Python string per cell. Its 64-bit offsets
+    become 32-bit ones, the string type the kernels take, when the text fits."""
+    import pyarrow as pa
+
+    arr = pa.Array.from_pandas(s)
+    try:
+        arr = arr.cast(pa.string())
+    except pa.ArrowInvalid:
+        pass
+    return _ext._series_from_arrow(arr)
+
+
 def pandas_to_native(s: pd.Series) -> Series:
     """A ``pandas.Series`` as a native column: a NaN in a float column and a
     ``NaT`` or ``NA`` anywhere read as null. A ``category`` column whose
@@ -507,6 +521,8 @@ def pandas_to_native(s: pd.Series) -> Series:
     dtype = s.dtype
     if hasattr(pd, "ArrowDtype") and isinstance(dtype, pd.ArrowDtype):
         raise NeedsArrow(f"a pandas column of dtype {dtype} needs pyarrow")
+    if isinstance(dtype, pd.StringDtype) and dtype.storage == "pyarrow":
+        return _pyarrow_strings(s)
     if isinstance(dtype, pd.CategoricalDtype):
         categories = dtype.categories.tolist()
         if all(isinstance(c, str) for c in categories):

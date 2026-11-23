@@ -53,6 +53,7 @@ still import and export every column type:
   becomes columns after the data columns. Polars list, array and struct
   columns import as list and struct columns. A pandas Arrow-backed column
   needs pyarrow (pandas itself needs it to hold one).
+  A pandas ``str`` column that pyarrow holds, the pandas 3 default, shares its text buffer with no copy.
   A pandas ``category`` column whose categories are strings becomes a dictionary-encoded string column; other categories keep their values.
   With pyarrow installed the column is built from the category codes and keeps the category order, and ``to_pandas`` gives back the categories that are used.
 - ``from_parquet`` reads through ``pyarrow.parquet``.

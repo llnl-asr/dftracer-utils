@@ -315,6 +315,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Add `jit.json(text)` and `jit.yaml(text)` to a compiled body: a typed value with `find`, `as_int`, `as_float`, `as_str`, `as_bool`, `is_null`, `len`, iteration over array items and `items()` over object members. A missing key, a null and a value of the other kind give the default; a parse error raises `jit.ParseError` with the line and column.
 
 ### Changed
+- Make `DataFrame.from_pandas` share the text of a pandas `str` column that pyarrow holds, the pandas 3 default, in place of one Python string per cell.
 - Count NaN as missing in the pandas names on float columns: `isna`, `isnull`, `notna`, `notnull`, `fillna`, `dropna` and `hasnans`, also inside `apply`, `eval` and JIT batch plugins (which now also take `isna` and `notna`). The Polars names keep NaN as a value: `is_null`, `fill_null` and `drop_nulls` see only nulls. Lazy `drop_nulls` and `drop_nans` also check the undeclared columns a scan returns.
 - `DataFrame.select` evaluates every item against the input frame, as Polars does; an item no longer sees a column an earlier item made.
 - Refuse a text fill on a number column in `fillna` and `fill_null`, where the nulls became 0; a frame keeps such a column as it is.
@@ -966,6 +967,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix slow row slices, such as `loc` and `truncate` on a sorted index, of a column imported from Arrow or pandas that holds no nulls.
+  The import kept a bitmap of all valid rows, and each slice that did not start on a byte copied it.
 - Fix `DataFrame.with_column`, `with_columns`, `assign` and `select` giving a frame with columns of different lengths; a column of another length is now an error.
 - Fix `typing.get_type_hints` on `DataFrame`, `Series`, `LazyFrame`, the other native classes and `lit` on Python 3.8 and 3.9.
   The native types now report their module as `dftracer.utils.dftracer_utils_ext`.

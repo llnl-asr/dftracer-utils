@@ -5,6 +5,7 @@
 // the live worker count.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/cstring_view.h>
@@ -29,10 +30,9 @@ constexpr std::size_t THREADS = 4;
 class ElasticEnv {
    public:
     explicit ElasticEnv(dstd::CStringView value) {
-        if (const char* prev = std::getenv("DFTRACER_UTILS_ELASTIC")) {
-            had_ = true;
-            prev_ = prev;
-        }
+        const auto prev = common::Env::get("DFTRACER_UTILS_ELASTIC");
+        had_ = prev.has_value();
+        if (had_) prev_ = *prev;
         setenv("DFTRACER_UTILS_ELASTIC", value.c_str(), 1);
     }
     ~ElasticEnv() {

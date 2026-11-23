@@ -268,8 +268,10 @@ coro::CoroTask<QuerySet> sample_queries(dstd::String file) {
 
 dstd::String number_text(double d) {
     char buf[40];
-    std::snprintf(buf, sizeof(buf), "%.9g", d);
-    return buf;
+    const char* const end =
+        dstd::to_chars_general(buf, buf + sizeof(buf), d, 9);
+    return dstd::String(
+        buf, end != nullptr ? static_cast<std::size_t>(end - buf) : 0);
 }
 
 // Genesis output is not a trace: a long-format file has one `gtype` per line

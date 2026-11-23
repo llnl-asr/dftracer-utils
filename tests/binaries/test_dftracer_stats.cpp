@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/span.h>
@@ -329,20 +330,17 @@ TEST_SUITE("DFTracerStats") {
         const auto summary = report("summary", {"--top-n-pid-tid", "0"});
         CHECK(summary.find("Events Scanned: " + dstd::to_string(fx.events)) !=
               dstd::String::npos);
-        char span[64];
-        std::snprintf(span, sizeof(span), "Time Span: %.6f seconds",
-                      static_cast<double>(fx.max_end - fx.min_ts) / 1e6);
+        const dstd::String span = dstd::fmt<"Time Span: {:.6f} seconds">(
+            static_cast<double>(fx.max_end - fx.min_ts) / 1e6);
         CHECK(summary.find(span) != dstd::String::npos);
         auto summary_counts = parse_counts(summary);
         for (const auto& [k, v] : fx.categories) CHECK(summary_counts[k] == v);
         for (const auto& [k, v] : fx.pid_tids) CHECK(summary_counts[k] == v);
 
         const auto duration = report("duration");
-        char dur_line[96];
-        std::snprintf(dur_line, sizeof(dur_line), "Count: %llu   Mean: %.1f us",
-                      static_cast<unsigned long long>(fx.dur_count),
-                      static_cast<double>(fx.dur_sum) /
-                          static_cast<double>(fx.dur_count));
+        const dstd::String dur_line = dstd::fmt<"Count: {}   Mean: {:.1f} us">(
+            fx.dur_count, static_cast<double>(fx.dur_sum) /
+                              static_cast<double>(fx.dur_count));
         CHECK(duration.find(dur_line) != dstd::String::npos);
 
         // A warm unfiltered run neither folds nor writes: the index and the

@@ -70,14 +70,14 @@ constexpr std::int64_t DEFAULT_ROWS = 1'000'000;
 constexpr std::uint64_t DEFAULT_BUDGET_MB = 8;
 #endif
 std::int64_t rows_count() {
-    const char* v = std::getenv("DFTU_OP_PEAK_ROWS");
-    return v ? std::strtoll(v, nullptr, 10) : DEFAULT_ROWS;
+    const auto rows = common::Env::get<int>("DFTU_OP_PEAK_ROWS");
+    return rows ? static_cast<std::int64_t>(*rows) : DEFAULT_ROWS;
 }
 const std::int64_t ROWS = rows_count();
 // DFTU_OP_PEAK_BUDGET_MB overrides the budget (child and parent both read it).
 std::uint64_t budget_bytes() {
-    const char* v = std::getenv("DFTU_OP_PEAK_BUDGET_MB");
-    return (v ? std::strtoull(v, nullptr, 10) : DEFAULT_BUDGET_MB) << 20;
+    const auto mb = common::Env::get<std::uint64_t>("DFTU_OP_PEAK_BUDGET_MB");
+    return (mb ? *mb : DEFAULT_BUDGET_MB) << 20;
 }
 const std::uint64_t BUDGET = budget_bytes();
 constexpr std::int64_t BATCH_SIZE = 8192;
@@ -840,7 +840,7 @@ TEST_CASE("every lazy op is in the expectation table") {
 
 TEST_CASE("each op stays within its bound at a small budget" *
           doctest::skip(instrumentation::active())) {
-    const bool report = std::getenv("DFTU_OP_PEAK_REPORT") != nullptr;
+    const bool report = common::Env::get("DFTU_OP_PEAK_REPORT").has_value();
     const ChildResult base = run_child("input_only");
     REQUIRE(base.piped);
     REQUIRE(base.forked);

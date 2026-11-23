@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/cstring_view.h>
@@ -775,7 +776,9 @@ TEST_SUITE("SchemaDetection") {
 
     TEST_CASE("environment schema load retries" * doctest::skip()) {
         fresh_process::announce();
-        const dstd::String dir = std::getenv("DFTU_TEST_SCHEMA_DIR");
+        const auto env_dir = common::Env::get("DFTU_TEST_SCHEMA_DIR");
+        REQUIRE(env_dir.has_value());
+        const dstd::String dir(*env_dir);
         const auto invalid = common::ErrorCode::InvalidArgument;
         dftu_utils_test::expect_error(trace::index::registered_schemas(),
                                       invalid);

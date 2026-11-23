@@ -68,8 +68,7 @@ dstd::String write_trace(dstd::CStringView dir, int n,
                                      : (i % 3 == 0 ? "STDIO" : "POSIX");
         const dstd::String name = own ? "step" : NAMES[i % 4];
         const int dur = 1 + (i * 7 + n + salt) % 500;
-        char fhash[24];
-        std::snprintf(fhash, sizeof fhash, "%016x", 0x1000 + i % 7);
+        const dstd::String fhash = dstd::fmt<"{:016x}">(0x1000 + i % 7);
         dstd::fmt_append<
             "{\"id\":{},\"name\":\"{}\",\"cat\":\"{}\",\"pid\":{},\"tid\":{},"
             "\"ph\":1,\"ts\":{},\"dur\":{},\"args\":{\"ret\":{},\"offset\":"

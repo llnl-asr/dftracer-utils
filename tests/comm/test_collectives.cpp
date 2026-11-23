@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -648,7 +649,7 @@ TEST_SUITE("CommCollectives") {
                 rt, 2,
                 [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                     comm::Group group = communicator.world(rank);
-                    const std::string word = "rank" + std::to_string(rank);
+                    const dstd::String word = "rank" + dstd::to_string(rank);
                     auto all_op = group.all_gather(bytes_of(word));
                     auto all = co_await all_op;
                     if (!all) co_return std::move(all).error();

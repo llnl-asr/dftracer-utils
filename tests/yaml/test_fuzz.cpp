@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
@@ -29,9 +30,8 @@ using yaml::Value;
 namespace {
 
 std::size_t seed_count() {
-    if (const char* more = std::getenv("YAML_FUZZ_SEEDS"))
-        return static_cast<std::size_t>(std::strtoull(more, nullptr, 10));
-    return 3000;
+    const auto more = common::Env::get<std::uint64_t>("YAML_FUZZ_SEEDS");
+    return more ? static_cast<std::size_t>(*more) : 3000;
 }
 
 // The text of the records that a text of a generated tree has.

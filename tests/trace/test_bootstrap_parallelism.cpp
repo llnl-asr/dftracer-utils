@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -49,9 +50,8 @@ dstd::String write_trace(dstd::CStringView dir, int n, int events = EVENTS) {
             << 1000 + i * 10 << R"(,"dur":3,"args":{}})" << "\n";
     }
     out << "]\n";
-    char name[32];
-    std::snprintf(name, sizeof(name), "/t%04d.pfw.gz", n);
-    return dftu_utils_test::write_gz_trace(dstd::String(dir) + name, out.str());
+    return dftu_utils_test::write_gz_trace(
+        dstd::String(dir) + dstd::fmt<"/t{:04}.pfw.gz">(n), out.str());
 }
 
 class LineSink : public ExportSink {

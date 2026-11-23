@@ -8,6 +8,7 @@
 // out=report.jsonl.gz
 
 #include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/plugins/plugin.h>
 
 #include <array>
@@ -41,11 +42,10 @@ struct DurationReport {
         char line[96];
         for (int i = 0; i < static_cast<int>(bins.size()); ++i) {
             if (!bins[i]) continue;
-            int n = std::snprintf(line, sizeof(line),
-                                  "{\"log2_us\":%d,\"count\":%llu}\n", i,
-                                  static_cast<unsigned long long>(bins[i]));
-            co_await writer.append(
-                dstd::StringView{line, static_cast<std::size_t>(n)});
+            const dstd::FmtResult written =
+                dstd::fmt_to<"{\"log2_us\":{},\"count\":{}}\n">(
+                    line, sizeof(line), i, bins[i]);
+            co_await writer.append(dstd::StringView{line, written.size});
         }
         GzSummary summary = co_await writer.close();
         std::fprintf(stderr, "duration_report: lines=%llu path=%s\n",

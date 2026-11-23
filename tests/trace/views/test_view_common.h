@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/fileio/file_helpers.h>
@@ -276,8 +277,11 @@ sorted_row_keys(
                 key += "\x01null";
             } else if (col.type() == T::Float64) {
                 char buf[40];
-                std::snprintf(buf, sizeof buf, "%.17g", col.data<double>()[r]);
-                key += buf;
+                const char* const end = dftracer::utils::dstd::to_chars_general(
+                    buf, buf + sizeof buf, col.data<double>()[r], 17);
+                key.append(buf, end != nullptr
+                                    ? static_cast<std::size_t>(end - buf)
+                                    : 0);
             } else {
                 key += dftracer::utils::dataframe::cell_to_string(col, r);
             }

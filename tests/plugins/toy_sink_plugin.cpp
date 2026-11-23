@@ -24,6 +24,13 @@ using namespace dftracer::utils;
 
 namespace {
 
+/// Writes `text` into `out` as a C string, cut to fit with a NUL at the end.
+void copy_option(char* out, std::size_t cap, dstd::StringView text) {
+    if (cap == 0) return;
+    const dstd::FmtResult written = dstd::fmt_to<"{}">(out, cap - 1, text);
+    out[written.size] = '\0';
+}
+
 std::int64_t g_made = 0;
 std::int64_t g_killed = 0;
 std::int64_t g_written = 0;
@@ -78,11 +85,8 @@ class ToySink : public plugins::Sink {
                 const dstd::StringView key = root.key_at(i);
                 const dstd::StringView value = root.value_at(i).as_str();
                 if (i == 0 && value.data() != nullptr) {
-                    std::snprintf(g_option_key, sizeof(g_option_key), "%.*s",
-                                  static_cast<int>(key.size()), key.data());
-                    std::snprintf(g_option_value, sizeof(g_option_value),
-                                  "%.*s", static_cast<int>(value.size()),
-                                  value.data());
+                    copy_option(g_option_key, sizeof(g_option_key), key);
+                    copy_option(g_option_value, sizeof(g_option_value), value);
                 }
                 if (key == "fail" && value.data() != nullptr)
                     g_fail_after = std::atoi(dstd::String(value).c_str());

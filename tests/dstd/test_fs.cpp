@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
@@ -474,9 +475,8 @@ TEST_CASE("space and temp_directory") {
     CHECK_FALSE(temp.empty());
     CHECK(dstd::PathView(temp).is_absolute());
     CHECK(dstd::fs::exists(temp.view()).value());
-    const char* given = std::getenv("TMPDIR");
-    if (given != nullptr && given[0] != '\0') {
-        CHECK(temp.str() == given);
+    if (const auto given = common::Env::get("TMPDIR")) {
+        CHECK(temp.str() == *given);
     }
 }
 

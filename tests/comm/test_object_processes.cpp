@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -87,12 +88,12 @@ struct PickyCodec {
 static_assert(comm::Codec<PickyCodec, dstd::String>);
 
 dstd::String word_of(std::uint32_t rank) {
-    return dstd::String(("w" + std::to_string(rank)).c_str());
+    return dstd::String(("w" + dstd::to_string(rank)).c_str());
 }
 
 dstd::String piece_of(std::uint32_t from, std::uint32_t to) {
     return dstd::String(
-        (std::to_string(from) + ">" + std::to_string(to)).c_str());
+        (dstd::to_string(from) + ">" + dstd::to_string(to)).c_str());
 }
 
 comm::Communicator start_mixed(Runtime& rt, dstd::Vector<std::uint32_t> map) {

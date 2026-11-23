@@ -3,6 +3,7 @@
 #include <dataframe/builders_types.h>
 #include <dftracer/utils/cli/json_cell_printer.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
@@ -1212,8 +1213,8 @@ int run_view_stderr(dstd::CStringView binary, dstd::Vector<dstd::String> args,
 
 // The example sink plugin the build produced, or empty when it is missing.
 dstd::String csv_sink_plugin() {
-    const char* path = std::getenv("DFTRACER_UTILS_CSV_SINK_PLUGIN");
-    if (path != nullptr && path[0] != '\0') return dstd::String(path);
+    if (const auto path = common::Env::get("DFTRACER_UTILS_CSV_SINK_PLUGIN"))
+        return dstd::String(*path);
     return "";
 }
 

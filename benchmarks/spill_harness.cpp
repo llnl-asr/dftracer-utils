@@ -179,13 +179,11 @@ Series generate(const Column& c, std::size_t salt, std::uint64_t seed,
     }
     if (c.gen == Gen::Text) {
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> out(count);
-        char buffer[16];
         for (std::size_t j = 0; j < count; ++j) {
-            std::snprintf(buffer, sizeof(buffer), "s%012" PRIu64,
-                          static_cast<std::uint64_t>(
-                              hash(from + static_cast<std::int64_t>(j)) %
-                              1000000000000ULL));
-            out[j] = buffer;
+            out[j] = dftracer::utils::dstd::fmt<"s{:012}">(
+                static_cast<std::uint64_t>(
+                    hash(from + static_cast<std::int64_t>(j)) %
+                    1000000000000ULL));
         }
         return Series::strings(out);
     }

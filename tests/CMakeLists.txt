@@ -354,6 +354,34 @@ add_test(
     sh -c
     "bad=$(grep -rnE '0123456789abcdef|0123456789ABCDEF' \"$0/include\" \"$0/src\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v -e 'dftracer/utils/dstd/vendor/' -e 'dftracer/utils/dstd/hex.h'); if [ -n \"$bad\" ]; then echo \"hex digit tables belong in include/dftracer/utils/dstd/hex.h:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
+# Every environment read goes through common::Env::get (common/env.h), so a
+# name and the meaning of an empty value are one decision. The allow list holds
+# the files that cannot call it, and why.
+add_test(
+  NAME one_getenv
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE '(^|[^A-Za-z0-9_])(std::|::)?(secure_)?getenv[[:space:]]*\\(|_NSGetEnviron|(^|[^A-Za-z0-9_])environ([^A-Za-z0-9_]|$)' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/' | grep -vE ':[0-9]+:[[:space:]]*(//|/\\*)' | grep -vE '^[^:]*/(src/dftracer/utils/common/env\\.cpp|src/dftracer/utils/dstd/fs\\.cpp|src/dftracer/utils/cli/dftracer_plugin\\.cpp|tests/binaries/test_dftracer_replay\\.cpp|tests/trace/index/input_syscalls_interpose\\.cpp|tests/comm/test_loader\\.cpp|tests/binaries/test_comm_args\\.cpp|src/dftracer/utils/memory/heap\\.cpp|tests/memory/fresh_process\\.h):|^[^:]*/tests/plugins/'); if [ -n \"$bad\" ]; then echo 'environment read; use common::Env::get() from <dftracer/utils/common/env.h> (the allow list and its reasons are in tests/CMakeLists.txt):'; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+# With the allow list off, the scan must find a raw read, so a scanner that
+# matches nothing cannot pass.
+add_test(NAME one_getenv_self
+         COMMAND
+           sh -c
+           "printf '%s\\n' 'const char* v = std::getenv(\"X\");' 'extern char** environ;' | grep -cE '(^|[^A-Za-z0-9_])(std::|::)?(secure_)?getenv[[:space:]]*\\(|(^|[^A-Za-z0-9_])environ([^A-Za-z0-9_]|$)' > /dev/null")
+# Text and numbers get their bytes from dstd::fmt and dstd::to_chars, so one
+# rounding and one padding rule hold. The allow list holds the files that are
+# the printf form or cannot reach dstd, and why.
+add_test(
+  NAME no_printf_format
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE '(^|[^A-Za-z0-9_])(v?sn?printf)[[:space:]]*\\(|(^|[^A-Za-z0-9_])std::to_string[[:space:]]*\\(|ostringstream|istringstream|stringstream' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/' | grep -vE ':[0-9]+:[[:space:]]*(//|/\\*)' | grep -vE '^[^:]*/(include/dftracer/utils/dstd/to_chars\\.h|benchmarks/fmt_bench\\.cpp|benchmarks/memory_probe\\.h|tests/dstd/test_fmt\\.cpp|tests/memory/fresh_process\\.h):|^[^:]*/src/dftracer/utils/memory/|\\.c:'); if [ -n \"$bad\" ]; then echo 'hand formatting; use dstd::fmt, dstd::fmt_append or dstd::fmt_to (<dftracer/utils/dstd/fmt.h>) for text and dstd::to_chars or dstd::to_chars_general (<dftracer/utils/dstd/to_chars.h>) for a number (the allow list and its reasons are in tests/CMakeLists.txt):'; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(NAME no_printf_format_self
+         COMMAND
+           sh -c
+           "printf '%s\\n' 'snprintf(buf, n, \"%d\", v);' 'std::to_string(n)' 'std::ostringstream os;' | grep -cE '(^|[^A-Za-z0-9_])(v?sn?printf)[[:space:]]*\\(|(^|[^A-Za-z0-9_])std::to_string[[:space:]]*\\(|ostringstream|istringstream|stringstream' > /dev/null")
 add_test(
   NAME store_no_upward
   COMMAND

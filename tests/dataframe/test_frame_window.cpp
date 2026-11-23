@@ -1840,8 +1840,10 @@ dstd::String key_at(const Series& c, std::int64_t i) {
             return dstd::to_string(c.data<std::int64_t>()[i]);
         case TypeId::Float64: {
             char buf[40];
-            std::snprintf(buf, sizeof buf, "%.17g", c.data<double>()[i]);
-            return buf;
+            const char* const end = dstd::to_chars_general(
+                buf, buf + sizeof buf, c.data<double>()[i], 17);
+            return dstd::String(
+                buf, end != nullptr ? static_cast<std::size_t>(end - buf) : 0);
         }
         case TypeId::String:
             return dstd::String(c.string_at(i));

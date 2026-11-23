@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/map.h>
@@ -58,9 +60,9 @@ dstd::String read_text(dstd::StringView path) {
 // Writes the reference when recording and returns "", else returns the
 // reference text (a failure when the file is missing).
 dstd::String reference(dstd::CStringView file, dstd::StringView produced) {
-    if (const char* dir = std::getenv(RECORD_ENV)) {
-        REQUIRE(dstd::fs::create_directories(dir).has_value());
-        dftu_utils_test::FileOut ofs(dstd::String(dir) + "/" + file.c_str());
+    if (const auto dir = common::Env::get(RECORD_ENV)) {
+        REQUIRE(dstd::fs::create_directories(*dir).has_value());
+        dftu_utils_test::FileOut ofs(dstd::String(*dir) + "/" + file.c_str());
         ofs << produced;
         return dstd::String();
     }
@@ -264,9 +266,7 @@ dstd::String escape(dstd::StringView s) {
     dstd::String out;
     for (unsigned char c : s) {
         if (c < 0x20 || c > 0x7e || c == '\\') {
-            char buf[8];
-            std::snprintf(buf, sizeof buf, "\\x%02x", c);
-            out += buf;
+            dstd::fmt_append<"\\x{:02x}">(out, c);
         } else {
             out += static_cast<char>(c);
         }
@@ -276,8 +276,10 @@ dstd::String escape(dstd::StringView s) {
 
 dstd::String number_text(double v) {
     char buf[40];
-    std::snprintf(buf, sizeof buf, "%.17g", v);
-    return dstd::String(buf);
+    const char* const end =
+        dstd::to_chars_general(buf, buf + sizeof buf, v, 17);
+    return dstd::String(
+        buf, end != nullptr ? static_cast<std::size_t>(end - buf) : 0);
 }
 
 dstd::Vector<dstd::String> split(dstd::StringView s, char sep) {

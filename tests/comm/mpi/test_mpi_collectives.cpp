@@ -6,6 +6,7 @@
 #include <dftracer/utils/comm/codec.h>
 #include <dftracer/utils/comm/collective.h>
 #include <dftracer/utils/comm/group.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/error.h>
@@ -13,6 +14,7 @@
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -44,7 +46,7 @@ comm::Communicator start_mpi() {
     comm::Communicator communicator = std::move(*started);
     // A run with DFTU_TEST_LINEAR=1 uses the collectives over the messages, so
     // the counters of the native provider must then fail.
-    if (std::getenv("DFTU_TEST_LINEAR") != nullptr)
+    if (common::Env::get("DFTU_TEST_LINEAR").has_value())
         comm::detail::Hooks::set_collectives(
             communicator, comm::backend::make_linear_collectives(
                               comm::detail::Hooks::messaging(communicator)));
@@ -584,7 +586,7 @@ TEST_SUITE("CommMpiCollectives") {
                     const std::string text = text_of(outcome.error());
                     CHECK(text.find("refused bad") != std::string::npos);
                     CHECK(text.find("deserialize the object of rank " +
-                                    std::to_string(owner)) !=
+                                    dstd::to_string(owner)) !=
                           std::string::npos);
                 }
                 co_return {};

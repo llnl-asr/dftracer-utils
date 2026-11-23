@@ -29,6 +29,14 @@ using namespace test_view_common;
 
 namespace {
 
+/// The text of `v` as `%g` writes it: the JSON number text this file builds.
+dstd::String json_number(double v) {
+    char buf[32];
+    const char* const end = dstd::to_chars_general(buf, buf + sizeof buf, v, 6);
+    return dstd::String(
+        buf, end != nullptr ? static_cast<std::size_t>(end - buf) : 0);
+}
+
 struct NullSink : ExportSink {
     void write(dstd::StringView) override {}
 };
@@ -1218,9 +1226,7 @@ TEST_SUITE("View duql joins") {
                 l += R"(,"run":")" + dstd::to_string(r.run) + "\"";
             if (r.run_kind == 3) l += R"(,"run":)" + dstd::to_string(r.run);
             if (r.has_dur) {
-                char buf[32];
-                std::snprintf(buf, sizeof buf, "%g", r.dur);
-                l += dstd::String(R"(,"dur":)") + buf;
+                l += dstd::String(R"(,"dur":)") + json_number(r.dur);
             }
             d.lines.push_back(l + R"(,"pad":"xxxxxxxxxxxxxxxxxxxxxxxx"})");
         }
@@ -1319,9 +1325,7 @@ TEST_SUITE("View duql joins") {
                 // `empty_sum`.
                 c.want.emplace_back(any ? dstd::StringView("null") : empty_sum);
                 if (with_dur) {
-                    char buf[32];
-                    std::snprintf(buf, sizeof buf, "%g", t);
-                    c.want.back() = buf;
+                    c.want.back() = json_number(t);
                 }
             }
             out.push_back(std::move(c));
@@ -1333,9 +1337,7 @@ TEST_SUITE("View duql joins") {
                              "x",
                              {}};
             for (const Rec& r : rs) {
-                char buf[32];
-                std::snprintf(buf, sizeof buf, "%g", r.dur);
-                c.want.push_back(r.has_dur ? buf : "null");
+                c.want.push_back(r.has_dur ? json_number(r.dur) : "null");
             }
             out.push_back(std::move(c));
         }
@@ -1376,9 +1378,7 @@ TEST_SUITE("View duql joins") {
         if (s == "null" || s.empty()) return dstd::String(s);
         char* end = nullptr;
         const double v = std::strtod(s.c_str(), &end);
-        char buf[32];
-        std::snprintf(buf, sizeof buf, "%g", v);
-        return buf;
+        return json_number(v);
     }
 
     // Checks every query of `cases` against its per-row reference.
@@ -1423,11 +1423,7 @@ TEST_SUITE("View duql joins") {
         }
     }
 
-    static dstd::String num_text(double v) {
-        char buf[32];
-        std::snprintf(buf, sizeof buf, "%g", v);
-        return buf;
-    }
+    static dstd::String num_text(double v) { return json_number(v); }
 
     // Range sub-queries over `where` with the per-row nested-loop answer.
     static dstd::Vector<CorrelatedCase> range_cases(const CorrelatedData& d,

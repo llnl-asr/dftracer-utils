@@ -8,6 +8,7 @@
 
 #include <arpa/inet.h>
 #include <dftracer/utils/dstd/clock.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -200,8 +201,10 @@ void fill_pattern(char* out, std::size_t size, int seed) {
 class TempFile {
    public:
     TempFile() {
-        std::snprintf(path_, sizeof(path_), "%s/dftu_uring_ring_XXXXXX",
-                      dstd::fs::temp_directory().c_str());
+        const dstd::FmtResult written =
+            dstd::fmt_to<"{}/dftu_uring_ring_XXXXXX">(
+                path_, sizeof(path_) - 1, dstd::fs::temp_directory());
+        path_[written.size] = '\0';
         fd_ = ::mkstemp(path_);
         REQUIRE(fd_ >= 0);
     }
@@ -1121,10 +1124,9 @@ dstd::Vector<pid_t> iowq_workers() {
     if (dir == nullptr) return workers;
     while (struct dirent* entry = ::readdir(dir)) {
         if (entry->d_name[0] < '0' || entry->d_name[0] > '9') continue;
-        char path[320];
-        std::snprintf(path, sizeof(path), "/proc/self/task/%s/comm",
-                      entry->d_name);
-        const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+        const dstd::String path =
+            dstd::fmt<"/proc/self/task/{}/comm">(entry->d_name);
+        const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
         if (fd < 0) continue;
         char comm[64];
         const ssize_t n = ::read(fd, comm, sizeof(comm) - 1);

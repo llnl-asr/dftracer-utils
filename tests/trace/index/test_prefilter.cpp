@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/cpu_features.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -317,11 +318,11 @@ TEST_SUITE("Prefilter") {
     TEST_CASE("the request in the environment picks the kernel" *
               doctest::skip()) {
         fresh_process::announce();
-        const char* request = std::getenv("DFTRACER_UTILS_JCC_KERNELS");
-        REQUIRE(request != nullptr);
+        const auto request = common::Env::get("DFTRACER_UTILS_JCC_KERNELS");
+        REQUIRE(request.has_value());
         const plan::PrefilterKernel* want = plan::prefilter_kernel_variant(
-            dstd::StringView(request) == "jcc" ? common::JccKernels::Jcc
-                                               : common::JccKernels::Plain);
+            *request == "jcc" ? common::JccKernels::Jcc
+                              : common::JccKernels::Plain);
         if (!want)
             want = plan::prefilter_kernel_variant(common::JccKernels::Plain);
         CHECK(&plan::prefilter_kernel() == want);

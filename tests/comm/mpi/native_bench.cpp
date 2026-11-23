@@ -8,6 +8,7 @@
 #include <comm/support.h>
 #include <dftracer/utils/comm/backend/linear_collectives.h>
 #include <dftracer/utils/comm/group.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/result.h>
@@ -38,7 +39,7 @@ int main(int argc, char** argv) {
     auto started = comm::Communicator::start(comm::BackendKind::Mpi);
     if (!started) return 3;
     comm::Communicator communicator = std::move(*started);
-    if (std::getenv("DFTU_TEST_LINEAR") != nullptr)
+    if (common::Env::get("DFTU_TEST_LINEAR").has_value())
         comm::detail::Hooks::set_collectives(
             communicator, comm::backend::make_linear_collectives(
                               comm::detail::Hooks::messaging(communicator)));

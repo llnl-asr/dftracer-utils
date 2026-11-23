@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
@@ -93,7 +94,7 @@ TEST_CASE("ipc: a string slice inside a struct is written with its own bytes") {
     dstd::Vector<dstd::String> values;
     for (std::int64_t i = 0; i < ROWS; ++i)
         values.push_back(dstd::String(200, 'a') +
-                         dstd::String{std::to_string(i).c_str()});
+                         dstd::String{dstd::to_string(i).c_str()});
     const Series big = Series::strings(values);
     dstd::Vector<std::int64_t> k;
     for (std::int64_t i = 0; i < 10; ++i) k.push_back(i);

@@ -132,7 +132,10 @@ dftu_status run(::dftu_task* t, dstd::String* message = nullptr) {
 Ctx* g_harness_ctx = nullptr;
 
 void copy_text(dstd::CStringView text, char* out, std::uint64_t cap) {
-    std::snprintf(out, static_cast<std::size_t>(cap), "%s", text.c_str());
+    if (cap == 0) return;
+    const dstd::FmtResult written =
+        dstd::fmt_to<"{}">(out, static_cast<std::size_t>(cap) - 1, text);
+    out[written.size] = '\0';
 }
 
 // The callbacks the C scenarios use to run a task, record a check and read the

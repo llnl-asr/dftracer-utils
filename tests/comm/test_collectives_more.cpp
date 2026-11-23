@@ -14,6 +14,7 @@
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -46,6 +47,12 @@ using dftu_comm_test::start;
 using dftu_comm_test::text_of;
 
 using Task = coro::CoroTask<dstd::Result<void>>;
+
+/// The decimal text of @p v, in the std::string this file's codecs carry.
+std::string num_text(std::uint32_t v) {
+    const dstd::String text = dstd::to_string(v);
+    return std::string(text.data(), text.size());
+}
 
 /// The text rank @p from sends to rank @p to; its size is 0 to 2.
 std::string piece_of(std::uint32_t from, std::uint32_t to) {
@@ -1040,7 +1047,7 @@ TEST_SUITE("CommCollectivesMore") {
                 auto errors =
                     run_ranks(rt, ranks, [&](std::uint32_t rank) -> Task {
                         comm::Group group = communicator.world(rank);
-                        const Person mine{"rank" + std::to_string(rank),
+                        const Person mine{"rank" + num_text(rank),
                                           static_cast<std::int32_t>(rank + 20)};
                         auto a_op =
                             group.all_gather_object(mine, PersonCodec{});
@@ -1060,8 +1067,7 @@ TEST_SUITE("CommCollectivesMore") {
                         dstd::Vector<Person> sends;
                         for (std::uint32_t dest = 0; dest < ranks; ++dest)
                             sends.push_back(Person{
-                                std::to_string(rank) + ">" +
-                                    std::to_string(dest),
+                                num_text(rank) + ">" + num_text(dest),
                                 static_cast<std::int32_t>(100 + rank * 10 +
                                                           dest)});
                         auto d_op = group.all_to_all_object(std::move(sends),
@@ -1076,17 +1082,16 @@ TEST_SUITE("CommCollectivesMore") {
                     REQUIRE(everyone[rank].size() == ranks);
                     for (std::uint32_t from = 0; from < ranks; ++from) {
                         CHECK(everyone[rank][from]->name ==
-                              "rank" + std::to_string(from));
+                              "rank" + num_text(from));
                         CHECK(everyone[rank][from]->age ==
                               static_cast<std::int32_t>(from + 20));
                     }
                     CHECK(rooted[rank].size() == (rank == root ? ranks : 0u));
-                    CHECK(cast[rank]->name == "rank" + std::to_string(root));
+                    CHECK(cast[rank]->name == "rank" + num_text(root));
                     REQUIRE(swapped[rank].size() == ranks);
                     for (std::uint32_t from = 0; from < ranks; ++from) {
                         CHECK(swapped[rank][from]->name ==
-                              std::to_string(from) + ">" +
-                                  std::to_string(rank));
+                              num_text(from) + ">" + num_text(rank));
                         CHECK(
                             swapped[rank][from]->age ==
                             static_cast<std::int32_t>(100 + from * 10 + rank));

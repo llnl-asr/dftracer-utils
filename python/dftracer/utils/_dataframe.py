@@ -901,8 +901,10 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
             raise KeyError(f"drop: no column named {missing[0]!r}")
         return _bound(_ext.DataFrame.select(self, *[c for c in self._names() if c not in dropped]))
 
-    def _constant_column(self, value: bool | int | float | str | None) -> Series:
-        """A column of this frame's row count holding ``value``: an Int64, Float64,
+    def _constant_column(
+        self, value: bool | int | float | str | None, rows: int | None = None
+    ) -> Series:
+        """A column of ``rows`` (this frame's row count by default) holding ``value``: an Int64, Float64,
         Bool or String column, empty for a frame with no rows. ``None`` gives an
         all-null String column, the type a column of only ``None`` has in
         ``from_dict`` and ``from_pandas``."""
@@ -915,7 +917,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
             if isinstance(value, float)
             else DType.STRING
         )
-        n = len(self)
+        n = len(self) if rows is None else rows
         if n == 0:
             return _ext._series_from_list([], int(kind))
         # Built from the row count alone, so no other column's nulls reach it.
@@ -1580,10 +1582,38 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         if items and all(isinstance(i, Agg) for i in items):
             return GroupBy(self, []).agg(*select_aggs(items))
         pairs = resolve_selectors(items)
+
+        def is_literal(expr: Expr | None) -> bool:
+            return isinstance(expr, Lit) and (
+                expr.value is None or isinstance(expr.value, (bool, int, float, str))
+            )
+
+        evaluated = {
+            name: expr.apply(self)
+            for name, expr in pairs
+            if expr is not None and not is_literal(expr)
+        }
+        lengths = {len(c) for c in evaluated.values()}
+        if any(expr is None for _, expr in pairs):
+            lengths.add(len(self))
+        if len(lengths) > 1:
+            raise ValueError(f"select: the columns must have one length, got {sorted(lengths)}")
+        rows = lengths.pop() if lengths else len(self)
+        computed = {
+            name: evaluated[name]
+            if name in evaluated
+            else self._constant_column(cast("Lit", expr).value, rows)
+            for name, expr in pairs
+            if expr is not None
+        }
+        if computed and len(computed) == len(pairs) and rows != len(self):
+            out = DataFrame({})
+            for name, column in computed.items():
+                out = _bound(_ext.DataFrame.with_column(out, name, column))
+            return out
         out = self
-        for name, expr in pairs:
-            if expr is not None:
-                out = out.assign(**{name: expr})
+        for name, column in computed.items():
+            out = out.assign(**{name: column})
         return _ext.DataFrame.select(out, *[name for name, _ in pairs])
 
     def rename(

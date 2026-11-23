@@ -299,7 +299,7 @@ dftu_dataframe* dftu_dataframe_rename(const dftu_dataframe* df,
 dftu_dataframe* dftu_dataframe_with_column(const dftu_dataframe* df,
                                            const char* name,
                                            const dftu_series* col) {
-    if (!df) return nullptr;
+    if (!df || !name || !col) return nullptr;
     return wrap(with_borrowed(
         col, [&](const Series& c) { return df->df.with_column(name, c); }));
 }

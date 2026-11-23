@@ -674,7 +674,7 @@ TEST_SUITE("output morsels") {
             CHECK(cut.size() >= 6);
             CHECK(most_rows(cut) <= 1000);
             expect_same_rows(joined(cut),
-                             df.with_column(name, extra.columns[0]));
+                             df.with_column(name, extra.columns[0]).value());
         }
     }
 

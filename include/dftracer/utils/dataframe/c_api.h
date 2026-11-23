@@ -1641,6 +1641,8 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_select(const dftu_dataframe* df,
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_rename(const dftu_dataframe* df,
                                                   const char* const* new_names,
                                                   int32_t n);
+/** Add or replace column `name`. Returns NULL when `col` has a different
+    length than the frame's other columns, or on a null argument. */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_with_column(const dftu_dataframe* df,
                                                        const char* name,
                                                        const dftu_series* col);

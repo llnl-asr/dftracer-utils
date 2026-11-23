@@ -136,8 +136,8 @@ dstd::Result<DataFrame> DataFrame::rename(
     dstd::Span<const dstd::String> new_names) const {
     return dataframe::rename(*this, new_names);
 }
-DataFrame DataFrame::with_column(dstd::StringView name,
-                                 const Series& col) const {
+dstd::Result<DataFrame> DataFrame::with_column(dstd::StringView name,
+                                               const Series& col) const {
     return dataframe::with_column(*this, name, col);
 }
 

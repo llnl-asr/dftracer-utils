@@ -29,7 +29,7 @@ method API - each operator returns a new frame or column, so calls chain.
 
    Series dur = df.column("dur");
    double p99 = dur.quantile(0.99);
-   DataFrame out = df.with_column("dur_ms", dur * 0.001);
+   DataFrame out = df.with_column("dur_ms", dur * 0.001).value();
 
 The field builder (``F`` / ``Field`` / ``Expr``) in
 ``dftracer::utils::dataframe::field`` composes column expressions that the engine

@@ -304,7 +304,9 @@ struct DataFrame {
     /// Rename columns positionally; the errors of `dataframe::rename`.
     dstd::Result<DataFrame> rename(
         dstd::Span<const dstd::String> new_names) const;
-    DataFrame with_column(dstd::StringView name, const Series& col) const;
+    /// Add or replace a column; the errors of `dataframe::with_column`.
+    dstd::Result<DataFrame> with_column(dstd::StringView name,
+                                        const Series& col) const;
 
     /// Group rows by column `key` (first-seen order) and compute each
     /// aggregate. The errors of `dataframe::group_by` (a NotFound error for

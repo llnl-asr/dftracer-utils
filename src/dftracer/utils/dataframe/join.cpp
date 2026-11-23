@@ -1147,8 +1147,11 @@ static dstd::Result<DataFrame> compare_agg_raw(const DataFrame& base,
         Series delta = r.sub(l);
         Series pct =
             delta.cast(TypeId::Float64).div(l.cast(TypeId::Float64)).mul(scale);
-        joined = with_column(joined, dstd::fmt<"delta_{}">(m), delta);
-        joined = with_column(joined, dstd::fmt<"pct_{}">(m), pct);
+        auto with_delta = with_column(joined, dstd::fmt<"delta_{}">(m), delta);
+        if (!with_delta) return with_delta.error();
+        auto with_pct = with_column(*with_delta, dstd::fmt<"pct_{}">(m), pct);
+        if (!with_pct) return with_pct.error();
+        joined = std::move(*with_pct);
     }
     return joined;
 }

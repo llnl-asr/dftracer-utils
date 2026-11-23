@@ -331,7 +331,7 @@ see it match.
 
              Series avg = df.column("sum_dur").cast(TypeId::Float64)
                               .div(df.column("count").cast(TypeId::Float64));
-             df = df.with_column("avg_dur", avg);
+             df = df.with_column("avg_dur", avg).value();
 
              auto name = df.column("name");
              const auto count = df.column("count").materialize();
@@ -420,8 +420,8 @@ total duration in milliseconds.
              Series sum_f = df.column("sum_dur").cast(TypeId::Float64);
              Series avg_dur = sum_f.div(df.column("count").cast(TypeId::Float64));
              Series total_ms = df.column("sum_dur").cast(TypeId::Float64) / 1000.0;
-             df = df.with_column("avg_dur", avg_dur)
-                      .with_column("total_ms", total_ms);
+             df = df.with_column("avg_dur", avg_dur).value()
+                      .with_column("total_ms", total_ms).value();
 
              auto name = df.column("name");
              const auto count = df.column("count").materialize();

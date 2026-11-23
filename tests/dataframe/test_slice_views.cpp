@@ -403,8 +403,9 @@ TEST_SUITE("slice views") {
             df.filter(dftu_utils_test::eval_ok(col(0) > std::int64_t{10}, in));
         dstd::Vector<const Series*> kin;
         for (const Series& c : kept.columns) kin.push_back(&c);
-        DataFrame want = kept.with_column(
-            "j", dftu_utils_test::eval_ok(col(0) + col(0), kin));
+        DataFrame want = kept.with_column("j", dftu_utils_test::eval_ok(
+                                                   col(0) + col(0), kin))
+                             .value();
 
         REQUIRE(lazy.num_columns() == want.num_columns());
         CHECK(lazy.names == want.names);

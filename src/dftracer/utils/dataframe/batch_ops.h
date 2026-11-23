@@ -61,9 +61,10 @@ dstd::Result<DataFrame> rename(const DataFrame& b,
                                dstd::Span<const dstd::String> new_names);
 
 /// Add `col` under `name` (replacing an existing column of that name), sharing
-/// the other columns zero-copy. `col` must match the batch row count.
-DataFrame with_column(const DataFrame& b, dstd::StringView name,
-                      const Series& col);
+/// the other columns zero-copy. `col` must match the batch row count unless the
+/// batch has no other column; an InvalidArgument error otherwise.
+dstd::Result<DataFrame> with_column(const DataFrame& b, dstd::StringView name,
+                                    const Series& col);
 
 /// Order every column by the values of column `name` (stable; nulls last, or
 /// first when `nulls_last` is false), ascending or `descending`. A NotFound

@@ -2062,7 +2062,10 @@ TEST_SUITE("vec") {
         CHECK(rn.num_rows() == 3);
 
         dstd::Vector<std::int64_t> extra{1, 2, 3};
-        DataFrame wc = with_column(b, "id", Series::flat_i64(extra.data(), 3));
+        dstd::Result<DataFrame> wc_result =
+            with_column(b, "id", Series::flat_i64(extra.data(), 3));
+        REQUIRE(wc_result);
+        DataFrame wc = std::move(*wc_result);
         REQUIRE(wc.num_columns() == 3);
         CHECK(wc.names[2] == "id");
 

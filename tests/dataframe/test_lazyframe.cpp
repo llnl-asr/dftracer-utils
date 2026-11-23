@@ -396,8 +396,9 @@ TEST_SUITE("lazyframe") {
         DataFrame e = make_df();
         DataFrame ef = e.filter(
             dftu_utils_test::eval_ok(col(0) > std::int64_t{3}, ptrs(e)));
-        DataFrame ew = ef.with_column(
-            "c", dftu_utils_test::eval_ok(col(0) + col(1), ptrs(ef)));
+        DataFrame ew = ef.with_column("c", dftu_utils_test::eval_ok(
+                                               col(0) + col(1), ptrs(ef)))
+                           .value();
         DataFrame eager = dftu_utils_test::ok(
             ew.select(dftu_utils_test::span_of<dstd::String>({"a", "c"})));
 

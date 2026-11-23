@@ -151,7 +151,7 @@ TEST_CASE("keep: row ops carry a two-level index") {
     CHECK(index_is(ok(ix.unique()), {"k1", "k2"}));
     CHECK(index_is(ok(ix.drop_duplicates()), {"k1", "k2"}));
     CHECK(index_is(ok(ix.topk("v", 2)), {"k1", "k2"}));
-    CHECK(index_is(ix.with_column("w", ix.column("v") + ix.column("v")),
+    CHECK(index_is(ok(ix.with_column("w", ix.column("v") + ix.column("v"))),
                    {"k1", "k2"}));
 }
 

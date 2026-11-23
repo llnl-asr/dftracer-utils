@@ -313,6 +313,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 - Count NaN as missing in the pandas names on float columns: `isna`, `isnull`, `notna`, `notnull`, `fillna`, `dropna` and `hasnans`, also inside `apply`, `eval` and JIT batch plugins (which now also take `isna` and `notna`). The Polars names keep NaN as a value: `is_null`, `fill_null` and `drop_nulls` see only nulls. Lazy `drop_nulls` and `drop_nans` also check the undeclared columns a scan returns.
+- `DataFrame.select` evaluates every item against the input frame, as Polars does; an item no longer sees a column an earlier item made.
 - Refuse a text fill on a number column in `fillna` and `fill_null`, where the nulls became 0; a frame keeps such a column as it is.
 
 - Make a slice of a String or Binary column zero copy: it shares the parent offsets and bytes, so its offsets may start above 0 (slicing 1 million rows went from about 86 us to under 0.1 us).
@@ -962,6 +963,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `DataFrame.with_column`, `with_columns`, `assign` and `select` giving a frame with columns of different lengths; a column of another length is now an error.
 - Fix `typing.get_type_hints` on `DataFrame`, `Series`, `LazyFrame`, the other native classes and `lit` on Python 3.8 and 3.9.
   The native types now report their module as `dftracer.utils.dftracer_utils_ext`.
 - Fix `jit` plugins loaded with `importlib.util.module_from_spec` on Python 3.8 and 3.9, which failed with a `KeyError`.

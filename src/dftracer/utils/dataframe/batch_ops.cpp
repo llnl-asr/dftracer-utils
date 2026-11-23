@@ -236,13 +236,19 @@ static dstd::Result<DataFrame> rename_raw(
     return out;
 }
 
-static DataFrame with_column_raw(const DataFrame& b, dstd::StringView name,
-                                 const Series& col) {
+static dstd::Result<DataFrame> with_column_raw(const DataFrame& b,
+                                               dstd::StringView name,
+                                               const Series& col) {
+    const std::int64_t i = index_of(b, name);
+    const std::size_t others = b.columns.size() - (i >= 0 ? 1 : 0);
+    if (others > 0 && col.length() != b.num_rows())
+        return invalid_argument<
+            "with_column: column {} has length {} but the frame has {} "
+            "rows">(name, col.length(), b.num_rows());
     DataFrame out;
     out.names = b.names;
     out.columns.reserve(b.columns.size() + 1);
     for (const Series& c : b.columns) out.columns.push_back(c.share());
-    std::int64_t i = index_of(b, name);
     if (i >= 0) {
         out.columns[static_cast<std::size_t>(i)] = col.share();
     } else {
@@ -2159,14 +2165,18 @@ static dstd::Result<DataFrame> unpivot_raw(
         DataFrame block = take(id_df, identity);
         dstd::Vector<dstd::String> varnames(static_cast<std::size_t>(n),
                                             value_vars[j]);
-        block = with_column(block, "variable", Series::strings(varnames));
+        dstd::Result<DataFrame> with_variable =
+            with_column(block, "variable", Series::strings(varnames));
+        if (!with_variable) return with_variable.error();
 
         const Series& src = b.columns[static_cast<std::size_t>(val_idx[j])];
         Series matv = flat_copy(src);
         Series valcol =
             matv.type() == common ? std::move(matv) : matv.cast(common);
-        block = with_column(block, "value", valcol);
-        blocks.push_back(std::move(block));
+        dstd::Result<DataFrame> with_value =
+            with_column(*with_variable, "value", valcol);
+        if (!with_value) return with_value.error();
+        blocks.push_back(std::move(*with_value));
     }
 
     dstd::Vector<const DataFrame*> parts;
@@ -2649,10 +2659,10 @@ dstd::Result<DataFrame> rename(const DataFrame& b,
     return out;
 }
 
-DataFrame with_column(const DataFrame& b, dstd::StringView name,
-                      const Series& col) {
-    DataFrame out = with_column_raw(b, name, col);
-    index_keep<"with_column">(b, out);
+dstd::Result<DataFrame> with_column(const DataFrame& b, dstd::StringView name,
+                                    const Series& col) {
+    dstd::Result<DataFrame> out = with_column_raw(b, name, col);
+    if (out) index_keep<"with_column">(b, *out);
     return out;
 }
 

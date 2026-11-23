@@ -136,7 +136,7 @@ existing ones without leaving the SIMD engine.
       .. code-block:: cpp
 
          Series bytes_per_us = df.column("sum_dur") / df.column("count");
-         df = df.with_column("bytes_per_us", bytes_per_us);
+         df = df.with_column("bytes_per_us", bytes_per_us).value();
 
 Full detail: :doc:`core/columnar-ops`, :doc:`data/dataframe`, :doc:`data/series`.
 

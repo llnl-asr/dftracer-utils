@@ -29,6 +29,9 @@ inline constexpr std::size_t HUGE_PAGE_RUN_MIN = std::size_t{2} << 20;
 /// threads kept 165 MiB after one burst each and a 14-thread sink kept about
 /// 7 MiB per thread.
 inline constexpr std::size_t IDLE_BACKED_CAP = std::size_t{32} << 20;
+/// The least page_set_idle_cap() sets. Under it a heap that frees and takes
+/// pages at full rate purges them and faults them back.
+inline constexpr std::size_t IDLE_BACKED_MIN = std::size_t{4} << 20;
 /// Over IDLE_BACKED_CAP a heap purges only pages idle this long, and looks at
 /// most once per RELIEF_INTERVAL_MS. Purging at once made a heap that frees and
 /// takes pages at full rate spend its time in madvise: 9x slower in a
@@ -86,6 +89,9 @@ std::size_t page_used_peak() noexcept;
 std::size_t page_budget_purged() noexcept;
 /// Freed bytes that are still backed, in the heaps and the caches.
 std::size_t page_idle_backed() noexcept;
+/// Bound page_idle_backed() at @p bytes, clamped to IDLE_BACKED_MIN and
+/// IDLE_BACKED_CAP. Thread-safe.
+void page_set_idle_cap(std::size_t bytes) noexcept;
 /// Push the calling thread's buffered remote frees to their pages.
 void page_flush_remote() noexcept;
 /// Heaps ever created. A heap is never unmapped and an exited thread's heap is

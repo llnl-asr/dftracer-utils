@@ -6191,6 +6191,9 @@ struct CursorChain {
     // The query run's Results pool, when the chain is a run. Declared first so
     // it closes after every cursor.
     memory::PoolHandle pool;
+    // The run's budget bound on idle heap memory, for as long as the chain
+    // runs.
+    dstd::Optional<memory::JobBudgetScope> idle_budget;
     // Declared before the cursor so it outlives the cursor built over it.
     dstd::SharedPtr<const Source> source;
     dstd::UniquePtr<Cursor> cursor;
@@ -6506,6 +6509,7 @@ coro::AsyncGenerator<dstd::Result<DataFrame>> stream_plan(
     if (!lowered) return failed_stream(lowered.error());
     CursorChain chain = std::move(*lowered);
     chain.pool = std::move(pool);
+    chain.idle_budget.emplace(budget);
     // Returned, not re-yielded through: an extra coroutine layer around a
     // parallel drain has miscompiled frames before (project_coro_threadlocal_
     // parser_pitfall), and it would delay the chain's destruction past the
@@ -6694,6 +6698,7 @@ coro::CoroTask<dstd::Result<DataFrame>> collect_plan(
         }
     }
     const std::uint64_t budget = memory::resolve_spill_budget(memory_budget);
+    const memory::JobBudgetScope idle_budget(budget);
     const bool whole = batch_size <= 0;
     auto draining =
         drain_stream(stream_plan(std::move(plan), memory_budget, batch_size,

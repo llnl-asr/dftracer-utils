@@ -428,6 +428,7 @@ struct OutputWriter::Impl {
     };
 
     OutputOptions opts;
+    dstd::Optional<memory::JobBudgetScope> idle_budget;
     bool is_file = false;
     bool committed = false;
     dstd::String target;
@@ -1648,6 +1649,8 @@ dstd::Result<OutputWriter> OutputWriter::open(OutputOptions options) {
     s.opts = std::move(options);
     OutputOptions& o = s.opts;
     s.shares = split_sink_budget(o.memory_budget);
+    if (o.memory_budget != memory::NO_SPILL_BUDGET)
+        s.idle_budget.emplace(memory::resolve_spill_budget(o.memory_budget));
     if (o.path.empty())
         return common::make_error(ErrorCode::InvalidArgument,
                                   "the output path is empty");

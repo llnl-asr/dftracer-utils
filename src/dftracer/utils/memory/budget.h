@@ -24,6 +24,29 @@ std::uint64_t resolve_spill_budget(std::uint64_t configured);
 
 std::size_t detect_available_memory();
 
+/**
+ * @brief Holds the allocator's freed-but-backed memory to a quarter of a job's
+ * budget while the job runs.
+ *
+ * The smallest budget of the scopes alive, rounded down to a power of two,
+ * sets the bound, which stays within detail::IDLE_BACKED_MIN and
+ * detail::IDLE_BACKED_CAP. A budget whose quarter reaches
+ * detail::IDLE_BACKED_CAP changes nothing. Thread-safe and lock-free, so a
+ * scope may end on another thread than the one that made it.
+ */
+class JobBudgetScope {
+   public:
+    explicit JobBudgetScope(std::uint64_t budget) noexcept;
+    ~JobBudgetScope();
+    JobBudgetScope(JobBudgetScope&& other) noexcept;
+    JobBudgetScope(const JobBudgetScope&) = delete;
+    JobBudgetScope& operator=(const JobBudgetScope&) = delete;
+    JobBudgetScope& operator=(JobBudgetScope&&) = delete;
+
+   private:
+    int bucket_;
+};
+
 }  // namespace dftracer::utils::memory
 
 #endif  // DFTRACER_UTILS_MEMORY_BUDGET_H

@@ -11,6 +11,7 @@
 #include <dftracer/utils/coro/stop_token.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/time.h>
+#include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -156,6 +157,28 @@ TEST_CASE("with_timeout wakes a parked wait in a nested task") {
     REQUIRE_FALSE(result);
     CHECK(result.error().condition() == dstd::Condition::Timeout);
     CHECK(dstd::steady_now() - start < 10s);
+}
+
+TEST_CASE("with_timeout cancels a task that holds the only worker") {
+    Runtime runtime(1);
+    std::atomic<bool> saw_cancel{false};
+    // It waits once, as a query does before its first batch, then computes
+    // on the worker and only polls the cancel.
+    auto busy = [&]() -> CoroTask<int> {
+        co_await yield();
+        const CancelView view = co_await this_coro::cancel_view;
+        const auto until = dstd::steady_now() + 5s;
+        while (!view.requested() && dstd::steady_now() < until)
+            std::this_thread::sleep_for(1ms);
+        saw_cancel.store(view.requested());
+        co_return 7;
+    };
+    const auto start = dstd::steady_now();
+    auto result = runtime.block_on(with_timeout(busy(), 20ms));
+    REQUIRE_FALSE(result);
+    CHECK(result.error().condition() == dstd::Condition::Timeout);
+    CHECK(saw_cancel.load());
+    CHECK(dstd::steady_now() - start < 2s);
 }
 
 TEST_CASE("with_timeout wakes a task parked on a channel, event or semaphore") {

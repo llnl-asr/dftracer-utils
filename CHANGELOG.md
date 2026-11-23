@@ -1024,6 +1024,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Opening an index that is already open costs one more `stat` call.
 - Fix memory that grows with the thread count when threads free medium blocks (64 KiB to 1 MiB) that other threads allocated.
   A heap now takes these blocks back before it takes a new run, not only when it runs out of room.
+- Fix `with_timeout` and query time limits that did not stop a task while it kept every worker thread busy, such as a slow plugin UDF.
 
 ### Removed
 

@@ -98,6 +98,8 @@ def dask_dir(tmp_path, name, **kwargs):
     return path, frame
 
 
+# dask itself calls set_index(inplace=True), which pandas deprecates.
+@pytest.mark.filterwarnings("ignore:The inplace keyword in DataFrame.set_index:Warning")
 def test_a_dask_directory_reads_without_its_index_marker(tmp_path):
     path, frame = dask_dir(tmp_path, "idx")
     got = DataFrame.from_parquet(path)
@@ -106,6 +108,8 @@ def test_a_dask_directory_reads_without_its_index_marker(tmp_path):
     assert sorted(got.to_pandas()["s"]) == list(frame["s"])
 
 
+# dask itself calls set_index(inplace=True), which pandas deprecates.
+@pytest.mark.filterwarnings("ignore:The inplace keyword in DataFrame.set_index:Warning")
 def test_the_marker_can_be_asked_for_by_name(tmp_path):
     path, _ = dask_dir(tmp_path, "idx2")
     got = DataFrame.from_parquet(path, columns=["s", "__null_dask_index__"])

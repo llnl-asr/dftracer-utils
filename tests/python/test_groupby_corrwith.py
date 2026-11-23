@@ -3,7 +3,9 @@
 paired column of another frame or with a Series, against pandas."""
 
 import math
+import warnings
 
+import numpy as np
 import pytest
 
 import dftracer.utils as dft
@@ -50,7 +52,10 @@ def test_corrwith_a_series_and_drop_match_pandas():
     ours = dft.DataFrame({k: v for k, v in DATA.items() if k != "s"})
     theirs = pd.DataFrame({k: v for k, v in DATA.items() if k != "s"})
     got = ours.groupby("k").corrwith(dft.Series(OTHER["a"], name="a"))
-    want = theirs.groupby("k").corrwith(pd.Series(OTHER["a"], name="a"))
+    # A group too small for a correlation makes numpy warn inside pandas.
+    with np.errstate(divide="ignore", invalid="ignore"), warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Degrees of freedom", category=RuntimeWarning)
+        want = theirs.groupby("k").corrwith(pd.Series(OTHER["a"], name="a"))
     for c in ("a", "b"):
         _close(got[c].to_list(), want[c].tolist())
     dropped = dft.DataFrame(DATA).groupby("k").corrwith(dft.DataFrame(OTHER), drop=True)

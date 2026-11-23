@@ -327,6 +327,10 @@ class TestPack:
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
 class TestFork:
+    # The test forks a threaded process on purpose to check fork safety.
+    @pytest.mark.filterwarnings(
+        "ignore:This process .* is multi-threaded, use of fork:DeprecationWarning"
+    )
     def test_child_refuses_inherited_handle_and_opens_its_own(self, tmp_path):
         directory = str(tmp_path / "store")
         store = Store.open(directory)

@@ -53,6 +53,10 @@ def test_share_has_a_floor_and_validates() -> None:
 
 
 @pytest.mark.skipif(os.name != "posix", reason="fork is POSIX only")
+# The test forks a threaded process on purpose to check fork safety.
+@pytest.mark.filterwarnings(
+    "ignore:This process .* is multi-threaded, use of fork:DeprecationWarning"
+)
 def test_forked_child_with_inherited_state_takes_the_share() -> None:
     # The parent already has a runtime and a memory budget; the fork copies the
     # budget, so only an explicit apply can change it.

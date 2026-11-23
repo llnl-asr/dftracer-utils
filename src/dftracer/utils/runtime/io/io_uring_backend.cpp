@@ -1196,6 +1196,11 @@ void IoUringBackend::flush_worker(WorkerRing& worker) noexcept {
     // a cached read, completes here and not on a thief or the sysmon. A thief
     // already inside finishes first. A completion that flushes again leaves
     // what it added to the drain further up.
+    if (worker.backlog_head == nullptr && worker.ring.pending() == 0) {
+        worker.ring.flush_completions();
+        reap_worker(worker);
+        return;
+    }
     bool held = false;
     if (!worker.owner_holds) {
         if (t_drains_other_ring) {

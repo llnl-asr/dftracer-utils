@@ -389,6 +389,7 @@ add_test(
   COMMAND
     sh -c
     "bad=$(grep -rnE 'memcpy[[:space:]]*\\([[:space:]]*&[^,]+,[^,]*\\+[[:space:]]*12[[:space:]]*,' \"$0/include/dftracer/utils/dataframe\" \"$0/src/dftracer/utils/dataframe\" \"$0/src/dftracer/utils/arrow\" --include='*.h' --include='*.cpp' --include='*.inl' | grep -vE '^[^:]*/dftracer/utils/dataframe/internal/string_reader\\.h:'); if [ -n \"$bad\" ]; then echo \"hand-written Arrow view decode; use decode_view() from dataframe/internal/string_reader.h:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
 # A big-endian read over a view passes the view: dstd::read_u16_be, read_u32_be
 # and read_u64_be take a dstd::ByteView or dstd::StringView.
 add_test(

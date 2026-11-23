@@ -1022,6 +1022,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A store made before this change gets its id from its first writer, and a reader without write access falls back to the directory's device and inode.
   A store that is no longer current refuses to open a writer or a snapshot, with a `NotFound` error, so it cannot write into the new directory.
   Opening an index that is already open costs one more `stat` call.
+- Fix memory that grows with the thread count when threads free medium blocks (64 KiB to 1 MiB) that other threads allocated.
+  A heap now takes these blocks back before it takes a new run, not only when it runs out of room.
 
 ### Removed
 

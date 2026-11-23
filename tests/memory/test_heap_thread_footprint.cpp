@@ -88,3 +88,37 @@ TEST_CASE("a thread that exits gives back the idle pages of its heap") {
     CHECK(idle_before_exit >= count / 2 * HEAP_PAGE_SIZE);
     CHECK(idle_after_exit + count / 2 * HEAP_PAGE_SIZE <= idle_before_exit);
 }
+
+TEST_CASE(
+    "a heap takes back the medium runs another thread freed before it takes a "
+    "new run") {
+    constexpr std::size_t size = 256 * 1024;
+    constexpr std::size_t count = 8;
+    // Idle bytes left by earlier cases could reach the cap, and its relief
+    // would purge them between the two readings.
+    page_trim(Mode::All);
+    std::vector<void*> blocks;
+    std::atomic<int> stage{0};
+    std::size_t idle_before = 0;
+    std::size_t idle_after = 0;
+    std::thread owner([&] {
+        void* live = page_allocate(size, 16);
+        for (std::size_t i = 0; i < count; ++i) {
+            blocks.push_back(page_allocate(size, 16));
+            std::memset(blocks.back(), 1, size);
+        }
+        stage.store(1);
+        while (stage.load() != 2) std::this_thread::yield();
+        idle_before = page_idle_backed();
+        void* fresh = page_allocate(128 * 1024, 16);
+        idle_after = page_idle_backed();
+        page_deallocate(fresh);
+        page_deallocate(live);
+        stage.store(3);
+    });
+    while (stage.load() != 1) std::this_thread::yield();
+    for (void* p : blocks) page_deallocate(p);
+    stage.store(2);
+    owner.join();
+    CHECK(idle_after >= idle_before + (count - 1) * size);
+}

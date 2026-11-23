@@ -1147,6 +1147,7 @@ bool find_in_spans(Heap& h, std::size_t n, std::size_t step,
 }
 
 Run acquire_run(Heap& h, std::size_t n, std::size_t step) {
+    drain_inbox(h);
     Run run{};
     if (find_in_spans(h, n, step, run)) return run;
     if (slow_path(h) && find_in_spans(h, n, step, run)) return run;

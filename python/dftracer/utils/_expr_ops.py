@@ -28,6 +28,7 @@ from ._expr import (
     Col,
     ColumnOp,
     Expr,
+    Scalar,
     has_column_op,
     split_column_ops,
 )
@@ -93,6 +94,12 @@ def _plan_column(plan: LazyFrame, name: str) -> tuple[int, int]:
     )
 
 
+def _number(value: Scalar | None, op: str) -> Scalar:
+    if value is None:
+        raise TypeError(f"{op}: the operand must be a number, not None")
+    return value
+
+
 def run_column_op(series: Series, spec: ColumnOp, series2: Series | None) -> Series:
     """``spec`` over ``series`` through the registry, the operands placed by
     the op's signature tokens exactly as the lazy ``column_op`` step places
@@ -106,7 +113,7 @@ def run_column_op(series: Series, spec: ColumnOp, series2: Series | None) -> Ser
         raise TypeError(f"{spec.op}: not a column -> column op")
     if spec.op == "dftu.series.dt_round" and spec.text is not None:
         spec = resolve_round(spec, dt_unit(series.type, series.time_unit, spec.unit))
-    scalars = [spec.a, spec.b]
+    scalars: list[Scalar | None] = [spec.a, spec.b]
     args: list[object] = []
     used_text = False
     for tok in tokens[1:]:
@@ -128,11 +135,11 @@ def run_column_op(series: Series, spec: ColumnOp, series2: Series | None) -> Ser
         ):
             if not scalars:
                 raise TypeError(f"{spec.op}: needs a scalar operand")
-            args.append(int(scalars.pop(0)))
+            args.append(int(_number(scalars.pop(0), spec.op)))
         elif tok == "f64":
             if not scalars:
                 raise TypeError(f"{spec.op}: needs a scalar operand")
-            args.append(float(scalars.pop(0)))
+            args.append(float(_number(scalars.pop(0), spec.op)))
         elif tok == "scalar":
             if not scalars:
                 raise TypeError(f"{spec.op}: needs a scalar operand")
@@ -221,7 +228,7 @@ def _eager_agg_over(columns: dict[str, Series], spec: ColumnOp) -> Series:
 def _rank_name(spec: ColumnOp) -> str:
     if spec.op != "dftu.series.rank":
         return "average"
-    return {v: k for k, v in RANK_METHODS.items() if k != "first"}[int(spec.a)]
+    return {v: k for k, v in RANK_METHODS.items() if k != "first"}[int(_number(spec.a, spec.op))]
 
 
 def _ascending(spec: ColumnOp) -> bool:

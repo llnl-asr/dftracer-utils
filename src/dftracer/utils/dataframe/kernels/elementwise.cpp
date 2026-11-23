@@ -1075,12 +1075,18 @@ dftu_series* dftu_series_fillna(const dftu_series* a, dftu_scalar fill) {
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_fillna(flat_a, fill));
 
     using namespace dftracer::utils::dataframe;
+    if (fill.kind == DFTU_SCALAR_TAG_NULL && a->encoding == Encoding::Flat &&
+        (a->type == TypeId::Bool || a->type == TypeId::String ||
+         is_numeric(a->type)))
+        return dftu_series_share(a);
     if (a->encoding == Encoding::Flat && a->type == TypeId::Bool)
         return fillna_bool(a, fill);
     if (a->encoding == Encoding::Flat && a->type == TypeId::String)
         return fillna_string(a, fill);
     if (a->encoding != Encoding::Flat || !is_numeric(a->type) ||
         a->type == TypeId::Bool)
+        return nullptr;
+    if (fill.kind == DFTU_SCALAR_TAG_STR || fill.kind == DFTU_SCALAR_TAG_ERR)
         return nullptr;
     dftu_series* out = alloc_like(a, false);
     HWY_DYNAMIC_DISPATCH(FillKernel)

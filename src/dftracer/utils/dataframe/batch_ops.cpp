@@ -19,6 +19,7 @@
 #include <dftracer/utils/dataframe/kernels/field_stat.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/kernels/group_by.h>
+#include <dftracer/utils/dataframe/kernels/nan_rows.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/algorithm.h>
@@ -1395,6 +1396,36 @@ static DataFrame fill_null_raw(const DataFrame& b, dftu_scalar value) {
     return out;
 }
 
+static bool is_float_column(const Series& c) {
+    return c.type() == TypeId::Float32 || c.type() == TypeId::Float64;
+}
+
+static dstd::Result<DataFrame> drop_nans_raw(const DataFrame& b) {
+    Series keep;
+    for (const Series& c : b.columns) {
+        if (!is_float_column(c)) continue;
+        std::int64_t nans = 0;
+        Series ok = keep_non_nan(c, &nans);
+        if (nans < 0)
+            return invalid_argument<
+                "drop_nans: a float column cannot be read">();
+        if (nans == 0) continue;
+        keep = keep.valid() ? keep.logical_and(ok) : std::move(ok);
+    }
+    return keep.valid() ? b.filter(keep) : b.share();
+}
+
+static DataFrame fill_nan_raw(const DataFrame& b, dftu_scalar value) {
+    DataFrame out;
+    out.names = b.names;
+    out.columns.reserve(b.columns.size());
+    for (const Series& c : b.columns) {
+        Series f = c.fill_nan(value);
+        out.columns.push_back(f.valid() ? std::move(f) : c.share());
+    }
+    return out;
+}
+
 static dstd::Result<DataFrame> unique_raw(
     const DataFrame& b, dstd::Span<const dstd::String> subset) {
     const std::int64_t n = b.num_rows();
@@ -2663,6 +2694,20 @@ DataFrame drop_nulls(const DataFrame& b) {
 DataFrame fill_null(const DataFrame& b, dftu_scalar value) {
     DataFrame out = fill_null_raw(b, value);
     index_keep<"fill_null">(b, out);
+    return out;
+}
+
+dstd::Result<DataFrame> drop_nans(const DataFrame& b) {
+    dstd::Result<DataFrame> out = drop_nans_raw(b);
+    if (out) index_keep<"drop_nans">(b, *out);
+    return out;
+}
+
+dstd::Result<DataFrame> fill_nan(const DataFrame& b, dftu_scalar value) {
+    if (value.kind == DFTU_SCALAR_TAG_STR || value.kind == DFTU_SCALAR_TAG_ERR)
+        return invalid_argument<"fill_nan: a NaN takes a number or null">();
+    DataFrame out = fill_nan_raw(b, value);
+    index_keep<"fill_nan">(b, out);
     return out;
 }
 

@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ## [Unreleased]
 
 ### Added
+- Add the Polars `fill_nan` and `drop_nans` on `Series`, `DataFrame` and `LazyFrame`, and the C ABI kernels `dftu_series_fill_nan`, `dftu_series_drop_nans`, `dftu_series_na_mask`, `dftu_series_notna_mask` and `dftu_expr_is_na`. A column with no NaN is shared, not copied.
 
 - Add the pandas row-label join: `DataFrame.join(other)` with no key columns joins on the row index (all levels, matched by name), with `how="left"` by default and pandas 3.1 `suffixes=`.
   `merge` takes `left_index=` and `right_index=`, and a keyed `join` keeps its Polars defaults (`how="inner"`, `suffix="_right"`).
@@ -311,6 +312,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Add `jit.json(text)` and `jit.yaml(text)` to a compiled body: a typed value with `find`, `as_int`, `as_float`, `as_str`, `as_bool`, `is_null`, `len`, iteration over array items and `items()` over object members. A missing key, a null and a value of the other kind give the default; a parse error raises `jit.ParseError` with the line and column.
 
 ### Changed
+- Count NaN as missing in the pandas names on float columns: `isna`, `isnull`, `notna`, `notnull`, `fillna`, `dropna` and `hasnans`, also inside `apply`, `eval` and JIT batch plugins (which now also take `isna` and `notna`). The Polars names keep NaN as a value: `is_null`, `fill_null` and `drop_nulls` see only nulls. Lazy `drop_nulls` and `drop_nans` also check the undeclared columns a scan returns.
+- Refuse a text fill on a number column in `fillna` and `fill_null`, where the nulls became 0; a frame keeps such a column as it is.
 
 - Make a slice of a String or Binary column zero copy: it shares the parent offsets and bytes, so its offsets may start above 0 (slicing 1 million rows went from about 86 us to under 0.1 us).
   Spill files, pickled frames and Arrow IPC output still write offsets that start at 0 and only the slice bytes.
@@ -398,7 +401,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The `directory` and `force_rebuild` arguments and the `resolve` and `ensure_indexed` methods are gone.
 - Export the error classes (`DFTUtilsError` and its ten subclasses) from `dftracer.utils.errors` and `DType` from `dftracer.utils`, and keep `schemas`, `Session` and `Handle` out of `dftracer.utils.__all__`.
   `Session` and `Handle` stay in `dftracer.utils.trace`, and the `typing`, `atexit` and `importlib` helpers no longer show as public names of the package.
-- Make the polars names canonical on `Series`, `Expr`, `DataFrame`, `LazyFrame` and the group-by classes, and build every pandas spelling from one table, `python/dftracer/utils/_aliases.py`: `fillna`, `astype`, `isna`, `notna`, `dropna`, `isin`, `groupby`, `sort_values`, `drop_duplicates`, `take`, `cumsum`, `ffill` and the rest are the same object as `fill_null`, `cast`, `is_null`, `is_not_null`, `drop_nulls`, `is_in`, `group_by`, `sort`, `unique`, `gather`, `cum_sum` and `forward_fill`.
+- Make the polars names canonical on `Series`, `Expr`, `DataFrame`, `LazyFrame` and the group-by classes, and build every pandas spelling from one table, `python/dftracer/utils/_aliases.py`: `astype`, `isin`, `groupby`, `sort_values`, `drop_duplicates`, `take`, `cumsum`, `ffill` and the rest are the same object as `cast`, `is_in`, `group_by`, `sort`, `unique`, `gather`, `cum_sum` and `forward_fill`.
   A pandas name with other keywords or another result (`sort_values(ascending=, na_position=)`, `nlargest`, `groupby(sort=)`) is a small function listed in the table.
   `Series`, `DataFrame`, `LazyFrame` and `Expr` take the same keywords for a shared name: `fill_null(value)`, `clip(lower, upper)`, `is_between(lower, upper)` and `sort(by, *, descending, nulls_last)`.
   `sort` puts nulls first by default, as polars, on `Series`, `DataFrame`, `LazyFrame` and `Expr` (`Expr.sort(nulls_last=False)` runs, where it raised); `sort_values` keeps the pandas `na_position="last"` default.

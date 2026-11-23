@@ -127,7 +127,7 @@ def _temporal_numpy(native: Series, dtype: DType) -> npt.NDArray[Any]:
     if dtype == DType.DATE32:
         phys = phys._cast(int(DType.INT64))
     if phys.null_count:
-        phys = phys.fillna(_NAT)
+        phys = phys.fill_null(_NAT)
     kind = "timedelta64" if dtype == DType.DURATION else "datetime64"
     return np.array(memoryview(phys)).view(f"{kind}[{unit}]")
 

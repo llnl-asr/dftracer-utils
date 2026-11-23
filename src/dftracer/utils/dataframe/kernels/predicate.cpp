@@ -6,8 +6,13 @@
 
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/kernels/nan_rows.h>
+#include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/bits.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -117,6 +122,129 @@ dftu_series* predicate_mask(const dftu_series* v, std::int32_t mode) {
     return out;
 }
 
+bool is_float(TypeId t) { return t == TypeId::Float32 || t == TypeId::Float64; }
+
+// A Bool column of the rows that are present and NaN, for a FLAT float column.
+dftu_series* nan_rows(const dftu_series* v) {
+    dftu_series* out = predicate_mask(v, 0);
+    out->validity = BufferView{};
+    out->null_count = 0;
+    if (v->validity.block()) {
+        std::uint8_t* dst = writable(out->data);
+        const std::uint8_t* valid = v->validity.data();
+        const std::size_t bytes =
+            std::min(buffer_bytes(TypeId::Bool, v->length), v->validity.size());
+        for (std::size_t i = 0; i < bytes; ++i) dst[i] &= valid[i];
+    }
+    return out;
+}
+
+// The Bool mask of the rows that are not a present NaN of a FLAT float column,
+// in one pass over the packed bits; `*nan_count` counts the rows that are.
+dftu_series* keep_non_nan_flat(const dftu_series* v, std::int64_t* nan_count) {
+    dftu_series* out = predicate_mask(v, 0);
+    out->validity = BufferView{};
+    out->null_count = 0;
+    std::uint8_t* bits = writable(out->data);
+    const std::uint8_t* valid =
+        v->validity.block() ? v->validity.data() : nullptr;
+    std::size_t bytes = std::min(buffer_bytes(TypeId::Bool, v->length),
+                                 static_cast<std::size_t>(out->data.size()));
+    if (valid)
+        bytes = std::min(bytes, static_cast<std::size_t>(v->validity.size()));
+    std::int64_t nans = 0;
+    for (std::size_t i = 0; i < bytes; ++i) {
+        const std::uint8_t m =
+            valid ? static_cast<std::uint8_t>(bits[i] & valid[i]) : bits[i];
+        nans += std::popcount(m);
+        bits[i] = static_cast<std::uint8_t>(~m);
+    }
+    *nan_count = nans;
+    return out;
+}
+
+// Whether a FLAT float column has a NaN in a row that is not null.
+template <class T>
+bool any_present_nan_flat(const dftu_series* v) {
+    const T* in = reinterpret_cast<const T*>(v->data.data());
+    const auto n = static_cast<std::size_t>(v->length);
+    const std::uint8_t* valid =
+        v->validity.block() ? v->validity.data() : nullptr;
+    for (std::size_t i = 0; i < n; ++i)
+        if (in[i] != in[i] && (!valid || ((valid[i >> 3] >> (i & 7)) & 1)))
+            return true;
+    return false;
+}
+
+// Whether a float column may have a NaN in a row that is not null, read in
+// place. A layout other than FLAT, CHUNKED or a SELECTION over a FLAT base
+// answers yes without looking.
+bool may_have_present_nan(const dftu_series* v) {
+    if (v->encoding == Encoding::Flat)
+        return v->type == TypeId::Float32 ? any_present_nan_flat<float>(v)
+                                          : any_present_nan_flat<double>(v);
+    if (v->is_chunked()) {
+        for (const auto& c : v->nested)
+            if (may_have_present_nan(c.series.get())) return true;
+        return false;
+    }
+    const dftu_series* base = v->child().get();
+    if (v->encoding != Encoding::Selection || !base ||
+        base->encoding != Encoding::Flat)
+        return true;
+    const auto* idx = reinterpret_cast<const std::int64_t*>(v->data.data());
+    for (std::int64_t i = 0; i < v->length; ++i) {
+        if (idx[i] < 0 || dftu_series_is_null(v, i)) continue;
+        const auto k = static_cast<std::size_t>(idx[i]);
+        const bool nan =
+            base->type == TypeId::Float32
+                ? reinterpret_cast<const float*>(base->data.data())[k] !=
+                      reinterpret_cast<const float*>(base->data.data())[k]
+                : reinterpret_cast<const double*>(base->data.data())[k] !=
+                      reinterpret_cast<const double*>(base->data.data())[k];
+        if (nan) return true;
+    }
+    return false;
+}
+
+// NaN of a FLAT float column replaced by `fv`, or by a null. A column with no
+// NaN is shared, not copied.
+template <class T>
+dftu_series* fill_nan_flat(const dftu_series* v, T fv, bool to_null) {
+    const T* in = reinterpret_cast<const T*>(v->data.data());
+    const auto n = static_cast<std::size_t>(v->length);
+    if (!any_present_nan_flat<T>(v)) return dftu_series_share(v);
+    auto* out = new dftu_series();
+    out->type = v->type;
+    out->encoding = Encoding::Flat;
+    out->length = v->length;
+    out->data = new_buffer(buffer_bytes(v->type, v->length));
+    T* dst = reinterpret_cast<T*>(writable(out->data));
+    if (!to_null) {
+        for (std::size_t i = 0; i < n; ++i)
+            dst[i] = in[i] == in[i] ? in[i] : fv;
+        out->validity = v->validity;
+        out->null_count = v->null_count;
+        return out;
+    }
+    if (n) std::memcpy(dst, in, n * sizeof(T));
+    const std::size_t bytes = (n + 7) / 8;
+    BufferView bitmap = new_buffer(bytes == 0 ? 1 : bytes);
+    std::uint8_t* bits = writable(bitmap);
+    std::memset(bits, 0, bitmap.size());
+    const std::uint8_t* valid =
+        v->validity.block() ? v->validity.data() : nullptr;
+    for (std::size_t i = 0; i < n; ++i) {
+        const bool present = !valid || ((valid[i >> 3] >> (i & 7)) & 1);
+        if (present && in[i] == in[i])
+            bits[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+    }
+    out->null_count = v->length - static_cast<std::int64_t>(
+                                      dstd::bits::popcount_bytes(bits, bytes));
+    out->validity = std::move(bitmap);
+    return out;
+}
+
 }  // namespace
 
 }  // namespace dftracer::utils::dataframe
@@ -184,5 +312,84 @@ dftu_series* dftu_series_null_mask(const dftu_series* v) {
         dst[i] = static_cast<std::uint8_t>(~bm[i]);
     return out;
 }
+
+// Null or NaN. A column that is not a float has no NaN, so the answer is the
+// null mask.
+dftu_series* dftu_series_na_mask(const dftu_series* v) {
+    if (!v) return nullptr;
+    if (!is_float(v->type)) return dftu_series_null_mask(v);
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_na_mask(flat_v));
+    dftu_series* out = dftu_series_null_mask(v);
+    dftu_series* nan = nan_rows(v);
+    std::uint8_t* dst = writable(out->data);
+    const std::uint8_t* src = nan->data.data();
+    for (std::size_t i = 0; i < out->data.size(); ++i) dst[i] |= src[i];
+    dftu_series_free(nan);
+    return out;
+}
+
+dftu_series* dftu_series_notna_mask(const dftu_series* v) {
+    if (!v) return nullptr;
+    if (!is_float(v->type)) return dftu_series_valid_mask(v);
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_notna_mask(flat_v));
+    dftu_series* out = dftu_series_valid_mask(v);
+    dftu_series* nan = nan_rows(v);
+    std::uint8_t* dst = writable(out->data);
+    const std::uint8_t* src = nan->data.data();
+    for (std::size_t i = 0; i < out->data.size(); ++i)
+        dst[i] &= static_cast<std::uint8_t>(~src[i]);
+    dftu_series_free(nan);
+    return out;
+}
+
+dftu_series* dftu_series_fill_nan(const dftu_series* v, dftu_scalar fill) {
+    if (!v) return nullptr;
+    if (!is_float(v->type)) return dftu_series_share(v);
+    if (fill.kind == DFTU_SCALAR_TAG_STR || fill.kind == DFTU_SCALAR_TAG_ERR)
+        return nullptr;
+    if (v->encoding != Encoding::Flat && !may_have_present_nan(v))
+        return dftu_series_share(v);
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_fill_nan(flat_v, fill));
+    const bool to_null = fill.kind == DFTU_SCALAR_TAG_NULL;
+    if (v->type == TypeId::Float32)
+        return fill_nan_flat<float>(v, scalar_value<float>(fill), to_null);
+    return fill_nan_flat<double>(v, scalar_value<double>(fill), to_null);
+}
+
+// A null is not a NaN, so the null rows stay.
+dftu_series* dftu_series_drop_nans(const dftu_series* v) {
+    if (!v) return nullptr;
+    if (!is_float(v->type)) return dftu_series_share(v);
+    if (v->encoding != Encoding::Flat && !may_have_present_nan(v))
+        return dftu_series_share(v);
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_drop_nans(flat_v));
+    std::int64_t nans = 0;
+    dftu_series* keep = keep_non_nan_flat(v, &nans);
+    dftu_series* out =
+        nans == 0 ? dftu_series_share(v) : dftu_series_filter(v, keep);
+    dftu_series_free(keep);
+    return out;
+}
+
+namespace dftracer::utils::dataframe {
+
+Series keep_non_nan(const Series& c, std::int64_t* nan_count) {
+    *nan_count = 0;
+    if (!c.valid() || !is_float(c.type())) return Series{};
+    const dftu_series* h = c.handle();
+    if (h->encoding == Encoding::Flat)
+        return Series{keep_non_nan_flat(h, nan_count)};
+    if (!may_have_present_nan(h)) return Series{};
+    dftu_series* flat = dftu_series_materialize(h);
+    if (!flat) {
+        *nan_count = -1;
+        return Series{};
+    }
+    Series out{keep_non_nan_flat(flat, nan_count)};
+    dftu_series_free(flat);
+    return out;
+}
+
+}  // namespace dftracer::utils::dataframe
 
 #endif  // HWY_ONCE

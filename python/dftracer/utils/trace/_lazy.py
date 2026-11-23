@@ -124,6 +124,15 @@ class LazyOps(_ext.TraceViewer):
         """Fill nulls in every column with ``value``."""
         return self.lazy().fill_null(value)
 
+    def drop_nans(self) -> LazyFrame:
+        """Drop rows holding a NaN in a float column (a null is not a NaN)."""
+        return self.lazy().drop_nans()
+
+    def fill_nan(self, value: int | float | None) -> LazyFrame:
+        """Replace the NaN of every float column with ``value`` (null for
+        ``None``)."""
+        return self.lazy().fill_nan(value)
+
     def top_k(self, k: int, *, by: str | Sequence[str], reverse: bool = False) -> LazyFrame:
         """The ``k`` rows with the largest ``by`` (the smallest with
         ``reverse=True``), best first; a null never ranks (polars ``top_k``)."""

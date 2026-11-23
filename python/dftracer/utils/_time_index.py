@@ -608,7 +608,7 @@ class TimeResampler:
         ticks = self._bins.ticks
         if ordered and not ticks.is_sorted():
             frame = frame.with_column(_TICK, ticks)
-        keep = ids.notna() if ids.null_count else None
+        keep = ids.is_not_null() if ids.null_count else None
         frame = frame if keep is None else frame.filter(keep)
         return frame.sort_by(_TICK) if _TICK in frame else frame
 
@@ -640,7 +640,7 @@ class TimeResampler:
         full = grid.join(counted, on=_BIN, how="left")
         for out, _, func in specs:
             if func in _ZERO or func == "prod":
-                filled = _ext.DataFrame.__getitem__(full, out).fillna(1 if func == "prod" else 0)
+                filled = _ext.DataFrame.__getitem__(full, out).fill_null(1 if func == "prod" else 0)
                 full = full.with_column(out, filled)
         outs = [o for o, _, _ in specs]
         out_frame = full.with_column(self._name, self._bins.labels).select(*outs, self._name)
@@ -889,7 +889,7 @@ def between_time_mask(
     lo, hi = _time_us(start_time, True), _time_us(end_time, True)
     tod = _time_of_day_us(key)
     if key.null_count:
-        tod = tod.fillna(-1)  # pandas reads a missing instant as the time -1
+        tod = tod.fill_null(-1)  # pandas reads a missing instant as the time -1
     after = tod.ge(lo) if inclusive in ("both", "left") else tod.gt(lo)
     before = tod.le(hi) if inclusive in ("both", "right") else tod.lt(hi)
     return after.logical(0, before) if lo <= hi else after.logical(1, before)

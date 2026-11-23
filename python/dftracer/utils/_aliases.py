@@ -39,10 +39,8 @@ def _polars(cls: str, pairs: Mapping[str, str], adapters: Tuple[str, ...] = ()) 
 _SERIES = {
     "aggregate": "agg",
     "astype": "cast",
-    "isna": "is_null",
-    "isnull": "is_null",
-    "notna": "is_not_null",
-    "notnull": "is_not_null",
+    "isnull": "isna",
+    "notnull": "notna",
     "dropna": "drop_nulls",
     "fillna": "fill_null",
     "isin": "is_in",
@@ -80,10 +78,8 @@ _SERIES = {
 }
 
 _EXPR = {
-    "isna": "is_null",
-    "isnull": "is_null",
-    "notna": "is_not_null",
-    "notnull": "is_not_null",
+    "isnull": "isna",
+    "notnull": "notna",
     "isin": "is_in",
     "astype": "cast",
     "fillna": "fill_null",
@@ -139,12 +135,13 @@ ADAPTERS = {
         "kurt",
         "drop_duplicates",
         "dropna",
+        "fillna",
         "take",
         "between",
         "loc",
         "at",
     ),
-    "Expr": ("between",),
+    "Expr": ("between", "fillna"),
     "DataFrame": (
         "groupby",
         "sort_values",

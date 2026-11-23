@@ -1088,12 +1088,21 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         return with_levels(out, [default_name(0)], [positions(len(out), len(self) - len(out))])
 
     def dropna(self) -> Self:
-        """The pandas ``dropna``: :meth:`drop_nulls`. The rows keep their
+        """The pandas ``dropna``: :meth:`drop_nulls` then :meth:`drop_nans`,
+        so a NaN of a float column goes with the nulls. The rows keep their
         labels; a positional Series that loses a row is labelled by the
         positions it kept, as pandas."""
-        if self.null_count == 0:
+        if self.null_count == 0 and not (self.dtype.is_float and self.is_nan().any()):
             return self
-        return positional(self).drop_nulls()
+        return positional(self).drop_nulls().drop_nans()
+
+    def fillna(self, value: bool | int | float | builtins.str) -> Self:
+        """The pandas ``fillna``: a null and, in a float column, a NaN become
+        ``value`` (:meth:`fill_null` fills only the nulls, :meth:`fill_nan`
+        only the NaNs)."""
+        if isinstance(value, builtins.str):
+            return self.fill_null(value)
+        return self.fill_nan(value).fill_null(value)
 
     def take(self, indices: Sequence[int] | Series) -> Self:
         """The pandas ``take``: :meth:`gather`. The rows keep their labels; a
@@ -1133,11 +1142,8 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     if TYPE_CHECKING:
         aggregate = SeriesPandasMixin.agg
         astype = cast
-        isna = _ext.Series.is_null
-        isnull = _ext.Series.is_null
-        notna = _ext.Series.is_not_null
-        notnull = _ext.Series.is_not_null
-        fillna = _ext.Series.fill_null
+        isnull = _ext.Series.isna
+        notnull = _ext.Series.notna
         isin = is_in
         nunique = _ext.Series.n_unique
         prod = _ext.Series.product
@@ -1219,7 +1225,7 @@ class _Expanding:
         return self._series.cummax().ffill()
 
     def count(self) -> Series[int]:
-        return self._series.notna().astype(DType.INT64).cumsum()
+        return self._series.is_not_null().astype(DType.INT64).cumsum()
 
     def mean(self) -> Series[float]:
         return self.sum().astype("float64") / self.count()
@@ -1890,7 +1896,7 @@ class _StrAccessor(_ext.StrAccessor):
         labels = [names.get(g, str(g - 1)) for g in range(1, rx.groups + 1)]
         found = DataFrame.from_dict({"m": self._s.str_findall(pat)})
         rows = found.with_row_index("row").explode("m")
-        rows = rows[rows["m"].notna()]
+        rows = rows[rows["m"].is_not_null()]
         if len(rows) == 0:
             ints = {c: Series.from_list([], dtype=DType.INT64) for c in ["row", "match"]}
             text = {c: Series.from_list([], dtype=DType.STRING) for c in labels}
@@ -1950,7 +1956,7 @@ class _StrAccessor(_ext.StrAccessor):
 
         parts = self._s.str_split(sep)
         exploded = DataFrame.from_dict({"v": parts}).with_row_index("r").explode("v")
-        wide = exploded.pivot(index="r", on="v", values="v", agg="count").drop("r").fillna(0)
+        wide = exploded.pivot(index="r", on="v", values="v", agg="count").drop("r").fill_null(0)
         # Presence (1), not a count; an empty token is no category.
         names = [c for c in wide.columns if c != ""]
         return DataFrame.from_dict({c: wide[c].gt(0).astype("int64") for c in names})

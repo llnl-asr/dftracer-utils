@@ -126,7 +126,7 @@ def _scaled_differs(a: Series, b: Series) -> Series[bool]:
     factor = 1000 ** (b.time_unit - a.time_unit)
     fine, coarse = b.astype("int64"), a.astype("int64")
     same = ((fine % factor) == 0) & ((fine // factor) == coarse)
-    ne = (~same).fillna(False)
+    ne = (~same).fill_null(False)
     nulls = _kernel_operand(a.is_null()).compare_series(_kernel_operand(b.is_null()), _CMP_NE)
     return cast("Series[bool]", ne | nulls)
 
@@ -164,9 +164,9 @@ def differs(a: Series, b: Series) -> Series[bool]:
                 DType.BOOL,
             ),
         )
-    ne = _kernel_operand(a).compare_series(_kernel_operand(b), _CMP_NE).fillna(False)
+    ne = _kernel_operand(a).compare_series(_kernel_operand(b), _CMP_NE).fill_null(False)
     if da in _FLOATS and db in _FLOATS:
-        ne = ne & ~(a.is_nan().fillna(False) & b.is_nan().fillna(False))
+        ne = ne & ~(a.is_nan().fill_null(False) & b.is_nan().fill_null(False))
     if a.null_count == 0 and b.null_count == 0:
         return ne
     nulls = _kernel_operand(a.is_null()).compare_series(_kernel_operand(b.is_null()), _CMP_NE)
@@ -192,7 +192,7 @@ def present_edge(s: Series, first: bool) -> int | None:
         return None
     if nulls == 0:
         return 0 if first else len(s) - 1
-    return valid_edge(s.notna(), first)
+    return valid_edge(s.is_not_null(), first)
 
 
 def edge_label(labels: object, pos: int | None) -> object | None:
@@ -225,7 +225,7 @@ def present_or(s: Series, other: Series, kept: DType | None = None) -> Series:
             other = other.cast(s.dtype)
         elif s.null_count == len(s):
             s = s.cast(other.dtype)
-    out = s.where(s.notna(), other)
+    out = s.where(s.is_not_null(), other)
     if kept is not None and out.dtype != kept and out.null_count == 0:
         out = out.cast(kept)
     return out
@@ -245,7 +245,7 @@ def kept_by_update(out: Series, kept: DType) -> Series:
     if out.dtype == kept:
         return out
     back = out.cast(kept)
-    if (back.cast(out.dtype) != out).fillna(False).any():
+    if (back.cast(out.dtype) != out).fill_null(False).any():
         raise TypeError(f"Invalid value for dtype '{kept.name.lower()}'")
     return back
 
@@ -348,7 +348,7 @@ def replace_in(
         old_kind, new_kind = _kind(old), _kind(new)
         hit: Series[bool] | None
         if old_kind == "null":
-            hit = s.isna()
+            hit = s.is_null()
         elif old_kind == "nan":
             hit = (s != s) if floats else None
         elif is_str == (old_kind == "str"):
@@ -427,7 +427,8 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
 
     @property
     def hasnans(self) -> bool:
-        return self._s().null_count > 0
+        s = self._s()
+        return s.null_count > 0 or (s.dtype.is_float and bool(s.is_nan().any()))
 
     @property
     def empty(self) -> bool:
@@ -524,9 +525,9 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         it, -1 for a null (pandas numbers uniques by first occurrence)."""
         s = self._s()
         uniques = s.drop_nulls().unique()
-        codes = cast("Series", uniques.search_sorted(s.fillna(0) if s.null_count else s))
+        codes = cast("Series", uniques.search_sorted(s.fill_null(0) if s.null_count else s))
         if s.null_count:
-            codes = codes.mask(s.isna(), -1)
+            codes = codes.mask(s.is_null(), -1)
         return codes, uniques
 
     def repeat(self, repeats: int) -> Series:
@@ -747,7 +748,7 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         ``autocorr``); the shifted-in nulls drop from the pair."""
         s = self._s()
         shifted = s.shift(lag)
-        keep = shifted.notna()
+        keep = shifted.is_not_null()
         return s.filter(keep).corr(shifted.filter(keep))
 
     def combine_first(self, other: Series) -> Series:
@@ -927,7 +928,7 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
 
         s = self._s()
         # pandas gives NaN below two complete pairs; the engine's readout 0.
-        pairs = s.notna().logical(0, other.notna())
+        pairs = s.is_not_null().logical(0, other.is_not_null())
         if int(pairs.astype("int64").sum()) < 2:
             return float("nan")
         frame = DataFrame.from_dict({"x": s, "y": other})

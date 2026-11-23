@@ -480,6 +480,11 @@ class LazyFrame {
     LazyFrame tail(std::int64_t n) const;
     LazyFrame drop_nulls() const;
     LazyFrame fill_null(Scalar value) const;
+    /// Drops the rows with a NaN in any float column (a null is not a NaN).
+    LazyFrame drop_nans() const;
+    /// Replaces the NaN of every float column with `value` (a null scalar
+    /// makes it null); other columns pass through.
+    LazyFrame fill_nan(Scalar value) const;
     /// Keeps the rows at `indices` (arbitrary order, repeats allowed), as
     /// DataFrame::take. Not streaming: the whole frame must be resident before
     /// the indices can be applied.
@@ -496,6 +501,12 @@ class LazyFrame {
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     LazyFrame fill_null(T value) const {
         return fill_null(to_scalar(value));
+    }
+    /// Fill NaN with a natural C++ value; converts to each float column's
+    /// type.
+    template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
+    LazyFrame fill_nan(T value) const {
+        return fill_nan(to_scalar(value));
     }
     LazyFrame with_row_index(dstd::String name) const;
     /// A one-row frame of each column's null count.

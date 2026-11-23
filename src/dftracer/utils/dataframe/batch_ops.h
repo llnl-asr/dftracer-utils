@@ -203,6 +203,15 @@ DataFrame drop_nulls(const DataFrame& b);
 /// are shared unchanged.
 DataFrame fill_null(const DataFrame& b, dftu_scalar value);
 
+/// Drop every row that is NaN in ANY Float32 or Float64 column. A null is not a
+/// NaN, so a null row stays. An error when a float column cannot be read.
+dstd::Result<DataFrame> drop_nans(const DataFrame& b);
+
+/// Replace the NaN of every Float32 or Float64 column with `value` (a null
+/// scalar makes it null); the other columns are shared unchanged. A text or
+/// error `value` is an InvalidArgument error.
+dstd::Result<DataFrame> fill_nan(const DataFrame& b, dftu_scalar value);
+
 /// Distinct ROWS (keep first), hashing all columns as the composite key, or
 /// only the `subset` columns (empty = all). `drop_duplicates` is an alias.
 /// A NotFound error for a subset name the frame lacks, an InvalidArgument

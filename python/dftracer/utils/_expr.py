@@ -371,7 +371,7 @@ class ColumnOp:
         self,
         op: str,
         column2: Expr | None = None,
-        a: Scalar = 0,
+        a: Scalar | None = 0,
         b: Scalar = 0,
         text: str | None = None,
         over: list[str] | None = None,
@@ -654,9 +654,24 @@ class Expr(_Namespaces):
         when the plan runs."""
         return Cast(CAST_CODES[dtype], self)
 
-    def fill_null(self, value: int | float) -> Expr:
+    def fill_null(self, value: Value) -> Expr:
         """Replace nulls with ``value`` (elementwise)."""
         return Fillna(self, value)
+
+    def fill_nan(self, value: int | float | None) -> Expr:
+        """Replace the NaN of a float column with ``value`` (null for
+        ``None``); a null stays null and another type is unchanged (a column
+        op: the whole column at once)."""
+        return self._op("dftu.series.fill_nan", a=value)
+
+    def fillna(self, value: int | float | builtins.str) -> Expr:
+        """The pandas ``fillna``: a null and, in a float column, a NaN become
+        ``value``."""
+        return Fillna(self, value, True)
+
+    def is_not_nan(self) -> Expr:
+        """Bool mask of the values that are not NaN (a null stays null)."""
+        return ~self.is_nan()
 
     def is_between(self, lower: int | float, upper: int | float) -> Expr:
         """Bool mask of ``lower <= x <= upper`` (desugars to two compares)."""
@@ -680,11 +695,21 @@ class Expr(_Namespaces):
         """Bool mask of the present rows."""
         return IsNull(self, False)
 
+    def isna(self) -> Expr:
+        """The pandas ``isna``: the Bool mask of the null rows and, in a float
+        column, the NaN rows (a row-wise node, so a plan streams it)."""
+        return IsNull(self, True, True)
+
+    def notna(self) -> Expr:
+        """The pandas ``notna``: the Bool mask of the rows that are neither null
+        nor, in a float column, NaN."""
+        return IsNull(self, False, True)
+
     # -- the column ops: the whole column at once (polars spellings) ----------
     def _op(
         self,
         op: str,
-        a: int | float = 0,
+        a: int | float | None = 0,
         b: int | float = 0,
         text: str | None = None,
         kind: str | None = None,
@@ -1405,6 +1430,8 @@ class Expr(_Namespaces):
         def is_infinite(self) -> Expr: ...
         def is_unique(self) -> Expr: ...
         def is_duplicated(self) -> Expr: ...
+        def drop_nulls(self) -> Expr: ...
+        def drop_nans(self) -> Expr: ...
         def reverse(self) -> Expr: ...
         def interpolate(self) -> Expr: ...
         # END GENERATED
@@ -1457,13 +1484,10 @@ class Expr(_Namespaces):
 
     # BEGIN GENERATED aliases from _aliases.py by scripts/gen_pyi.py
     if TYPE_CHECKING:
-        isna = is_null
-        isnull = is_null
-        notna = is_not_null
-        notnull = is_not_null
+        isnull = isna
+        notnull = notna
         isin = is_in
         astype = cast
-        fillna = fill_null
         cumsum = cum_sum
         cumprod = cum_prod
         cummax = cum_max
@@ -1610,9 +1634,11 @@ class Cast(Expr):
 
 
 class Fillna(Expr):
-    def __init__(self, arg: Expr, fill: int | float) -> None:
+    def __init__(self, arg: Expr, fill: int | float | builtins.str, nan: bool = False) -> None:
         self.arg = arg
         self.fill = fill
+        # Also replace the NaN of a float column (pandas fillna).
+        self.nan = nan
 
 
 class Cmp(Expr):
@@ -2475,9 +2501,11 @@ setattr(
 class IsNull(Expr):
     """The Bool mask of the null (or the present) rows of ``arg``."""
 
-    def __init__(self, arg: Expr, null: bool) -> None:
+    def __init__(self, arg: Expr, null: bool, na: bool = False) -> None:
         self.arg = arg
         self.null = null
+        # The pandas reading: a NaN of a float column counts as missing.
+        self.na = na
 
 
 class Select(Expr):
@@ -2955,7 +2983,7 @@ def emit_ast(expr: Expr, resolve: Callable[[str], int], ast: list[tuple[object, 
         ast.append((_AST_CAST, expr.type_id))
     elif isinstance(expr, Fillna):
         emit_ast(expr.arg, resolve, ast)
-        ast.append((_AST_FILLNA, expr.fill))
+        ast.append((_AST_FILLNA, expr.fill, 1 if expr.nan else 0))
     elif isinstance(expr, Cmp) and isinstance(expr.rhs, Expr):
         # Column against column: the engine compares the two row by row, null
         # where either side is null.
@@ -3037,7 +3065,8 @@ def emit_ast(expr: Expr, resolve: Callable[[str], int], ast: list[tuple[object, 
         ast.append((_AST_SELECT,))
     elif isinstance(expr, IsNull):
         emit_ast(expr.arg, resolve, ast)
-        ast.append((_AST_IS_NULL, 1 if expr.null else 0))
+        mode = (2 if expr.null else 3) if expr.na else (1 if expr.null else 0)
+        ast.append((_AST_IS_NULL, mode))
     elif isinstance(expr, _IRegex):
         raise TypeError(_PREDICATE_ONLY)
     elif isinstance(expr, ColumnOpNode):

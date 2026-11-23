@@ -77,7 +77,10 @@ def series_lines(rows: List[api_def.Row]) -> List[str]:
         if r.args == "NONE":
             params = ""
         elif r.args == "SCALAR":
-            params = f", {r.keywords[0]}: bool | int | float | str"
+            if r.op == "dftu.series.fill_nan":
+                params = f", {r.keywords[0]}: int | float | None"
+            else:
+                params = f", {r.keywords[0]}: bool | int | float | str"
         elif r.args == "NUMBER2":
             params = "".join(f", {k}: int | float" for k in r.keywords)
         elif r.args in ("STR", "STR2"):

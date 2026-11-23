@@ -117,7 +117,7 @@ def _null_where_input_is(out: Series, series: Series) -> Series:
     missing value into a present one."""
     if series.null_count == 0:
         return out
-    return out.where(series.notna())
+    return out.where(series.is_not_null())
 
 
 def _trace(

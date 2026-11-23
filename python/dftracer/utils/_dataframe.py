@@ -249,6 +249,14 @@ def _nan_keys(frame: DataFrame, given: list[str | Series]) -> tuple[DataFrame, l
     return frame, keys
 
 
+def _fill_missing(frame: DataFrame, value: bool | int | float | str) -> DataFrame:
+    """The nulls, and the NaNs of the float columns, of ``frame`` as ``value``;
+    a text has no NaN to fill."""
+    if isinstance(value, str):
+        return _bound(_ext.DataFrame.fill_null(frame, value))
+    return _bound(_ext.DataFrame.fill_null(_ext.DataFrame.fill_nan(frame, value), value))
+
+
 def _keeps_every_row(mask: Series, rows: int) -> bool:
     """Whether the Bool Series ``mask`` is true on all ``rows`` rows."""
     return len(mask) == rows and mask.null_count == 0 and bool(mask.all())
@@ -257,6 +265,14 @@ def _keeps_every_row(mask: Series, rows: int) -> bool:
 def _bound(native: _ext.DataFrame) -> DataFrame:
     """A native result as the public class: the native factories build it."""
     return cast("DataFrame", native)
+
+
+def _present_count(column: Series) -> int:
+    """The rows of ``column`` that are neither null nor, in a float column,
+    NaN."""
+    if not column.dtype.is_float:
+        return len(column) - column.null_count
+    return int(column.notna().astype("int64").sum())
 
 
 class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
@@ -905,7 +921,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         # Built from the row count alone, so no other column's nulls reach it.
         if value is None:
             return _ext._series_nulls(int(kind), n)
-        return _ext._series_nulls(int(kind), n).fillna(value)
+        return _ext._series_nulls(int(kind), n).fill_null(value)
 
     def assign(self, **columns: Series | Expr | bool | int | float | str | None) -> DataFrame:
         """Add or replace columns from Series, column expressions or Python
@@ -1666,7 +1682,8 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         subset: str | Sequence[str] | None = None,
     ) -> DataFrame:
         """The pandas ``dropna`` over :attr:`columns` (a null in an index column
-        does not drop its row). ``axis=0`` drops the rows with a null in
+        does not drop its row). A NaN in a float column counts as a null. ``axis=0``
+        drops the rows with a null in
         ``subset`` (every shown column by default): ``how="any"`` (the default)
         a row with one null, ``"all"`` a row of only nulls, or ``thresh`` a row
         with fewer than ``thresh`` values. ``axis=1`` drops the columns with a
@@ -1694,11 +1711,11 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
             rows = len(self)
             kept = []
             for name in self.columns:
-                values = rows - self._col(name).null_count
+                values = _present_count(self._col(name))
                 keep = (
                     values >= thresh
                     if thresh is not None
-                    else (values > 0 or rows == 0 if how == "all" else values == rows)
+                    else (values > 0 if how == "all" else values == rows)
                 )
                 if keep:
                     kept.append(name)
@@ -1706,12 +1723,16 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         if names is None:
             names = self.columns
             if not index and how is None and thresh is None:
-                with_nulls = [c for c in names if self._col(c).null_count]
-                if not with_nulls:
+                maybe_missing = [
+                    c for c in names if self._col(c).null_count or self._col(c).dtype.is_float
+                ]
+                if not maybe_missing:
                     return _bound(_ext.DataFrame.share(self))
-                mask = self._col(with_nulls[0]).notna()
-                for c in with_nulls[1:]:
+                mask = self._col(maybe_missing[0]).notna()
+                for c in maybe_missing[1:]:
                     mask = mask & self._col(c).notna()
+                if _keeps_every_row(mask, len(self)):
+                    return _bound(_ext.DataFrame.share(self))
                 return self._keep_rows(mask)
         if not names:
             return self
@@ -1746,12 +1767,13 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
 
     def fillna(
         self,
-        value: int | float | Mapping[str, int | float] | None = None,
+        value: bool | int | float | str | Mapping[str, bool | int | float | str] | None = None,
         *,
         axis: int | Literal["index", "columns"] | None = None,
     ) -> DataFrame:
-        """The pandas ``fillna``: nulls of :attr:`columns` become ``value``, a
-        scalar or a ``{column: value}`` mapping (a name that is not a shown
+        """The pandas ``fillna``: the nulls of :attr:`columns`, and the NaNs of
+        its float columns, become ``value``, a scalar or a ``{column: value}``
+        mapping (a name that is not a shown
         column is ignored, as in pandas); the index columns are left as they
         are. A mapping with ``axis=1`` is refused (``NotImplementedError``, as
         pandas); a scalar fills the same cells for either axis."""
@@ -1772,8 +1794,9 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
                     )
             return _bound(_ext.DataFrame.share(out)) if out is self else out
         if not names:
-            return _bound(_ext.DataFrame.fill_null(self, value))
-        out = _ext.DataFrame.fill_null(self._data_only(), value)
+            return _fill_missing(self, value)
+        data = self._data_only()
+        out = _fill_missing(data, value)
         for name in names:
             out = _ext.DataFrame.with_column(out, name, self._col(name))
         return _bound(_ext.DataFrame.with_index(out, names))
@@ -2027,7 +2050,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
                 if source._col(k).null_count:
                     if rows is None:
                         rows = DataFrame.from_dict({"v": source._col(k)}).with_row_index("_i")["_i"]
-                    present = source._col(k).notna()
+                    present = source._col(k).is_not_null()
                     rows = rows.filter(present)
                     source = source.filter(present)
         if not aggs:
@@ -2102,8 +2125,8 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
                 diff = col("a") - col("b")
                 pick = (diff <= 0) if func == "min" else (diff >= 0)
                 both = when(pick).then(col("a")).otherwise(col("b")).apply(pair)
-                best = best.where(c.isna(), both)
-                best = c.where(best.isna(), best)
+                best = best.where(c.is_null(), both)
+                best = c.where(best.is_null(), best)
             return best
         raise ValueError(
             f"agg({func!r}, axis=1): the per-row reductions are sum, mean, min, max and count"

@@ -37,6 +37,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <cstdint>
+#include <cstring>
 #include <new>
 #include <stdexcept>
 #include <utility>
@@ -325,6 +326,22 @@ PyObject* LazyFrame_fill_null(PyObject* self, PyObject* value) {
     return run_lazy_op([&] { return b->lf.fill_null(s); });
 }
 
+PyObject* LazyFrame_drop_nans(PyObject* self, PyObject*) {
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
+    if (!b) return nullptr;
+    return run_lazy_op([&] { return b->lf.drop_nans(); });
+}
+
+PyObject* LazyFrame_fill_nan(PyObject* self, PyObject* args, PyObject* kwds) {
+    LazyFrameObject* b = as_native<LazyFrameObject>(self);
+    if (!b) return nullptr;
+    PyObject* value = nullptr;
+    if (!parse_kw<"O">(args, kwds, {"value"}, &value)) return nullptr;
+    dftu_scalar s{};
+    if (!py_to_fill_scalar(value, &s)) return nullptr;
+    return run_lazy_op([&] { return b->lf.fill_nan(s); });
+}
+
 PyObject* LazyFrame_with_row_index(PyObject* self, PyObject* name) {
     LazyFrameObject* b = as_native<LazyFrameObject>(self);
     if (!b) return nullptr;
@@ -496,6 +513,8 @@ PyObject* LazyFrame_column_op(PyObject* self, PyObject* args, PyObject* kwds) {
     sb.kind = DFTU_SCALAR_TAG_I64;
     if (a_obj && a_obj != Py_None && !py_to_scalar(a_obj, &sa)) return nullptr;
     if (b_obj && b_obj != Py_None && !py_to_scalar(b_obj, &sb)) return nullptr;
+    if (a_obj == Py_None && std::strcmp(op, "dftu.series.fill_nan") == 0)
+        sa.kind = DFTU_SCALAR_TAG_NULL;
     const dftracer::utils::dstd::String c2 = column2 ? column2 : "";
     const dftracer::utils::dstd::String tx = text ? text : "";
     dataframe::OpArgs a;
@@ -1199,6 +1218,13 @@ PyMethodDef LazyFrame_methods[] = {
      "drop_nulls() -> LazyFrame with rows holding any null removed."},
     {"fill_null", LazyFrame_fill_null, METH_O,
      "fill_null(value) -> LazyFrame with nulls filled in every column."},
+    {"drop_nans", LazyFrame_drop_nans, METH_NOARGS,
+     "drop_nans() -> LazyFrame with rows holding a NaN in a float column "
+     "removed."},
+    {"fill_nan", DFTU_PYCFUNCTION(LazyFrame_fill_nan),
+     METH_VARARGS | METH_KEYWORDS,
+     "fill_nan(value) -> LazyFrame with the NaN of every float column "
+     "replaced (null for None)."},
     {"with_row_index", LazyFrame_with_row_index, METH_O,
      "with_row_index(name) -> LazyFrame with a prepended Int64 index column."},
     {"null_count", LazyFrame_null_count, METH_NOARGS,

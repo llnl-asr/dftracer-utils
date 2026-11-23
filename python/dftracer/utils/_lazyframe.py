@@ -389,6 +389,15 @@ class LazyFrame(SinkVerbs, _ext.LazyFrame):
         """Fill nulls in every column with ``value``."""
         return self._new(_ext.LazyFrame.fill_null(self, value))
 
+    def drop_nans(self) -> LazyFrame:
+        """Drop rows holding a NaN in a float column (a null is not a NaN)."""
+        return self._new(_ext.LazyFrame.drop_nans(self))
+
+    def fill_nan(self, value: int | float | None) -> LazyFrame:
+        """Replace the NaN of every float column with ``value`` (null for
+        ``None``)."""
+        return self._new(_ext.LazyFrame.fill_nan(self, value))
+
     def top_k(self, k: int, *, by: str | Sequence[str], reverse: bool = False) -> LazyFrame:
         """The ``k`` rows with the largest ``by`` (the smallest with
         ``reverse=True``), best first; a null never ranks (polars ``top_k``)."""

@@ -851,14 +851,14 @@ class GroupBy(GroupTransforms[DataFrame]):
         frame = self._frame()
         out: DataFrame | None = None
         for c in [n for n in frame._names() if n not in self._keys]:
-            present = frame.filter(self._col(frame, c).notna())
+            present = frame.filter(self._col(frame, c).is_not_null())
             pairs = GroupBy(present, self._keys + [c])._size_frame()
             counts = GroupBy(pairs, self._keys).agg(Agg("count", None, c))
             every = GroupBy(frame, self._keys)._size_frame().select(*self._keys)
             if len(counts) < len(every):
                 # A group whose values are all missing has no pair: zero values.
                 counts = every.join(counts, on=self._keys, how="left", nulls_equal=True)
-                counts = counts.with_column(c, self._col(counts, c).fillna(0))
+                counts = counts.with_column(c, self._col(counts, c).fill_null(0))
             out = counts if out is None else out.join(counts, on=self._keys)
         if out is None:
             raise ValueError("nunique: no columns besides the keys")
@@ -977,7 +977,7 @@ class GroupBy(GroupTransforms[DataFrame]):
         frame = self._frame()
         cols = [c for c in frame._names() if c not in self._keys]
         for c in cols:  # pandas drops a row with a null value (dropna=True)
-            frame = frame.filter(self._col(frame, c).notna())
+            frame = frame.filter(self._col(frame, c).is_not_null())
             if pandas_named(self) and self._col(frame, c).dtype.is_float:
                 frame = frame.filter(self._col(frame, c).is_nan().logical_not())
         if self._sort or not pandas_named(self):

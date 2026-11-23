@@ -118,4 +118,8 @@ DFTU_LAZY_OP(rename_columns, dftu_lazyframe_rename_columns, LAZY, LAZY, STRLIST,
 DFTU_LAZY_OP(sort_by_multi, dftu_lazyframe_sort_by_multi_nulls, LAZY, LAZY, STRLIST, I32, I32, NONE, NONE, NONE)
 DFTU_LAZY_OP(sort_by, dftu_lazyframe_sort_by_nulls, LAZY, LAZY, STR, I32, I32, NONE, NONE, NONE)
 
+/* NaN of the float columns: dropped rows, filled values. */
+DFTU_LAZY_OP(drop_nans, dftu_lazyframe_drop_nans, LAZY, LAZY, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(fill_nan, dftu_lazyframe_fill_nan, LAZY, LAZY, SCALAR, NONE, NONE, NONE, NONE, NONE)
+
 #undef DFTU_LAZY_OP

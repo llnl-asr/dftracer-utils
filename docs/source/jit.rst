@@ -494,7 +494,9 @@ The vocabulary is closed. In a column expression:
 - ``s.where(mask, other)``, which keeps ``s`` where the mask is true and takes
   ``other`` (a number or a column) elsewhere;
 - ``abs(s)`` or ``s.abs()``, and ``s.clip(lo, hi)`` with number literals;
-- ``s.isnull()``, ``s.notnull()`` and ``s.fill_null(v)`` with a number literal.
+- ``s.isnull()``, ``s.notnull()``, ``s.isna()``, ``s.notna()`` and
+  ``s.fill_null(v)`` with a number literal. All four masks count a NaN of a
+  float column as missing.
 
 A statement is either ``name = <column expression>`` or a fold of a reduction
 into state:

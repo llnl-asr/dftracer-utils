@@ -204,7 +204,7 @@ def _broadcast_scalar(value: Scalar, out_float: bool, cols: dict[str, Series]) -
     if not cols:
         raise ValueError("a constant columnar expression needs at least one column")
     n = len(next(iter(cols.values())))
-    return _ext._series_nulls(int(_FLOAT64 if out_float else _INT64), n).fillna(value)
+    return _ext._series_nulls(int(_FLOAT64 if out_float else _INT64), n).fill_null(value)
 
 
 def _is_float(expr: Expr, cols: dict[str, Series]) -> bool:

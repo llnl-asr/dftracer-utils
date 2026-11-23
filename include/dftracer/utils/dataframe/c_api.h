@@ -1135,6 +1135,14 @@ DFTU_EXPORT dftu_series* dftu_series_clip(const dftu_series* v, dftu_scalar lo,
 DFTU_EXPORT dftu_series* dftu_series_round(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_fillna(const dftu_series* v,
                                             dftu_scalar fill);
+/** Replace each NaN of a Float32 or Float64 column with `fill`, converted to
+ * the column's type; a NULL scalar turns the NaN into a null. A null row stays
+ * null and a column of any other type, or a float column with no NaN, is
+ * returned as it is (shared, as dftu_series_share). The caller owns the result
+ * and frees it with dftu_series_free. NULL for a NULL `v` and for an ERR or
+ * string scalar on a float column. */
+DFTU_EXPORT dftu_series* dftu_series_fill_nan(const dftu_series* v,
+                                              dftu_scalar fill);
 DFTU_EXPORT dftu_series* dftu_series_cumsum(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_cummax(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_cummin(const dftu_series* v);
@@ -1230,6 +1238,14 @@ DFTU_EXPORT dftu_series* dftu_series_is_infinite(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_null_mask(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_valid_mask(const dftu_series* v);
 
+/** The pandas view of missing data, each a bit-packed Bool column with no
+ * nulls. na_mask[i] is true where row i is null or, for a Float32 or Float64
+ * column, NaN; notna_mask is its complement. On every other type they are
+ * null_mask and valid_mask. The caller owns each result and frees it with
+ * dftu_series_free. NULL if `v` is NULL. */
+DFTU_EXPORT dftu_series* dftu_series_na_mask(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_notna_mask(const dftu_series* v);
+
 /** is_unique[i] is true iff v's value at row i occurs exactly once;
  * is_duplicated is its complement (true for a repeated value). Both are
  * bit-packed Bool columns (hash pass; polars semantics). NULL rows form one
@@ -1250,6 +1266,12 @@ DFTU_EXPORT int32_t dftu_series_is_sorted(const dftu_series* v,
 
 /** Drop null rows, returning a SELECTION over `v` of the non-null rows. */
 DFTU_EXPORT dftu_series* dftu_series_drop_nulls(const dftu_series* v);
+
+/** Drop the NaN rows of a Float32 or Float64 column (a null row stays); a
+ * column of any other type, or with no NaN, is returned as it is (shared). The
+ * caller owns the result and frees it with dftu_series_free. NULL if `v` is
+ * NULL. */
+DFTU_EXPORT dftu_series* dftu_series_drop_nans(const dftu_series* v);
 
 /** Bit-packed Bool mask, true where `v`'s value is present in the `values`
  * column (a hash-set probe). NULL rows are never in the set. Numeric `v`
@@ -1629,6 +1651,18 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_drop_nulls(const dftu_dataframe* df);
  * scalar (string/bool) are carried over unchanged. */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_fill_null(const dftu_dataframe* df,
                                                      dftu_scalar value);
+/** Drop every row that holds a NaN in any Float32 or Float64 column (a null is
+ * not a NaN). The caller owns the result and frees it with
+ * dftu_dataframe_free. NULL if `df` is NULL or a float column cannot be read.
+ */
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_drop_nans(const dftu_dataframe* df);
+/** Replace the NaN of every Float32 or Float64 column with `value` (a NULL
+ * scalar makes it null, as dftu_series_fill_nan); other columns are carried
+ * over unchanged. The caller owns the result and frees it with
+ * dftu_dataframe_free. NULL if `df` is NULL or `value` is a string or error
+ * scalar. */
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_fill_nan(const dftu_dataframe* df,
+                                                    dftu_scalar value);
 /** Distinct ROWS (keep first), hashing all columns as the composite key.
  * dftu_dataframe_drop_duplicates is an alias. */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_unique(const dftu_dataframe* df);
@@ -2024,6 +2058,10 @@ DFTU_EXPORT dftu_expr* dftu_expr_select(const dftu_expr* cond,
 /** The Bool mask of the rows where `a` is null (`null` nonzero) or present
  * (`null` zero). NULL if `a` is NULL. */
 DFTU_EXPORT dftu_expr* dftu_expr_is_null(const dftu_expr* a, int32_t null);
+/** As dftu_expr_is_null for missing data in the pandas sense: `na` nonzero is
+ * true where `a` is null or, in a float operand, NaN; zero is its complement.
+ * NULL if `a` is NULL. */
+DFTU_EXPORT dftu_expr* dftu_expr_is_na(const dftu_expr* a, int32_t na);
 
 /* duql semantics (see expr.h): an unknown result is a null cell. Each builder
  * returns NULL when a handle it needs is NULL. The n-ary builders borrow
@@ -2237,6 +2275,9 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_tail(const dftu_lazyframe* lf,
 
 /** Drop every row that is null in ANY column. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_drop_nulls(const dftu_lazyframe* lf);
+/** Drop every row that holds a NaN in any float column. The caller owns the
+ * result and frees it with dftu_lazyframe_free. NULL if `lf` is NULL. */
+DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_drop_nans(const dftu_lazyframe* lf);
 
 /** Distinct rows (keep first), in original order. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_unique(const dftu_lazyframe* lf);
@@ -2295,6 +2336,12 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_slice(const dftu_lazyframe* lf,
 /** Replace every null with `value`, cast to each column's type. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_fill_null(const dftu_lazyframe* lf,
                                                      dftu_scalar value);
+/** Replace the NaN of every float column with `value` (a NULL scalar makes it
+ * null); other columns pass through. The caller owns the result and frees it
+ * with dftu_lazyframe_free. NULL if `lf` is NULL or `value` is a string or
+ * error scalar. */
+DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_fill_nan(const dftu_lazyframe* lf,
+                                                    dftu_scalar value);
 
 /** Append an Int64 row-index column named `name`, starting at 0. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_with_row_index(

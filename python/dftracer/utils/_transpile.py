@@ -54,7 +54,7 @@ NULL_COLUMN = "__eval_null__"
 
 _FLIP = {"lt": "gt", "le": "ge", "gt": "lt", "ge": "le", "eq": "eq", "ne": "ne"}
 _MATH = {"sqrt": "sqrt", "log": "log", "exp": "exp", "floor": "floor", "ceil": "ceil"}
-_NULL_TESTS = {"isna": True, "isnull": True, "notna": False, "notnull": False}  # True: is null
+_NULL_TESTS = {"isna": True, "isnull": True, "notna": False, "notnull": False}  # True: is missing
 _STR_MAP = {
     "lower": "lower",
     "upper": "upper",
@@ -504,7 +504,7 @@ class _Lowering:
                 self._bind(method, n, ("value",)).get("value") or _missing("fillna")
             )
             if isinstance(v, Expr):
-                return Select(target.is_null(), v, target)
+                return Select(target.isna(), v, target)
             return target.fillna(cast("int | float", v))
         if method == "clip":
             a = self._bind(method, n, ("lower", "upper"))
@@ -615,7 +615,7 @@ class _Lowering:
                     return target.regex(pat if case else "(?i)" + pat)
                 return target.contains(pat, case=case)
             if method in _NULL_TESTS and not n.args and not n.keywords:
-                return target.is_null() if _NULL_TESTS[method] else target.is_not_null()
+                return target.isna() if _NULL_TESTS[method] else target.notna()
             lowered = self.method(target, method, n)
             if lowered is not None:
                 return lowered

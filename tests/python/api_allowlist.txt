@@ -283,6 +283,10 @@ Expr.ewm_mean | expr-node:ColumnOpNode | -
 Expr.ewm_std | expr-node:ColumnOpNode | -
 Expr.extract | expr-node:_StrFn | -
 Expr.fill_null | python-semantics | built from other Expr methods (fillna)
+Expr.fill_nan | python-semantics | column op dftu.series.fill_nan with a number or None, not a no-argument row
+Expr.is_not_nan | python-semantics | the negation of is_nan
+Expr.isna | python-semantics | a row-wise IsNull node with the NaN reading, not a column op
+Expr.notna | python-semantics | a row-wise IsNull node with the NaN reading, not a column op
 Expr.find | expr-node:_StrFind | -
 Expr.findall | expr-node:_StrFn | -
 Expr.first | python-semantics | Python logic that does not build one node
@@ -774,6 +778,8 @@ LazyFrame.dtypes | python-semantics | accessor or shape property of the frame, n
 LazyFrame.explain | display | explain describes the frame as text
 LazyFrame.explode | python-semantics | plan step written in Python over native plan ops
 LazyFrame.fill_null | python-semantics | plan step written in Python over native plan ops
+LazyFrame.drop_nans | python-semantics | plan step written in Python over native plan ops
+LazyFrame.fill_nan | python-semantics | plan step written in Python over native plan ops
 LazyFrame.filter | python-semantics | plan step written in Python over native plan ops
 LazyFrame.filter_mask | python-semantics | plan step written in Python over native plan ops
 LazyFrame.first | python-semantics | plan step written in Python over native plan ops

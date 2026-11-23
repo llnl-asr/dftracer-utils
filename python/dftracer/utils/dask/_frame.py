@@ -205,8 +205,8 @@ def _partial(
             n = _s(out, f"__n_{c}")
             out = out.with_columns(
                 **{
-                    f"__m2_{c}": (_s(out, f"__m2_{c}") * (n - 1)).fillna(0.0),
-                    f"__m_{c}": _s(out, f"__m_{c}").fillna(0.0),
+                    f"__m2_{c}": (_s(out, f"__m2_{c}") * (n - 1)).fill_null(0.0),
+                    f"__m_{c}": _s(out, f"__m_{c}").fill_null(0.0),
                 }
             )
     return out
@@ -244,7 +244,7 @@ def _combine(parts: Sequence[DataFrame], keys: list[str]) -> DataFrame:
     mean_d = {}
     for c in moments:
         n_total = _s(first, f"__n_{c}")
-        mean_d[f"__md_{c}"] = (_s(first, f"__nd_{c}") / n_total).fillna(0.0)
+        mean_d[f"__md_{c}"] = (_s(first, f"__nd_{c}") / n_total).fill_null(0.0)
     first = first.with_columns(**mean_d)
     merged = merged.join(first.select(*keys, *mean_d), on=keys, how="inner")
     between = {}

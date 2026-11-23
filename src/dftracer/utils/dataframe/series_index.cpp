@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/internal/label_index.h>
 #include <dftracer/utils/dataframe/kernels/cast.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
+#include <dftracer/utils/dataframe/kernels/nan_rows.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -416,6 +417,18 @@ Series Series::drop_nulls() const {
     const Series valid = without_index().valid_mask();
     return through_frame(*this, [&](const DataFrame& f) {
         return dstd::Result<DataFrame>(f.filter(valid));
+    });
+}
+
+Series Series::drop_nans() const {
+    if (!has_index()) return derived(dftu_series_drop_nans(handle_));
+    const Series bare = without_index();
+    std::int64_t nans = 0;
+    const Series keep = keep_non_nan(bare, &nans);
+    if (nans < 0) return Series{};
+    if (nans == 0) return share();
+    return through_frame(*this, [&](const DataFrame& f) {
+        return dstd::Result<DataFrame>(f.filter(keep));
     });
 }
 

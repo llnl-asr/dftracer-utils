@@ -357,7 +357,7 @@ def _joined_names(a: list[str], b: list[str], how: str) -> list[str]:
 
 
 def _filled(s: Series, fill_value: object) -> Series:
-    return s if _missing(fill_value) else s.fillna(cast("float | str", _scalar(fill_value)))
+    return s if _missing(fill_value) else s.fill_null(cast("float | str", _scalar(fill_value)))
 
 
 def align(

@@ -267,7 +267,9 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 dftu_scalar fill{};
                 if (!py_to_scalar(arg(1), &fill)) return false;
                 dataframe::Expr a = pop();
-                stack.push_back(dataframe::expr_fillna(a, fill));
+                const bool nan =
+                    PyTuple_GET_SIZE(t) > 2 && PyObject_IsTrue(arg(2)) == 1;
+                stack.push_back(dataframe::expr_fillna(a, fill, nan));
                 break;
             }
             case AstStrPred: {
@@ -406,7 +408,9 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 const long null = PyLong_AsLong(arg(1));
                 if (null == -1 && PyErr_Occurred()) return false;
                 dataframe::Expr a = pop();
-                stack.push_back(dataframe::expr_is_null(a, null != 0));
+                stack.push_back(null >= 2
+                                    ? dataframe::expr_is_na(a, null == 2)
+                                    : dataframe::expr_is_null(a, null != 0));
                 break;
             }
             default:

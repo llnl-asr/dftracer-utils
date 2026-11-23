@@ -263,6 +263,9 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
         // k rows far past the budget: cut from the spilling sort.
         {"topk_wide", [](const LazyFrame& b) { return b.topk("v", ROWS / 2); }},
         {"drop_nulls", [](const LazyFrame& b) { return b.drop_nulls(); }},
+        {"drop_nans", [](const LazyFrame& b) { return b.drop_nans(); }},
+        {"fill_nan",
+         [](const LazyFrame& b) { return b.fill_nan(std::int64_t{0}); }},
         {"with_row_index",
          [](const LazyFrame& b) { return b.with_row_index("i"); }},
         {"null_count", [](const LazyFrame& b) { return b.null_count(); }},
@@ -598,6 +601,8 @@ const dstd::Map<dstd::String, Expect>& expectations() {
         {"memory_budget", {Kind::NotMeasured, "plan only"}},
         {"describe", {Kind::Streaming, ""}},
         {"drop_nulls", {Kind::Streaming, ""}},
+        {"drop_nans", {Kind::Streaming, ""}},
+        {"fill_nan", {Kind::Streaming, ""}},
         {"null_count", {Kind::Streaming, ""}},
         {"with_row_index", {Kind::Streaming, ""}},
         {"head", {Kind::Streaming, ""}},

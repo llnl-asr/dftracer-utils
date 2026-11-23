@@ -942,18 +942,21 @@ Morsel map_frame(Morsel&& m, Fn&& fn) {
     return out;
 }
 
-// Drops rows null in any column; skips fully-dropped morsels.
+// Drops rows null in any column, or with `nan` the rows holding a NaN in any
+// float column; skips fully-dropped morsels. With `rest`, the fields of the
+// last column count as columns.
 class DropNullsCursor : public Cursor {
    public:
-    explicit DropNullsCursor(dstd::UniquePtr<Cursor> in) : in_(std::move(in)) {}
+    DropNullsCursor(dstd::UniquePtr<Cursor> in, bool rest, bool nan)
+        : in_(std::move(in)), rest_(rest), nan_(nan) {}
     coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         for (;;) {
             auto task = in_->next(max_rows);
             auto m = co_await std::move(task).or_fail();
             if (!m) break;
-            Morsel out = map_frame(std::move(*m),
-                                   [](DataFrame f) { return f.drop_nulls(); });
-            if (out.rows > 0) co_return out;
+            auto out = drop_morsel(std::move(*m));
+            if (!out) co_return out.error();
+            if (out->rows > 0) co_return std::move(*out);
         }
         co_return dstd::nullopt;
     }
@@ -968,10 +971,13 @@ class DropNullsCursor : public Cursor {
                 out = std::move(m);
                 return true;
             }
-            Morsel filtered = map_frame(
-                std::move(**m), [](DataFrame f) { return f.drop_nulls(); });
-            if (filtered.rows > 0) {
-                out = std::move(filtered);
+            auto filtered = drop_morsel(std::move(**m));
+            if (!filtered) {
+                out = filtered.error();
+                return true;
+            }
+            if (filtered->rows > 0) {
+                out = std::move(*filtered);
                 return true;
             }
         }
@@ -982,14 +988,46 @@ class DropNullsCursor : public Cursor {
     }
 
    private:
+    dstd::Result<Morsel> drop_morsel(Morsel&& m) {
+        DataFrame tmp;
+        tmp.names.assign(m.columns.size(), dstd::SharedString());
+        for (Series& c : m.columns) tmp.columns.push_back(std::move(c));
+        const std::size_t declared = tmp.columns.size();
+        if (rest_) {
+            DataFrame fields = rest_fields(tmp.columns.back(), &names_);
+            for (std::size_t i = 0; i < fields.columns.size(); ++i) {
+                tmp.names.push_back(std::move(fields.names[i]));
+                tmp.columns.push_back(std::move(fields.columns[i]));
+            }
+        }
+        dstd::Result<DataFrame> r =
+            nan_ ? tmp.drop_nans() : dstd::Result<DataFrame>(tmp.drop_nulls());
+        if (!r) return r.error();
+        while (r->columns.size() > declared) {
+            r->columns.pop_back();
+            r->names.pop_back();
+        }
+        Morsel out;
+        out.columns.reserve(r->columns.size());
+        for (const Series& c : r->columns)
+            out.columns.push_back(c.materialize());
+        out.rows = out.columns.empty() ? 0 : out.columns.front().length();
+        return out;
+    }
+
     dstd::UniquePtr<Cursor> in_;
+    mutable NameCache names_;
+    bool rest_;
+    bool nan_;
 };
 
-// Fills nulls per morsel; with `rest`, in the fields of the last column too.
+// Fills nulls per morsel, or with `nan` the NaN of the float columns; with
+// `rest`, in the fields of the last column too.
 class FillNullCursor : public Cursor {
    public:
-    FillNullCursor(dstd::UniquePtr<Cursor> in, dftu_scalar value, bool rest)
-        : in_(std::move(in)), value_(value), rest_(rest) {}
+    FillNullCursor(dstd::UniquePtr<Cursor> in, dftu_scalar value, bool rest,
+                   bool nan)
+        : in_(std::move(in)), value_(value), rest_(rest), nan_(nan) {}
     coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         auto task = in_->next(max_rows);
         auto m = co_await std::move(task).or_fail();
@@ -1009,27 +1047,40 @@ class FillNullCursor : public Cursor {
     // Filling nulls keeps rows and columns in place, but nulls sort last
     // (cmp_cell); replacing them with a concrete value can move what was the
     // tail of the ordered column anywhere, so the claim only survives when
-    // that column had no nulls to fill.
+    // that column had no nulls to fill. A NaN is ordered among the numbers, so
+    // filling a float ordered column never keeps the claim.
+    DataFrame fill(DataFrame f) const {
+        if (!nan_) return f.fill_null(value_);
+        auto filled = f.fill_nan(value_);
+        if (!filled)
+            dstd::fatal("fill_nan cursor got a fill the plan refuses",
+                        filled.error().message());
+        return std::move(*filled);
+    }
+
     Morsel apply(Morsel&& m) {
         const std::int64_t bi = m.batch_index;
         const Ordering ord = m.ordering;
         const std::int32_t ordered_column = m.ordered_column;
         const bool ordered_descending = m.ordered_descending;
-        const bool ordered_col_had_nulls =
-            ord == Ordering::ByColumn &&
-            m.columns[static_cast<std::size_t>(ordered_column)].null_count() >
-                0;
-        Morsel out = map_frame(
-            std::move(m), [&](DataFrame f) { return f.fill_null(value_); });
+        bool ordered_col_changes = false;
+        if (ord == Ordering::ByColumn) {
+            const Series& oc =
+                m.columns[static_cast<std::size_t>(ordered_column)];
+            ordered_col_changes = nan_ ? (oc.type() == TypeId::Float32 ||
+                                          oc.type() == TypeId::Float64)
+                                       : oc.null_count() > 0;
+        }
+        Morsel out = map_frame(std::move(m),
+                               [&](DataFrame f) { return fill(std::move(f)); });
         if (rest_) {
             const std::int64_t rows = out.columns.back().length();
-            DataFrame fields =
-                rest_fields(out.columns.back(), &names_).fill_null(value_);
+            DataFrame fields = fill(rest_fields(out.columns.back(), &names_));
             out.columns.back() = struct_of_length(
                 std::move(fields.names), std::move(fields.columns), rows);
         }
         out.batch_index = bi;
-        out.ordering = ordered_col_had_nulls ? Ordering::Unordered : ord;
+        out.ordering = ordered_col_changes ? Ordering::Unordered : ord;
         out.ordered_column = ordered_column;
         out.ordered_descending = ordered_descending;
         return out;
@@ -1039,6 +1090,7 @@ class FillNullCursor : public Cursor {
     mutable NameCache names_;
     dftu_scalar value_;
     bool rest_;
+    bool nan_;
 };
 
 // Prepends a global Int64 row-index column.
@@ -2991,6 +3043,10 @@ struct DropNullsOp {};
 struct FillNullOp {
     dftu_scalar value;
 };
+struct DropNansOp {};
+struct FillNanOp {
+    dftu_scalar value;
+};
 struct WithRowIndexOp {
     dstd::String name;
 };
@@ -3143,7 +3199,7 @@ class LazyOp {
                   GroupByOp, SortByOp, UniqueOp, SampleOp, HeadByOp, IsDupOp,
                   GroupByDynamicOp, PivotOp, ToDummiesOp, DescribeOp, ReverseOp,
                   TakeOp, FilterMaskOp, SortByMultiOp, JoinOp, ConcatOp,
-                  UnnestOp, FrameOp, NodeOp, TapOp>
+                  UnnestOp, FrameOp, NodeOp, TapOp, DropNansOp, FillNanOp>
         node;
 };
 
@@ -3327,6 +3383,8 @@ dstd::Vector<dstd::String> out_schema(const LazyOp& op,
             [&](const TailOp&) { return in; },
             [&](const DropNullsOp&) { return in; },
             [&](const FillNullOp&) { return in; },
+            [&](const DropNansOp&) { return in; },
+            [&](const FillNanOp&) { return in; },
             [&](const SelectOp& o) { return without_rest(o.names); },
             [&](const RenameOp& o) { return o.names; },
             [&](const DropOp& o) {
@@ -3447,6 +3505,8 @@ IndexList index_through(const LazyOp& op, IndexList index,
             [&](const TailOp&) { return index; },
             [&](const DropNullsOp&) { return index; },
             [&](const FillNullOp&) { return index; },
+            [&](const DropNansOp&) { return index; },
+            [&](const FillNanOp&) { return index; },
             [&](const WithColumnOp&) { return index; },
             [&](const ExplodeOp&) { return index; },
             [&](const TopkOp&) { return index; },
@@ -3668,6 +3728,8 @@ Schema out_types(const LazyOp& op, Schema in) {
             // parameters) and leaves every other column untouched, so
             // fill_null never changes a field's type.
             [&](const FillNullOp&) { return in; },
+            [&](const DropNansOp&) { return in; },
+            [&](const FillNanOp&) { return in; },
             [&](const SelectOp& o) {
                 Schema out;
                 out.fields.reserve(o.names.size());
@@ -3875,6 +3937,8 @@ dstd::String describe_op(const LazyOp& op) {
             [](const TailOp&) { return dstd::String("tail"); },
             [](const DropNullsOp&) { return dstd::String("drop_nulls"); },
             [](const FillNullOp&) { return dstd::String("fill_null"); },
+            [](const DropNansOp&) { return dstd::String("drop_nans"); },
+            [](const FillNanOp&) { return dstd::String("fill_nan"); },
             [](const WithRowIndexOp& o) {
                 return dstd::fmt<"with_row_index {}">(o.name);
             },
@@ -3957,6 +4021,8 @@ RestRule rest_rule(const LazyOp& op, dstd::Span<const dstd::String> in) {
                    [](const TailOp&) { return RestRule::Moves; },
                    [](const DropNullsOp&) { return RestRule::Moves; },
                    [](const FillNullOp&) { return RestRule::Moves; },
+                   [](const DropNansOp&) { return RestRule::Moves; },
+                   [](const FillNanOp&) { return RestRule::Moves; },
                    [](const WithRowIndexOp&) { return RestRule::Moves; },
                    [](const NullCountOp&) { return RestRule::Omits; },
                    [](const ExplodeOp&) { return RestRule::Moves; },
@@ -4678,11 +4744,20 @@ CursorResult make_cursor(const LazyOp& op, dstd::UniquePtr<Cursor> in,
                 return dstd::make_unique<TailCursor>(std::move(in), o.n);
             },
             [&](const DropNullsOp&) -> CursorResult {
-                return dstd::make_unique<DropNullsCursor>(std::move(in));
+                return dstd::make_unique<DropNullsCursor>(std::move(in),
+                                                          has_rest(sch), false);
             },
             [&](const FillNullOp& o) -> CursorResult {
                 return dstd::make_unique<FillNullCursor>(std::move(in), o.value,
-                                                         has_rest(sch));
+                                                         has_rest(sch), false);
+            },
+            [&](const DropNansOp&) -> CursorResult {
+                return dstd::make_unique<DropNullsCursor>(std::move(in),
+                                                          has_rest(sch), true);
+            },
+            [&](const FillNanOp& o) -> CursorResult {
+                return dstd::make_unique<FillNullCursor>(std::move(in), o.value,
+                                                         has_rest(sch), true);
             },
             [&](const WithRowIndexOp&) -> CursorResult {
                 return dstd::make_unique<WithRowIndexCursor>(std::move(in));
@@ -4959,6 +5034,12 @@ coro::CoroTask<dstd::Result<DataFrame>> LazyFrame::run_ops_in_memory(
                 [&](const FillNullOp& o) -> dstd::Result<DataFrame> {
                     return df.fill_null(o.value);
                 },
+                [&](const DropNansOp&) -> dstd::Result<DataFrame> {
+                    return df.drop_nans();
+                },
+                [&](const FillNanOp& o) -> dstd::Result<DataFrame> {
+                    return df.fill_nan(o.value);
+                },
                 [&](const SortByOp& o) {
                     return df.sort_by(o.name, o.descending, o.nulls_last);
                 },
@@ -5151,6 +5232,23 @@ LazyFrame LazyFrame::drop_nulls() const {
 LazyFrame LazyFrame::fill_null(Scalar value) const {
     auto ops = ops_;
     ops.push_back(dstd::make_shared<LazyOp>(LazyOp{FillNullOp{value}}));
+    return with_ops(std::move(ops));
+}
+
+LazyFrame LazyFrame::drop_nans() const {
+    auto ops = ops_;
+    ops.push_back(dstd::make_shared<LazyOp>(LazyOp{DropNansOp{}}));
+    return with_ops(std::move(ops));
+}
+
+LazyFrame LazyFrame::fill_nan(Scalar value) const {
+    const dftu_scalar raw = value;
+    if (raw.kind == DFTU_SCALAR_TAG_STR || raw.kind == DFTU_SCALAR_TAG_ERR)
+        return failed(
+            invalid_argument<"fill_nan: a NaN takes a number or null">()
+                .error());
+    auto ops = ops_;
+    ops.push_back(dstd::make_shared<LazyOp>(LazyOp{FillNanOp{value}}));
     return with_ops(std::move(ops));
 }
 
@@ -5552,18 +5650,41 @@ namespace {
 // name, such a frame op runs as its lazy twin, which streams and spills under
 // the budget; the generic step below holds its whole input in memory. compare_
 // and group_transform are left out: their lazy ops build on frame_op.
-constexpr dstd::StringView NATIVE_TWINS[] = {
-    "drop_nulls",  "unique",        "drop_duplicates",
-    "reverse",     "describe",      "null_count",
-    "head",        "tail",          "slice",
-    "fill_null",   "filter",        "with_row_index",
-    "explode",     "to_dummies",    "sort_by",
-    "select",      "rename",        "sort_by_multi",
-    "with_column", "unpivot",       "topk",
-    "pivot",       "is_duplicated", "is_unique",
-    "take",        "sample",        "group_by_dynamic",
-    "group_by",    "join",          "concat",
-    "unnest",      "unique_by",     "reduce"};
+constexpr dstd::StringView NATIVE_TWINS[] = {"drop_nulls",
+                                             "drop_nans",
+                                             "fill_nan",
+                                             "unique",
+                                             "drop_duplicates",
+                                             "reverse",
+                                             "describe",
+                                             "null_count",
+                                             "head",
+                                             "tail",
+                                             "slice",
+                                             "fill_null",
+                                             "filter",
+                                             "with_row_index",
+                                             "explode",
+                                             "to_dummies",
+                                             "sort_by",
+                                             "select",
+                                             "rename",
+                                             "sort_by_multi",
+                                             "with_column",
+                                             "unpivot",
+                                             "topk",
+                                             "pivot",
+                                             "is_duplicated",
+                                             "is_unique",
+                                             "take",
+                                             "sample",
+                                             "group_by_dynamic",
+                                             "group_by",
+                                             "join",
+                                             "concat",
+                                             "unnest",
+                                             "unique_by",
+                                             "reduce"};
 
 // The lazy op that does the work of frame op `name`, or null.
 const dftu_op_desc* native_twin(dstd::StringView name, const dftu_op_desc& op,
@@ -5949,6 +6070,7 @@ PlannedScan plan_scan_request(
                 !std::holds_alternative<WithColumnOp>(n) &&
                 !std::holds_alternative<RenameOp>(n) &&
                 !std::holds_alternative<FillNullOp>(n) &&
+                !std::holds_alternative<FillNanOp>(n) &&
                 !std::holds_alternative<WithRowIndexOp>(n))
                 break;
         }
@@ -7131,6 +7253,8 @@ void fingerprint_op(Fingerprint& fp, const LazyOp& op) {
             [&](const TailOp& o) { fp.pod(o.n); },
             [&](const DropNullsOp&) {},
             [&](const FillNullOp& o) { fp.scalar(o.value); },
+            [&](const DropNansOp&) {},
+            [&](const FillNanOp& o) { fp.scalar(o.value); },
             [&](const WithRowIndexOp& o) { fp.str(o.name); },
             [&](const NullCountOp&) {},
             [&](const ExplodeOp& o) { fp.str(o.column); },

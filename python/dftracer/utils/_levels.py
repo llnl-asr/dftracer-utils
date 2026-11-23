@@ -166,7 +166,7 @@ def label_text(level: Series, prefix: str, suffix: str) -> Series:
         return Series.from_list(texts) if texts else level.cast(DType.STRING)
     text = cast(
         "Series[str]",
-        (level if level.dtype == DType.STRING else level.cast(DType.STRING)).fillna("nan"),
+        (level if level.dtype == DType.STRING else level.cast(DType.STRING)).fill_null("nan"),
     )
     if prefix:
         text = _cat(_cat(text.str.slice(0, 0), prefix), text)

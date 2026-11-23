@@ -92,7 +92,7 @@ def _fill(column: Series, fill_value: object, seen: Series | None) -> Series:
     if column.dtype.is_integer and isinstance(fill_value, float) and not fill_value.is_integer():
         column = column.cast(DType.FLOAT64)
     if seen is None:
-        return column.fillna(cast("float", fill_value))
+        return column.fill_null(cast("float", fill_value))
     return column.where(seen.is_not_null(), cast("float", fill_value))
 
 

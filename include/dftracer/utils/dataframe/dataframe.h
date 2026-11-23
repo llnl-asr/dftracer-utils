@@ -243,6 +243,18 @@ struct DataFrame {
     DataFrame fill_null(T value) const {
         return fill_null(to_scalar(value));
     }
+    /// Drop every row that is NaN in any float column (a null is not a NaN).
+    /// An error when a float column cannot be read.
+    dstd::Result<DataFrame> drop_nans() const;
+    /// Replace the NaN of every float column with `value` (a null scalar makes
+    /// it null); other columns are left unchanged. A text or error `value` is
+    /// an InvalidArgument error.
+    dstd::Result<DataFrame> fill_nan(Scalar value) const;
+    /// Replace NaN with a natural C++ value (fill_nan(0.0)).
+    template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
+    dstd::Result<DataFrame> fill_nan(T value) const {
+        return fill_nan(to_scalar(value));
+    }
     /// Distinct rows, keeping the first occurrence, keyed on every column or
     /// on `subset` (empty = all); the errors of `dataframe::unique`.
     dstd::Result<DataFrame> unique(

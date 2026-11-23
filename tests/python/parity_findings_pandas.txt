@@ -11,11 +11,7 @@ series.sum#2[X] | semantics | [values] nan vs 5.0
 series.mean#2[X] | semantics | [values] nan vs 1.0
 series.count#1[X] | semantics | [values] 6 vs 5
 series.nunique#1[X] | semantics | [values] 5 vs 4
-series.isna#1[X] | semantics | [values] [False, False, False, False, False, False] vs [False, True, False, False, False, False]
-series.notna#1[X] | semantics | [values] [True, True, True, True, True, True] vs [True, False, True, True, True, True]
 series.cumsum#1[X] | semantics | [values] [1.5, nan, nan, nan, nan, nan] vs [1.5, nan, 4.5, 2.0, 5.0, 5.0]
-series.fillna#1[X] | semantics | [values] [1.5, nan, 3.0, -2.5, 3.0, 0.0] vs [1.5, 0.0, 3.0, -2.5, 3.0, 0.0]
-series.dropna#1[X] | semantics | [shape] length 6 vs 5
 series.sum#3[I] | semantics | [error] ours raised TypeError: Series.sum() takes no keyword arguments
 series.sum#3[F] | semantics | [error] ours raised TypeError: Series.sum() takes no keyword arguments
 series.sum#4[I] | semantics | [error] ours raised TypeError: Series.sum() takes no keyword arguments
@@ -129,7 +125,6 @@ frame.kurt#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
 frame.sum#6[X] | shape | [type] ours DataFrame (frame), library Series (series)
 frame.mean#3[X] | shape | [type] ours DataFrame (frame), library Series (series)
 frame.count#1[X] | shape | [type] ours DataFrame (frame), library Series (series)
-frame.isna#1[X] | semantics | [values] b: [False, False, False, False, False] vs [False, True, False, False, False]
 frame.count#2[M] | shape | [type] ours DataFrame (frame), library Series (series)
 frame.count#2[N] | shape | [type] ours DataFrame (frame), library Series (series)
 frame.count#2[E] | shape | [type] ours DataFrame (frame), library Series (series)

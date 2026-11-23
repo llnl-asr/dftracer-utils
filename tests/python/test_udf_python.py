@@ -692,6 +692,32 @@ time.sleep(0.2)
 print("exiting")
 """
 
+# The exit handler registered first runs last and gives up the GIL, so the
+# daemon thread wakes with its batch cancelled before the interpreter ends.
+_EXIT_CANCEL_SEEN = """
+import atexit, os, threading, time
+atexit.register(time.sleep, 1.0)
+import numpy as np, pyarrow as pa
+import dftracer.utils as dft
+from dftracer.utils import DataFrame, col
+
+@dft.udf(batch=True, returns=np.float64)
+def slow(x):
+    time.sleep(0.5)
+    return x
+
+df = DataFrame.from_arrow(pa.table({"x": [float(i) for i in range(4000)]}))
+def run():
+    try:
+        df.lazy().with_columns(r=slow(col("x"))).collect(batch_size=500)
+    except BaseException as e:
+        os.write(1, ("caught %s %r\\n" % (type(e).__name__, e.args)).encode())
+        raise
+threading.Thread(target=run, daemon=True).start()
+time.sleep(0.2)
+print("exiting", flush=True)
+"""
+
 _LANE_STOP = """
 import threading, time
 import numpy as np, pyarrow as pa
@@ -793,6 +819,13 @@ def test_interpreter_exit_while_a_batch_is_running():
     r = _run(_EXIT_BUSY)
     assert r.returncode == 0, r.stderr
     assert "exiting" in r.stdout
+
+
+def test_a_daemon_thread_whose_batch_the_exit_cancels_ends_without_a_traceback():
+    r = _run(_EXIT_CANCEL_SEEN)
+    assert r.returncode == 0, r.stderr
+    assert "caught SystemExit ()" in r.stdout, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr, r.stderr
 
 
 def test_queued_batches_fail_as_cancelled_when_the_lane_stops():

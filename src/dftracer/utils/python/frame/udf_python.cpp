@@ -29,6 +29,7 @@
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/host/plugins_internal.h>
+#include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/frame/udf_python.h>
 #include <dlfcn.h>
 
@@ -566,6 +567,13 @@ PyObject* udf_lane_shutdown(PyObject* /*self*/, PyObject* /*unused*/) {
     Py_RETURN_NONE;
 }
 
+// udf_lane_close_at_exit() -> None
+PyObject* udf_lane_close_at_exit(PyObject* /*self*/, PyObject* /*unused*/) {
+    core::mark_exit_cancel();
+    lane().close();
+    Py_RETURN_NONE;
+}
+
 }  // namespace
 
 int init_udf_python(PyObject* m) {
@@ -588,6 +596,10 @@ int init_udf_python(PyObject* m) {
         {"udf_lane_shutdown", udf_lane_shutdown, METH_NOARGS,
          "udf_lane_shutdown() -> None: stop the python lane for the rest of "
          "the process; queued and later batches fail as cancelled."},
+        {"udf_lane_close_at_exit", udf_lane_close_at_exit, METH_NOARGS,
+         "udf_lane_close_at_exit() -> None: udf_lane_shutdown for the exit "
+         "handler. A thread other than this one whose batch it cancels gets a "
+         "bare SystemExit, which ends a daemon thread without a traceback."},
     };
     for (PyMethodDef& def : defs) {
         PyObject* fn = PyCFunction_NewEx(&def, nullptr, nullptr);

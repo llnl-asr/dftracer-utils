@@ -3,6 +3,7 @@
 #include <dftracer/utils/duql/errc.h>
 #include <dftracer/utils/python/core/errors.h>
 
+#include <atomic>
 #include <new>
 #include <stdexcept>
 
@@ -127,12 +128,38 @@ PyObject *py_error_type_for(const dftracer::utils::dstd::Error &error) {
     return py_error_type_for(common::errorcode_of(error));
 }
 
+namespace {
+
+std::atomic<bool> g_exit_cancel{false};
+std::atomic<unsigned long> g_exit_thread{0};
+
+bool set_exit_cancel(const dftracer::utils::dstd::Error &error) {
+    if (!error.is(dftracer::utils::dstd::Condition::Cancelled) ||
+        !g_exit_cancel.load(std::memory_order_acquire) ||
+        PyThread_get_thread_ident() ==
+            g_exit_thread.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    // Bare, so its code is 0. A subclass or a message would be printed.
+    PyErr_SetNone(PyExc_SystemExit);
+    return true;
+}
+
+}  // namespace
+
+void mark_exit_cancel() noexcept {
+    g_exit_thread.store(PyThread_get_thread_ident(), std::memory_order_relaxed);
+    g_exit_cancel.store(true, std::memory_order_release);
+}
+
 void set_py_error(const dftracer::utils::dstd::Error &error) {
+    if (set_exit_cancel(error)) return;
     PyErr_SetString(py_error_type_for(error), error.c_str());
 }
 
 void set_typed_py_error(const std::exception &e) {
     if (const auto *de = dynamic_cast<const PyErrorException *>(&e)) {
+        if (set_exit_cancel(de->error())) return;
         PyErr_SetString(py_error_type_for(de->error()), e.what());
     } else if (dynamic_cast<const std::invalid_argument *>(&e)) {
         PyErr_SetString(g_dft_value_error, e.what());

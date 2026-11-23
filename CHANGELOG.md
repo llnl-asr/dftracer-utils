@@ -211,6 +211,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Fixed
 
 - Fix `DataFrame.with_column`, `with_columns`, `assign` and `select` giving a frame with columns of different lengths.
+- Fix a rare abort at interpreter exit when a daemon thread waits on a batch Python UDF.
+  The thread now ends with a bare `SystemExit` and prints no traceback.
 - Fix a segmentation fault when `argsort`, `top_k` or a frame `sort` read a column that is a selection, a view or a constant of numbers.
 - Fix `group_by(...).agg(...)` so that `min`, `max`, `first`, `last`, `sum` and `mean` keep the type of a temporal column, `first` and `last` give null for a group with no value, and a spilled group-by keeps the unit and zone of a Timestamp key.
   The mean of an integer, Timestamp or Duration column now divides the exact sum.

@@ -2399,6 +2399,12 @@ def udf_lane_shutdown() -> None:
     batches fail as cancelled."""
     ...
 
+def udf_lane_close_at_exit() -> None:
+    """udf_lane_shutdown for the exit handler. A thread other than this one
+    whose batch it cancels gets a bare SystemExit, which ends a daemon thread
+    without a traceback."""
+    ...
+
 class _UdafHandle:
     """A registered user-defined aggregate held for aggregates that call it.
     Opaque."""

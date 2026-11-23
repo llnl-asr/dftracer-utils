@@ -2618,7 +2618,7 @@ _BATCH_DTYPES = frozenset(d.name.lower() for d in DType if d.is_numeric) | {"boo
 def _close_udfs_at_exit() -> None:
     for owned in list(_OWNED_UDFS.values()):
         owned.close()
-    _ext.udf_lane_shutdown()
+    _ext.udf_lane_close_at_exit()
 
 
 def _udf_origin(fn: Callable[..., Any]) -> str:

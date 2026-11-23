@@ -2369,6 +2369,13 @@ def udf_lane_shutdown() -> None:
     ...
 
 
+def udf_lane_close_at_exit() -> None:
+    """udf_lane_shutdown for the exit handler. A thread other than this one
+    whose batch it cancels gets a bare SystemExit, which ends a daemon thread
+    without a traceback."""
+    ...
+
+
 class _UdafHandle:
     """A registered user-defined aggregate held for aggregates that call it.
     Opaque."""
@@ -2610,6 +2617,7 @@ _EXPORTS = (
     "udf_unregister",
     "udf_lane_stats",
     "udf_lane_shutdown",
+    "udf_lane_close_at_exit",
     "_UdafHandle",
     "udaf_lookup",
     "udaf_names",

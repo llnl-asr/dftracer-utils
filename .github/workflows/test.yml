@@ -40,6 +40,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Fetch the web UI that the CI web job built
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+
       - name: Set up Python
         uses: actions/setup-python@v6.1.0
         with:

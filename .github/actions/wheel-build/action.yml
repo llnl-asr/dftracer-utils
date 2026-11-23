@@ -14,7 +14,7 @@ inputs:
   sccache-secret-access-key:
     required: true
   publish:
-    description: Embed the built web UI and upload the wheel as an artifact.
+    description: Upload the wheel as an artifact.
     default: "false"
 
 runs:
@@ -30,21 +30,11 @@ runs:
       if: runner.os == 'macOS'
       uses: mozilla-actions/sccache-action@v0.0.11
 
-    - name: Set up Node (publish)
-      if: inputs.publish == 'true'
-      uses: actions/setup-node@v6
+    - name: Fetch the web UI that the CI web job built
+      uses: actions/download-artifact@v8
       with:
-        node-version: "20"
-        cache: npm
-        cache-dependency-path: web/package-lock.json
-
-    - name: Build web UI (publish)
-      if: inputs.publish == 'true'
-      shell: bash
-      working-directory: web
-      run: |
-        npm ci
-        npm run build
+        name: web-dist
+        path: web/dist
 
     - name: Cache CPM dependency sources
       uses: actions/cache@v5

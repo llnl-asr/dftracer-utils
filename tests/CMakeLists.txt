@@ -389,6 +389,13 @@ add_test(
   COMMAND
     sh -c
     "bad=$(grep -rnE 'memcpy[[:space:]]*\\([[:space:]]*&[^,]+,[^,]*\\+[[:space:]]*12[[:space:]]*,' \"$0/include/dftracer/utils/dataframe\" \"$0/src/dftracer/utils/dataframe\" \"$0/src/dftracer/utils/arrow\" --include='*.h' --include='*.cpp' --include='*.inl' | grep -vE '^[^:]*/dftracer/utils/dataframe/internal/string_reader\\.h:'); if [ -n \"$bad\" ]; then echo \"hand-written Arrow view decode; use decode_view() from dataframe/internal/string_reader.h:\"; echo \"$bad\"; exit 1; fi"
+# A big-endian read over a view passes the view: dstd::read_u16_be, read_u32_be
+# and read_u64_be take a dstd::ByteView or dstd::StringView.
+add_test(
+  NAME one_be_view_read
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE 'read_(u16|u32|u64|f64)_be\\(.*reinterpret_cast<const (std::)?uint8_t' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/'); if [ -n \"$bad\" ]; then echo \"pass the view to dstd::read_u16_be, read_u32_be or read_u64_be (include/dftracer/utils/dstd/big_endian.h), not a cast pointer:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME store_no_upward

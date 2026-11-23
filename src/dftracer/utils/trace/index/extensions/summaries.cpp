@@ -549,8 +549,7 @@ dstd::Vector<std::uint64_t> PostingsBuilder::decode(dstd::StringView payload) {
     if (payload.size() % 8 != 0) return out;
     out.reserve(payload.size() / 8);
     for (std::size_t i = 0; i < payload.size(); i += 8)
-        out.push_back(dstd::read_u64_be(
-            reinterpret_cast<const std::uint8_t*>(payload.data() + i)));
+        out.push_back(dstd::read_u64_be(payload.substr(i)));
     return out;
 }
 

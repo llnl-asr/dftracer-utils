@@ -42,6 +42,11 @@ def internal_name(name: object, level: int) -> str:
     return default_name(level) if name is None else str(name)
 
 
+def column_series(frame: DataFrame, name: str) -> Series:
+    """The Series for column ``name`` of ``frame`` without Python dispatch."""
+    return _ext.DataFrame.__getitem__(frame, name)
+
+
 def positions(n: int, start: int = 0) -> Series:
     """The Int64 column ``start .. start + n - 1`` (no name, no labels)."""
     from ._series import Series

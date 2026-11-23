@@ -16,6 +16,9 @@ from ._enums import DType
 from ._expr import Agg, Col
 from ._series import Series
 from ._series_index import (
+    column_series as _column,
+)
+from ._series_index import (
     default_name,
     drop_levels,
     levels_of,
@@ -33,10 +36,6 @@ ROW = "__dftu_group_row__"
 FIRST = "__dftu_group_first__"
 ORD = "__dftu_group_ord__"
 VALUE = "__dftu_group_value__"
-
-
-def _column(frame: DataFrame, name: str) -> Series:
-    return _ext.DataFrame.__getitem__(frame, name)
 
 
 def pandas_named(g: GroupBy) -> bool:

@@ -109,7 +109,6 @@ def _kernel_operand(s: Series) -> Series:
 
 
 _TEMPORAL = frozenset([DType.TIME32, DType.TIME64, DType.TIMESTAMP, DType.DURATION])
-_FLOATS = frozenset([DType.FLOAT32, DType.FLOAT64])
 _BYTES = frozenset([DType.STRING, DType.LARGE_STRING, DType.BINARY, DType.LARGE_BINARY])
 
 
@@ -165,7 +164,7 @@ def differs(a: Series, b: Series) -> Series[bool]:
             ),
         )
     ne = _kernel_operand(a).compare_series(_kernel_operand(b), _CMP_NE).fill_null(False)
-    if da in _FLOATS and db in _FLOATS:
+    if da.is_float and db.is_float:
         ne = ne & ~(a.is_nan().fill_null(False) & b.is_nan().fill_null(False))
     if a.null_count == 0 and b.null_count == 0:
         return ne
@@ -200,8 +199,8 @@ def edge_label(labels: object, pos: int | None) -> object | None:
     of labels, a frame of levels (a tuple, as pandas), or positions when there
     is none."""
     from ._dataframe import DataFrame
-    from ._pandas_frame import column_series
     from ._series import Series
+    from ._series_index import column_series
 
     if pos is None:
         return None

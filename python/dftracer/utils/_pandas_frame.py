@@ -43,6 +43,7 @@ from ._pandas_series import (
 from ._reshape import stack_frame, unstack_frame
 from ._series import Series
 from ._series_index import (
+    column_series,
     default_name,
     drop_levels,
     internal_name,
@@ -81,10 +82,6 @@ def _group(frame: DataFrame, keys: Sequence[str]) -> GroupBy:
     from ._groupby import GroupBy
 
     return GroupBy(frame, list(keys))
-
-
-def column_series(frame: DataFrame, name: str) -> Series:
-    return _ext.DataFrame.__getitem__(frame, name)
 
 
 class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFrame):

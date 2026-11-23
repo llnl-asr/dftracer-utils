@@ -30,6 +30,7 @@ from . import dftracer_utils_ext as _ext
 from ._eval import Columnar
 from ._expr import Expr, col, collect_columns, has_column_op
 from ._series import Series
+from ._series_index import column_series as _column
 
 if TYPE_CHECKING:
     from typing_extensions import TypeGuard
@@ -78,11 +79,6 @@ def _eval_expr(expr: Expr, source: Mapping[str, Series]) -> Series:
 
 def _from_python(values: Sequence[object]) -> Series:
     return Series.from_list(list(values))
-
-
-def _column(frame: DataFrame, name: str) -> Series:
-
-    return frame[name]
 
 
 def apply_series(series: Series, func: Callable[..., object], what: str) -> Series:

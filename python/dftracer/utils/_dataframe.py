@@ -49,7 +49,7 @@ from ._expr import Agg, Expr, Lit, Named, SelectItem, col, resolve_selectors, wh
 from ._label_join import LABEL_HOWS, Suffixes, check_how, index_merge, label_join
 from ._levels import LevelArg, pick_levels
 from ._pandas_frame import FramePandasMixin
-from ._polars_frame import FramePolarsMixin
+from ._polars_frame import FramePolarsMixin, _require_polars
 from ._series import Series
 from ._series_index import default_name, positions, public_name, shown_name
 from ._sink_verbs import WriteVerbs
@@ -735,12 +735,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         polars raises its own error), without pyarrow; otherwise each column
         uses the native conversion. A dictionary column becomes
         ``Categorical``."""
-        try:
-            import polars as pl
-        except ImportError:
-            raise ImportError(
-                "polars is required for to_polars(). Install with: pip install polars"
-            ) from None
+        pl = _require_polars()
         if self.num_rows == 0:
             return pl.DataFrame()
         if hasattr(self, "__arrow_c_stream__") and all(

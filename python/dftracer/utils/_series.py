@@ -470,12 +470,9 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         native conversion (Float16 becomes Float32, a decimal gets precision
         38). A dictionary column becomes ``Categorical``. The polars Series
         takes this name, ``""`` when there is none."""
-        try:
-            import polars as pl
-        except ImportError:
-            raise ImportError(
-                "polars is required for to_polars(). Install with: pip install polars"
-            ) from None
+        from ._polars_frame import _require_polars
+
+        pl = _require_polars()
         if _polars_via_arrow(self):
             out = pl.Series(self)
         else:

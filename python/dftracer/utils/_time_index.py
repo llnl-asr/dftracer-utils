@@ -20,7 +20,17 @@ from . import dftracer_utils_ext as _ext
 from ._convert import _like
 from ._enums import UNIT_CODES, UNIT_NS, DType, rule_to_units
 from ._levels import pick_levels
-from ._series_index import drop_levels, levels_of, names_of, positions, public_name, with_levels
+from ._series_index import (
+    column_series as _column,
+)
+from ._series_index import (
+    drop_levels,
+    levels_of,
+    names_of,
+    positions,
+    public_name,
+    with_levels,
+)
 
 if TYPE_CHECKING:
     from typing_extensions import Self
@@ -765,10 +775,6 @@ def _func_name(func: object) -> str:
     if not isinstance(func, str) or func not in _SIMPLE:
         raise TypeError(f"resample aggregation {func!r} is not supported")
     return func
-
-
-def _column(frame: DataFrame, name: str) -> Series:
-    return _ext.DataFrame.__getitem__(frame, name)
 
 
 def resample(

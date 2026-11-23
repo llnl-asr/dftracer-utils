@@ -6,18 +6,30 @@ horizontal reductions, the stacks, `partition_by`, `gather_every`,
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Iterator, Literal, Sequence
+import types
+from typing import TYPE_CHECKING, Iterator, Literal, Sequence, cast
 
 from . import dftracer_utils_ext as _ext
 from ._convert import _require_pyarrow
-from ._pandas_frame import column_series, is_numeric_series
+from ._pandas_frame import is_numeric_series
 from ._series import Series
+from ._series_index import column_series
 
 if TYPE_CHECKING:
     from ._dataframe import DataFrame
     from ._enums import DType
     from ._expr import Expr
     from ._groupby import GroupKey
+
+
+def _require_polars() -> types.ModuleType:
+    try:
+        import polars as pl
+    except ImportError:
+        raise ImportError(
+            "polars is required for to_polars(). Install with: pip install polars"
+        ) from None
+    return cast("types.ModuleType", pl)
 
 
 class FramePolarsMixin:

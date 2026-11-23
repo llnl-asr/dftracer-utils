@@ -777,11 +777,9 @@ class CoroTask {
     }
 
     T await_resume() {
-#if defined(__GNUC__) || defined(__clang__)
         // Never null here (await_resume runs on a live task); silences a
         // spurious GCC -Wnull-dereference on the promise() reads below.
-        if (!coro_handle_) __builtin_unreachable();
-#endif
+        if (!coro_handle_) DFTRACER_UTILS_UNREACHABLE();
         report_await_end(coro_handle_.promise());
         if (coro_handle_.promise().cancelled) {
             detail::cancelled_unstoppable(

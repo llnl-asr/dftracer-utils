@@ -21,6 +21,10 @@ inline constexpr std::uint64_t SPLITMIX64_MUL2 = 0x94d049bb133111ebULL;
 /// https://github.com/Cyan4973/xxHash).
 inline constexpr std::uint64_t XXH64_PRIME2 = 0xc2b2ae3d27d4eb4fULL;
 
+/// PRIME64_3 of xxHash, by Yann Collet (BSD-2-Clause,
+/// https://github.com/Cyan4973/xxHash).
+inline constexpr std::uint64_t XXH64_PRIME3 = 0x165667b19e3779f9ULL;
+
 /// MurmurHash3's fmix64 finalizer multipliers, by Austin Appleby (public
 /// domain, https://github.com/aappleby/smhasher).
 inline constexpr std::uint64_t MURMUR3_FMIX64_MUL1 = 0xff51afd7ed558ccdULL;

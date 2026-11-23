@@ -14,6 +14,7 @@
 // the caller reports it once, after its loop.
 
 #include <dftracer/utils/dataframe/kernels/order.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/int128.h>
@@ -53,7 +54,7 @@ struct SumI64 {
     std::int64_t acc = 0;
     bool overflowed = false;
     void add(std::int64_t v) {
-        if (__builtin_add_overflow(acc, v, &acc)) [[unlikely]]
+        if (dstd::bits::add_overflow(acc, v, &acc)) [[unlikely]]
             overflowed = true;
     }
 };
@@ -61,7 +62,7 @@ struct SumU64 {
     std::uint64_t acc = 0;
     bool overflowed = false;
     void add(std::uint64_t v) {
-        if (__builtin_add_overflow(acc, v, &acc)) [[unlikely]]
+        if (dstd::bits::add_overflow(acc, v, &acc)) [[unlikely]]
             overflowed = true;
     }
 };

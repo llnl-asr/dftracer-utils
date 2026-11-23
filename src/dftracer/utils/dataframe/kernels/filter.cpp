@@ -169,7 +169,7 @@ BufferView mask_to_indices(const std::uint8_t* bits, std::int64_t n,
             std::memcpy(&x, bits + w * 8, sizeof(x));
             while (x != 0) {
                 sel[static_cast<std::size_t>(k++)] =
-                    w * 64 + static_cast<unsigned>(__builtin_ctzll(x));
+                    w * 64 + static_cast<unsigned>(dstd::bits::ctz_u64(x));
                 x &= x - 1;
             }
         }

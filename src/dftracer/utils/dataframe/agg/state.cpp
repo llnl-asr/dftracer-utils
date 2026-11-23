@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/sketch.h>  // DDSketch, sketch_bucket_keys
 #include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function_ref.h>
@@ -778,7 +779,7 @@ __attribute__((always_inline)) inline int light_add(
                 const auto x = std::bit_cast<std::int64_t>(bits);
                 if (sum) {
                     std::int64_t s = 0;
-                    if (__builtin_add_overflow(
+                    if (dstd::bits::add_overflow(
                             std::bit_cast<std::int64_t>(*sum), x, &s))
                         [[unlikely]]
                         wrap = x < 0 ? -1 : 1;
@@ -789,7 +790,8 @@ __attribute__((always_inline)) inline int light_add(
                 break;
             }
             case FieldStatDomain::U64:
-                if (sum && __builtin_add_overflow(*sum, bits, sum)) [[unlikely]]
+                if (sum && dstd::bits::add_overflow(*sum, bits, sum))
+                    [[unlikely]]
                     wrap = 1;
                 if (lo && bits < *lo) *lo = bits;
                 if (hi && bits > *hi) *hi = bits;
@@ -1075,12 +1077,12 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
                     groups[static_cast<std::size_t>(r + AHEAD)]);
                 if (nf > 0) {
                     if (st.light_on)
-                        __builtin_prefetch(
-                            st.light.data() + ga * st.light_stride, 1);
+                        dstd::bits::prefetch_write(st.light.data() +
+                                                   ga * st.light_stride);
                     else
-                        __builtin_prefetch(st.fstats.data() + ga * nf, 1);
+                        dstd::bits::prefetch_write(st.fstats.data() + ga * nf);
                 }
-                __builtin_prefetch(st.counts.data() + ga, 1);
+                dstd::bits::prefetch_write(st.counts.data() + ga);
             }
             add_row.template operator()<Moments, Nulls>(
                 groups[static_cast<std::size_t>(r)], b0 + r);
@@ -1156,20 +1158,18 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
             }
             const std::size_t mask = st.fast_slots.size() - 1;
             for (std::int64_t r = 0; r < std::min(m, AHEAD); ++r)
-                __builtin_prefetch(
+                dstd::bits::prefetch_read(
                     st.fast_slots.data() +
-                        (static_cast<std::size_t>(
-                             hashes[static_cast<std::size_t>(r)]) &
-                         mask),
-                    0);
+                    (static_cast<std::size_t>(
+                         hashes[static_cast<std::size_t>(r)]) &
+                     mask));
             for (std::int64_t r = 0; r < m; ++r) {
                 if (r + AHEAD < m)
-                    __builtin_prefetch(
+                    dstd::bits::prefetch_read(
                         st.fast_slots.data() +
-                            (static_cast<std::size_t>(
-                                 hashes[static_cast<std::size_t>(r + AHEAD)]) &
-                             mask),
-                        0);
+                        (static_cast<std::size_t>(
+                             hashes[static_cast<std::size_t>(r + AHEAD)]) &
+                         mask));
                 const std::uint64_t h = hashes[static_cast<std::size_t>(r)];
                 const std::uint64_t e =
                     st.fast_slots[static_cast<std::size_t>(h) & mask];
@@ -1179,15 +1179,16 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
                     (e & FAST_TAG) == (h & FAST_TAG)) {
                     g = static_cast<std::int64_t>(e & ~FAST_TAG);
                     const auto gi = static_cast<std::size_t>(g);
-                    __builtin_prefetch(st.fast_words.data() + gi * W, 0);
+                    dstd::bits::prefetch_read(st.fast_words.data() + gi * W);
                     if (nf > 0) {
                         if (st.light_on)
-                            __builtin_prefetch(
-                                st.light.data() + gi * st.light_stride, 1);
+                            dstd::bits::prefetch_write(st.light.data() +
+                                                       gi * st.light_stride);
                         else
-                            __builtin_prefetch(st.fstats.data() + gi * nf, 1);
+                            dstd::bits::prefetch_write(st.fstats.data() +
+                                                       gi * nf);
                     }
-                    __builtin_prefetch(st.counts.data() + gi, 1);
+                    dstd::bits::prefetch_write(st.counts.data() + gi);
                 }
                 cand[static_cast<std::size_t>(r)] = g;
             }

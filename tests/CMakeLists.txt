@@ -334,6 +334,35 @@ add_test(
     sh -c
     "bad=$(grep -rnE '[A-Za-z_][A-Za-z_0-9]*::now[[:space:]]*\\(\\)|clock_gettime|gettimeofday|mach_absolute_time|rdtsc|timespec_get|(::|[^A-Za-z0-9_.:])time[[:space:]]*\\([[:space:]]*(nullptr|NULL|0)[[:space:]]*\\)' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/' | grep -vE '^[^:]*/dftracer/utils/dstd/clock\\.(h|cpp):'); if [ -n \"$bad\" ]; then echo \"direct clock read; use dstd::steady_now(), dstd::steady_now_ns(), dstd::coarse_now_ns(), dstd::system_now_ns() or, for a clock a syscall names, dstd::posix_clock_now_ns():\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
+# The 64-bit hash mixing constants live in
+# <dftracer/utils/dstd/hash/constants.h>, so a typo cannot fork a hash. The
+# allow list holds code that cannot include it: memory links nothing else, and
+# the plugin SDK header is self-contained by design.
+add_test(
+  NAME one_hash_constant
+  COMMAND
+    sh -c
+    "bad=$(grep -rniE '9e3779b97f4a7c15|bf58476d1ce4e5b9|94d049bb133111eb|c2b2ae3d27d4eb4f|165667b19e3779f9|ff51afd7ed558ccd|c4ceb9fe1a85ec53|cbf29ce484222325|0*100000001b3|1469598103934665603|14695981039346656037|1099511628211' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/' | grep -vE '^[^:]*/(include/dftracer/utils/dstd/hash/constants\\.h|include/dftracer/utils/plugins/prims\\.h):|^[^:]*/src/dftracer/utils/memory/debug\\.cpp:'); if [ -n \"$bad\" ]; then echo 'hash constant typed by hand; use the names in <dftracer/utils/dstd/hash/constants.h>:'; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(NAME one_hash_constant_self
+         COMMAND
+           sh -c
+           "printf '%s\\n' 'h *= 0x9E3779B97F4A7C15ull;' | grep -qiE '9e3779b97f4a7c15|bf58476d1ce4e5b9|94d049bb133111eb|c2b2ae3d27d4eb4f|165667b19e3779f9|ff51afd7ed558ccd|c4ceb9fe1a85ec53|cbf29ce484222325|0*100000001b3|1469598103934665603|14695981039346656037|1099511628211'")
+# Compiler built-ins go through the wrappers in dstd/bits.h and
+# common/platform_compat.h, so MSVC needs one port. The allow list holds the
+# plugin SDK header (self-contained by design), the plugin examples, and only
+# the __builtin_return_address and __builtin_frame_address reads that name the
+# caller of an allocation or check a stack frame.
+add_test(
+  NAME no_builtin
+  COMMAND
+    sh -c
+    "bad=$(grep -rnF '__builtin_' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/' | grep -vE '^[^:]*/(include/dftracer/utils/dstd/(bits|int128)\\.h|include/dftracer/utils/common/(platform_compat|export)\\.h|include/dftracer/utils/plugins/prims\\.h):|^[^:]*/examples/plugins/|^[^:]*/(src/dftracer/utils/memory/[^:]*|src/dftracer/utils/dstd/concurrent_queue\\.cpp|tests/memory/test_exit_hook_order\\.cpp|tests/coro/test_async_mutex\\.cpp):[0-9]+:.*__builtin_(return|frame)_address\\('); if [ -n \"$bad\" ]; then echo 'compiler built-in; use dstd/bits.h or DFTRACER_UTILS_UNREACHABLE (common/platform_compat.h):'; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(NAME no_builtin_self
+         COMMAND
+           sh -c
+           "printf '%s\\n' 'return __builtin_ctzll(x);' | grep -qF '__builtin_'")
 # A prefix or suffix test is std::string_view::starts_with or ends_with, never a
 # substr compare. The allow list holds tests that compare two substrings or keep a plain oracle for a kernel.
 add_test(

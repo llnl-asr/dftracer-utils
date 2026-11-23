@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/label_index.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash/xxh3.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -94,7 +95,7 @@ double as_double(std::uint64_t bits) noexcept {
 }
 
 std::uint64_t combine(std::uint64_t seed, std::uint64_t cell) noexcept {
-    return dstd::hash::splitmix64(seed ^ (cell + 0x9e3779b97f4a7c15ULL));
+    return dstd::hash::splitmix64(seed ^ (cell + dstd::hash::GOLDEN_RATIO));
 }
 
 std::size_t pow2_at_least(std::size_t n) noexcept {

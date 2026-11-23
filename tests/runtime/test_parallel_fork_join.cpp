@@ -17,6 +17,7 @@
 
 using namespace dftracer::utils;
 
+#if DFTRACER_UTILS_TEST_PROBES
 namespace {
 
 constexpr std::size_t POOL_THREADS = 4;
@@ -28,11 +29,6 @@ coro::CoroTask<void> fork_join_task(Runtime* rt, std::atomic<int>* done) {
     done->fetch_add(1);
     co_return;
 }
-
-}  // namespace
-
-#if DFTRACER_UTILS_TEST_PROBES
-namespace {
 
 dftracer::utils::ThreadPoolExecutor& pool_of(Runtime& rt) {
     return static_cast<ThreadPoolExecutor&>(*rt.executor());

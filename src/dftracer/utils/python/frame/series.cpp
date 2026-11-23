@@ -519,7 +519,7 @@ int Series_set_name(PyObject* self, PyObject* value, void*) {
 
 // Series[T] on the native base and every subclass: a generic alias where
 // Python has one, else the class itself.
-PyObject* Series_class_getitem(PyObject* cls, PyObject* args) {
+PyObject* Series_class_getitem(PyObject* cls, [[maybe_unused]] PyObject* args) {
 #if PY_VERSION_HEX >= 0x03090000
     return Py_GenericAlias(cls, args);
 #else

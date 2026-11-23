@@ -30,12 +30,6 @@ struct Candidate {
     bool missing = false;
 };
 
-dstd::String join(dstd::StringView dir, dstd::StringView name) {
-    if (dir.empty()) return dstd::String(name);
-    if (dir.back() == '/') return dstd::fmt<"{}{}">(dir, name);
-    return dstd::fmt<"{}/{}">(dir, name);
-}
-
 bool is_staging(dstd::StringView name) {
     return dstd::fs::match_name(".*.tmp-*", name) ||
            dstd::fs::match_name(".*.old-*", name);
@@ -111,7 +105,8 @@ expand_glob(coro::Scope& scope, dstd::String pattern) {
         ++literal;
 
     dstd::String root = rooted ? dstd::String("/") : dstd::String();
-    for (std::size_t i = 0; i < literal; ++i) root = join(root, parts[i]);
+    for (std::size_t i = 0; i < literal; ++i)
+        root = dstd::String((dstd::PathView(root) / parts[i]).str());
 
     dstd::Vector<dstd::String> matched;
     dstd::Vector<Step> work;
@@ -136,7 +131,8 @@ expand_glob(coro::Scope& scope, dstd::String pattern) {
         if (every_depth) work.push_back(Step{step.dir, step.at + 1});
 
         if (!every_depth && !dstd::fs::has_glob_chars(part)) {
-            const dstd::String child = join(step.dir, part);
+            const dstd::String child =
+                dstd::String((dstd::PathView(step.dir) / part).str());
             if (!last) {
                 work.push_back(Step{child, step.at + 1});
                 continue;
@@ -160,7 +156,8 @@ expand_glob(coro::Scope& scope, dstd::String pattern) {
             const dstd::StringView name = entry.path.view().filename();
             if (is_staging(name) || dstd::fs::match_name(".dftindex*", name))
                 continue;
-            const dstd::String child = join(step.dir, name);
+            const dstd::String child =
+                dstd::String((dstd::PathView(step.dir) / name).str());
             if (every_depth) {
                 if (entry.kind == FileKind::Directory && !is_skipped(name))
                     work.push_back(Step{child, step.at});

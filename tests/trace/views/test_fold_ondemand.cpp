@@ -56,7 +56,7 @@ struct DeepRead {
 // The longest string arg is a piece of `line` that closes as `line` does.
 bool is_tail_of(StringView text, StringView line, StringView closing) {
     return text.size() > 1000 && line.find(text) != StringView::npos &&
-           text.substr(text.size() - closing.size()) == closing;
+           text.ends_with(closing);
 }
 
 // where: 0 args of the dftracer reader, 1 a top-level capture, 2 the path
@@ -350,7 +350,7 @@ String describe_under_paths(const FoldEvent& ev, const StringIntern& intern,
         for (const String& path : paths) {
             if (key == StringView(path)) return true;
             if (key.size() > path.size() && key[path.size()] == '.' &&
-                key.substr(0, path.size()) == StringView(path))
+                key.starts_with(StringView(path)))
                 return true;
         }
         return false;

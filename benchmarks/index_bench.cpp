@@ -159,16 +159,16 @@ dstd::Vector<dstd::String> trace_files(dstd::StringView input) {
         files.emplace_back(input);
         return files;
     }
-    require_ok(dstd::fs::walk(
-                   input,
-                   [&](dstd::PathView path, dstd::fs::FileKind kind) {
-                       const dstd::StringView p = path.str();
-                       if (kind == dstd::fs::FileKind::File && p.size() > 7 &&
-                           p.compare(p.size() - 7, 7, ".pfw.gz") == 0)
-                           files.emplace_back(p);
-                       return dstd::fs::WalkAction::Continue;
-                   }),
-               "walk");
+    require_ok(
+        dstd::fs::walk(input,
+                       [&](dstd::PathView path, dstd::fs::FileKind kind) {
+                           const dstd::StringView p = path.str();
+                           if (kind == dstd::fs::FileKind::File &&
+                               p.size() > 7 && p.ends_with(".pfw.gz"))
+                               files.emplace_back(p);
+                           return dstd::fs::WalkAction::Continue;
+                       }),
+        "walk");
     std::sort(files.begin(), files.end());
     return files;
 }

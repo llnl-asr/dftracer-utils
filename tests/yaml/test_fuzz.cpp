@@ -38,7 +38,7 @@ std::size_t seed_count() {
 void expected_records(dstd::StringView text, const Tree& tree,
                       dstd::Vector<const Tree*>& out) {
     dstd::StringView rest = text;
-    if (rest.substr(0, 3) == "\xEF\xBB\xBF") rest.remove_prefix(3);
+    if (rest.starts_with("\xEF\xBB\xBF")) rest.remove_prefix(3);
     while (!rest.empty()) {
         const std::size_t end = rest.find('\n');
         const dstd::StringView line = rest.substr(0, end);
@@ -48,8 +48,7 @@ void expected_records(dstd::StringView text, const Tree& tree,
             line[line.find_first_not_of(" \t\r")] == '#')
             continue;
         if (tree.kind == Tree::Kind::Seq && line[0] == '-' &&
-            (line.size() == 1 || line[1] == ' ') &&
-            line.substr(0, 3) != "---") {
+            (line.size() == 1 || line[1] == ' ') && !line.starts_with("---")) {
             for (const Tree& item : tree.items) out.push_back(&item);
             return;
         }
@@ -83,7 +82,7 @@ std::size_t touch(Value value, std::size_t& misses, int depth = 0) {
 // Whether `message` is `name:line:col: reason`.
 bool is_well_formed(dstd::StringView message, dstd::StringView name,
                     std::size_t line_count) {
-    if (message.substr(0, name.size()) != name) return false;
+    if (!message.starts_with(name)) return false;
     message.remove_prefix(name.size());
     if (message.empty() || message[0] != ':') return false;
     message.remove_prefix(1);

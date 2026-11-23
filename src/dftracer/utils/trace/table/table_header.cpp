@@ -131,8 +131,7 @@ dstd::Optional<Field> resolve(const RawField& raw) {
         return f;
     }
     const auto numeric = [&](dstd::StringView prefix, Kind kind) {
-        if (base.size() <= prefix.size() ||
-            base.substr(0, prefix.size()) != prefix)
+        if (base.size() <= prefix.size() || !base.starts_with(prefix))
             return false;
         if (!read_width(base.substr(prefix.size()), f.bits)) return false;
         f.kind = kind;

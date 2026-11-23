@@ -100,8 +100,7 @@ void warn_skipped(dstd::StringView dir, dstd::StringView name,
 
 bool has_data_file_suffix(dstd::StringView name) {
     return name.size() > DATA_FILE_SUFFIX.size() &&
-           name.compare(name.size() - DATA_FILE_SUFFIX.size(),
-                        DATA_FILE_SUFFIX.size(), DATA_FILE_SUFFIX) == 0;
+           name.ends_with(DATA_FILE_SUFFIX);
 }
 
 double ms_since(std::chrono::steady_clock::time_point start) {

@@ -370,7 +370,7 @@ TEST_CASE("TaskHandle - auto-generated name when empty") {
     Runtime rt(2);
     auto h = rt.submit(noop_async());
     CHECK(!h.name.empty());
-    CHECK(h.name.substr(0, 5) == "task-");
+    CHECK(h.name.starts_with("task-"));
     dftu_utils_test::ok(h.wait());
 }
 

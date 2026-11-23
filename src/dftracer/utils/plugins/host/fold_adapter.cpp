@@ -863,7 +863,7 @@ struct DynCols {
             const char* name = dftu_dataframe_column_name(df, i);
             if (!name) continue;
             dstd::StringView nv{name};
-            if (nv.substr(0, ARGS_PREFIX.size()) != ARGS_PREFIX) continue;
+            if (!nv.starts_with(ARGS_PREFIX)) continue;
             cols.emplace_back(nv.substr(ARGS_PREFIX.size()),
                               dftu_dataframe_column(df, name));
         }

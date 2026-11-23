@@ -84,8 +84,7 @@ struct Tree {
         Names out;
         for (const dstd::String& f : result.files) {
             dstd::StringView v(f);
-            if (v.size() > root.size() &&
-                v.substr(0, root.size()) == dstd::StringView(root))
+            if (v.size() > root.size() && v.starts_with(dstd::StringView(root)))
                 v.remove_prefix(root.size() + 1);
             out.push_back(dstd::String(v));
         }

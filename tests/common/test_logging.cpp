@@ -174,7 +174,7 @@ TEST_CASE("line shape: color wraps the stamp and the level") {
                            [] { DFTRACER_UTILS_LOG_WARN("c"); });
     const dstd::StringView v(out);
     REQUIRE(v.size() > 30);
-    CHECK(v.substr(0, 5) == "\x1b[2m[");
+    CHECK(v.starts_with("\x1b[2m["));
     CHECK(v.substr(28) == "]\x1b[0m \x1b[33mWARN \x1b[0m c\n");
 }
 
@@ -184,7 +184,7 @@ TEST_CASE("a message over the cap is cut and ends in an ellipsis") {
         capture_log(plain(false), [&] { DFTRACER_UTILS_LOG_WARN("{}", big); });
     const dstd::StringView body = after_stamp(out);
     REQUIRE(body.size() == 6 + common::logger::detail::MESSAGE_CAP + 1);
-    CHECK(body.substr(0, 6) == "WARN  ");
+    CHECK(body.starts_with("WARN  "));
     CHECK(
         body.substr(6, common::logger::detail::MESSAGE_CAP - 3) ==
         dstd::StringView(big.data(), common::logger::detail::MESSAGE_CAP - 3));

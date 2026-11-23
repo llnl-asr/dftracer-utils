@@ -37,8 +37,7 @@ void collect_parts(dstd::CStringView dir, dstd::Vector<dstd::String>& parts) {
             continue;
         }
         const dstd::String name(e.path.view().filename());
-        if (name.size() >= 7 &&
-            name.compare(name.size() - 7, 7, ".pfw.gz") == 0)
+        if (name.ends_with(".pfw.gz"))
             parts.push_back(dstd::String(e.path.str()));
     }
 }

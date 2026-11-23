@@ -25,7 +25,7 @@ bool is_blank(char c) { return c == ' ' || c == '\t'; }
 // True when `line` starts with `marker` and then a blank or the end of the
 // line (a CR counts as the end).
 bool starts_with_marker(dstd::StringView line, dstd::StringView marker) {
-    if (line.substr(0, marker.size()) != marker) return false;
+    if (!line.starts_with(marker)) return false;
     if (line.size() == marker.size()) return true;
     const char next = line[marker.size()];
     return is_blank(next) || next == '\r';
@@ -33,7 +33,7 @@ bool starts_with_marker(dstd::StringView line, dstd::StringView marker) {
 
 // What the first content line of `text` says the text is.
 Head detect_head(dstd::StringView text, bool is_ended) {
-    if (text.substr(0, 3) == "\xEF\xBB\xBF") text.remove_prefix(3);
+    if (text.starts_with("\xEF\xBB\xBF")) text.remove_prefix(3);
     while (!text.empty()) {
         const std::size_t end = text.find('\n');
         if (end == dstd::StringView::npos && !is_ended) return Head::NeedMore;

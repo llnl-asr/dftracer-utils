@@ -295,10 +295,6 @@ dstd::Vector<dstd::String> split(dstd::StringView s, char sep) {
     return out;
 }
 
-bool starts_with(dstd::StringView s, dstd::StringView prefix) {
-    return s.substr(0, prefix.size()) == prefix;
-}
-
 // Relative closeness with a small absolute floor for values that are zero up
 // to rounding.
 bool rel_close(double x, double y, double tol) {
@@ -363,17 +359,17 @@ dstd::String table_text(const dataframe::DataFrame& t,
 // means of those event arguments.
 double column_tolerance(dstd::StringView name, bool& known) {
     known = true;
-    if (name == "n" || name == "time_bucket" || starts_with(name, "busy") ||
-        starts_with(name, "active") || starts_with(name, "count") ||
-        starts_with(name, "n_") || starts_with(name, "sum") ||
-        starts_with(name, "min") || starts_with(name, "max"))
+    if (name == "n" || name == "time_bucket" || name.starts_with("busy") ||
+        name.starts_with("active") || name.starts_with("count") ||
+        name.starts_with("n_") || name.starts_with("sum") ||
+        name.starts_with("min") || name.starts_with("max"))
         return TOL_EXACT;
     if (name == "epoch" || name == "level" || name == "size" ||
         name == "step" || name == "offset" || name == "ret" ||
-        starts_with(name, "mean") || starts_with(name, "var") ||
-        starts_with(name, "std") || starts_with(name, "skew") ||
-        starts_with(name, "kurt") || starts_with(name, "concurrency") ||
-        starts_with(name, "utilization"))
+        name.starts_with("mean") || name.starts_with("var") ||
+        name.starts_with("std") || name.starts_with("skew") ||
+        name.starts_with("kurt") || name.starts_with("concurrency") ||
+        name.starts_with("utilization"))
         return TOL_MOMENT;
     if (name.size() > 1 && name[0] == 'p' && dstd::is_ascii_digit(name[1]))
         return TOL_QUANTILE;

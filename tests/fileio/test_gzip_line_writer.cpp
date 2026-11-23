@@ -588,7 +588,7 @@ TEST_CASE("GzipLineWriter - named parts, header, footer, on_part") {
         const dstd::String text = gunzip_all(parts[p].path);
         REQUIRE(text.size() == parts[p].uc + 5);
         CHECK(text.rfind("[\n", 0) == 0);
-        CHECK(text.substr(text.size() - 3) == "\n]\n");
+        CHECK(text.ends_with("\n]\n"));
         total_lines += parts[p].lines;
 
         // The index sees the header and footer as members of their own;
@@ -784,8 +784,8 @@ TEST_CASE("GzipLineWriter - unordered mode") {
     });
     const dstd::String text = gunzip_all(dstd::String(path.str()));
     REQUIRE(text.size() > 4);
-    CHECK(text.substr(0, 2) == "[\n");
-    CHECK(text.substr(text.size() - 2) == "]\n");
+    CHECK(text.starts_with("[\n"));
+    CHECK(text.ends_with("]\n"));
     dstd::MultiSet<dstd::String> got;
     std::size_t pos = 2;
     while (pos < text.size() - 2) {

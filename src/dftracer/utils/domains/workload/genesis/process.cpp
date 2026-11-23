@@ -384,7 +384,7 @@ dstd::StringView get_sv(simdjson::dom::object o, dstd::StringView key) {
 }
 
 bool is_per_core_cpu(dstd::StringView name) {
-    return name.size() > 4 && name.substr(0, 4) == "cpu-";
+    return name.size() > 4 && name.starts_with("cpu-");
 }
 
 dstd::String strip_spaces(dstd::StringView s) {
@@ -818,13 +818,12 @@ class GroupReader {
                         const auto num = get_number(v);
                         if (!num) continue;
                         static constexpr dstd::StringView SUFFIX = "_delta";
-                        if (k.size() > SUFFIX.size() &&
-                            k.substr(k.size() - SUFFIX.size()) == SUFFIX) {
+                        if (k.size() > SUFFIX.size() && k.ends_with(SUFFIX)) {
                             auto& s = p.papi[dstd::String(
                                 k.substr(0, k.size() - SUFFIX.size()))];
                             if (auto st = add_sample(s, ts, *num); !st)
                                 return st;
-                        } else if (k.substr(0, 5) == "PAPI_") {
+                        } else if (k.starts_with("PAPI_")) {
                             add_papi_name(p, k);
                         }
                     }

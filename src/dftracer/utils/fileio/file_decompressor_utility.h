@@ -34,7 +34,7 @@ struct FileDecompressionUtilityInput {
         dstd::String output(input_path);
 
         // Strip .gz extension if present
-        if (output.size() > 3 && output.substr(output.size() - 3) == ".gz") {
+        if (output.size() > 3 && output.ends_with(".gz")) {
             output = output.substr(0, output.size() - 3);
         } else {
             // If no .gz extension, append .decompressed

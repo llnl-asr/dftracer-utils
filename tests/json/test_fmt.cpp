@@ -93,6 +93,6 @@ TEST_CASE("the escaped text of a long string with runs is correct") {
     s[199] = '\n';
     const dstd::String out = json::fmt<"{}">(s);
     CHECK(out.size() == 203);
-    CHECK(out.substr(0, 3) == "\\\"x");
-    CHECK(out.substr(out.size() - 3) == "x\\n");
+    CHECK(out.starts_with("\\\"x"));
+    CHECK(out.ends_with("x\\n"));
 }

@@ -22,10 +22,6 @@ namespace dftracer::utils::yaml {
 
 namespace {
 
-bool starts_with(dstd::StringView s, dstd::StringView prefix) {
-    return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
-}
-
 // A character a number, a timestamp or a sexagesimal in YAML 1.1 or 1.2 is
 // spelled with.
 bool is_number_character(char c) {
@@ -117,7 +113,7 @@ bool needs_quotes(dstd::StringView s) {
     if (s.empty()) return true;
     if (is_indicator(s.front()) || s.front() == ' ' || s.back() == ' ')
         return true;
-    if (starts_with(s, "---") || starts_with(s, "...")) return true;
+    if (s.starts_with("---") || s.starts_with("...")) return true;
     if (s.back() == ':') return true;
     for (std::size_t i = 0; i < s.size(); ++i) {
         const unsigned char u = static_cast<unsigned char>(s[i]);

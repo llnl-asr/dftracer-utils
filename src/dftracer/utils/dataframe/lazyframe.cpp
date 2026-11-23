@@ -5690,7 +5690,7 @@ constexpr dstd::StringView NATIVE_TWINS[] = {"drop_nulls",
 const dftu_op_desc* native_twin(dstd::StringView name, const dftu_op_desc& op,
                                 std::size_t others) {
     constexpr dstd::StringView PREFIX = "dftu.frame.";
-    if (name.compare(0, PREFIX.size(), PREFIX) != 0) return nullptr;
+    if (!name.starts_with(PREFIX)) return nullptr;
     const dstd::StringView base = dstd::StringView(name).substr(PREFIX.size());
     if (std::find(std::begin(NATIVE_TWINS), std::end(NATIVE_TWINS), base) ==
         std::end(NATIVE_TWINS))

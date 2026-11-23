@@ -15,6 +15,7 @@ The test-suite metrics are from the `tests` preset (a debug build) of the same t
 | `scale_corona_traced_fixed.tsv` | every tool on `minife/tuolumne` at 1 thread under the DFTracer preload after the fixes | `69779a9c` |
 | `scale_corona_fixed2.tsv` | every tool on `minife/tuolumne` at 96 and 16 threads after the cold-view and directory-scan work | `3dd2713` |
 | `scale_corona_traced_fixed2.tsv` | every tool on `minife/tuolumne` at 1 thread under the DFTracer preload after that work | `50c67be` |
+| `scale_corona_fixed3.tsv` | every tool on `minife/tuolumne` at 96 and 16 threads on the own store, the allocator and the dataframe work | `2a84f95bd` |
 | `test_suite_metrics.tsv` | each ctest: wall time, parallelism, RSS, instructions, IPC, cache misses, Cachegrind D1 and LL misses, DHAT bytes and blocks | `b33cabbc+wip` |
 
 `b33cabbc+wip` is `b33cabbc` with the memory report, the I/O backend switch and this ladder, which are now commits `4a5302d0` to `dabf2cf1`.
@@ -101,3 +102,22 @@ The 96 and 16 thread rows are from `3dd2713`. The traced rows are from `50c67be`
 `dftracer_index` needs 1.0 G instructions per MB where it needed 1.95 G, and `dftracer_view` 1.08 G where it needed 2.77 G.
 Every run of both tables passed, so their `.known.tsv` files list no failure.
 
+
+## On the own store, the allocator and the dataframe work (`2a84f95bd`, 96 threads)
+
+One run per row, on corona232; `fixed2` ran on corona222, so a change of a few percent is node noise.
+
+| Tool | `fixed2` | `fixed3` | Instructions before / after | RSS before / after |
+|---|---|---|---|---|
+| `dftracer_index` | 32.1 s | 7.0 s | 1,097 / 1,329 G | 3.1 / 1.3 GB |
+| `dftracer_event_count` | 13.1 s | 1.6 s | 1,149 / 389 G | 3.2 / 0.6 GB |
+| `dftracer_info` | 8.2 s | 8.1 s | 1,131 / 1,332 G | 3.2 / 1.4 GB |
+| `dftracer_stats` | 15.5 s | 8.4 s | 1,887 / 1,332 G | 6.0 / 1.4 GB |
+| `dftracer_view` | 8.6 s | 6.2 s | 1,174 / 1,170 G | 3.2 / 1.4 GB |
+| `dftracer_split` | 18.1 s | 16.2 s | 983 / 931 G | 1.9 / 0.9 GB |
+| `dftracer_validate` | 1.7 s | 1.7 s | 338 / 367 G | 1.1 / 0.6 GB |
+| `dftracer_pgzip` | 0.6 s | 0.3 s | 12 / 13 G | 0.6 / 0.6 GB |
+| `dftracer_comparator` | 60.2 s | 9.8 s | 5,786 / 1,946 G | 10.4 / 1.7 GB |
+| `dftracer_replay` | 8.7 s | 6.2 s | 1,474 / 1,725 G | 1.3 / 0.6 GB |
+
+Still open: `dftracer_index`, `dftracer_info` and `dftracer_replay` run 16 to 21% more instructions than on `3dd2713` while their wall time fell or stayed.

@@ -11,6 +11,7 @@ failure, so a fixed case fails the run until its row is deleted. A case that
 is not listed must match pandas exactly."""
 
 import re
+import warnings
 
 import pytest
 
@@ -609,7 +610,11 @@ def _run(kind, method, letter, args, kwargs, side):
         return getattr(target, method)
     a = [resolve(x, base) for x in args]
     kw = {k: resolve(v, base) for k, v in kwargs.items()}
-    return getattr(target, method)(*a, **kw)
+    with warnings.catch_warnings():
+        if side == "pandas" and "convert_integer" in kw:
+            # Ours takes convert_integer; pandas has no replacement for it yet.
+            warnings.filterwarnings("ignore", message=".*convert_integer keyword.*")
+        return getattr(target, method)(*a, **kw)
 
 
 @pytest.mark.parametrize("kind,method,letter,args,kwargs", PARAMS)

@@ -15,6 +15,14 @@ pd = pytest.importorskip("pandas")
 from dftracer.utils import DataFrame, Series, col  # noqa: E402
 from dftracer.utils.errors import DFTUtilsValueError  # noqa: E402
 
+# Current pandas spellings of the names newer pandas deprecates; ours stay as aliases.
+_PANDAS_DT_NAMES = {
+    "weekday": "day_of_week",
+    "dayofweek": "day_of_week",
+    "dayofyear": "day_of_year",
+    "daysinmonth": "days_in_month",
+}
+
 # include_groups= landed in pandas 2.2; before it, apply() forwards the keyword
 # to the function.
 _PG_APPLY_KW = (
@@ -533,7 +541,8 @@ def test_dt_accessor_matches_pandas():
         "is_quarter_start",
         "is_quarter_end",
     ):
-        assert getattr(s.dt, name).to_list() == getattr(p.dt, name).tolist(), name
+        ref_name = _PANDAS_DT_NAMES.get(name, name)
+        assert getattr(s.dt, name).to_list() == getattr(p.dt, ref_name).tolist(), name
     iso = _d(s.dt.isocalendar())
     ref = p.dt.isocalendar()
     assert iso == {c: ref[c].tolist() for c in ("year", "week", "day")}

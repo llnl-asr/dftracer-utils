@@ -7,6 +7,7 @@ names and the error kinds are compared."""
 
 import datetime
 import os
+import warnings
 
 import pytest
 
@@ -88,7 +89,10 @@ def _kind(e):
 
 def _outcome(fn, obj):
     try:
-        return fn(obj)
+        with warnings.catch_warnings():
+            # Pandas says it ignores origin and offset for a day or a non-Tick rule.
+            warnings.filterwarnings("ignore", message=".*keyword does not take effect.*")
+            return fn(obj)
     except Exception as e:  # noqa: BLE001 - the kind is compared
         return e
 

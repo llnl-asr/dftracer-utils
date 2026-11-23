@@ -209,8 +209,8 @@ class StringIntern {
 
     const char* slot_value(std::uint32_t id) const;
     static constexpr std::size_t slot_offset() noexcept {
-        constexpr std::size_t a = alignof(IndexSlot);
-        return (sizeof(Index) + a - 1) & ~(a - 1);
+        constexpr std::size_t SLOT_ALIGN = alignof(IndexSlot);
+        return (sizeof(Index) + SLOT_ALIGN - 1) & ~(SLOT_ALIGN - 1);
     }
     static StringView record_view(const void* rec);
     static std::uint32_t record_chunk(const void* rec);

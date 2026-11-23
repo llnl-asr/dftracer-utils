@@ -430,8 +430,9 @@ bool item_is_valid(const RecordItem& item) {
 
 dstd::Vector<std::uint8_t> encode_items(const RecordItems& items) {
     dstd::Vector<std::uint8_t> body;
+    dstd::Vector<std::uint8_t> payload;
     for (const RecordItem& item : items) {
-        dstd::Vector<std::uint8_t> payload;
+        payload.clear();
         if (const auto* namespace_item = std::get_if<NamespaceItem>(&item)) {
             encode_namespace(payload, *namespace_item);
             append_item(body, 1, payload);

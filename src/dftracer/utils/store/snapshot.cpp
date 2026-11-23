@@ -1566,6 +1566,7 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
             copy.state = listed.state;
             copy.local_id = listed.local_id;
             copy.sources = listed.sources;
+            copy.erases.reserve(listed.erases.size());
             for (const DirectoryErase& erase : listed.erases) {
                 copy.erases.push_back({erase.ordinal, erase.begin, erase.end});
             }

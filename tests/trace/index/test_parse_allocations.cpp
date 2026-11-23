@@ -21,7 +21,7 @@ namespace {
 constexpr int FILES = 8;
 constexpr int EVENTS = 4000;
 constexpr double MAX_PER_EVENT = 8.0;
-constexpr double MAX_PER_FILE = 3900.0;
+constexpr double MAX_PER_FILE = 2051.0;
 
 dstd::String write_trace(dstd::CStringView dir, int n, int events = EVENTS) {
     dstd::String out;

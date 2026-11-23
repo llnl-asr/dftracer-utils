@@ -10,6 +10,7 @@ deliberate mistake. This locks the overloads and the typed dicts that the public
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -39,7 +40,16 @@ def _ty(path: Path) -> subprocess.CompletedProcess:
 
 def _mypy(tmp_path: Path, path: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["uvx", "mypy", "--strict", "--cache-dir", str(tmp_path / "mypy_cache"), str(path)],
+        [
+            "uvx",
+            "--python",
+            sys.executable,
+            "mypy",
+            "--strict",
+            "--cache-dir",
+            str(tmp_path / "mypy_cache"),
+            str(path),
+        ],
         capture_output=True,
         text=True,
         cwd=_ROOT,

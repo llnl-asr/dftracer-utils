@@ -9,6 +9,7 @@ clean, and the wrong fixture must be flagged on every deliberate mistake.
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -34,7 +35,7 @@ def _mypy(tmp_path: Path, path: Path, *extra: str) -> subprocess.CompletedProces
     return subprocess.run(
         [
             "uvx",
-            *extra,
+            *(extra or ("--python", sys.executable)),
             "mypy",
             "--strict",
             "--cache-dir",

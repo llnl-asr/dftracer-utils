@@ -550,9 +550,12 @@ Series rolling(const Series& v, std::int64_t window, RollingOp op) {
         vals = nonnull_values(v);
         p = vals.data();
     } else {
+        // A null row is 0: the value under it can be anything, and a NaN or
+        // an inf there would stay in the running sum past its window.
         vals.resize(static_cast<std::size_t>(n));
         for (std::int64_t i = 0; i < n; ++i)
-            vals[static_cast<std::size_t>(i)] = read_f64(v, i);
+            vals[static_cast<std::size_t>(i)] =
+                v.is_null(i) ? 0.0 : read_f64(v, i);
         p = vals.data();
     }
 
@@ -1168,14 +1171,20 @@ Series qcut(const Series& v, std::int32_t q) {
 Series search_sorted(const Series& v, const Series& values, bool right) {
     if (refuse_non_numeric("search_sorted", v.type())) return Series{};
     if (refuse_non_numeric("search_sorted", values.type())) return Series{};
+    // A null sorts after every value, as NumPy sorts NaN; the value under it
+    // is never read.
+    using Key = dstd::Pair<bool, double>;
+    const auto key = [](const Series& s, std::int64_t i) {
+        return s.is_null(i) ? Key{true, 0.0} : Key{false, read_f64(s, i)};
+    };
     const std::int64_t n = v.length();
-    dstd::Vector<double> self(static_cast<std::size_t>(n));
+    dstd::Vector<Key> self(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i)
-        self[static_cast<std::size_t>(i)] = read_f64(v, i);
+        self[static_cast<std::size_t>(i)] = key(v, i);
     const std::int64_t m = values.length();
     dstd::Vector<std::int64_t> out(static_cast<std::size_t>(m), 0);
     for (std::int64_t k = 0; k < m; ++k) {
-        const double qv = read_f64(values, k);
+        const Key qv = key(values, k);
         auto it = right ? std::upper_bound(self.begin(), self.end(), qv)
                         : std::lower_bound(self.begin(), self.end(), qv);
         out[static_cast<std::size_t>(k)] =

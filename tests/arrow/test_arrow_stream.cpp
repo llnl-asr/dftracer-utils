@@ -733,8 +733,37 @@ TEST_CASE("arrow stream: importing a LazyFrame pulls only on collect") {
     CHECK_FALSE(default_runtime().submit(std::move(again)).get().has_value());
 }
 
-TEST_CASE("arrow stream: a null stream and a stream with no batch are errors") {
+TEST_CASE("arrow stream: a null stream is an error") {
     CHECK_FALSE(series_from_arrow_stream(nullptr).has_value());
     CHECK_FALSE(dataframe_from_arrow_stream(nullptr).has_value());
     CHECK_FALSE(lazyframe_from_arrow_stream(nullptr).has_value());
+}
+
+TEST_CASE("arrow stream: a stream with no batch gives no rows of its type") {
+    ArrowSchema text;
+    REQUIRE(ArrowSchemaInitFromType(&text, NANOARROW_TYPE_STRING) ==
+            NANOARROW_OK);
+    ArrowArrayStream none;
+    REQUIRE(ArrowBasicArrayStreamInit(&none, &text, 0) == NANOARROW_OK);
+    Series s = dftu_utils_test::ok(series_from_arrow_stream(&none));
+    CHECK(s.length() == 0);
+    CHECK(s.type() == TypeId::String);
+
+    ArrowSchema row;
+    ArrowSchemaInit(&row);
+    REQUIRE(ArrowSchemaSetTypeStruct(&row, 2) == NANOARROW_OK);
+    REQUIRE(ArrowSchemaSetType(row.children[0], NANOARROW_TYPE_INT64) ==
+            NANOARROW_OK);
+    REQUIRE(ArrowSchemaSetName(row.children[0], "i") == NANOARROW_OK);
+    REQUIRE(ArrowSchemaSetType(row.children[1], NANOARROW_TYPE_STRING) ==
+            NANOARROW_OK);
+    REQUIRE(ArrowSchemaSetName(row.children[1], "s") == NANOARROW_OK);
+    ArrowArrayStream rows;
+    REQUIRE(ArrowBasicArrayStreamInit(&rows, &row, 0) == NANOARROW_OK);
+    DataFrame f = dftu_utils_test::ok(dataframe_from_arrow_stream(&rows));
+    CHECK(f.num_rows() == 0);
+    REQUIRE(f.columns.size() == 2);
+    CHECK(f.names[0] == "i");
+    CHECK(f.columns[0].type() == TypeId::Int64);
+    CHECK(f.columns[1].type() == TypeId::String);
 }

@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
@@ -14,6 +15,7 @@
 #include <dftracer/utils/trace/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/trace/index/index.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/table/table_decode.h>
 #include <dftracer/utils/trace/table/table_source.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -21,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::table;
@@ -114,6 +117,34 @@ dstd::String gz_lines(dstd::StringView text, std::size_t member_bytes) {
         REQUIRE(member.has_value());
         all.append(reinterpret_cast<const char*>(member->data()),
                    member->size());
+        at = end;
+    }
+    return all;
+}
+
+// gz_lines, with a file name and an unknown OS in the header of each member
+// from `named` to `named_end`, a header the member scan does not mark.
+dstd::String gz_lines_named(dstd::StringView text, std::size_t member_bytes,
+                            std::size_t named,
+                            std::size_t named_end = SIZE_MAX) {
+    fileio::compress::GzipMemberCompressor comp(6);
+    dstd::String all;
+    std::size_t at = 0;
+    for (std::size_t m = 0; at < text.size(); ++m) {
+        std::size_t end = std::min(text.size(), at + member_bytes);
+        const std::size_t nl = text.find('\n', end > 0 ? end - 1 : 0);
+        end = nl == dstd::StringView::npos ? text.size() : nl + 1;
+        const auto piece = text.substr(at, end - at);
+        auto member = comp.compress_member(piece.data(), piece.size());
+        REQUIRE(member.has_value());
+        dstd::String bytes(reinterpret_cast<const char*>(member->data()),
+                           member->size());
+        if (m >= named && m < named_end) {
+            bytes[3] = 0x08;
+            bytes[9] = 50;
+            bytes.insert(10, dstd::StringView("n\0", 2));
+        }
+        all += bytes;
         at = end;
     }
     return all;
@@ -226,6 +257,275 @@ TEST_SUITE("trace::table source") {
         const dstd::String message(opened.error().message());
         CHECK(message.find(table) != dstd::String::npos);
         CHECK(message.find(trace) != dstd::String::npos);
+    }
+
+    TEST_CASE("tables among traces are flagged, tables alone are not") {
+        TestEnvironment env(0);
+        const dstd::String table = env.dir() + "/a.pfw.gz";
+        const dstd::String trace = env.dir() + "/b.pfw";
+        const dstd::String bad = env.dir() + "/c.pfw";
+        put(table, gz(table_text(edge_rows(), 6), 64));
+        put(trace, "[\n{\"name\":\"n\",\"ph\":\"X\",\"ts\":1}\n");
+        put(bad, header_line(header_args(0, "2")));
+        const dstd::StringView mixed[] = {trace, table, table};
+        auto flags = tables_among_traces(mixed);
+        REQUIRE(flags.has_value());
+        CHECK(*flags == dstd::Vector<std::uint8_t>{0, 1, 1});
+        const dstd::StringView alone[] = {table, table};
+        auto none = tables_among_traces(alone);
+        REQUIRE(none.has_value());
+        CHECK(*none == dstd::Vector<std::uint8_t>{0, 0});
+        CHECK(tables_among_traces({})->empty());
+        const dstd::StringView broken[] = {trace, bad};
+        CHECK_FALSE(tables_among_traces(broken).has_value());
+    }
+
+    TEST_CASE("a whole read in slabs equals a read in one slab") {
+        TestEnvironment env(0);
+        dstd::String rows;
+        const std::size_t n = 40000;
+        for (std::size_t i = 0; i < n; ++i)
+            rows += row(static_cast<std::int64_t>(i), dstd::fmt<"{}.5">(i % 97),
+                        "\"text of a row\"");
+        const dstd::String text = table_text(rows, n);
+        const dstd::String inside = env.dir() + "/inside.pfw.gz";
+        const dstd::String at_ends = env.dir() + "/ends.pfw.gz";
+        put(inside, gz(text, 50000));
+        put(at_ends, gz_lines(text, 50000));
+        for (const dstd::String* path : {&inside, &at_ends}) {
+            auto source = open_one(*path);
+            reset_read_counters();
+            DataFrame one = collect(dataframe::LazyFrame::scan(source));
+            DataFrame slabs = collect(
+                dataframe::LazyFrame::scan(source).memory_budget(16u << 20));
+            CHECK(read_counters().direct_files == 2);
+            REQUIRE(slabs.num_rows() == static_cast<std::int64_t>(n));
+            CHECK(slabs.columns[0].encoding() == dataframe::Encoding::Chunked);
+            CHECK(ints(slabs, 0) == ints(one, 0));
+            const auto f_slabs = slabs.columns[1].materialize();
+            const auto f_one = one.columns[1].materialize();
+            const auto s_slabs = slabs.columns[2].materialize();
+            const auto s_one = one.columns[2].materialize();
+            for (std::int64_t r = 0; r < slabs.num_rows(); ++r) {
+                REQUIRE(f_slabs.values<double>()[r] ==
+                        f_one.values<double>()[r]);
+                REQUIRE(s_slabs.string_at(r) == s_one.string_at(r));
+            }
+        }
+    }
+
+    TEST_CASE(
+        "a slab read keeps a last line with no newline and empty tables") {
+        TestEnvironment env(0);
+        dstd::String rows;
+        const std::size_t n = 30000;
+        for (std::size_t i = 0; i < n; ++i)
+            rows += row(static_cast<std::int64_t>(i), "0.5", "\"x\"");
+        rows.pop_back();
+        const dstd::String cut_end = env.dir() + "/cut.pfw.gz";
+        put(cut_end, gz(table_text(rows, n), 40000));
+        const dstd::String empty = env.dir() + "/empty.pfw.gz";
+        put(empty, gz(table_text("", 0), 40000));
+        auto cut_source = open_one(cut_end);
+        DataFrame all = collect(
+            dataframe::LazyFrame::scan(cut_source).memory_budget(16u << 20));
+        CHECK(all.num_rows() == static_cast<std::int64_t>(n));
+        CHECK(ints(all, 0).back() == static_cast<std::int64_t>(n - 1));
+        auto empty_source = open_one(empty);
+        DataFrame none = collect(
+            dataframe::LazyFrame::scan(empty_source).memory_budget(16u << 20));
+        CHECK(none.num_rows() == 0);
+        CHECK(none.columns.size() == 3);
+    }
+
+    TEST_CASE(
+        "a table far larger than the budget reads directly, a slab at "
+        "a time") {
+        TestEnvironment env(0);
+        dstd::String rows;
+        const std::size_t n = 150000;
+        for (std::size_t i = 0; i < n; ++i)
+            rows +=
+                row(static_cast<std::int64_t>(i), dstd::fmt<"{}.25">(i % 1013),
+                    dstd::fmt<"\"r{}\"">(i * 7919 % 100003));
+        const dstd::String text = table_text(rows, n);
+        REQUIRE(text.size() > (std::size_t{8} << 20));
+        const dstd::String members = env.dir() + "/members.pfw.gz";
+        const dstd::String one = env.dir() + "/one.pfw.gz";
+        const dstd::String plain = env.dir() + "/plain.pfw";
+        put(members, gz_lines(text, 64u << 10));
+        put(one, gz(text, text.size()));
+        put(plain, text);
+        for (const dstd::String* path : {&members, &one, &plain}) {
+            CAPTURE(*path);
+            auto source = open_one(*path);
+            reset_read_counters();
+            DataFrame got = collect(
+                dataframe::LazyFrame::scan(source).memory_budget(16u << 20));
+            CHECK(read_counters().direct_files == 1);
+            CHECK(read_counters().streamed_files == 0);
+            REQUIRE(got.num_rows() == static_cast<std::int64_t>(n));
+            const auto ids = ints(got, 0);
+            bool in_order = true;
+            for (std::size_t i = 0; i < n; ++i)
+                in_order = in_order && ids[i] == static_cast<std::int64_t>(i);
+            CHECK(in_order);
+            const auto s = got.columns[2].materialize();
+            CHECK(s.string_at(static_cast<std::int64_t>(n - 1)) ==
+                  dstd::fmt<"r{}">((n - 1) * 7919 % 100003));
+        }
+    }
+
+    TEST_CASE(
+        "a member whose mark is hidden inflates alone and the rest in "
+        "parallel") {
+        TestEnvironment env(0);
+        dstd::String text;
+        for (std::size_t i = 0; i < 40000; ++i)
+            text += row(static_cast<std::int64_t>(i), "0.5",
+                        dstd::fmt<"\"v{}\"">(i * 31 % 977));
+        const dstd::String path = env.dir() + "/one_named.pfw.gz";
+        put(path, gz_lines_named(text, 32u << 10, 5, 6));
+        auto file = dstd::File::open(dstd::PathView(path), {});
+        REQUIRE(file.has_value());
+        auto size = file->size();
+        REQUIRE(size.has_value());
+        trace::table::detail::SlabReader reader(*file, *size, true, 128u << 10);
+        dstd::String got;
+        for (;;) {
+            auto next = default_runtime().block_on(reader.next());
+            REQUIRE(next.has_value());
+            if (next->size == 0) break;
+            got.append(next->text(), next->size);
+        }
+        CHECK(got == text);
+        CHECK_FALSE(reader.stats().inflated_in_order);
+        CHECK(reader.stats().members_alone >= 1);
+        CHECK(reader.stats().members_in_parallel > 10);
+    }
+
+    TEST_CASE("an empty member is not the end of a slab read") {
+        TestEnvironment env(0);
+        dstd::String head, rest;
+        for (std::size_t i = 0; i < 100; ++i)
+            head += row(static_cast<std::int64_t>(i), "0.5", "\"a\"");
+        for (std::size_t i = 100; i < 200; ++i)
+            rest += row(static_cast<std::int64_t>(i), "0.5", "\"b\"");
+        const dstd::String path = env.dir() + "/empty_member.pfw.gz";
+        fileio::compress::GzipMemberCompressor comp(6);
+        auto empty = comp.compress_member("", 0);
+        REQUIRE(empty.has_value());
+        const dstd::String none(reinterpret_cast<const char*>(empty->data()),
+                                empty->size());
+        put(path, gz_lines(head, head.size()) + none +
+                      gz_lines_named(rest, rest.size(), 0));
+        auto file = dstd::File::open(dstd::PathView(path), {});
+        REQUIRE(file.has_value());
+        auto size = file->size();
+        REQUIRE(size.has_value());
+        trace::table::detail::SlabReader reader(*file, *size, true, 128u << 10);
+        dstd::String got;
+        for (;;) {
+            auto next = default_runtime().block_on(reader.next());
+            REQUIRE(next.has_value());
+            if (next->size == 0) break;
+            got.append(next->text(), next->size);
+        }
+        CHECK(got == head + rest);
+    }
+
+    TEST_CASE("a member past the hold streams a slab at a time") {
+        TestEnvironment env(0);
+        const dstd::String line = row(1, "0.5", "\"same text in every row\"");
+        dstd::String text;
+        while (text.size() < (std::size_t{70} << 20)) text += line;
+        const dstd::String path = env.dir() + "/huge_member.pfw.gz";
+        // A small member first, so the big one is not the first held.
+        const std::size_t small = line.size() * 10;
+        put(path,
+            gz(dstd::StringView(text).substr(0, small), small) +
+                gz(dstd::StringView(text).substr(small), text.size() - small));
+        auto file = dstd::File::open(dstd::PathView(path), {});
+        REQUIRE(file.has_value());
+        auto size = file->size();
+        REQUIRE(size.has_value());
+        const std::size_t slab = 128u << 10;
+        trace::table::detail::SlabReader reader(*file, *size, true, slab);
+        std::size_t total = 0;
+        std::size_t largest = 0;
+        bool same = true;
+        for (;;) {
+            auto next = default_runtime().block_on(reader.next());
+            REQUIRE(next.has_value());
+            if (next->size == 0) break;
+            same = same && std::memcmp(next->text(), text.data() + total,
+                                       next->size) == 0;
+            total += next->size;
+            largest = std::max(largest, next->size);
+        }
+        CHECK(total == text.size());
+        CHECK(same);
+        CHECK(largest <= (std::size_t{4} << 20));
+        CHECK(reader.stats().inflated_in_order);
+    }
+
+    TEST_CASE(
+        "a table with no columns still counts its rows in a direct read") {
+        TestEnvironment env(0);
+        const dstd::String path = env.dir() + "/no_columns.pfw";
+        dstd::String text = header_line(
+            "{\"format\":\"dftu.table\",\"format_version\":1,\"table\":\"t\","
+            "\"nrows\":3,\"index\":[],"
+            "\"index_names\":[],\"fields\":[],\"meta\":{}}");
+        for (int i = 0; i < 3; ++i)
+            text +=
+                "{\"name\":\"t\",\"cat\":\"dftu\",\"ts\":0,\"ph\":3,\"pid\":0,"
+                "\"tid\":0,\"args\":{}}\n";
+        put(path, text);
+        auto source = open_one(path);
+        DataFrame got =
+            collect(dataframe::LazyFrame::scan(source).with_row_index("r"));
+        CHECK(got.num_rows() == 3);
+    }
+
+    TEST_CASE("members the scan does not mark read in full after a slab") {
+        TestEnvironment env(0);
+        dstd::String rows;
+        const std::size_t n = 60000;
+        const dstd::String same(160, 'x');
+        for (std::size_t i = 0; i < n; ++i)
+            rows += row(static_cast<std::int64_t>(i), "0.5",
+                        dstd::fmt<"\"{}\"">(dstd::StringView(same)));
+        const dstd::String path = env.dir() + "/named.pfw.gz";
+        put(path, gz_lines_named(table_text(rows, n), 256u << 10, 6));
+        auto source = open_one(path);
+        DataFrame all = collect(
+            dataframe::LazyFrame::scan(source).memory_budget(16u << 20));
+        CHECK(all.num_rows() == static_cast<std::int64_t>(n));
+        CHECK(ints(all, 0).back() == static_cast<std::int64_t>(n - 1));
+    }
+
+    TEST_CASE("a parse error in a slab read names the row of the file") {
+        TestEnvironment env(0);
+        dstd::String rows;
+        const std::size_t n = 30000;
+        for (std::size_t i = 0; i < n; ++i)
+            rows += i == 25000
+                        ? row(static_cast<std::int64_t>(i), "\"no\"", "\"x\"")
+                        : row(static_cast<std::int64_t>(i), "0.5", "\"x\"");
+        const dstd::String path = env.dir() + "/bad.pfw.gz";
+        put(path, gz_lines(table_text(rows, n), 40000));
+        auto source = open_one(path);
+        const auto message = [&](std::uint64_t budget) {
+            auto lf = dataframe::LazyFrame::scan(source);
+            if (budget != 0) lf = lf.memory_budget(budget);
+            auto done = default_runtime().block_on(lf.collect());
+            REQUIRE_FALSE(done.has_value());
+            return dstd::String(done.error().message());
+        };
+        const dstd::String whole = message(0);
+        CHECK(whole.find("row 25000") != dstd::String::npos);
+        CHECK(message(16u << 20) == whole);
     }
 
     TEST_CASE("parts must agree on their fields before any row is read") {

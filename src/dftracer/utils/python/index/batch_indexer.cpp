@@ -749,18 +749,38 @@ PidSet file_pids(const dftracer::utils::trace::index::Snapshot& snapshot,
     return pids;
 }
 
-// Every indexed file with its PID set, keyed by the path the index names it by.
-PidsByPath all_file_pids(dftracer::utils::dstd::StringView index_path) {
+// The PID set of each of `paths` that the index holds, keyed by the path the
+// index names it by. The index root may hold files of other inputs too.
+PidsByPath all_file_pids(
+    dftracer::utils::dstd::StringView index_path,
+    dftracer::utils::dstd::Span<const dftracer::utils::dstd::String> paths) {
     const auto snapshot = dftracer::utils::python::core::py_unwrap(
         dftracer::utils::trace::index::plan::open_snapshot(index_path));
+    dftracer::utils::dstd::HashSet<dftracer::utils::dstd::String> wanted;
+    for (const auto& p : paths) wanted.insert(fileio::get_logical_path(p));
     PidsByPath out;
     for (const auto& file :
          dftracer::utils::python::core::py_unwrap(snapshot.files())) {
         const auto path = file.path();
-        out.emplace(dftracer::utils::dstd::String(path.data(), path.size()),
-                    file_pids(snapshot, file));
+        dftracer::utils::dstd::String key(path.data(), path.size());
+        if (!wanted.contains(key)) continue;
+        auto pids = file_pids(snapshot, file);
+        out.emplace(std::move(key), std::move(pids));
     }
     return out;
+}
+
+// The PID sets of this indexer's own files.
+bool indexer_file_pids(IndexerObject* self, PidsByPath& out) {
+    auto idx_opt = resolve_index_path(self);
+    if (!idx_opt) return false;
+    const dftracer::utils::dstd::String index_path = std::move(*idx_opt);
+    return with_indexer(self, [&](dftracer::utils::trace::index::Indexer ix) {
+        out = all_file_pids(
+            index_path,
+            dftracer::utils::dstd::Span<const dftracer::utils::dstd::String>(
+                ix.paths().data(), ix.paths().size()));
+    });
 }
 
 PyObject* pids_set(const PidSet& pids) {
@@ -826,25 +846,15 @@ static PyObject* Indexer_query_file_pids(IndexerObject* self, PyObject* args) {
 
 static PyObject* Indexer_query_all_file_pids(IndexerObject* self,
                                              PyObject* Py_UNUSED(ignored)) {
-    auto idx_opt = resolve_index_path(self);
-    if (!idx_opt) return nullptr;
-    dftracer::utils::dstd::String index_path = std::move(*idx_opt);
-
     PidsByPath all_pids;
-    if (!run_blocking_r([&] { return all_file_pids(index_path); }, all_pids))
-        return nullptr;
+    if (!indexer_file_pids(self, all_pids)) return nullptr;
     return pids_by_path_dict(all_pids);
 }
 
 static PyObject* Indexer_query_file_info(IndexerObject* self,
                                          PyObject* Py_UNUSED(ignored)) {
-    auto idx_opt = resolve_index_path(self);
-    if (!idx_opt) return nullptr;
-    dftracer::utils::dstd::String index_path = std::move(*idx_opt);
-
     PidsByPath all_pids;
-    if (!run_blocking_r([&] { return all_file_pids(index_path); }, all_pids))
-        return nullptr;
+    if (!indexer_file_pids(self, all_pids)) return nullptr;
     return pids_by_path_dict(all_pids);
 }
 
@@ -923,13 +933,15 @@ static PyMethodDef Indexer_methods[] = {
      METH_NOARGS,
      "query_all_file_pids()\n"
      "--\n\n"
-     "Query PIDs for all indexed files.\n\n"
+     "Query PIDs for every input file of this indexer; other files of the\n"
+     "index root, such as a table written next to the traces, are left out.\n\n"
      "Returns:\n"
      "    dict mapping trace path to set of PIDs.\n"},
     {"query_file_info", DFTU_PYCFUNCTION(Indexer_query_file_info), METH_NOARGS,
      "query_file_info()\n"
      "--\n\n"
-     "Query every indexed file with its PIDs in one call.\n\n"
+     "Query every input file of this indexer with its PIDs in one call;\n"
+     "other files of the index root are left out.\n\n"
      "Returns:\n"
      "    dict mapping trace path to set of PIDs.\n"},
     {NULL, NULL, 0, NULL}};

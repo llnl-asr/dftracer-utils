@@ -33,6 +33,7 @@
 #include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/index/write_feed.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/table/table_source.h>
 
 #include <algorithm>
 #include <utility>
@@ -127,6 +128,28 @@ struct Indexer::Impl {
             out.push_back(std::move(entry));
         }
         return out;
+    }
+
+    /// Drops the table files from `paths` (and `opened`) when they sit
+    /// among traces, so every call reads the same files.
+    dstd::Result<void> drop_tables() {
+        dstd::Vector<dstd::StringView> names(paths.begin(), paths.end());
+        auto skip = table::tables_among_traces(
+            dstd::Span<const dstd::StringView>(names.data(), names.size()));
+        if (!skip) return skip.error();
+        const bool scanned = !opened.empty();
+        std::size_t kept = 0;
+        for (std::size_t i = 0; i < paths.size(); ++i) {
+            if ((*skip)[i] != 0) continue;
+            if (kept != i) {
+                paths[kept] = std::move(paths[i]);
+                if (scanned) opened[kept] = std::move(opened[i]);
+            }
+            ++kept;
+        }
+        paths.erase(paths.begin() + kept, paths.end());
+        if (scanned) opened.erase(opened.begin() + kept, opened.end());
+        return {};
     }
 
     /// `entries` split by reader: the files a registered plugin file format
@@ -481,6 +504,7 @@ dstd::Result<build::ChunkIndexerConfig> index_chunk_config(
 }
 
 dstd::Result<Indexer> Indexer::finish_open(dstd::SharedPtr<Impl> impl) {
+    if (auto dropped = impl->drop_tables(); !dropped) return dropped.error();
     for (const auto& [index_path, traces] : impl->by_index())
         if (auto loaded = load_index_schemas(index_path); !loaded)
             return loaded.error();

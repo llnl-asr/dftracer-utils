@@ -79,8 +79,9 @@ dstd::Result<void> to_arrow_stream(dataframe::LazyFrame plan, Runtime& runtime,
  * @brief Imports every batch of `in` as a Series, one chunk per batch, and
  * takes ownership of `in`: this call releases it exactly once, on every path.
  *
- * An InvalidArgument error for a null `in`, for a batch of a type the engine
- * cannot hold, and for a stream that ends with no batch.
+ * A stream that ends with no batch gives an empty Series of the stream type.
+ * An InvalidArgument error for a null `in` and for a type the engine cannot
+ * hold.
  */
 dstd::Result<dataframe::Series> series_from_arrow_stream(ArrowArrayStream* in);
 
@@ -89,9 +90,10 @@ dstd::Result<dataframe::Series> series_from_arrow_stream(ArrowArrayStream* in);
  * batch per column, and takes ownership of `in`: this call releases it exactly
  * once, on every path.
  *
- * An InvalidArgument error for a null `in`, for a stream that ends with no
- * batch, and for a batch that is not a struct or whose columns differ from the
- * first batch's. A NotFound error for a column type the engine cannot hold.
+ * A stream that ends with no batch gives a frame of no rows with the stream
+ * columns. An InvalidArgument error for a null `in` and for a batch that is
+ * not a struct or whose columns differ from the first batch's. A NotFound
+ * error for a column type the engine cannot hold.
  */
 dstd::Result<dataframe::DataFrame> dataframe_from_arrow_stream(
     ArrowArrayStream* in);

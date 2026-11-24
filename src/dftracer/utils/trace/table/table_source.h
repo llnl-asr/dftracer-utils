@@ -47,9 +47,10 @@ void reset_read_counters();
 /// back to a trace read. A file that cannot be opened or read is not a table,
 /// so the trace path reports it. When no file is a table the result is empty.
 /// A mix of tables and traces is an InvalidArgument error that names one file
-/// of each kind. Tables must agree on their fields (name, dtype, ordered,
-/// elem, arrow_type, the kind of their labels) and index names, else it is an
-/// InvalidArgument error before any row is read.
+/// of each kind; a View leaves the tables out first (@ref tables_among_traces).
+/// Tables must agree on their fields (name, dtype, ordered, elem, arrow_type,
+/// the kind of their labels) and index names, else it is an InvalidArgument
+/// error before any row is read.
 ///
 /// The files of one folder are read in part-number order (`part-2` before
 /// `part-10`); folders keep the order of their first file in `inputs`. The
@@ -59,6 +60,22 @@ void reset_read_counters();
 /// else it reads every chunk. It never builds or changes an index.
 dstd::Result<dstd::Optional<dstd::SharedPtr<const dataframe::Source>>>
 open_table_inputs(dstd::Span<const TableInput> inputs);
+
+/// A flag per file of `paths`, 1 for a table file and 0 for any other: what
+/// @ref open_table_inputs takes for a table, with its errors for a line 1 that
+/// claims dftu.table but is malformed. Reads the first line of each file, in
+/// parallel.
+dstd::Result<dstd::Vector<std::uint8_t>> table_flags(
+    dstd::Span<const dstd::StringView> paths);
+
+/// A flag per file of `paths`, 1 for each table file when `paths` also holds a
+/// file that is not a table, else all 0: a folder may hold traces and the
+/// tables written next to them, and a read of it reads the traces. A table is
+/// what @ref open_table_inputs takes for one, and its errors are the same: a
+/// line 1 that claims dftu.table but is malformed is an error. Reads the first
+/// line of each file, in parallel.
+dstd::Result<dstd::Vector<std::uint8_t>> tables_among_traces(
+    dstd::Span<const dstd::StringView> paths);
 
 /// The args object (JSON text) of the header record of each file of a source
 /// made by @ref open_table_inputs, in read order; empty for any other source.

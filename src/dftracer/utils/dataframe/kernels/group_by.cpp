@@ -65,10 +65,23 @@ struct Groups {
     dftu_series* keys = nullptr;
 };
 
+// Every null key is one group, first seen where its first row is; its key
+// bytes are zeros under a null bit, whatever bytes the rows hold.
+std::int32_t null_group_of(
+    std::int32_t& null_group,
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& distinct,
+    std::size_t width) {
+    if (null_group < 0) {
+        null_group = static_cast<std::int32_t>(distinct.size());
+        distinct.push_back(dftracer::utils::dstd::String(width, '\0'));
+    }
+    return null_group;
+}
+
 // String/Binary(/Large) key hashing at offset width `Off`: assigns each row
 // its first-seen distinct-value group index.
 template <class Off>
-void hash_string_keys(
+std::int32_t hash_string_keys(
     const dftu_series& k, dftracer::utils::dstd::Vector<std::int32_t>& group_of,
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& distinct) {
     const Off* offsets =
@@ -76,7 +89,13 @@ void hash_string_keys(
     const char* data = reinterpret_cast<const char*>(k.data.data());
     dftracer::utils::dstd::HashMap<dftracer::utils::dstd::String, std::int32_t>
         idx;
+    std::int32_t null_group = -1;
     for (std::int64_t i = 0; i < k.length; ++i) {
+        if (!is_valid(k, i)) {
+            group_of[static_cast<std::size_t>(i)] =
+                null_group_of(null_group, distinct, 0);
+            continue;
+        }
         dftracer::utils::dstd::String key(
             data + offsets[i],
             static_cast<std::size_t>(offsets[i + 1] - offsets[i]));
@@ -85,6 +104,7 @@ void hash_string_keys(
         if (ins) distinct.push_back(it->first);
         group_of[static_cast<std::size_t>(i)] = it->second;
     }
+    return null_group;
 }
 
 // Assign each row to a group by hashing the key's raw bytes (numeric value or
@@ -109,11 +129,14 @@ Groups build_groups(const dftu_series* keys_in) {
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> distinct;
     Groups g;
     g.group_of.resize(static_cast<std::size_t>(k->length));
+    std::int32_t null_group = -1;
     if (str) {
         if (is_wide_offset_type(k->type))
-            hash_string_keys<std::int64_t>(*k, g.group_of, distinct);
+            null_group =
+                hash_string_keys<std::int64_t>(*k, g.group_of, distinct);
         else
-            hash_string_keys<std::int32_t>(*k, g.group_of, distinct);
+            null_group =
+                hash_string_keys<std::int32_t>(*k, g.group_of, distinct);
     } else {
         dftracer::utils::dstd::HashMap<dftracer::utils::dstd::String,
                                        std::int32_t>
@@ -125,6 +148,11 @@ Groups build_groups(const dftu_series* keys_in) {
                               k->type == TypeId::Float32 ||
                               k->type == TypeId::Float64;
         for (std::int64_t i = 0; i < k->length; ++i) {
+            if (!is_valid(*k, i)) {
+                g.group_of[static_cast<std::size_t>(i)] =
+                    null_group_of(null_group, distinct, width);
+                continue;
+            }
             dftracer::utils::dstd::String key(
                 data + static_cast<std::size_t>(i) * width, width);
             if (is_float) {
@@ -181,6 +209,15 @@ Groups build_groups(const dftu_series* keys_in) {
         if (!bytes.empty())
             std::memcpy(writable(out->data), bytes.data(), bytes.size());
         g.keys = out;
+    }
+    if (null_group >= 0 && g.keys) {
+        g.keys->validity = dftracer::utils::dataframe::new_buffer(
+            static_cast<std::size_t>(g.group_count + 7) / 8);
+        std::uint8_t* bits = writable(g.keys->validity);
+        std::memset(bits, 0xff, g.keys->validity.size());
+        bits[null_group >> 3] &=
+            static_cast<std::uint8_t>(~(1u << (null_group & 7)));
+        g.keys->null_count = 1;
     }
     if (materialized) dftu_series_free(materialized);
     return g;

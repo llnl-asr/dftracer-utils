@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
+#include <dftracer/utils/dataframe/kernels/dictionary.h>
 #include <dftracer/utils/dataframe/kernels/elementwise.h>
 #include <dftracer/utils/dataframe/kernels/field_stat.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
@@ -1092,6 +1093,30 @@ TEST_SUITE("vec") {
         CHECK(g.columns[0].data<std::int32_t>()[1] == 2);
         CHECK(g.columns[1].data<std::int64_t>()[0] == 90);  // 10+30+50
         CHECK(g.columns[1].data<std::int64_t>()[1] == 60);  // 20+40
+    }
+
+    TEST_CASE("group_by puts every null key in one null group") {
+        // Different values sit under the nulls, as a borrowed masked array has.
+        dstd::Vector<std::int64_t> key{1, 7, 8, 1};
+        const std::uint8_t valid = 0b1001;
+        dstd::Vector<std::int64_t> val{10, 20, 30, 40};
+        DataFrame g =
+            group_by(Series::flat_i64(key.data(), 4, &valid),
+                     Series::flat_i64(val.data(), 4), DFTU_REDUCE_SUM);
+        REQUIRE(g.num_rows() == 2);
+        CHECK_FALSE(g.columns[0].is_null(0));
+        CHECK(g.columns[0].data<std::int64_t>()[0] == 1);
+        CHECK(g.columns[0].is_null(1));
+        CHECK(g.columns[1].data<std::int64_t>()[0] == 50);
+        CHECK(g.columns[1].data<std::int64_t>()[1] == 50);
+
+        const dstd::Vector<dstd::StringView> words{"a", "x", "y", "a"};
+        DataFrame s = group_by(
+            Series::strings(dstd::Span<const dstd::StringView>(words), &valid),
+            Series::flat_i64(val.data(), 4), DFTU_REDUCE_SUM);
+        REQUIRE(s.num_rows() == 2);
+        CHECK(s.columns[0].string_at(0) == "a");
+        CHECK(s.columns[0].is_null(1));
     }
 
     TEST_CASE("cast between numeric types") {
@@ -2589,6 +2614,49 @@ TEST_SUITE("vec") {
         CHECK(g.columns[2].data<std::int64_t>()[1] == 20);  // cpu sum 5+15
     }
 
+    TEST_CASE("partition_id puts every null key in one part") {
+        // Different values sit under the nulls, as a borrowed masked array has.
+        const std::int64_t keys[] = {7, 8, 9, 10, 11, 12, 13, 14};
+        const std::uint8_t none[] = {0};
+        DataFrame b;
+        b.names = dstd::make_shared_strings({"k"});
+        b.columns.push_back(Series::flat_i64(keys, 8, none));
+        REQUIRE(b.columns[0].null_count() == 8);
+        Series ids = dftu_utils_test::ok(dataframe::partition_id(
+            b, dftu_utils_test::span_of<dstd::String>({"k"}), 8));
+        const std::int32_t* id = ids.data<std::int32_t>();
+        for (std::int64_t r = 1; r < 8; ++r) CHECK(id[r] == id[0]);
+    }
+
+    TEST_CASE(
+        "partition_id puts a null dictionary entry with the other nulls") {
+        const dstd::Vector<dstd::StringView> vals{"", "a"};
+        const std::uint8_t entry_valid = 0b10;
+        const dstd::Vector<std::int32_t> codes{0, 1};
+        DataFrame dict;
+        dict.names = dstd::make_shared_strings({"k"});
+        dict.columns.push_back(dictionary_from_codes(
+            codes,
+            Series::strings(dstd::Span<const dstd::StringView>(vals),
+                            &entry_valid),
+            nullptr));
+        REQUIRE(dict.columns[0].is_null(0));
+        const std::uint8_t row_valid = 0b10;
+        DataFrame flat;
+        flat.names = dstd::make_shared_strings({"k"});
+        flat.columns.push_back(Series::strings(
+            dstd::Span<const dstd::StringView>(vals), &row_valid));
+        REQUIRE(flat.columns[0].is_null(0));
+        const dstd::String key[] = {"k"};
+        const dstd::Span<const dstd::String> keys(key, 1);
+        Series a =
+            dftu_utils_test::ok(dataframe::partition_id(dict, keys, 256));
+        Series b =
+            dftu_utils_test::ok(dataframe::partition_id(flat, keys, 256));
+        CHECK(a.data<std::int32_t>()[0] == b.data<std::int32_t>()[0]);
+        CHECK(a.data<std::int32_t>()[1] == b.data<std::int32_t>()[1]);
+    }
+
     TEST_CASE("hash_partition co-locates equal keys and preserves rows") {
         DataFrame b;
         b.names = dstd::make_shared_strings({"cat", "dur"});
@@ -3254,6 +3322,36 @@ TEST_SUITE("vec") {
         CHECK(Series::flat_f64(f.data(), 100).is_sorted());
         f[10] = 999.0;  // real inversion before the NaN
         CHECK_FALSE(Series::flat_f64(f.data(), 100).is_sorted());
+    }
+
+    TEST_CASE("is_sorted, rolling and search_sorted never read under a null") {
+        // Values that would decide each answer sit under the nulls, as a
+        // borrowed masked array can have.
+        const double inf = std::numeric_limits<double>::infinity();
+        dstd::Vector<double> v{inf, 1.0, 2.0, 3.0};
+        const std::uint8_t first_null = 0b1110;
+        Series s = Series::flat_f64(v.data(), 4, &first_null);
+        Series sum = s.rolling(RollingOp::Sum, 2);
+        CHECK(sum.is_null(1));
+        CHECK(sum.data<double>()[2] == 3.0);
+        CHECK(sum.data<double>()[3] == 5.0);
+
+        dstd::Vector<std::int64_t> tail{1, 2, 99};
+        const std::uint8_t last_null = 0b011;
+        CHECK(Series::flat_i64(tail.data(), 3, &last_null).is_sorted());
+        tail[2] = 0;
+        CHECK(Series::flat_i64(tail.data(), 3, &last_null).is_sorted());
+        dstd::Vector<std::int64_t> head{0, 1, 2};
+        const std::uint8_t head_null = 0b110;
+        CHECK_FALSE(Series::flat_i64(head.data(), 3, &head_null).is_sorted());
+
+        dstd::Vector<std::int64_t> sorted{1, 5, 10};
+        dstd::Vector<std::int64_t> query{7};
+        const std::uint8_t none = 0;
+        Series at =
+            Series::flat_i64(sorted.data(), 3)
+                .search_sorted(Series::flat_i64(query.data(), 1, &none));
+        CHECK(at.data<std::int64_t>()[0] == 3);
     }
 
     TEST_CASE("A2 drop_nulls") {

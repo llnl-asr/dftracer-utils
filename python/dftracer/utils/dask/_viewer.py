@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
 
 from .._dataframe import DataFrame, PhaseArg, TimeUnitArg
+from .._discover import _without_tables
 from .._enums import coerce_bytes, coerce_duration
 from .._sink import TraceWriteOptions
 from ..dftracer_utils_ext import NUM_SHARDS
@@ -348,8 +349,10 @@ class DaskTraceViewer:
         return self._agg_clone(replace(self._plan, auto_numeric=True))
 
     def _shards(self) -> list[list[str]]:
+        # Before the split: a shard of tables only would read them as a table.
+        files = _without_tables(self._files)
         step = max(1, self._files_per_task)
-        return [self._files[i : i + step] for i in range(0, len(self._files), step)]
+        return [files[i : i + step] for i in range(0, len(files), step)]
 
     def _resolve_client(self) -> Client:
         if self._client is not None:

@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/fileio/compress/gzip_member_reader.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/trace/index/gzip/gzip_member_scanner.h>
 #include <dftracer/utils/trace/table/table_decode.h>
 #include <dftracer/utils/trace/table/table_header.h>
 
@@ -35,6 +38,9 @@ constexpr std::size_t MIN_PART_BYTES = std::size_t{256} << 10;
 // is corrupt or forged.
 constexpr std::size_t MAX_RATIO = 1032;
 constexpr std::size_t RATIO_SLACK = std::size_t{1} << 20;
+// The fewest compressed bytes a slab reader holds before it gives a member
+// whose end it cannot find to the in-order inflate.
+constexpr std::size_t HOLD_MIN = std::size_t{64} << 20;
 
 }  // namespace
 
@@ -78,10 +84,7 @@ bool has_gzip_magic(const unsigned char* bytes, std::size_t size) {
 namespace {
 
 std::uint32_t trailer_size(const unsigned char* end) {
-    return static_cast<std::uint32_t>(end[-4]) |
-           static_cast<std::uint32_t>(end[-3]) << 8 |
-           static_cast<std::uint32_t>(end[-2]) << 16 |
-           static_cast<std::uint32_t>(end[-1]) << 24;
+    return dstd::read_u32_le(end - 4);
 }
 
 dstd::Error corrupt() {
@@ -89,41 +92,49 @@ dstd::Error corrupt() {
                        "gzip data is corrupt or cut short");
 }
 
+// The most compressed bytes or member text a slab reader holds before it
+// streams the rest of the file in order.
+std::size_t hold_bytes(std::size_t slab) {
+    return std::max(4 * slab, HOLD_MIN);
+}
+
+// Inflates the member at `in` after the `out.size` bytes of `out`, doubling
+// `out` up to `limit` while it is too small.
+GzipDecode inflate_growing(GzipMemberDecompressor& dec, const unsigned char* in,
+                           std::size_t in_size, Buffer& out, std::size_t limit,
+                           fileio::compress::DecompressResult& res) {
+    for (;;) {
+        const GzipDecode status =
+            dec.decompress_status(in, in_size, out.data.get() + out.size,
+                                  out.capacity - out.size, res);
+        if (status != GzipDecode::InsufficientSpace || out.capacity >= limit)
+            return status;
+        out.reserve(std::min(out.capacity * 2, limit));
+    }
+}
+
 // Members decode one after another into a buffer that grows.
-dstd::Result<Buffer> inflate_in_order(const Buffer& comp, InflateStats& stats,
-                                      std::size_t max_bytes) {
-    const std::size_t limit =
-        std::min(comp.size * MAX_RATIO + RATIO_SLACK, max_bytes);
+dstd::Result<Buffer> inflate_in_order(const unsigned char* comp,
+                                      std::size_t comp_size,
+                                      InflateStats& stats) {
+    stats.inflated_in_order = true;
+    const std::size_t limit = comp_size * MAX_RATIO + RATIO_SLACK;
     GzipMemberDecompressor dec;
     if (!dec.valid())
         return common::make_error(ErrorCode::Compression,
                                   "failed to allocate a gzip decompressor");
     Buffer out = Buffer::with_capacity(std::min(
-        std::max<std::size_t>(comp.size * 4, std::size_t{1} << 20), limit));
+        std::max<std::size_t>(comp_size * 4, std::size_t{1} << 20), limit));
     std::size_t at = 0;
-    while (at < comp.size) {
+    while (at < comp_size) {
         fileio::compress::DecompressResult res{};
-        for (;;) {
-            const GzipDecode status = dec.decompress_status(
-                comp.data.get() + at, comp.size - at, out.data.get() + out.size,
-                out.capacity - out.size, res);
-            if (status == GzipDecode::Ok) break;
-            if (status != GzipDecode::InsufficientSpace) return corrupt();
-            if (out.capacity >= limit) {
-                if (limit == max_bytes) {
-                    stats.exceeded = true;
-                    return Buffer{};
-                }
-                return common::make_error(
-                    ErrorCode::Compression,
-                    "gzip data inflates past the deflate maximum ratio");
-            }
-            Buffer bigger =
-                Buffer::with_capacity(std::min(out.capacity * 2, limit));
-            std::memcpy(bigger.data.get(), out.data.get(), out.size);
-            bigger.size = out.size;
-            out = std::move(bigger);
-        }
+        const GzipDecode status =
+            inflate_growing(dec, comp + at, comp_size - at, out, limit, res);
+        if (status == GzipDecode::InsufficientSpace)
+            return common::make_error(
+                ErrorCode::Compression,
+                "gzip data inflates past the deflate maximum ratio");
+        if (status != GzipDecode::Ok) return corrupt();
         out.size += res.out_bytes;
         at += res.in_bytes;
     }
@@ -131,10 +142,80 @@ dstd::Result<Buffer> inflate_in_order(const Buffer& comp, InflateStats& stats,
     return out;
 }
 
-dstd::Result<Buffer> in_order(const Buffer& comp, InflateStats& stats,
-                              std::size_t max_bytes) {
-    stats.inflated_in_order = true;
-    return inflate_in_order(comp, stats, max_bytes);
+}  // namespace
+
+namespace {
+
+// Appends to `starts` each gzip member mark in bytes [from, size) of `base`: a
+// whole header that looks valid. Returns where the next scan starts.
+std::size_t find_marks(const unsigned char* base, std::size_t size,
+                       std::size_t from, dstd::Vector<std::size_t>& starts) {
+    constexpr std::size_t HEADER = 10;
+    std::size_t i = std::max<std::size_t>(from, 1);
+    while (i + HEADER <= size) {
+        const void* hit = std::memchr(base + i, 0x1f, size - (HEADER - 1) - i);
+        if (hit == nullptr) break;
+        i = static_cast<std::size_t>(static_cast<const unsigned char*>(hit) -
+                                     base);
+        if (index::gzip::gzip_header_looks_valid(base + i)) starts.push_back(i);
+        ++i;
+    }
+    return size >= HEADER ? std::max<std::size_t>(size - (HEADER - 1), 1) : 1;
+}
+
+// The output offset of each of members [0, count) of `base` from their
+// trailers, the member m spanning [starts[m], ends(m)). Returns how many lead
+// members are sane: a member that is too short or claims more than deflate can
+// give ends the count, as a false mark at its end gives.
+std::size_t claimed_sizes(const unsigned char* base,
+                          dstd::Span<const std::size_t> starts,
+                          std::size_t count, std::size_t end_of_last,
+                          dstd::Vector<std::size_t>& out_at) {
+    out_at.assign(count + 1, 0);
+    for (std::size_t m = 0; m < count; ++m) {
+        const std::size_t end =
+            m + 1 < starts.size() ? starts[m + 1] : end_of_last;
+        const std::size_t in_size = end - starts[m];
+        if (in_size < 18) return m;
+        const std::size_t claimed = trailer_size(base + end);
+        if (claimed > in_size * MAX_RATIO + 64) return m;
+        out_at[m + 1] = out_at[m] + claimed;
+    }
+    return count;
+}
+
+// Inflates members [0, count) in parallel into `out`, which holds
+// out_at[count] bytes. Returns the first member that is not a whole member of
+// its claimed size, as a false mark gives, or `count` when all are.
+dstd::Result<std::size_t> inflate_run(const unsigned char* base,
+                                      dstd::Span<const std::size_t> starts,
+                                      std::size_t count,
+                                      std::size_t end_of_last,
+                                      dstd::Span<const std::size_t> out_at,
+                                      unsigned char* out) {
+    dstd::Vector<std::uint8_t> good(count, 0);
+    auto ran = default_runtime().parallel_for(
+        static_cast<std::int64_t>(count), 1,
+        [&](std::int64_t lo, std::int64_t hi) {
+            GzipMemberDecompressor dec;
+            if (!dec.valid()) return;
+            for (std::int64_t m = lo; m < hi; ++m) {
+                const auto k = static_cast<std::size_t>(m);
+                const std::size_t end =
+                    k + 1 < starts.size() ? starts[k + 1] : end_of_last;
+                const std::size_t want = out_at[k + 1] - out_at[k];
+                fileio::compress::DecompressResult res{};
+                const GzipDecode status =
+                    dec.decompress_status(base + starts[k], end - starts[k],
+                                          out + out_at[k], want, res);
+                good[k] = status == GzipDecode::Ok && res.out_bytes == want &&
+                          res.in_bytes == end - starts[k];
+            }
+        });
+    if (!ran) return ran.error();
+    std::size_t first_bad = 0;
+    while (first_bad < count && good[first_bad]) ++first_bad;
+    return first_bad;
 }
 
 }  // namespace
@@ -143,60 +224,196 @@ dstd::Result<Buffer> in_order(const Buffer& comp, InflateStats& stats,
 // start, and the member's size in its trailer. The members decode in parallel
 // from those marks; any mark that is not a member, or a member that ends
 // elsewhere, sends the file to the in-order decode.
-dstd::Result<Buffer> inflate_gzip(const Buffer& comp, InflateStats& stats,
-                                  std::size_t max_bytes) {
+dstd::Result<Buffer> inflate_gzip(const Buffer& comp, InflateStats& stats) {
+    const unsigned char* base = comp.data.get();
     dstd::Vector<std::size_t> starts;
     starts.push_back(0);
-    const unsigned char* base = comp.data.get();
-    for (std::size_t i = 1; i + 4 <= comp.size;) {
-        const void* hit = std::memchr(base + i, 0x1f, comp.size - 3 - i);
-        if (hit == nullptr) break;
-        i = static_cast<std::size_t>(static_cast<const unsigned char*>(hit) -
-                                     base);
-        if (base[i + 1] == 0x8b && base[i + 2] == 0x08 && base[i + 3] == 0)
-            starts.push_back(i);
-        ++i;
-    }
-    const std::size_t members = starts.size();
-    dstd::Vector<std::size_t> in_end(members);
-    dstd::Vector<std::size_t> out_at(members + 1);
-    for (std::size_t m = 0; m < members; ++m) {
-        in_end[m] = m + 1 < members ? starts[m + 1] : comp.size;
-        const std::size_t in_size = in_end[m] - starts[m];
-        const std::size_t claimed = trailer_size(base + in_end[m]);
-        if (in_size < 18 || claimed > in_size * MAX_RATIO + 64)
-            return in_order(comp, stats, max_bytes);
-        out_at[m + 1] = out_at[m] + claimed;
-        if (out_at[m + 1] > max_bytes) {
-            stats.exceeded = true;
-            return Buffer{};
-        }
-    }
-    Buffer out = Buffer::with_capacity(out_at[members]);
-    out.size = out_at[members];
-    dstd::Vector<std::uint8_t> good(members, 0);
-    auto ran = default_runtime().parallel_for(
-        static_cast<std::int64_t>(members), 1,
-        [&](std::int64_t first, std::int64_t last) {
-            GzipMemberDecompressor dec;
-            if (!dec.valid()) return;
-            for (std::int64_t m = first; m < last; ++m) {
-                const auto k = static_cast<std::size_t>(m);
-                const std::size_t want = out_at[k + 1] - out_at[k];
-                fileio::compress::DecompressResult res{};
-                const GzipDecode status = dec.decompress_status(
-                    base + starts[k], in_end[k] - starts[k],
-                    out.data.get() + out_at[k], want, res);
-                good[k] = status == GzipDecode::Ok && res.out_bytes == want &&
-                          res.in_bytes == in_end[k] - starts[k];
-            }
-        });
-    if (!ran) return ran.error();
-    for (const std::uint8_t g : good)
-        if (!g) return in_order(comp, stats, max_bytes);
-    stats.members_in_parallel = members;
+    find_marks(base, comp.size, 1, starts);
+    dstd::Vector<std::size_t> out_at;
+    if (claimed_sizes(base, starts, starts.size(), comp.size, out_at) !=
+        starts.size())
+        return inflate_in_order(base, comp.size, stats);
+    const std::size_t bytes = out_at.back();
+    Buffer out = Buffer::with_capacity(bytes);
+    out.size = bytes;
+    auto ran = inflate_run(base, starts, starts.size(), comp.size, out_at,
+                           out.data.get());
+    if (!ran.has_value()) return ran.error();
+    if (*ran != starts.size()) return inflate_in_order(base, comp.size, stats);
+    stats.members_in_parallel += starts.size();
     out.seal();
     return out;
+}
+
+SlabReader::SlabReader(const dstd::File& file, std::uint64_t file_size,
+                       bool gzip, std::size_t slab_bytes)
+    : file_(file),
+      file_size_(file_size),
+      gzip_(gzip),
+      slab_(std::max<std::size_t>(slab_bytes, 1)) {
+    starts_.push_back(0);
+}
+
+dstd::Result<void> SlabReader::read_more(std::size_t want) {
+    want = static_cast<std::size_t>(
+        std::min<std::uint64_t>(want, file_size_ - read_at_));
+    if (comp_.size + want > comp_.capacity)
+        comp_.reserve(std::max(comp_.size + want, comp_.capacity * 2));
+    auto read = file_.read_exact_at(
+        read_at_,
+        dstd::Span<std::uint8_t>(comp_.data.get() + comp_.size, want));
+    if (!read) return read.error();
+    comp_.size += want;
+    read_at_ += want;
+    return {};
+}
+
+void SlabReader::scan() {
+    scanned_ = find_marks(comp_.data.get(), comp_.size, scanned_, starts_);
+}
+
+void SlabReader::start_in_order() {
+    stats_.inflated_in_order = true;
+    in_order_.emplace(fileio::compress::decode_gzip_members(
+        file_.native_handle(), file_size_, slab_, false, held_at_));
+    comp_ = Buffer{};
+    starts_.clear();
+}
+
+// Drops the first `used` bytes held, which end at a member end.
+void SlabReader::drop(std::size_t used) {
+    std::memmove(comp_.data.get(), comp_.data.get() + used, comp_.size - used);
+    comp_.size -= used;
+    held_at_ += used;
+    const auto kept = std::lower_bound(starts_.begin(), starts_.end(), used);
+    starts_.erase(starts_.begin(), kept);
+    for (std::size_t& at : starts_) at -= used;
+    if (starts_.empty() || starts_.front() != 0)
+        starts_.insert(starts_.begin(), 0);
+    scanned_ = scanned_ > used ? scanned_ - used : 1;
+}
+
+// The first member held, inflated alone to find where it truly ends: a false
+// mark inside it, or a header the scan does not mark, leaves its end unknown.
+// False when it is not held whole yet; past the hold limit the rest of the
+// file inflates in order.
+dstd::Result<bool> SlabReader::inflate_first(Buffer& out) {
+    GzipMemberDecompressor dec;
+    if (!dec.valid())
+        return dstd::Error(ErrorCode::Compression,
+                           "failed to allocate a gzip decompressor");
+    const std::size_t hold = hold_bytes(slab_);
+    const std::size_t limit =
+        std::min(comp_.size * MAX_RATIO + RATIO_SLACK, hold);
+    out = Buffer::with_capacity(
+        std::min(std::max(slab_, std::size_t{1} << 20), limit));
+    fileio::compress::DecompressResult res{};
+    const GzipDecode status =
+        inflate_growing(dec, comp_.data.get(), comp_.size, out, limit, res);
+    if (status == GzipDecode::Ok) {
+        out.size = res.out_bytes;
+        drop(res.in_bytes);
+        ++stats_.members_alone;
+        out.seal();
+        return true;
+    }
+    // A member whose text passes the hold streams in order.
+    if (status == GzipDecode::InsufficientSpace && limit == hold) {
+        out = Buffer{};
+        start_in_order();
+        return false;
+    }
+    out = Buffer{};
+    if (read_at_ >= file_size_) return corrupt();
+    if (comp_.size >= hold) start_in_order();
+    return false;
+}
+
+// Inflates the whole members held, up to about one slab, into `out`. False
+// when more bytes must be read first or the rest of the file is left to the
+// in-order inflate.
+dstd::Result<bool> SlabReader::inflate_ready(Buffer& out) {
+    const bool all = read_at_ >= file_size_;
+    // Every member but the last held ends where the next starts; the last
+    // ends at the end of the file once it is read.
+    const std::size_t whole = all ? starts_.size() : starts_.size() - 1;
+    const unsigned char* base = comp_.data.get();
+    dstd::Vector<std::size_t> out_at;
+    const std::size_t sane =
+        claimed_sizes(base, starts_, whole, comp_.size, out_at);
+    // A member whose text passes the hold, or whose trailer claims so, is not
+    // inflated whole.
+    const std::size_t hold = hold_bytes(slab_);
+    std::size_t count = 0;
+    while (count < sane && out_at[count] < slab_ &&
+           out_at[count + 1] - out_at[count] <= hold)
+        ++count;
+    if (count == 0 && sane > 0) return inflate_first(out);
+    if (sane == whole && !all && out_at[count] < slab_ && comp_.size < slab_)
+        return false;
+    if (count == 0) {
+        if (whole == 0 && !all && comp_.size < slab_) return false;
+        return inflate_first(out);
+    }
+    out = Buffer::with_capacity(out_at[count]);
+    auto ran =
+        inflate_run(base, starts_, count, comp_.size, out_at, out.data.get());
+    if (!ran.has_value()) return ran.error();
+    if (*ran == 0) return inflate_first(out);
+    count = *ran;
+    out.size = out_at[count];
+    stats_.members_in_parallel += count;
+    drop(count < starts_.size() ? starts_[count] : comp_.size);
+    out.seal();
+    return true;
+}
+
+coro::CoroTask<dstd::Result<Buffer>> SlabReader::next() {
+    if (!gzip_) {
+        const std::size_t n = static_cast<std::size_t>(
+            std::min<std::uint64_t>(slab_, file_size_ - read_at_));
+        Buffer out = Buffer::with_capacity(n);
+        auto read = file_.read_exact_at(
+            read_at_, dstd::Span<std::uint8_t>(out.data.get(), n));
+        if (!read) co_return read.error();
+        out.size = n;
+        read_at_ += n;
+        out.seal();
+        co_return out;
+    }
+    while (!in_order_) {
+        if (comp_.size == 0 && read_at_ >= file_size_) {
+            Buffer none = Buffer::with_capacity(0);
+            none.seal();
+            co_return none;
+        }
+        Buffer out;
+        auto ready = inflate_ready(out);
+        if (!ready.has_value()) co_return ready.error();
+        // An empty member gives no text, which must not read as the end.
+        if (*ready) {
+            if (out.size != 0) co_return out;
+            continue;
+        }
+        if (in_order_) break;
+        if (read_at_ >= file_size_) co_return corrupt();
+        auto read = read_more(std::max(slab_ / 4, std::size_t{1} << 20));
+        if (!read) co_return read.error();
+        scan();
+    }
+    Buffer out = Buffer::with_capacity(slab_);
+    while (out.size < slab_) {
+        auto item = co_await in_order_->next();
+        if (!item) break;
+        if (!*item) co_return item->error();
+        const dstd::StringView bytes = **item;
+        if (out.size + bytes.size() > out.capacity)
+            out.reserve(std::max(out.size + bytes.size(), out.capacity * 2));
+        std::memcpy(out.data.get() + out.size, bytes.data(), bytes.size());
+        out.size += bytes.size();
+    }
+    out.seal();
+    co_return out;
 }
 
 namespace {
@@ -251,6 +468,7 @@ struct Chunk {
     dstd::StringView range;
     std::size_t first_row = 0;
     std::size_t rows = 0;
+    std::size_t row_base = 0;        ///< added to a row an error names
     dstd::Optional<dstd::Error> error;
     dstd::Vector<StringPart> parts;  ///< one per String or Raw wanted field
 };
@@ -303,10 +521,10 @@ class RowParser {
               dstd::StringView field = {}) {
         if (field.empty())
             chunk_->error = dstd::Error::from_format<"row {}: {}">(
-                ErrorCode::Parse, row, why);
+                ErrorCode::Parse, chunk_->row_base + row, why);
         else
             chunk_->error = dstd::Error::from_format<"row {}, field {}: {}">(
-                ErrorCode::Parse, row, field, why);
+                ErrorCode::Parse, chunk_->row_base + row, field, why);
         return false;
     }
 
@@ -530,7 +748,8 @@ TypeId column_type(const Field& field) {
 
 dstd::Result<Decoded> decode_lines(const Header& header,
                                    dstd::Span<const std::size_t> wanted,
-                                   dstd::StringView range, std::size_t parts) {
+                                   dstd::StringView range, std::size_t parts,
+                                   std::size_t row_base) {
     const std::size_t nfields = header.fields.size();
     const std::size_t ncols = wanted.size();
     dstd::Vector<std::size_t> position(nfields, NOT_WANTED);
@@ -586,6 +805,7 @@ dstd::Result<Decoded> decode_lines(const Header& header,
     if (!counted) return counted.error();
     std::size_t total = 0;
     for (Chunk& c : chunks) {
+        c.row_base = row_base;
         c.first_row = total;
         total += c.rows;
     }

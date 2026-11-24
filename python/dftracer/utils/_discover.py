@@ -7,7 +7,7 @@ import glob
 import os
 from typing import Iterable, Union
 
-from .dftracer_utils_ext import INPUT_FILE_PATTERNS, scan_files
+from .dftracer_utils_ext import INPUT_FILE_PATTERNS, scan_files, tables_among_traces
 
 __all__ = ["discover_trace_files"]
 
@@ -35,6 +35,11 @@ def _keep_inputs(paths: Iterable[str]) -> list[str]:
     return sorted(kept)
 
 
+def _without_tables(paths: list[str]) -> list[str]:
+    """``paths`` without the dftu.table files that sit among traces."""
+    return [p for p, table in zip(paths, tables_among_traces(paths)) if not table]
+
+
 def discover_trace_files(path: _PathArg, recursive: bool = False) -> list[str]:
     """The trace files under ``path`` that the indexer reads, sorted.
 
@@ -44,16 +49,18 @@ def discover_trace_files(path: _PathArg, recursive: bool = False) -> list[str]:
     gives itself, and a glob gives the files it matches (``**`` with
     ``recursive``), each kept only when its name matches those patterns. A
     glob takes every folder it matches, the skipped ones too. A glob that
-    matches nothing gives an empty list.
+    matches nothing gives an empty list. When the files hold traces and the
+    dftu.table files written next to them, the tables are left out, as the
+    indexer and ``TraceViewer`` leave them out.
 
     Raises:
         FileNotFoundError: ``path`` has no glob characters and does not exist.
     """
     text = os.fspath(path)
     if os.path.isdir(text):
-        return sorted(_inputs_of(text, recursive))
+        return _without_tables(sorted(_inputs_of(text, recursive)))
     if os.path.isfile(text):
         return _keep_inputs([text])
     if glob.has_magic(text):
-        return _keep_inputs(glob.glob(text, recursive=recursive))
+        return _without_tables(_keep_inputs(glob.glob(text, recursive=recursive)))
     raise FileNotFoundError(f"no trace file or directory at {text}")

@@ -176,7 +176,9 @@ class Indexer:
         """
         ...
     def status(self) -> IndexStatusDict:
-        """Which files are indexed and which need work. Builds nothing.
+        """Which files are indexed and which need work. Builds nothing. Reads
+        the first line of each file to leave out tables listed with traces,
+        and raises on one that claims dftu.table but is malformed.
 
         Returns:
             Dictionary with 'ready' and 'needs_work' file lists.
@@ -250,14 +252,16 @@ class Indexer:
         """
         ...
     def query_all_file_pids(self) -> dict[str, set[int]]:
-        """Query all file-to-PIDs mappings.
+        """Query the file-to-PIDs mapping of every indexed file of this
+        indexer.
 
         Returns:
             Dict mapping trace path to set of PIDs observed in that file.
         """
         ...
     def query_file_info(self) -> dict[str, set[int]]:
-        """Query every indexed file with its PIDs in one call.
+        """Query every indexed file of this indexer with its PIDs in one call.
+        Files of the index root that are not among its inputs are left out.
 
         Returns:
             Dict mapping trace path to set of PIDs observed in that file.
@@ -1892,6 +1896,22 @@ def _dataframe_from_bytes(data: bytes) -> PublicDataFrame:
     ...
 
 
+class _FrameBuffer:
+    """One read-only column buffer of a pickled DataFrame, lent with no copy."""
+    def __buffer__(self, flags: int, /) -> memoryview: ...
+
+
+def _dataframe_to_buffers(frame: PublicDataFrame, /) -> tuple[bytes, list[_FrameBuffer]]:
+    """The frame as a header and its column buffers, with no copy of the columns."""
+    ...
+
+
+def _dataframe_from_buffers(header: Buffer, buffers: Sequence[Buffer], /) -> PublicDataFrame:
+    """The frame ``_dataframe_to_buffers`` wrote; its columns read ``buffers`` in place
+    and keep them alive. Raises ``ValueError`` for another version or a bad buffer."""
+    ...
+
+
 def _dataframe_from_arrow(table: object) -> PublicDataFrame:
     """Import a pyarrow Table's columns into a native vec batch."""
     ...
@@ -1960,6 +1980,15 @@ def duql_load_path(path: str, /) -> None:
 def plugin_results(plugins: Plugins) -> dict[str, object]:
     """``{name: result}`` of the last run of ``plugins``, as a
     TraceViewer.plugins plan left them."""
+    ...
+
+
+def tables_among_traces(paths: Sequence[str]) -> list[bool]:
+    """True for each dftu.table file of ``paths`` when ``paths`` also holds
+    a file that is not a table, else all False: a folder may hold traces and
+    the tables written next to them, and a read of it reads the traces. Reads
+    the first line of each file, in parallel. A first line that claims
+    dftu.table but is malformed raises."""
     ...
 
 
@@ -2582,6 +2611,9 @@ _EXPORTS = (
     "_series_retype",
     "_series_from_bytes",
     "_dataframe_from_bytes",
+    "_FrameBuffer",
+    "_dataframe_to_buffers",
+    "_dataframe_from_buffers",
     "_dataframe_from_arrow",
     "_dataframe_from_columns",
     "_sink_output",
@@ -2591,6 +2623,7 @@ _EXPORTS = (
     "duql_canonical",
     "duql_load_path",
     "plugin_results",
+    "tables_among_traces",
     "scan_files",
     "enable_aggregation_deterministic_ids",
     "write_shard_set",

@@ -213,6 +213,97 @@ def test_set_union_after_a_shuffle(client):
     f.close()
 
 
+CHUNKED = 5
+
+
+def make_nullable(seed, n=50_000):
+    r = np.random.default_rng(seed)
+    missing = r.random(n) < 0.1
+    return DataFrame.from_pandas(
+        pd.DataFrame(
+            {
+                "k": r.integers(0, 5_000, n),
+                "x": pd.arrays.IntegerArray(r.integers(0, 1000, n), missing),
+                "f": pd.arrays.FloatingArray(r.random(n), missing),
+                "s": pd.array(
+                    np.where(missing, None, r.choice([f"s{i}" for i in range(50)], n)),
+                    dtype="string",
+                ),
+            }
+        )
+    )
+
+
+def same_on_joined(part):
+    """Results on the shuffled partition equal those on its rows joined into one buffer."""
+    joined = DataFrame.from_pandas(part.to_pandas())
+    assert_same(part, joined, ["k", "x", "f", "s"])
+    assert_same(
+        part.group_by("k").agg(n=col("x").count(), t=col("f").sum(), u=col("s").count()),
+        joined.group_by("k").agg(n=col("x").count(), t=col("f").sum(), u=col("s").count()),
+        ["k"],
+        rtol=1e-12,
+    )
+    assert_same(
+        part.filter(part["x"] > 500), joined.filter(joined["x"] > 500), ["k", "x", "f", "s"]
+    )
+    pd.testing.assert_frame_equal(
+        part.sort_values(["k", "x", "f", "s"]).to_pandas(),
+        joined.sort_values(["k", "x", "f", "s"]).to_pandas(),
+    )
+
+
+@pytest.mark.parametrize("stages", [1, 2])
+def test_shuffled_partitions_equal_their_joined_rows(client, stages):
+    f = DaskFrame.from_function(make_nullable, range(8), client)
+    s = f.shuffle("k", 8, stages=stages)
+    parts = s._gather(s._parts)
+    assert sum(len(p) for p in parts) == 400_000
+    for p in parts:
+        same_on_joined(p)
+    s.close()
+    f.close()
+
+
+@pytest.mark.parametrize("stages", [1, 2])
+def test_shuffle_keeps_the_pieces_as_chunks(stages):
+    f = DaskFrame.from_function(make_nullable, range(8))
+    s = f.shuffle("k", 8, stages=stages)
+    for p in s._parts:
+        assert all(p[c].encoding == CHUNKED for c in p.columns)
+    whole = f.to_frame()
+    assert all(whole[c].encoding == CHUNKED for c in whole.columns)
+
+
+def test_shuffle_concat_keeps_the_columns_of_an_empty_output_with_a_list_column(client):
+    keys = ["g", "p"]
+    native = DataFrame.from_dict(
+        {"g": ["a", "a", "b"], "p": ["x", "y", "y"], "col": [[1], [2], [3]]}
+    )
+    f = DaskFrame.from_frames([native.slice(0, 2), native.slice(2, 1)], client)
+    parts = f.shuffle(keys, 4)
+    outs = parts._gather(parts._parts)
+    assert any(len(p) == 0 for p in outs)
+    assert all(p.columns == ["g", "p", "col"] for p in outs)
+    grouped = parts.map_partitions(lambda p: p.group_by(keys).agg(n=col("col").count()))
+    assert sorted_pd(grouped.to_frame(), keys)["n"].tolist() == [1, 1, 1]
+    parts.close()
+    f.close()
+
+
+def test_shuffle_concat_keeps_row_labels(client):
+    def labelled(seed):
+        frame = make_small(seed).to_pandas()
+        frame.index = pd.Index(np.arange(len(frame)) + seed * 10_000, name="row")
+        return DataFrame.from_pandas(frame)
+
+    f = DaskFrame.from_function(labelled, range(4), client)
+    got = f.shuffle("a", 4).to_frame().to_pandas().sort_index()
+    want = pd.concat([labelled(i).to_pandas() for i in range(4)]).sort_index()
+    pd.testing.assert_frame_equal(got, want, check_dtype=False)
+    f.close()
+
+
 def make_dim(_):
     r = np.random.default_rng(99)
     return DataFrame.from_pandas(
@@ -315,6 +406,18 @@ def test_close_releases_the_partitions(client):
     assert f.npartitions == 0
     with pytest.raises(ValueError):
         f.to_frame()
+
+
+def test_scattered_frames_shuffle_and_broadcast_join_on_a_cluster(cluster):
+    parts = [make_nullable(i, 20_000) for i in range(8)]
+    dim = DataFrame.from_pandas(pd.DataFrame({"k": np.arange(5_000), "w": np.arange(5_000) % 7}))
+    want = DaskFrame.from_frames(parts).shuffle("k").join(dim, on="k", strategy="broadcast")
+    dist = DaskFrame.from_frames(parts, cluster)
+    got = dist.shuffle("k").join(dim, on="k", strategy="broadcast")
+    assert got.npartitions == 8
+    assert_same(got.to_frame(), want.to_frame(), ["k", "x", "f", "s"])
+    got.close()
+    dist.close()
 
 
 def test_both_modes_agree(cluster):
@@ -715,3 +818,24 @@ def test_no_partitions_npartitions_and_close():
     e = _empty()
     assert e.npartitions == 0
     e.close()
+
+
+@pytest.mark.parametrize("use_client", [False, True])
+def test_to_frame_widens_partitions_whose_types_differ_as_concat_does(client, use_client):
+    ints = DataFrame.from_dict({"x": [1, 2]})
+    floats = DataFrame.from_dict({"x": [1.5]})
+    f = DaskFrame.from_frames([ints, floats], client if use_client else None)
+    got = f.to_frame()
+    assert got.to_dict() == ints.concat(floats).to_dict() == {"x": [1.0, 2.0, 1.5]}
+    f.close()
+
+
+def test_to_frame_keeps_row_labels_when_only_some_partitions_have_them():
+    labelled = DataFrame.from_pandas(pd.DataFrame({"x": [1, 2]}, index=pd.Index([10, 20])))
+    plain = DataFrame.from_dict({"x": [3, 4]})
+    f = DaskFrame.from_frames([labelled, plain])
+    got = f.to_frame().to_pandas()
+    want = labelled.concat(plain).to_pandas()
+    pd.testing.assert_frame_equal(got, want)
+    assert got.index.tolist() == [10, 20, 0, 1]
+    f.close()

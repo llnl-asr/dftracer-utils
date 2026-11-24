@@ -1036,8 +1036,8 @@ class View : public dataframe::LazyOps<View> {
 
     /// Whether the files are dftu.table files: the plan then reads them as a
     /// table, so the trace builders (phase, time range, time buckets, group
-    /// keys, trace aggregates and terminals) do not apply to it. A set of
-    /// files that mixes tables and traces is an error kept as @ref status.
+    /// keys, trace aggregates and terminals) do not apply to it. When the
+    /// files mix tables and traces, the tables are left out and this is false.
     bool is_table() const;
     /// The source of a table view, else null.
     dstd::SharedPtr<const dataframe::Source> table_source() const;

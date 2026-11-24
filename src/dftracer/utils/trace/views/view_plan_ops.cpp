@@ -444,21 +444,42 @@ ScanPlan from_files(dstd::Vector<ViewFile> files) {
         if (f.index_path.empty())
             f.index_path = internal::determine_index_path(f.file_path, "");
     {
-        dstd::Vector<table::TableInput> inputs;
-        inputs.reserve(files.size());
-        for (const auto& f : files)
-            inputs.push_back(table::TableInput{f.file_path, f.index_path});
-        auto tables = table::open_table_inputs(
-            dstd::Span<const table::TableInput>(inputs.data(), inputs.size()));
-        if (!tables)
+        dstd::Vector<dstd::StringView> paths;
+        paths.reserve(files.size());
+        for (const auto& f : files) paths.emplace_back(f.file_path);
+        auto flags = table::table_flags(
+            dstd::Span<const dstd::StringView>(paths.data(), paths.size()));
+        if (!flags)
             return failed_plan(dstd::make_shared<detail::ViewPlan>(),
-                               tables.error());
-        if (*tables) {
-            auto plan = dstd::make_shared<detail::ViewPlan>();
-            plan->files = std::move(files);
-            plan->table = std::move(**tables);
-            return plan;
+                               flags.error());
+        std::size_t tables = 0;
+        for (const std::uint8_t t : *flags) tables += t;
+        if (tables != 0 && tables == files.size()) {
+            dstd::Vector<table::TableInput> inputs;
+            inputs.reserve(files.size());
+            for (const auto& f : files)
+                inputs.push_back(table::TableInput{f.file_path, f.index_path});
+            auto opened =
+                table::open_table_inputs(dstd::Span<const table::TableInput>(
+                    inputs.data(), inputs.size()));
+            if (!opened)
+                return failed_plan(dstd::make_shared<detail::ViewPlan>(),
+                                   opened.error());
+            if (*opened) {
+                auto plan = dstd::make_shared<detail::ViewPlan>();
+                plan->files = std::move(files);
+                plan->table = std::move(**opened);
+                return plan;
+            }
         }
+        // A folder may hold traces and the tables written next to them.
+        std::size_t kept = 0;
+        for (std::size_t i = 0; i < files.size(); ++i)
+            if ((*flags)[i] == 0) {
+                if (kept != i) files[kept] = std::move(files[i]);
+                ++kept;
+            }
+        files.resize(kept);
     }
     if (auto checked = check_readers(
             dstd::Span<const ViewFile>(files.data(), files.size()));

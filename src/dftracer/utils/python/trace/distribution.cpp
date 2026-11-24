@@ -28,6 +28,7 @@
 #include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/trace/index/store/root_layout.h>
+#include <dftracer/utils/trace/table/table_source.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 
 #include <algorithm>
@@ -49,6 +50,33 @@ using dftracer::utils::trace::index::build::plan_lpt_partition;
 // ---------------------------------------------------------------------------
 // scan_files: parallel directory scan with size info
 // ---------------------------------------------------------------------------
+
+static PyObject *tables_among_traces_fn(PyObject * /*self*/, PyObject *arg) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths;
+    if (!parse_string_seq(arg, "paths must be a sequence of str", paths))
+        return NULL;
+    dftracer::utils::dstd::Vector<std::uint8_t> skip;
+    if (!run_blocking([&] {
+            dftracer::utils::dstd::Vector<dftracer::utils::dstd::StringView>
+                views(paths.begin(), paths.end());
+            auto found = dftracer::utils::trace::table::tables_among_traces(
+                dftracer::utils::dstd::Span<
+                    const dftracer::utils::dstd::StringView>(views.data(),
+                                                             views.size()));
+            if (!found)
+                throw dftracer::utils::python::core::PyErrorException(
+                    found.error());
+            skip = std::move(*found);
+        })) {
+        return NULL;
+    }
+    PyObject *out = PyList_New(static_cast<Py_ssize_t>(skip.size()));
+    if (!out) return NULL;
+    for (std::size_t i = 0; i < skip.size(); ++i)
+        PyList_SET_ITEM(out, static_cast<Py_ssize_t>(i),
+                        PyBool_FromLong(skip[i]));
+    return out;
+}
 
 static PyObject *scan_files_fn(PyObject * /*self*/, PyObject *args,
                                PyObject *kwds) {
@@ -456,6 +484,10 @@ static PyMethodDef DistributionMethods[] = {
      "Greedy Longest-Processing-Time-first bin-packing of (path, size) "
      "tuples across num_workers buckets. Minimises the maximum per-worker "
      "total size."},
+    {"tables_among_traces", DFTU_PYCFUNCTION(tables_among_traces_fn), METH_O,
+     "tables_among_traces(paths) -> list[bool]\n"
+     "True for each dftu.table file of `paths` when `paths` also holds a "
+     "file that is not a table, else all False."},
     {"scan_files", DFTU_PYCFUNCTION(scan_files_fn),
      METH_VARARGS | METH_KEYWORDS,
      "scan_files(directory, patterns=None, recursive=False, runtime=None) "

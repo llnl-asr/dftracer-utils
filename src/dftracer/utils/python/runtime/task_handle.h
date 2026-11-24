@@ -20,6 +20,12 @@
 
 namespace dftracer::utils::python::runtime {
 
+/// Call before a native thread that does not hold the GIL takes it. False once
+/// the interpreter exits: the thread must then not touch Python. After true,
+/// call @ref leave_python when the GIL is released again.
+bool enter_python();
+void leave_python();
+
 /// The type-erased completion of a native task, shared by the Python handle
 /// and the task that fills it. The task stores its result here and marks the
 /// state done on the worker that ran it, so a handle dropped before the end

@@ -38,6 +38,11 @@ returns carries the table header, and ``write_table`` stores a header that keeps
    original.write_table("typed.pfw.gz", name="typed", mode="overwrite")
    exact = TraceViewer("typed.pfw.gz").collect().to_pandas()
 
+A table can sit in the same folder as traces, such as a checkpoint written next to the traces it came from.
+When the files given to ``TraceViewer``, the ``Indexer`` or ``discover_trace_files`` hold both traces and tables, the tables are left out and only the traces are read.
+A file is a table when its first line is a dftu.table header record.
+When every file is a table, they are read as one table.
+
 A new frame (a filter, a join) has no header, and a frame changed in place
 (``df["a"] = ...``, ``df.loc[...] = ...``) drops it. ``to_pandas`` with an explicit ``arrow``, ``nullable`` or ``index``
 argument ignores the header too. Each of these behaves as ``to_pandas`` does

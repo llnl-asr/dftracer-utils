@@ -12,54 +12,6 @@
 
 namespace dftracer::utils::json {
 
-/// Append the JSON-escaped form of `s` (quotes, backslash, the standard
-/// control-character shorthands, and `\uXXXX` for every other control
-/// character below 0x20, all required by the JSON spec) to `out`. No
-/// temporary allocation, so callers building a JSON line in a loop don't
-/// churn a string per field.
-inline void append_json_escaped(dstd::String& out, dstd::StringView s) {
-    for (char c : s) {
-        switch (c) {
-            case '"':
-                out += "\\\"";
-                break;
-            case '\\':
-                out += "\\\\";
-                break;
-            case '\b':
-                out += "\\b";
-                break;
-            case '\f':
-                out += "\\f";
-                break;
-            case '\n':
-                out += "\\n";
-                break;
-            case '\r':
-                out += "\\r";
-                break;
-            case '\t':
-                out += "\\t";
-                break;
-            default: {
-                const unsigned char u = static_cast<unsigned char>(c);
-                if (u < 0x20) {
-                    const char escaped[6] = {'\\',
-                                             'u',
-                                             '0',
-                                             '0',
-                                             dstd::HEX_LOWER[u >> 4],
-                                             dstd::HEX_LOWER[u & 15]};
-                    out.append(escaped, sizeof(escaped));
-                } else {
-                    out += c;
-                }
-                break;
-            }
-        }
-    }
-}
-
 namespace detail {
 
 /// What a byte becomes in a JSON string: itself, a backslash and one letter,
@@ -109,9 +61,9 @@ inline std::size_t escaped_json_size(dstd::StringView s) {
     return s.size() + extra;
 }
 
-/// Like append_json_escaped, into `dst` with room for the escaped size of `s`
-/// (at most 6 * s.size() bytes). Copies each run of plain bytes at once.
-/// Returns the end of the written bytes.
+/// Writes the JSON-escaped form of `s`, as @ref append_json_escaped gives it,
+/// to `dst`, which has room for @ref escaped_json_size of `s` bytes. Copies
+/// each run of plain bytes at once. Returns the end of the written bytes.
 inline char* escape_json_to(char* dst, dstd::StringView s) {
     const char* const end = s.data() + s.size();
     const char* run = s.data();
@@ -141,6 +93,22 @@ inline char* escape_json_to(char* dst, dstd::StringView s) {
         dst += clean;
     }
     return dst;
+}
+
+/// Append the JSON-escaped form of `s` (quotes, backslash, the standard
+/// control-character shorthands, and `\uXXXX` for every other control
+/// character below 0x20, all required by the JSON spec) to `out`. No
+/// temporary allocation, so callers building a JSON line in a loop don't
+/// churn a string per field.
+inline void append_json_escaped(dstd::String& out, dstd::StringView s) {
+    const std::size_t size = escaped_json_size(s);
+    if (size == s.size()) {
+        out.append(s.data(), s.size());
+        return;
+    }
+    const std::size_t at = out.size();
+    out.resize(at + size);
+    escape_json_to(out.data() + at, s);
 }
 
 /// Escape a string for embedding in a JSON string literal.

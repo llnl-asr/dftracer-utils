@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/coro/async_generator.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/scalar.h>
@@ -67,8 +68,10 @@ constexpr std::size_t MIN_BATCH = std::size_t{1} << 20;
 constexpr std::size_t MAX_BATCH = std::size_t{8} << 20;
 // The fewest rows of a decoded file that one morsel carries.
 constexpr std::int64_t DIRECT_MORSEL_ROWS = std::int64_t{1} << 20;
-// A gzip table of JSON lines inflates to about this many bytes per byte.
-constexpr std::uint64_t INFLATE_GUESS = 12;
+// The text one slab of a direct read inflates and decodes at a time: a
+// sixteenth of the budget, within these bounds.
+constexpr std::size_t MIN_SLAB = std::size_t{1} << 20;
+constexpr std::size_t MAX_SLAB = std::size_t{64} << 20;
 constexpr dstd::StringView FORMAT_NAME = detail::FORMAT;
 
 std::atomic<std::uint64_t> g_chunks_read{0};
@@ -441,6 +444,7 @@ struct Settings {
     std::int64_t limit = -1;
     std::uint64_t budget = 0;
     std::size_t batch = DEFAULT_BATCH;
+    std::size_t slab = MAX_SLAB;
 };
 
 // The chunks of `file` a fresh index leaves for `question`; empty when the
@@ -535,6 +539,7 @@ class TableCursor final : public Cursor {
     coro::CoroTask<dstd::Result<bool>> fill();
     coro::CoroTask<dstd::Result<bool>> pull();
     dstd::Result<void> finish_file();
+    coro::CoroTask<dstd::Result<bool>> decode_slab();
     void consume(std::size_t n);
     void grow(std::size_t more);
     dstd::Result<void> start_streamed();
@@ -550,9 +555,15 @@ class TableCursor final : public Cursor {
     std::size_t rows_in_file_ = 0;
     std::int64_t batch_index_ = 0;
 
-    // Direct: the decoded file and the rows handed out.
+    // Direct: the decoded slab and the rows handed out, the slab reader and
+    // the end of a line that the last slab cut.
     dstd::Optional<DataFrame> whole_;
+    // A table with no wanted column still has rows, which its frame cannot
+    // count.
+    std::int64_t whole_rows_ = 0;
     std::int64_t whole_at_ = 0;
+    Buffer carry_;
+    bool header_left_ = true;
 
     // Streamed and Indexed: the bytes read and not yet decoded.
     Buffer acc_;
@@ -565,6 +576,8 @@ class TableCursor final : public Cursor {
     std::uint64_t plain_at_ = 0;
     dstd::SharedPtr<trace::reader::internal::Reader> reader_;
     dstd::UniquePtr<trace::reader::internal::ReaderStream> stream_;
+    // Declared after `handle_`, whose file it reads, so it goes first.
+    dstd::Optional<detail::SlabReader> slabs_;
 };
 
 // Room for `more` bytes after the ones held, growing by doubling.
@@ -643,8 +656,11 @@ coro::CoroTask<dstd::Result<void>> TableCursor::open_file() {
     range_open_ = false;
     reader_.reset();
     stream_.reset();
+    slabs_.reset();
     members_.reset();
     handle_.reset();
+    carry_ = Buffer{};
+    header_left_ = true;
     plan_ = ReadPlan{};
 
     if (settings_.question) {
@@ -658,11 +674,13 @@ coro::CoroTask<dstd::Result<void>> TableCursor::open_file() {
             co_return dstd::Result<void>{};
         }
     }
-    const std::uint64_t estimate =
-        f.gzip ? f.file_size * INFLATE_GUESS : f.file_size;
-    const bool fits = settings_.budget == 0 || estimate <= settings_.budget / 2;
-    if (!settings_.has_filters && settings_.limit < 0 && fits) {
+    if (!settings_.has_filters && settings_.limit < 0) {
         plan_.mode = ReadPlan::Mode::Direct;
+        count(g_direct_files);
+        auto opened = dstd::File::open(dstd::PathView(f.path), {});
+        if (!opened) co_return opened.error();
+        handle_.emplace(std::move(*opened));
+        slabs_.emplace(*handle_, f.file_size, f.gzip, settings_.slab);
     } else if (auto started = start_streamed(); !started) {
         co_return started.error();
     }
@@ -725,17 +743,32 @@ coro::CoroTask<dstd::Result<bool>> TableCursor::pull() {
     co_return true;
 }
 
+namespace {
+
+// The size of the header line of `text` with its newline, 0 when the newline
+// is not in it yet.
+std::size_t header_size(dstd::StringView text) {
+    const std::size_t nl = text.find('\n');
+    return nl == dstd::StringView::npos ? 0 : nl + 1;
+}
+
+// The size of the whole lines that start `text`: up to its last newline.
+std::size_t whole_lines_size(dstd::StringView text) {
+    const std::size_t nl = text.rfind('\n');
+    return nl == dstd::StringView::npos ? 0 : nl + 1;
+}
+
+}  // namespace
+
 // Leaves a run of whole lines in acc_[0, batch_end_) and returns true; false
 // when the unit has no more lines.
 coro::CoroTask<dstd::Result<bool>> TableCursor::fill() {
     for (;;) {
         if (header_pending_) {
-            const void* nl = std::memchr(acc_.data.get(), '\n', acc_.size);
-            if (nl != nullptr) {
-                consume(static_cast<std::size_t>(
-                            static_cast<const unsigned char*>(nl) -
-                            acc_.data.get()) +
-                        1);
+            const std::size_t header =
+                header_size(dstd::StringView(acc_.text(), acc_.size));
+            if (header != 0) {
+                consume(header);
                 header_pending_ = false;
             } else if (unit_done_) {
                 acc_.size = 0;
@@ -747,10 +780,8 @@ coro::CoroTask<dstd::Result<bool>> TableCursor::fill() {
             if (unit_done_) {
                 cut = acc_.size;
             } else if (acc_.size >= settings_.batch) {
-                const unsigned char* base = acc_.data.get();
-                std::size_t i = acc_.size;
-                while (i > 0 && base[i - 1] != '\n') --i;
-                cut = i;
+                cut =
+                    whole_lines_size(dstd::StringView(acc_.text(), acc_.size));
             }
             if (cut > 0) {
                 batch_end_ = cut;
@@ -761,6 +792,75 @@ coro::CoroTask<dstd::Result<bool>> TableCursor::fill() {
         auto pulling = pull();
         auto more = co_await pulling;
         if (!more.has_value()) co_return more.error();
+    }
+}
+
+// Decodes the whole lines of the next slab into `whole_`, keeping a line that
+// the slab cuts for the next one; false at the end of the file.
+coro::CoroTask<dstd::Result<bool>> TableCursor::decode_slab() {
+    for (;;) {
+        auto reading = slabs_->next();
+        auto read = co_await reading;
+        if (!read) co_return read.error();
+        Buffer text = std::move(*read);
+        const bool last = text.size == 0;
+        Buffer joined;
+        if (carry_.size != 0) {
+            joined = Buffer::with_capacity(carry_.size + text.size);
+            std::memcpy(joined.data.get(), carry_.data.get(), carry_.size);
+            std::memcpy(joined.data.get() + carry_.size, text.data.get(),
+                        text.size);
+            joined.size = carry_.size + text.size;
+            joined.seal();
+            carry_ = Buffer{};
+        }
+        Buffer& all = joined.size != 0 ? joined : text;
+        const char* begin = all.text();
+        const char* end = begin + all.size;
+        if (header_left_) {
+            const std::size_t header =
+                header_size(dstd::StringView(begin, all.size));
+            if (header == 0 && !last) {
+                carry_ = std::move(all);
+                continue;
+            }
+            begin = header != 0 ? begin + header : end;
+            header_left_ = false;
+        }
+        const char* cut = end;
+        if (!last) {
+            cut = begin + whole_lines_size(dstd::StringView(
+                              begin, static_cast<std::size_t>(end - begin)));
+            if (cut != end) {
+                const auto rest = static_cast<std::size_t>(end - cut);
+                carry_ = Buffer::with_capacity(rest);
+                std::memcpy(carry_.data.get(), cut, rest);
+                carry_.size = rest;
+            }
+        }
+        if (cut == begin) {
+            if (last) co_return false;
+            continue;
+        }
+        auto decoded = detail::decode_lines(
+            file().header, settings_.wanted,
+            dstd::StringView(begin, static_cast<std::size_t>(cut - begin)), 0,
+            rows_in_file_);
+        if (!decoded) co_return decoded.error();
+        if (decoded->rows == 0) {
+            if (last) co_return false;
+            continue;
+        }
+        rows_in_file_ += decoded->rows;
+        DataFrame frame;
+        for (std::size_t k = 0; k < settings_.wanted.size(); ++k) {
+            frame.names.push_back(dstd::SharedString(
+                file().header.fields[settings_.wanted[k]].name));
+            frame.columns.push_back(std::move(decoded->columns[k]));
+        }
+        whole_.emplace(std::move(frame));
+        whole_rows_ = static_cast<std::int64_t>(decoded->rows);
+        co_return true;
     }
 }
 
@@ -784,57 +884,20 @@ coro::CoroTask<MorselResult> TableCursor::next(std::int64_t max_rows) {
         }
 
         if (plan_.mode == ReadPlan::Mode::Direct) {
-            if (!whole_) {
-                auto raw = detail::read_whole(file().path);
-                if (!raw) co_return raw.error();
-                Buffer text;
-                if (file().gzip) {
-                    detail::InflateStats stats;
-                    auto inflated = detail::inflate_gzip(
-                        *raw, stats,
-                        settings_.budget == 0
-                            ? std::numeric_limits<std::size_t>::max()
-                            : static_cast<std::size_t>(settings_.budget / 2));
-                    if (!inflated) co_return inflated.error();
-                    if (stats.exceeded) {
-                        // A file that compresses far better than guessed:
-                        // read it in batches instead.
-                        if (auto started = start_streamed(); !started)
-                            co_return started.error();
-                        continue;
-                    }
-                    text = std::move(*inflated);
-                } else {
-                    text = std::move(*raw);
+            if (!whole_ || whole_at_ >= whole_rows_) {
+                whole_.reset();
+                auto decoding = decode_slab();
+                auto decoded = co_await decoding;
+                if (!decoded.has_value()) co_return decoded.error();
+                if (!*decoded) {
+                    if (auto ok = finish_file(); !ok) co_return ok.error();
+                    ++file_idx_;
+                    file_open_ = false;
+                    continue;
                 }
-                raw = Buffer{};
-                count(g_direct_files);
-                const char* base = text.text();
-                const char* end = base + text.size;
-                const void* nl = std::memchr(base, '\n', text.size);
-                const char* body = nl ? static_cast<const char*>(nl) + 1 : end;
-                auto decoded = detail::decode_lines(
-                    file().header, settings_.wanted,
-                    dstd::StringView(body,
-                                     static_cast<std::size_t>(end - body)));
-                if (!decoded) co_return decoded.error();
-                rows_in_file_ = decoded->rows;
-                if (auto ok = finish_file(); !ok) co_return ok.error();
-                DataFrame frame;
-                for (std::size_t k = 0; k < decoded->columns.size(); ++k) {
-                    frame.names.push_back(dstd::SharedString(
-                        file().header.fields[settings_.wanted[k]].name));
-                    frame.columns.push_back(std::move(decoded->columns[k]));
-                }
-                whole_.emplace(std::move(frame));
                 whole_at_ = 0;
             }
-            const std::int64_t total = static_cast<std::int64_t>(rows_in_file_);
-            if (whole_at_ >= total) {
-                ++file_idx_;
-                file_open_ = false;
-                continue;
-            }
+            const std::int64_t total = whole_rows_;
             // The rows are decoded and held already, so a larger morsel costs
             // no memory, and each morsel saved is one pipeline hop less. That
             // holds only for a bare scan into a collect: an operator after the
@@ -893,9 +956,11 @@ coro::CoroTask<MorselResult> TableCursor::next(std::int64_t max_rows) {
             continue;
         }
         acc_.seal();
-        auto decoded =
-            detail::decode_lines(file().header, settings_.wanted,
-                                 dstd::StringView(acc_.text(), batch_end_));
+        // An indexed read skips chunks, so its rows count from the batch.
+        auto decoded = detail::decode_lines(
+            file().header, settings_.wanted,
+            dstd::StringView(acc_.text(), batch_end_), 0,
+            plan_.mode == ReadPlan::Mode::Indexed ? 0 : rows_in_file_);
         if (!decoded) co_return decoded.error();
         consume(batch_end_);
         batch_end_ = 0;
@@ -981,6 +1046,10 @@ class TableSource final : public dataframe::Source {
                               : common::compute_memory_budget();
         settings.batch = std::clamp<std::size_t>(settings.budget / 128,
                                                  MIN_BATCH, MAX_BATCH);
+        settings.slab = settings.budget == 0
+                            ? MAX_SLAB
+                            : std::clamp<std::size_t>(settings.budget / 16,
+                                                      MIN_SLAB, MAX_SLAB);
 
         ScanResult result;
         dstd::Optional<duql::Expr> question;
@@ -1035,6 +1104,40 @@ void reset_read_counters() {
     g_streamed_files = 0;
     g_direct_files = 0;
     g_bytes_decoded = 0;
+}
+
+dstd::Result<dstd::Vector<std::uint8_t>> table_flags(
+    dstd::Span<const dstd::StringView> paths) {
+    const std::size_t n = paths.size();
+    dstd::Vector<std::uint8_t> table(n, 0);
+    dstd::Vector<dstd::Optional<dstd::Error>> errors(n);
+    auto ran = default_runtime().parallel_for(
+        static_cast<std::int64_t>(n), 1,
+        [&](std::int64_t first, std::int64_t last) {
+            for (std::int64_t k = first; k < last; ++k) {
+                const auto i = static_cast<std::size_t>(k);
+                auto one = probe_file(paths[i]);
+                if (!one)
+                    errors[i] = one.error();
+                else
+                    table[i] = one->has_value() ? 1 : 0;
+            }
+        });
+    if (!ran) return ran.error();
+    for (const auto& e : errors)
+        if (e) return *e;
+    return table;
+}
+
+dstd::Result<dstd::Vector<std::uint8_t>> tables_among_traces(
+    dstd::Span<const dstd::StringView> paths) {
+    auto table = table_flags(paths);
+    if (!table) return table.error();
+    std::size_t tables = 0;
+    for (const std::uint8_t t : *table) tables += t;
+    if (tables == paths.size())
+        std::fill(table->begin(), table->end(), std::uint8_t{0});
+    return table;
 }
 
 dstd::Result<dstd::Optional<dstd::SharedPtr<const dataframe::Source>>>

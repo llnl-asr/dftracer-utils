@@ -35,7 +35,9 @@ from .. import dftracer_utils_ext as _ext
 from .._agg import UdafAgg
 from .._dataframe import DataFrame, JoinHow
 from .._expr import Agg, Expr, col
+from .._lazyframe import concat
 from .._series import Series
+from ..errors import DFTUtilsValueError
 from ._workers import _require_workers
 
 if TYPE_CHECKING:
@@ -107,7 +109,21 @@ def _s(frame: DataFrame, name: str) -> Series:
 
 
 def _concat(frames: Sequence[DataFrame]) -> DataFrame:
-    return frames[0].concat(*frames[1:]) if len(frames) > 1 else frames[0]
+    """The frames one after another as chunked columns: each part keeps its buffers.
+    Parts whose column types or row labels differ take the eager concat, which
+    widens the types and keeps the labels."""
+    # A plan of empty parts only collects to no columns when a column is nested.
+    rows = [f for f in frames if len(f)] or [frames[0]]
+    if len(rows) == 1:
+        return rows[0]
+    labels = _ext.DataFrame.index_names(rows[0])
+    if any(_ext.DataFrame.index_names(f) != labels for f in rows[1:]):
+        return rows[0].concat(*rows[1:])
+    try:
+        plan = concat(rows)
+    except DFTUtilsValueError:
+        return rows[0].concat(*rows[1:])
+    return plan.collect()
 
 
 def _pick(parts: Sequence[DataFrame], i: int) -> DataFrame:
@@ -423,7 +439,7 @@ class DaskFrame:
         if client is None:
             return cls(frames, client)
         _require_workers(client)
-        return cls(cast(List[DataFrame], client.scatter(frames, hash=False)), client)
+        return cls(cast(List[DataFrame], client.scatter(frames, hash=False, direct=True)), client)
 
     @classmethod
     def from_function(
@@ -624,7 +640,7 @@ class DaskFrame:
             right = other if isinstance(other, DataFrame) else other.to_frame()
             if self._client is not None:
                 _require_workers(self._client)
-                ref = self._client.scatter(right, broadcast=True)
+                ref = self._client.scatter(right, broadcast=True, direct=True)
             else:
                 ref = right
             return self._like([self._submit(_join, p, ref, on, how, kw) for p in self._parts])

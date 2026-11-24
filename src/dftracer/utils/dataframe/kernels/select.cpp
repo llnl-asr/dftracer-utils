@@ -136,7 +136,16 @@ bool is_sorted_impl(const Series& v, bool descending) {
     if (v.encoding() == Encoding::Chunked)
         return is_sorted_impl(v.materialize(), descending);
     if (is_sorted_numeric(*v.handle(), descending, &simd)) return simd;
-    for (std::int64_t i = 1; i < n; ++i) {
+    // Nulls come last, as argsort puts them; the value under a null is never
+    // compared.
+    bool null_seen = false;
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (v.is_null(i)) {
+            null_seen = true;
+            continue;
+        }
+        if (null_seen) return false;
+        if (i == 0) continue;
         const int cmp = compare_rows(v, i - 1, i);
         if (descending ? cmp < 0 : cmp > 0) return false;
     }

@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/json/fmt.h>
+#include <dftracer/utils/json/json_escape.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -95,4 +96,52 @@ TEST_CASE("the escaped text of a long string with runs is correct") {
     CHECK(out.size() == 203);
     CHECK(out.starts_with("\\\"x"));
     CHECK(out.ends_with("x\\n"));
+}
+
+TEST_CASE("append_json_escaped escapes every byte as JSON says") {
+    // Each byte alone and between plain runs, against the spec's rules.
+    const auto expected = [](unsigned char u) -> dstd::String {
+        switch (u) {
+            case '"':
+                return "\\\"";
+            case '\\':
+                return "\\\\";
+            case '\b':
+                return "\\b";
+            case '\f':
+                return "\\f";
+            case '\n':
+                return "\\n";
+            case '\r':
+                return "\\r";
+            case '\t':
+                return "\\t";
+            default:
+                break;
+        }
+        if (u < 0x20) {
+            dstd::String code = "\\u00";
+            code += "0123456789abcdef"[u >> 4];
+            code += "0123456789abcdef"[u & 15];
+            return code;
+        }
+        return dstd::String(1, static_cast<char>(u));
+    };
+    for (int b = 0; b < 256; ++b) {
+        const auto u = static_cast<unsigned char>(b);
+        CAPTURE(b);
+        dstd::String alone;
+        json::append_json_escaped(
+            alone, dstd::StringView(reinterpret_cast<const char*>(&u), 1));
+        CHECK(alone == expected(u));
+        dstd::String text = "ab";
+        text += static_cast<char>(u);
+        text += "cd";
+        dstd::String out = "x";
+        json::append_json_escaped(out, text);
+        CHECK(out == "xab" + expected(u) + "cd");
+    }
+    dstd::String none = "keep";
+    json::append_json_escaped(none, dstd::StringView());
+    CHECK(none == "keep");
 }

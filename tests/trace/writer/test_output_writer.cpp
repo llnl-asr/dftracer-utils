@@ -17,6 +17,7 @@
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/table/table_codec.h>
+#include <dftracer/utils/trace/table/table_decode.h>
 #include <dftracer/utils/trace/writer/output_writer.h>
 #include <dftracer/utils/trace/writer/sink_plan.h>
 #include <doctest/doctest.h>
@@ -475,6 +476,83 @@ TEST_SUITE("trace.writer.output_writer") {
         p.part_size = 2;
         CHECK_FALSE(run(std::move(p), one(ints(0, 1))).has_value());
         CHECK(names_in(env.dir()).empty());
+    }
+
+    TEST_CASE("rows formatted on many threads give the serial bytes") {
+        TestEnvironment env(0);
+        const std::int64_t n = 50000;
+        dstd::Vector<dstd::String> names;
+        dstd::Vector<std::int64_t> small;
+        dstd::Vector<std::int64_t> ts;
+        dstd::Vector<std::int64_t> phase;
+        for (std::int64_t r = 0; r < n; ++r) {
+            names.push_back(r % 3 == 0 ? "read" : "write");
+            small.push_back(r % 7);
+            ts.push_back(r * 10);
+            phase.push_back(1);
+        }
+        const auto strings = [](dstd::Span<const dstd::String> v) {
+            return Series::strings(v);
+        };
+        DataFrame events;
+        const auto add = [&](dstd::StringView name, Series column) {
+            events.names.push_back(dstd::SharedString(name));
+            events.columns.push_back(std::move(column));
+        };
+        add("name", strings(names));
+        add("cat", strings(names));
+        add("pid", Series::flat(TypeId::Int64, small.data(), n));
+        add("tid", Series::flat(TypeId::Int64, small.data(), n));
+        add("ts", Series::flat(TypeId::Int64, ts.data(), n));
+        add("ph", Series::flat(TypeId::Int64, phase.data(), n));
+        add("dur", Series::flat(TypeId::Int64, small.data(), n));
+        add("args.size", Series::flat(TypeId::Int64, ts.data(), n));
+        // The bytes and the text of every part, in part order.
+        struct Parts {
+            dstd::String bytes;
+            dstd::String text;
+        };
+        const auto parts_of = [&](OutputOptions o, const DataFrame& frame,
+                                  std::uint64_t cap, std::int64_t part_size) {
+            o.part_bytes = cap;
+            o.part_size = part_size;
+            auto summary = run(std::move(o), one(frame.share()));
+            const dstd::String why =
+                summary ? dstd::String()
+                        : dstd::String(summary.error().message());
+            INFO(why);
+            REQUIRE(summary.has_value());
+            Parts all;
+            for (const auto& file : summary->files) {
+                auto raw = trace::table::detail::read_whole(file);
+                REQUIRE(raw.has_value());
+                all.bytes.append(raw->text(), raw->size);
+                trace::table::detail::InflateStats stats;
+                auto text = trace::table::detail::inflate_gzip(*raw, stats);
+                REQUIRE(text.has_value());
+                all.text.append(text->text(), text->size);
+            }
+            return all;
+        };
+        // A byte cap takes the serial loop; none takes the parallel one.
+        const std::uint64_t huge = std::uint64_t{1} << 40;
+        const DataFrame records = ints(0, n);
+        const auto at = [&](dstd::StringView name) {
+            return env.dir() + "/" + dstd::String(name);
+        };
+        const Parts waves = parts_of(records_to(at("waves")), records, 0, 0);
+        CHECK(waves.text.size() > 1000000);
+        const Parts serial =
+            parts_of(records_to(at("serial")), records, huge, 0);
+        CHECK(waves.text == serial.text);
+        CHECK(waves.bytes == serial.bytes);
+        CHECK(parts_of(records_to(at("waves_parts")), records, 0, 7000).bytes ==
+              parts_of(records_to(at("serial_parts")), records, huge, 7000)
+                  .bytes);
+        const Parts event_waves = parts_of(events_to(at("ev")), events, 0, 0);
+        CHECK(event_waves.text.size() > 1000000);
+        CHECK(event_waves.bytes ==
+              parts_of(events_to(at("ev_serial")), events, huge, 0).bytes);
     }
 
     TEST_CASE("parts are numbered with five digits and hold part_size rows") {

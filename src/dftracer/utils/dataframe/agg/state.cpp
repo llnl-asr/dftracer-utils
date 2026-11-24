@@ -367,19 +367,47 @@ dstd::Result<void> agg_accumulate(AggState& st,
 
 namespace {
 
-// A column as the plain loop reads it: one 8-byte load per cell, the
-// validity bitmap beside it.
+// A column as the plain loop reads it: one load per cell, widened to 8 bytes
+// as read_bits widens it, the validity bitmap beside it.
 struct Plain8 {
     const std::uint8_t* data = nullptr;
     const std::uint8_t* validity = nullptr;
     FieldStatDomain domain = FieldStatDomain::I64;
+    std::uint8_t width = 8;  // bytes a cell: 1, 2 or 4 only for an integer
     bool is_null(std::int64_t i) const {
         return validity && !((validity[i >> 3] >> (i & 7)) & 1);
     }
     std::uint64_t bits(std::int64_t i) const {
-        std::uint64_t v;
-        std::memcpy(&v, data + static_cast<std::size_t>(i) * 8, 8);
-        return v;
+        const auto at = static_cast<std::size_t>(i);
+        if (width == 8) [[likely]] {
+            std::uint64_t v;
+            std::memcpy(&v, data + at * 8, 8);
+            return v;
+        }
+        return narrow_bits(at);
+    }
+    std::uint64_t narrow_bits(std::size_t at) const {
+        const bool is_signed = domain == FieldStatDomain::I64;
+        switch (width) {
+            case 1:
+                return is_signed ? static_cast<std::uint64_t>(
+                                       static_cast<std::int8_t>(data[at]))
+                                 : data[at];
+            case 2: {
+                std::uint16_t u;
+                std::memcpy(&u, data + at * 2, 2);
+                return is_signed ? static_cast<std::uint64_t>(
+                                       static_cast<std::int16_t>(u))
+                                 : u;
+            }
+            default: {
+                std::uint32_t u;
+                std::memcpy(&u, data + at * 4, 4);
+                return is_signed ? static_cast<std::uint64_t>(
+                                       static_cast<std::int32_t>(u))
+                                 : u;
+            }
+        }
     }
     // The cell as a group key: a float's -0.0 and NaNs are one value each.
     std::uint64_t key_bits(std::int64_t i) const {
@@ -390,8 +418,27 @@ struct Plain8 {
 
 bool plain8(const Series& c, Plain8& out) {
     const TypeId t = c.type();
-    if (t != TypeId::Int64 && t != TypeId::Uint64 && t != TypeId::Float64)
-        return false;
+    switch (t) {
+        case TypeId::Int8:
+        case TypeId::Uint8:
+            out.width = 1;
+            break;
+        case TypeId::Int16:
+        case TypeId::Uint16:
+            out.width = 2;
+            break;
+        case TypeId::Int32:
+        case TypeId::Uint32:
+            out.width = 4;
+            break;
+        case TypeId::Int64:
+        case TypeId::Uint64:
+        case TypeId::Float64:
+            out.width = 8;
+            break;
+        default:
+            return false;
+    }
     const dftu_series& h = *c.handle();
     if (h.encoding != Encoding::Flat || !h.data.block()) return false;
     out.data = h.data.data();
@@ -400,7 +447,7 @@ bool plain8(const Series& c, Plain8& out) {
     return true;
 }
 
-// A key column as the plain loop reads it: an 8-byte cell, or a String's
+// A key column as the plain loop reads it: a fixed-width cell, or a String's
 // offsets and bytes (either width), the validity bitmap beside them.
 struct PlainKey {
     Plain8 fixed;
@@ -513,7 +560,7 @@ bool plain_shape(const AggState& st, dstd::Span<const Series* const> keys,
     return true;
 }
 
-// The word table (AggState::fast_*): a key row as words, an 8-byte cell one
+// The word table (AggState::fast_*): a key row as words, a fixed-width cell one
 // word, a string of up to 16 bytes its length and two words.
 constexpr std::uint64_t FAST_TAG = 0xFFFFFFFF00000000ULL;
 
@@ -901,8 +948,8 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
         }
     }
 
-    // Up to three 8-byte keys over dense ranges: a direct table in front of
-    // the hash map, indexed by the keys packed as mixed-radix digits, so the
+    // Up to three fixed-width keys over dense ranges: a direct table in front
+    // of the hash map, indexed by the keys packed as mixed-radix digits, so the
     // common row is one load, one compare, no hash. A cache: a miss goes to
     // find_or_add_group and is written back; a chunk that widens a range
     // rebuilds the table empty, and one that widens it past the limit
@@ -922,7 +969,7 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
             hi[j] = 0;
         }
         // One key, no nulls, is the common shape and gets a plain loop.
-        if (nk == 1 && !k[0].fixed.validity) {
+        if (nk == 1 && !k[0].fixed.validity && k[0].fixed.width == 8) {
             const std::uint8_t* d = k[0].fixed.data;
             if (k[0].fixed.domain == FieldStatDomain::F64) {
                 for (std::int64_t i = begin; i < end; ++i) {
@@ -1498,7 +1545,7 @@ dstd::Result<void> agg_accumulate(AggState& st,
         }
     }
 
-    // The plain case, which is most group-bys: 8-byte keys and values, no
+    // The plain case, which is most group-bys: fixed-width keys and values, no
     // positional / collection state. Every buffer is resolved once and the
     // row loop is loads and adds; the generic loop below makes a C ABI call
     // per cell.

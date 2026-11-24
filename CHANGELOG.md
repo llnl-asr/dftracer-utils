@@ -136,6 +136,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Make `to_pandas` of a table frame build the row index in place and convert chunked columns one chunk at a time, so it holds about half the memory it did.
 - Build the string and integer levels of a table's `MultiIndex` from the column dictionaries in `to_pandas`, so no Python object is made per row.
 - Make `DataFrame.from_pandas` borrow the values of a nullable pandas column (`Int64`, `Float64`, `boolean`) in place of copying them.
+- Make `group_by` with an 8, 16 or 32-bit integer key or value column take the fast fold, so it keeps about one word per group for each aggregate in place of a full statistics record.
+- Make a group-by aggregate of a computed value, such as `col("x").where(col("c") == 1, float("nan")).sum()`, compute it one window of rows at a time, so the value is never held as a full column.
 - Read YAML with our own reader in place of rapidyaml and yaml-cpp.
   A mapping with a duplicate key is now an error, and anchors, aliases, tags, complex keys, directives and null keys are refused with an error that names the feature.
 

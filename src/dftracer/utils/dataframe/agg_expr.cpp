@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dataframe/agg/computed.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
@@ -167,24 +168,16 @@ dstd::Result<DataFrame> group_agg_expr(
     // A bare column reference is taken directly, any type (a String counter arg
     // aggregates like the eager group_by: numeric reducers skip it, first/last/
     // count still work). Only genuinely computed values run through the numeric
-    // evaluator, which has no String kernel and would yield an invalid column.
+    // evaluator, and the group-by evaluates them a row window at a time, so no
+    // full-length computed column is held.
     dstd::Vector<Series> value_cols(value_roots.size());
-    dstd::Vector<Expr> computed;
-    dstd::Vector<std::size_t> computed_pos;
+    dstd::Vector<Expr> roots(value_roots.size() + raw_cols.size());
     for (std::size_t i = 0; i < value_roots.size(); ++i) {
         const std::int32_t ci = expr_col_index(value_roots[i]);
-        if (ci >= 0) {
+        if (ci >= 0)
             value_cols[i] = inputs[static_cast<std::size_t>(ci)]->share();
-        } else {
-            computed.push_back(value_roots[i]);
-            computed_pos.push_back(i);
-        }
-    }
-    if (!computed.empty()) {
-        dstd::Result<dstd::Vector<Series>> ev = eval_many(computed, inputs);
-        if (!ev) return ev.error();
-        for (std::size_t j = 0; j < ev->size(); ++j)
-            value_cols[computed_pos[j]] = std::move((*ev)[j]);
+        else
+            roots[i] = value_roots[i];
     }
     // raw_col indices are 0-based within raw_cols; offset them past the
     // value_cols outputs once both column counts are known.
@@ -198,14 +191,8 @@ dstd::Result<DataFrame> group_agg_expr(
 
     dstd::Vector<const Series*> values;
     values.reserve(value_cols.size() + raw_cols.size());
-    for (Series& c : value_cols) {
-        if (!c.valid())
-            return common::make_error(
-                common::ErrorCode::InvalidArgument,
-                "group_agg: an aggregate value expression is not a numeric "
-                "column (no arithmetic kernel for its type)");
-        values.push_back(&c);
-    }
+    for (const Series& c : value_cols)
+        values.push_back(c.valid() ? &c : nullptr);
     for (std::int32_t ci : raw_cols)
         values.push_back(inputs[static_cast<std::size_t>(ci)]);
 
@@ -227,7 +214,9 @@ dstd::Result<DataFrame> group_agg_expr(
     dstd::Vector<const Series*> key_ptrs;
     key_ptrs.reserve(key_cols.size());
     for (const Series& c : key_cols) key_ptrs.push_back(&c);
-    return group_agg(key_ptrs, values, std::move(col_specs), key_names);
+    const AggComputed computed{roots, inputs};
+    return group_agg_computed(key_ptrs, values, std::move(col_specs), key_names,
+                              computed);
 }
 
 dstd::Result<DataFrame> group_agg_expr(const Expr& key,

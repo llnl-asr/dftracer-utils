@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/int128.h>
@@ -18,6 +21,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <limits>
 #include <random>
 
 using namespace dftracer::utils;
@@ -69,14 +74,18 @@ struct Peak {
 };
 
 // Sums of `aggs` nullable columns of the given type over ROWS rows with
-// GROUPS keys, and what the group-by holds at most.
-Peak group_by_peak(bool is_float, std::int64_t aggs) {
+// GROUPS keys, and what the group-by holds at most. The key is Int64, or
+// Int32 when `narrow_key`.
+Peak group_by_peak(bool is_float, std::int64_t aggs, bool narrow_key) {
     std::mt19937_64 rng(1);
     dstd::Vector<std::int64_t> key(ROWS);
     for (auto& v : key) v = static_cast<std::int64_t>(rng() % GROUPS);
+    dstd::Vector<std::int32_t> key32(key.begin(), key.end());
     DataFrame df;
     df.names.emplace_back("g");
-    df.columns.push_back(Series::flat_i64(key.data(), ROWS));
+    df.columns.push_back(narrow_key
+                             ? Series::flat(TypeId::Int32, key32.data(), ROWS)
+                             : Series::flat_i64(key.data(), ROWS));
     dstd::Vector<double> fval(ROWS);
     dstd::Vector<std::int64_t> ival(ROWS);
     dstd::Vector<std::uint8_t> valid((ROWS + 7) / 8);
@@ -118,13 +127,15 @@ Peak group_by_peak(bool is_float, std::int64_t aggs) {
 // between one aggregation and MANY: the key tables and the first-seen order
 // are the same in both and drop out. The highest of a few runs, so the bound
 // holds for the worst of them.
-double bytes_per_group_per_agg(bool is_float) {
+double bytes_per_group_per_agg(bool is_float, bool narrow_key) {
     constexpr int RUNS = 2;
-    Peak one = group_by_peak(is_float, 1);
-    Peak many = group_by_peak(is_float, MANY);
+    Peak one = group_by_peak(is_float, 1, narrow_key);
+    Peak many = group_by_peak(is_float, MANY, narrow_key);
     for (int i = 1; i < RUNS; ++i) {
-        one.held = std::max(one.held, group_by_peak(is_float, 1).held);
-        many.held = std::max(many.held, group_by_peak(is_float, MANY).held);
+        one.held =
+            std::max(one.held, group_by_peak(is_float, 1, narrow_key).held);
+        many.held =
+            std::max(many.held, group_by_peak(is_float, MANY, narrow_key).held);
     }
     REQUIRE(many.groups == one.groups);
     REQUIRE(many.held > one.held);
@@ -137,8 +148,132 @@ double bytes_per_group_per_agg(bool is_float) {
 TEST_CASE("group_by holds a word per group per aggregate") {
     // Each worker owns a disjoint set of groups, so no lane holds a table of
     // them and nothing is merged or copied.
-    CHECK(bytes_per_group_per_agg(false) <= static_cast<double>(BYTES_PER_AGG));
-    CHECK(bytes_per_group_per_agg(true) <= static_cast<double>(BYTES_PER_AGG));
+    CHECK(bytes_per_group_per_agg(false, false) <=
+          static_cast<double>(BYTES_PER_AGG));
+    CHECK(bytes_per_group_per_agg(true, false) <=
+          static_cast<double>(BYTES_PER_AGG));
+}
+
+TEST_CASE("group_by on an Int32 key holds a word per group per aggregate") {
+    // A key narrower than 8 bytes takes the same plain fold, not one that
+    // keeps a whole field stat per group and column.
+    CHECK(bytes_per_group_per_agg(true, true) <=
+          static_cast<double>(BYTES_PER_AGG));
+}
+
+namespace {
+
+// `x` stored as a column of the integer type `t`, which holds every value.
+Series narrow_column(TypeId t, dstd::Span<const std::int64_t> x,
+                     const std::uint8_t* validity) {
+    const auto n = static_cast<std::int64_t>(x.size());
+    auto as = [&]<class T>(T) {
+        dstd::Vector<T> cells(x.size());
+        for (std::size_t i = 0; i < x.size(); ++i)
+            cells[i] = static_cast<T>(x[i]);
+        return Series::flat(t, cells.data(), n, validity);
+    };
+    switch (t) {
+        case TypeId::Int8:
+            return as(std::int8_t{});
+        case TypeId::Int16:
+            return as(std::int16_t{});
+        case TypeId::Int32:
+            return as(std::int32_t{});
+        case TypeId::Uint8:
+            return as(std::uint8_t{});
+        case TypeId::Uint16:
+            return as(std::uint16_t{});
+        default:
+            return as(std::uint32_t{});
+    }
+}
+
+// A cell as int64 whatever its signedness; read_i64 does not read an
+// unsigned column.
+std::int64_t cell_i64(const Series& c, std::int64_t i) {
+    switch (c.type()) {
+        case TypeId::Uint8:
+        case TypeId::Uint16:
+        case TypeId::Uint32:
+        case TypeId::Uint64:
+            return static_cast<std::int64_t>(read_u64(c, i));
+        default:
+            return read_i64(c, i);
+    }
+}
+
+}  // namespace
+
+TEST_CASE("group_by on narrow integer keys and values matches Int64") {
+    // Each narrow column holds the Int64 one's values, negatives and nulls
+    // included, so the results must be equal cell for cell. Every width is
+    // read signed and unsigned, as a key and as a value.
+    constexpr std::int64_t N = 4 * 65536 + 123;
+    struct Case {
+        TypeId key;
+        std::int64_t key_lo, key_span;
+        TypeId val;
+        std::int64_t val_lo, val_span;
+    };
+    const Case cases[] = {
+        {TypeId::Int8, -100, 200, TypeId::Int32, -1000000, 2000001},
+        {TypeId::Uint16, 0, 60000, TypeId::Int32, -1000000, 2000001},
+        {TypeId::Int16, -30000, 60000, TypeId::Uint32, 0, 4000000000},
+        {TypeId::Uint32, 4000000000 - 60000, 60000, TypeId::Uint8, 0, 256},
+        {TypeId::Int32, -30000, 60000, TypeId::Int16, -32768, 65536},
+        {TypeId::Uint8, 0, 256, TypeId::Uint16, 0, 65536},
+        {TypeId::Int32, -1, 3, TypeId::Int8, -128, 256},
+    };
+    const dstd::Vector<GroupAgg> aggs{
+        GroupAgg{Agg::Sum, "v", "s"}, GroupAgg{Agg::Min, "v", "lo"},
+        GroupAgg{Agg::Max, "v", "hi"}, GroupAgg{Agg::Mean, "v", "m"},
+        GroupAgg{Agg::Count, "v", "n"}};
+    auto run = [&](const Series& key, const Series& val) {
+        DataFrame df;
+        df.names = dstd::make_shared_strings({"g", "v"});
+        df.columns.push_back(key.share());
+        df.columns.push_back(val.share());
+        return dftu_utils_test::ok(df.group_by("g", aggs));
+    };
+    std::mt19937_64 rng(7);
+    for (const Case& cs : cases) {
+        CAPTURE(static_cast<int>(cs.key));
+        CAPTURE(static_cast<int>(cs.val));
+        dstd::Vector<std::int64_t> key(N), val(N);
+        dstd::Vector<std::uint8_t> valid((N + 7) / 8, 0);
+        for (std::int64_t i = 0; i < N; ++i) {
+            key[i] = cs.key_lo +
+                     static_cast<std::int64_t>(
+                         rng() % static_cast<std::uint64_t>(cs.key_span));
+            val[i] = cs.val_lo +
+                     static_cast<std::int64_t>(
+                         rng() % static_cast<std::uint64_t>(cs.val_span));
+            if (rng() % 10)
+                valid[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
+        }
+        const DataFrame got = run(narrow_column(cs.key, key, nullptr),
+                                  narrow_column(cs.val, val, valid.data()));
+        const DataFrame want =
+            run(Series::flat_i64(key.data(), N),
+                Series::flat_i64(val.data(), N, valid.data()));
+        REQUIRE(got.num_rows() == want.num_rows());
+        std::int64_t bad = 0;
+        for (std::int64_t g = 0; g < want.num_rows(); ++g) {
+            for (const char* c : {"g", "s", "lo", "hi", "n"}) {
+                const bool null = want.column(c).is_null(g);
+                bad += got.column(c).is_null(g) != null;
+                if (!null)
+                    bad += cell_i64(got.column(c), g) !=
+                           cell_i64(want.column(c), g);
+            }
+            bad += got.column("m").is_null(g) != want.column("m").is_null(g);
+            if (!want.column("m").is_null(g))
+                bad += got.column("m").data<double>()[g] !=
+                       want.column("m").data<double>()[g];
+        }
+        CHECK(bad == 0);
+    }
 }
 
 TEST_CASE("group_by merges integer sums that wrap and unwrap across lanes") {
@@ -414,4 +549,176 @@ TEST_CASE("group_by keeps the lanes just under the many-group estimate") {
 
 TEST_CASE("group_by drops the lanes just over the many-group estimate") {
     check_float_sums(12000, true);
+}
+
+namespace {
+
+// A group-by whose values are `x.where(cat == 1, NaN)` over K columns, run
+// as expressions and again over the same values computed beforehand.
+struct ComputedRun {
+    DataFrame got;         // the expressions, which the group-by evaluates
+    DataFrame want;        // bare columns holding the computed values
+    std::size_t got_held;  // the most live bytes beyond the input, each
+    std::size_t want_held;
+};
+
+// The aggregates of each computed value: a sum, with a variance, or the
+// ones that read row positions (first, last, the key at the largest value and
+// its position, which folds in row order on one state).
+enum class Aggs { Sum, Moments, Positional };
+
+ComputedRun computed_run(std::int64_t n, std::int64_t groups, Aggs aggs) {
+    constexpr std::int64_t K = 2;
+    std::mt19937_64 rng(13);
+    dstd::Vector<std::int64_t> key(n), cat(n);
+    dstd::Vector<dstd::Vector<double>> xs(K, dstd::Vector<double>(n));
+    for (std::int64_t i = 0; i < n; ++i) {
+        key[i] = static_cast<std::int64_t>(rng() %
+                                           static_cast<std::uint64_t>(groups));
+        cat[i] = static_cast<std::int64_t>(rng() % 4);
+        for (auto& x : xs) x[i] = static_cast<double>(rng() % 100000) / 7.0;
+    }
+    dstd::Vector<Series> cols;
+    cols.push_back(Series::flat_i64(key.data(), n));
+    cols.push_back(Series::flat_i64(cat.data(), n));
+    for (auto& x : xs) cols.push_back(Series::flat_f64(x.data(), n));
+    dstd::Vector<const Series*> inputs;
+    for (const Series& c : cols) inputs.push_back(&c);
+
+    const Expr cond = expr_cmp(CmpOp::Eq, expr_col(1), Scalar{i64(1)});
+    dstd::Vector<Expr> vals;
+    for (std::int32_t j = 0; j < K; ++j)
+        vals.push_back(
+            expr_select(cond, expr_col(2 + j),
+                        expr_lit(std::numeric_limits<double>::quiet_NaN())));
+    auto specs_over = [&](dstd::Span<const Expr> v) {
+        dstd::Vector<AggExprSpec> specs;
+        for (std::size_t j = 0; j < v.size(); ++j) {
+            auto name = [&](dstd::StringView op) {
+                return dstd::String(dstd::fmt<"{}{}">(op, j));
+            };
+            switch (aggs) {
+                case Aggs::Sum:
+                    specs.push_back(agg_sum(v[j], name("s")));
+                    break;
+                case Aggs::Moments:
+                    specs.push_back(agg_sum(v[j], name("s")));
+                    specs.push_back(agg_var(v[j], name("v")));
+                    break;
+                case Aggs::Positional:
+                    specs.push_back({AggOp::First, v[j], name("f")});
+                    specs.push_back({AggOp::Last, v[j], name("l")});
+                    specs.push_back(agg_argmax(expr_col(0), v[j], name("a")));
+                    specs.push_back({AggOp::ArgMaxPos, v[j], name("p")});
+                    break;
+            }
+        }
+        return specs;
+    };
+    const Expr keys[1] = {expr_col(0)};
+    const dstd::String key_names[1] = {dstd::String("g")};
+
+    ComputedRun out;
+    const std::size_t before = live();
+    {
+        PeakSampler sampler;
+        const dstd::Vector<AggExprSpec> specs = specs_over(vals);
+        out.got =
+            dftu_utils_test::ok(group_agg_expr(keys, specs, inputs, key_names));
+        out.got_held = sampler.stop() - before;
+    }
+    dstd::Vector<Series> made;
+    for (const Expr& v : vals)
+        made.push_back(dftu_utils_test::ok(eval(v, inputs)));
+    dstd::Vector<const Series*> made_inputs{&cols[0]};
+    for (const Series& m : made) made_inputs.push_back(&m);
+    dstd::Vector<Expr> bare;
+    for (std::int32_t j = 0; j < K; ++j) bare.push_back(expr_col(1 + j));
+    const std::size_t made_before = live();
+    {
+        PeakSampler sampler;
+        const dstd::Vector<AggExprSpec> specs = specs_over(bare);
+        out.want = dftu_utils_test::ok(
+            group_agg_expr(keys, specs, made_inputs, key_names));
+        out.want_held = sampler.stop() - made_before;
+    }
+    return out;
+}
+
+// Every cell of `got` holds the bits of the same cell of `want`.
+std::int64_t differing_cells(const DataFrame& got, const DataFrame& want) {
+    REQUIRE(got.columns.size() == want.columns.size());
+    REQUIRE(got.num_rows() == want.num_rows());
+    std::int64_t bad = 0;
+    for (std::size_t c = 0; c < want.columns.size(); ++c) {
+        const Series& g = got.columns[c];
+        const Series& w = want.columns[c];
+        REQUIRE(g.type() == w.type());
+        for (std::int64_t i = 0; i < want.num_rows(); ++i) {
+            bad += g.is_null(i) != w.is_null(i);
+            if (w.is_null(i)) continue;
+            if (w.type() == TypeId::Float64)
+                bad += std::memcmp(g.data<double>() + i, w.data<double>() + i,
+                                   sizeof(double)) != 0;
+            else
+                bad += read_i64(g, i) != read_i64(w, i);
+        }
+    }
+    return bad;
+}
+
+}  // namespace
+
+TEST_CASE("group_by over many groups evaluates computed values in windows") {
+    // 64 morsels: a computed value held whole would be 32 MiB a column and
+    // twice that while its windows are joined; the by-key driver evaluates a
+    // window of four morsels at a time.
+    constexpr std::int64_t N = 64 * 65536;
+    const ComputedRun run = computed_run(N, 200000, Aggs::Sum);
+    CHECK(differing_cells(run.got, run.want) == 0);
+    const auto extra =
+        static_cast<double>(run.got_held) - static_cast<double>(run.want_held);
+    CHECK(extra < static_cast<double>(N) * 8.0 / 2.0);
+}
+
+TEST_CASE("group_by over few groups evaluates computed values per chunk") {
+    const ComputedRun run = computed_run(64 * 65536, 500, Aggs::Sum);
+    CHECK(differing_cells(run.got, run.want) == 0);
+}
+
+TEST_CASE("group_by evaluates computed values for moments in batches") {
+    const ComputedRun run = computed_run(16 * 65536, 200000, Aggs::Moments);
+    CHECK(differing_cells(run.got, run.want) == 0);
+}
+
+TEST_CASE("group_by evaluates computed values of a small frame at once") {
+    const ComputedRun run = computed_run(1000, 50, Aggs::Moments);
+    CHECK(differing_cells(run.got, run.want) == 0);
+}
+
+TEST_CASE("group_by keeps row positions of computed values in every driver") {
+    // Many groups, few groups, and a frame the lanes start on and hand to the
+    // by-key driver; each folds computed values a window at a time.
+    for (const std::int64_t groups : {200000, 500}) {
+        const ComputedRun run =
+            computed_run(16 * 65536, groups, Aggs::Positional);
+        CHECK(differing_cells(run.got, run.want) == 0);
+    }
+    const ComputedRun mid = computed_run(3 * 65536, 20000, Aggs::Sum);
+    CHECK(differing_cells(mid.got, mid.want) == 0);
+}
+
+TEST_CASE("group_by reports a computed value that does not evaluate") {
+    constexpr std::int64_t N = 4 * 65536;
+    dstd::Vector<std::int64_t> key(N, 1);
+    dstd::Vector<double> x(N, 2.0);
+    const Series k = Series::flat_i64(key.data(), N);
+    const Series v = Series::flat_f64(x.data(), N);
+    const Series* inputs[2] = {&k, &v};
+    // The condition of a select must be Bool.
+    const dstd::Vector<AggExprSpec> specs{
+        agg_sum(expr_select(expr_col(1), expr_col(1), expr_lit(0.0)), "s")};
+    const Expr keys[1] = {expr_col(0)};
+    const dstd::String key_names[1] = {dstd::String("g")};
+    CHECK_FALSE(group_agg_expr(keys, specs, inputs, key_names).has_value());
 }

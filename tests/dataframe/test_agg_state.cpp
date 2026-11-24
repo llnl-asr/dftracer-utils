@@ -838,9 +838,9 @@ TEST_CASE("packed accumulation of a shape that does not pack ends the process" *
           doctest::skip()) {
     fresh_process::announce_abort();
     const std::int64_t k[2] = {1, 2};
-    const std::int32_t v[2] = {3, 4};
+    const float v[2] = {3, 4};
     const Series key = Series::flat_i64(k, 2);
-    const Series val = Series::flat(TypeId::Int32, v, 2);
+    const Series val = Series::flat(TypeId::Float32, v, 2);
     auto st = dataframe::agg_new({AggSpec{AggOp::Sum, 0, "sum"}});
     dataframe::AggPacked shape;
     dataframe::AggPages pages;

@@ -2,11 +2,13 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/platform_compat.h>  // hardware_concurrency
+#include <dftracer/utils/dataframe/agg/computed.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dataframe/batch_ops.h>     // concat, take
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_u64
+#include <dftracer/utils/dataframe/internal/expr_windows.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>          // argsort
 #include <dftracer/utils/dataframe/parallel.h>              // parallel_for
 #include <dftracer/utils/dstd/concurrent_queue.h>
@@ -102,12 +104,83 @@ struct FirstError {
         if (!error) error = r.error();
     }
 };
+
+// The computed value columns of a group-by, compiled once: `windows` gives
+// them for a row window and `slots[j]` is the value index its column j fills.
+struct Computed {
+    dstd::Optional<ExprWindows> windows;
+    dstd::Vector<std::size_t> slots;
+    std::int64_t rows = 0;
+    bool any() const { return windows.has_value(); }
+};
+
+dstd::Result<Computed> compile_computed(const AggComputed* c) {
+    Computed out;
+    if (c == nullptr) return out;
+    dstd::Vector<Expr> roots;
+    for (std::size_t i = 0; i < c->roots.size(); ++i)
+        if (c->roots[i].valid()) {
+            roots.push_back(c->roots[i]);
+            out.slots.push_back(i);
+        }
+    if (roots.empty()) return out;
+    dstd::Result<ExprWindows> w = ExprWindows::compile(roots, c->inputs);
+    if (!w) return w.error();
+    out.windows.emplace(std::move(*w));
+    out.rows = c->inputs.empty() ? 0 : c->inputs[0]->length();
+    return out;
+}
+
+// The rows a driver folds: the keys', else a value column's, else the
+// computed columns'.
+std::int64_t fold_rows(dstd::Span<const Series* const> keys,
+                       dstd::Span<const Series* const> values,
+                       const Computed* cw) {
+    if (!keys.empty()) return keys[0]->length();
+    for (const Series* v : values)
+        if (v != nullptr) return v->length();
+    return cw != nullptr ? cw->rows : 0;
+}
+
+// Rows [b, e) of the keys and values as flat columns of e - b rows, the
+// computed values evaluated for those rows alone.
+struct Window {
+    dstd::Vector<Series> owned;
+    dstd::Vector<const Series*> keys;
+    dstd::Vector<const Series*> values;
+};
+
+dstd::Result<void> load_window(dstd::Span<const Series* const> keys,
+                               dstd::Span<const Series* const> values,
+                               const Computed& cw, std::int64_t b,
+                               std::int64_t e, Window& w) {
+    dstd::Result<dstd::Vector<Series>> made = cw.windows->eval(b, e - b);
+    if (!made) return made.error();
+    w.owned.clear();
+    w.owned.reserve(keys.size() + values.size());
+    w.keys.clear();
+    w.values.assign(values.size(), nullptr);
+    for (const Series* k : keys) {
+        w.owned.push_back(flat_or_ref(k->slice(b, e - b), true));
+        w.keys.push_back(&w.owned.back());
+    }
+    for (std::size_t j = 0; j < cw.slots.size(); ++j) {
+        w.owned.push_back(flat_or_ref((*made)[j], false));
+        w.values[cw.slots[j]] = &w.owned.back();
+    }
+    for (std::size_t i = 0; i < values.size(); ++i)
+        if (w.values[i] == nullptr) {
+            w.owned.push_back(flat_or_ref(values[i]->slice(b, e - b), false));
+            w.values[i] = &w.owned.back();
+        }
+    return {};
+}
 }  // namespace
 
 static dstd::Result<AggStatePtr> group_agg_lanes(
     dstd::Span<const Series* const> in_keys,
     dstd::Span<const Series* const> in_values, dstd::Vector<AggSpec> specs,
-    std::atomic<bool>* many = nullptr) {
+    std::atomic<bool>* many = nullptr, const Computed* cw = nullptr) {
     // The accumulator reads FLAT columns; a view (a filter's selection, a
     // dictionary) is materialized once here, for every caller.
     dstd::Vector<Series> owned;
@@ -116,7 +189,7 @@ static dstd::Result<AggStatePtr> group_agg_lanes(
         dstd::Vector<const Series*> out;
         out.reserve(cols.size());
         for (const Series* c : cols) {
-            if (c->encoding() == Encoding::Flat ||
+            if (c == nullptr || c->encoding() == Encoding::Flat ||
                 (&cols == &in_keys && by_ref(*c))) {
                 out.push_back(c);
             } else {
@@ -128,14 +201,31 @@ static dstd::Result<AggStatePtr> group_agg_lanes(
     };
     const dstd::Vector<const Series*> keys = flat(in_keys);
     const dstd::Vector<const Series*> values = flat(in_values);
-    const std::int64_t n = !keys.empty()     ? keys[0]->length()
-                           : !values.empty() ? values[0]->length()
-                                             : 0;
+    const bool computed = cw != nullptr && cw->any();
+    const std::int64_t n = fold_rows(keys, values, cw);
     // A UDAF that two threads must not feed at once takes this single state.
     if (n <= AGG_GRAIN || agg_specs_serial(specs)) {
         auto st = agg_new(std::move(specs));
-        dstd::Result<void> done = agg_accumulate(*st, keys, values);
-        if (!done) return done.error();
+        if (!computed) {
+            dstd::Result<void> done = agg_accumulate(*st, keys, values);
+            if (!done) return done.error();
+            return st;
+        }
+        // One chunk of computed values at a time, in row order.
+        Window w;
+        std::int64_t b = 0;
+        do {
+            const std::int64_t e = std::min(n, b + AGG_GRAIN);
+            if (dstd::Result<void> ok = load_window(keys, values, *cw, b, e, w);
+                !ok)
+                return ok.error();
+            agg_set_row_base(*st, b);
+            if (dstd::Result<void> done = agg_accumulate(*st, w.keys, w.values);
+                !done)
+                return done.error();
+            b = e;
+        } while (b < n);
+        agg_set_row_base(*st, 0);
         return st;
     }
     // Fixed lanes, not a partial per thread: lane l folds chunks l, l+LANES,
@@ -156,9 +246,22 @@ static dstd::Result<AggStatePtr> group_agg_lanes(
             std::int64_t lane_rows = 0;
             for (std::int64_t c = l; c < chunks; c += nl)
                 lane_rows += std::min(n, (c + 1) * AGG_GRAIN) - c * AGG_GRAIN;
+            Window w;
             for (std::int64_t c = l; c < chunks; c += nl) {
                 std::int64_t b = c * AGG_GRAIN;
                 const std::int64_t e = std::min(n, (c + 1) * AGG_GRAIN);
+                // Computed values exist for this chunk's rows alone, which
+                // the state then counts from its first row.
+                const std::int64_t at = computed ? b : 0;
+                if (computed) {
+                    dstd::Result<void> ok =
+                        load_window(keys, values, *cw, b, e, w);
+                    if (!ok) {
+                        failed.note(std::move(ok));
+                        return;
+                    }
+                    agg_set_row_base(*st, b);
+                }
                 // The lane's first rows size its tables, so they are
                 // allocated once and not regrown (and freed) as the groups
                 // come in; lane 0's also tell whether the groups are many.
@@ -176,7 +279,9 @@ static dstd::Result<AggStatePtr> group_agg_lanes(
                     const std::int64_t pe = std::min(
                         e, b + (b == c * AGG_GRAIN && first ? piece : step));
                     dstd::Result<void> done =
-                        agg_accumulate(*st, keys, values, b, pe);
+                        computed ? agg_accumulate(*st, w.keys, w.values, b - at,
+                                                  pe - at)
+                                 : agg_accumulate(*st, keys, values, b, pe);
                     if (!done) {
                         failed.note(std::move(done));
                         return;
@@ -194,6 +299,7 @@ static dstd::Result<AggStatePtr> group_agg_lanes(
                     b = pe;
                 }
             }
+            agg_set_row_base(*st, 0);
             lanes[static_cast<std::size_t>(l)] = std::move(st);
         }
     });
@@ -822,7 +928,8 @@ bool by_key_eligible(dstd::Span<const Series* const> in_keys,
 dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
     dstd::Span<const Series* const> in_keys,
     dstd::Span<const Series* const> in_values, dstd::Span<const AggSpec> specs,
-    dstd::Span<const dstd::String> key_names, std::size_t drop_keys = 0) {
+    dstd::Span<const dstd::String> key_names, std::size_t drop_keys = 0,
+    const Computed* cw = nullptr) {
     using Maybe = dstd::Result<dstd::Optional<DataFrame>>;
     auto none = [] { return Maybe(dstd::Optional<DataFrame>()); };
     // Threshold set from benchmarks/groupby_analyzer_bench.py; below it the
@@ -839,6 +946,10 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
     auto flat = [&](dstd::Span<const Series* const> cols, bool key) {
         dstd::Vector<const Series*> out;
         for (const Series* c : cols) {
+            if (c == nullptr) {
+                out.push_back(nullptr);
+                continue;
+            }
             owned.push_back(flat_or_ref(*c, key));
             out.push_back(&owned.back());
         }
@@ -846,14 +957,23 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
     };
     const dstd::Vector<const Series*> keys = flat(in_keys, true);
     const dstd::Vector<const Series*> values = flat(in_values, false);
+    const bool computed = cw != nullptr && cw->any();
     std::size_t groups_hint = 0;
     {
         AggStatePtr probe =
             agg_new(dstd::Vector<AggSpec>(specs.begin(), specs.end()));
         // A rejected layout is reported by the state driver, which runs next.
         const bool lane_range = n <= 4 * AGG_GRAIN;
-        const std::int64_t rows = lane_range ? LANE_ROUTE_PROBE : ROUTE_PROBE;
-        if (!agg_accumulate(*probe, keys, values, 0, rows)) return none();
+        const std::int64_t rows =
+            std::min(n, lane_range ? LANE_ROUTE_PROBE : ROUTE_PROBE);
+        Window w;
+        if (computed && !load_window(keys, values, *cw, 0, rows, w))
+            return none();
+        const bool folded =
+            computed
+                ? agg_accumulate(*probe, w.keys, w.values).has_value()
+                : agg_accumulate(*probe, keys, values, 0, rows).has_value();
+        if (!folded) return none();
         const bool few = lane_range
                              ? estimate_groups(*probe, n) <
                                    static_cast<std::size_t>(LANE_MANY_GROUPS)
@@ -871,17 +991,26 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
     constexpr std::uint64_t NULL_KEY =
         dftracer::utils::dstd::hash::GOLDEN_RATIO;
 
-    DataFrame src;  // the key and value columns, shared, not copied
+    // The key and value columns, shared, not copied. A computed value is not
+    // in it: each morsel evaluates its rows into `made`.
+    DataFrame src;
     for (const Series* c : keys) {
         src.names.push_back(
             dstd::SharedString{dstd::fmt<"k{}">(src.columns.size())});
         src.columns.push_back(c->share());
     }
-    for (const Series* c : values) {
+    dstd::Vector<std::size_t> src_at(values.size(), 0);
+    for (std::size_t j = 0; j < values.size(); ++j) {
+        if (values[j] == nullptr) continue;
+        src_at[j] = src.columns.size();
         src.names.push_back(
             dstd::SharedString{dstd::fmt<"v{}">(src.columns.size())});
-        src.columns.push_back(c->share());
+        src.columns.push_back(values[j]->share());
     }
+    dstd::Vector<std::size_t> made_at(values.size(), 0);
+    if (computed)
+        for (std::size_t j = 0; j < cw->slots.size(); ++j)
+            made_at[cw->slots[j]] = j;
     dstd::Vector<AggStatePtr> states(PARTITIONS);
     for (AggStatePtr& st : states) {
         st = agg_new(dstd::Vector<AggSpec>(specs.begin(), specs.end()));
@@ -902,6 +1031,8 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
         dstd::Vector<std::int64_t> off;    // PARTITIONS + 1 offsets into rows
     };
     dstd::Vector<Bucketed> win(static_cast<std::size_t>(WINDOW));
+    // The computed values of each morsel in the window, its rows from 0.
+    dstd::Vector<DataFrame> made(static_cast<std::size_t>(WINDOW));
     auto bucket_morsel = [&](std::int64_t m, Bucketed& out) {
         const std::int64_t b = m * AGG_GRAIN;
         const std::int64_t e = std::min(n, b + AGG_GRAIN);
@@ -938,9 +1069,26 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
     for (std::int64_t w0 = 0; w0 < nmorsels; w0 += WINDOW) {
         const std::int64_t wn = std::min(WINDOW, nmorsels - w0);
         parallel_for(wn, 1, [&](std::int64_t m0, std::int64_t m1) {
-            for (std::int64_t m = m0; m < m1; ++m)
+            for (std::int64_t m = m0; m < m1; ++m) {
                 bucket_morsel(w0 + m, win[static_cast<std::size_t>(m)]);
+                if (!computed) continue;
+                const std::int64_t b = (w0 + m) * AGG_GRAIN;
+                dstd::Result<dstd::Vector<Series>> cols =
+                    cw->windows->eval(b, std::min(n, b + AGG_GRAIN) - b);
+                if (!cols) {
+                    failed.note(dstd::Result<void>(cols.error()));
+                    continue;
+                }
+                DataFrame& out = made[static_cast<std::size_t>(m)];
+                out = DataFrame{};
+                for (Series& c : *cols) {
+                    out.names.push_back(dstd::SharedString{
+                        dstd::fmt<"c{}">(out.columns.size())});
+                    out.columns.push_back(flat_or_ref(c, false));
+                }
+            }
         });
+        if (failed.error) return *failed.error;
         parallel_for(
             static_cast<std::int64_t>(PARTITIONS), 1,
             [&](std::int64_t p0, std::int64_t p1) {
@@ -959,11 +1107,22 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
                             mine.push_back(
                                 at + bk.rows[static_cast<std::size_t>(r)]);
                         const DataFrame sub = take(src, mine);
+                        DataFrame sub_made;
+                        if (computed) {
+                            dstd::Vector<std::int64_t> local;
+                            local.reserve(mine.size());
+                            for (const std::int64_t r : mine)
+                                local.push_back(r - at);
+                            sub_made =
+                                take(made[static_cast<std::size_t>(m)], local);
+                        }
                         dstd::Vector<const Series*> sk, sv;
                         for (std::size_t j = 0; j < keys.size(); ++j)
                             sk.push_back(&sub.columns[j]);
                         for (std::size_t j = 0; j < values.size(); ++j)
-                            sv.push_back(&sub.columns[keys.size() + j]);
+                            sv.push_back(values[j] != nullptr
+                                             ? &sub.columns[src_at[j]]
+                                             : &sub_made.columns[made_at[j]]);
                         st.row_ids = mine.data();
                         dstd::Result<void> done = agg_accumulate(st, sk, sv);
                         st.row_ids = nullptr;
@@ -1008,10 +1167,17 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
 dstd::Result<DataFrame> group_agg_whole(
     dstd::Span<const Series* const> keys,
     dstd::Span<const Series* const> values, dstd::Vector<AggSpec> specs,
-    dstd::Span<const dstd::String> key_names, std::size_t drop_keys = 0) {
-    if (dstd::Optional<DataFrame> out =
-            group_agg_partitioned(keys, values, specs, key_names, drop_keys))
-        return std::move(*out);
+    dstd::Span<const dstd::String> key_names, std::size_t drop_keys = 0,
+    const AggComputed* computed = nullptr) {
+    dstd::Result<Computed> compiled = compile_computed(computed);
+    if (!compiled) return compiled.error();
+    const Computed& cw = *compiled;
+    // The packed driver reads whole columns; computed values go to the
+    // drivers below, which evaluate them a window at a time.
+    if (!cw.any())
+        if (dstd::Optional<DataFrame> out = group_agg_partitioned(
+                keys, values, specs, key_names, drop_keys))
+            return std::move(*out);
     // A frame the lanes can hold is folded in lanes at once, and lane 0's
     // first rows decide whether the groups are many: then the lanes are
     // dropped and the by-key driver runs, else nothing waited.
@@ -1020,18 +1186,18 @@ dstd::Result<DataFrame> group_agg_whole(
     AggStatePtr folded;
     if (n > AGG_GRAIN && n <= 4 * AGG_GRAIN && !agg_specs_serial(specs) &&
         by_key_eligible(keys, specs)) {
-        dstd::Result<AggStatePtr> lanes =
-            group_agg_lanes(keys, values, dstd::Vector<AggSpec>(specs), &many);
+        dstd::Result<AggStatePtr> lanes = group_agg_lanes(
+            keys, values, dstd::Vector<AggSpec>(specs), &many, &cw);
         if (!lanes) return lanes.error();
         folded = std::move(*lanes);
     }
     if (!folded) {
-        dstd::Result<dstd::Optional<DataFrame>> hashed =
-            group_agg_by_key_hash(keys, values, specs, key_names, drop_keys);
+        dstd::Result<dstd::Optional<DataFrame>> hashed = group_agg_by_key_hash(
+            keys, values, specs, key_names, drop_keys, &cw);
         if (!hashed) return hashed.error();
         if (*hashed) return std::move(**hashed);
         dstd::Result<AggStatePtr> lanes =
-            group_agg_lanes(keys, values, std::move(specs));
+            group_agg_lanes(keys, values, std::move(specs), nullptr, &cw);
         if (!lanes) return lanes.error();
         folded = std::move(*lanes);
     }
@@ -1116,7 +1282,7 @@ std::int64_t cell_bytes(dstd::Span<const AggSpec> specs, std::int32_t col) {
 dstd::Result<dstd::Optional<DataFrame>> group_agg_in_batches(
     dstd::Span<const Series* const> keys,
     dstd::Span<const Series* const> values, dstd::Span<const AggSpec> specs,
-    dstd::Span<const dstd::String> key_names) {
+    dstd::Span<const dstd::String> key_names, const AggComputed* computed) {
     using Maybe = dstd::Result<dstd::Optional<DataFrame>>;
     auto none = [] { return Maybe(dstd::Optional<DataFrame>()); };
     // The state one batch may hold. The passes over the keys grow as columns /
@@ -1147,12 +1313,22 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_in_batches(
             owned.push_back(flat_or_ref(*c, true));
             ks.push_back(&owned.back());
         }
+        dstd::Result<Computed> cw = compile_computed(computed);
+        if (!cw) return cw.error();
+        Window w;
         dstd::Vector<Series> owned_values;
         owned_values.reserve(values.size());
         dstd::Vector<const Series*> vs;
-        for (const Series* c : values) {
-            owned_values.push_back(flat_or_ref(*c, false));
-            vs.push_back(&owned_values.back());
+        if (cw->any()) {
+            if (!load_window(ks, values, *cw, 0, AGG_GRAIN / 4, w))
+                return none();
+            ks = w.keys;
+            vs = w.values;
+        } else {
+            for (const Series* c : values) {
+                owned_values.push_back(flat_or_ref(*c, false));
+                vs.push_back(&owned_values.back());
+            }
         }
         AggStatePtr probe =
             agg_new(dstd::Vector<AggSpec>(specs.begin(), specs.end()));
@@ -1180,10 +1356,18 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_in_batches(
             sub.push_back(std::move(s));
         }
         dstd::Vector<const Series*> vs;
-        for (const std::int32_t c : cols)
+        dstd::Vector<Expr> roots;
+        for (const std::int32_t c : cols) {
             vs.push_back(values[static_cast<std::size_t>(c)]);
+            if (computed != nullptr)
+                roots.push_back(computed->roots[static_cast<std::size_t>(c)]);
+        }
+        const AggComputed part{roots, computed != nullptr
+                                          ? computed->inputs
+                                          : dstd::Span<const Series* const>()};
         return group_agg_whole(keys, vs, std::move(sub), key_names,
-                               from == 0 ? 0 : keys.size());
+                               from == 0 ? 0 : keys.size(),
+                               computed != nullptr ? &part : nullptr);
     };
     dstd::Vector<dstd::SharedString> made_names;
     dstd::Vector<Series> made;
@@ -1237,10 +1421,13 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_in_batches(
 
 }  // namespace
 
-dstd::Result<DataFrame> group_agg(dstd::Span<const Series* const> keys,
-                                  dstd::Span<const Series* const> values,
-                                  dstd::Vector<AggSpec> specs,
-                                  dstd::Span<const dstd::String> key_names) {
+namespace {
+
+dstd::Result<DataFrame> group_agg_impl(dstd::Span<const Series* const> keys,
+                                       dstd::Span<const Series* const> values,
+                                       dstd::Vector<AggSpec> specs,
+                                       dstd::Span<const dstd::String> key_names,
+                                       const AggComputed* computed) {
     dstd::Vector<Series> joined;
     joined.reserve(keys.size() + values.size());
     auto flat = [&](dstd::Span<const Series* const> in)
@@ -1264,11 +1451,28 @@ dstd::Result<DataFrame> group_agg(dstd::Span<const Series* const> keys,
     if (!values_flat) return values_flat.error();
     const dstd::Vector<const Series*>& flat_keys = *keys_flat;
     const dstd::Vector<const Series*>& flat_values = *values_flat;
-    dstd::Result<dstd::Optional<DataFrame>> batched =
-        group_agg_in_batches(flat_keys, flat_values, specs, key_names);
+    dstd::Result<dstd::Optional<DataFrame>> batched = group_agg_in_batches(
+        flat_keys, flat_values, specs, key_names, computed);
     if (!batched) return batched.error();
     if (*batched) return std::move(**batched);
-    return group_agg_whole(flat_keys, flat_values, std::move(specs), key_names);
+    return group_agg_whole(flat_keys, flat_values, std::move(specs), key_names,
+                           0, computed);
+}
+
+}  // namespace
+
+dstd::Result<DataFrame> group_agg(dstd::Span<const Series* const> keys,
+                                  dstd::Span<const Series* const> values,
+                                  dstd::Vector<AggSpec> specs,
+                                  dstd::Span<const dstd::String> key_names) {
+    return group_agg_impl(keys, values, std::move(specs), key_names, nullptr);
+}
+
+dstd::Result<DataFrame> group_agg_computed(
+    dstd::Span<const Series* const> keys,
+    dstd::Span<const Series* const> values, dstd::Vector<AggSpec> specs,
+    dstd::Span<const dstd::String> key_names, const AggComputed& computed) {
+    return group_agg_impl(keys, values, std::move(specs), key_names, &computed);
 }
 
 dstd::Result<DataFrame> group_agg(const Series& key,

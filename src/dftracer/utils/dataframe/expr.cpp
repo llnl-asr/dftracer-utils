@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/internal/cell_ops.h>  // cell_to_string
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
+#include <dftracer/utils/dataframe/internal/expr_windows.h>
 #include <dftracer/utils/dataframe/internal/fingerprint.h>
 #include <dftracer/utils/dataframe/internal/scalar.h>     // scalar_as
 #include <dftracer/utils/dataframe/kernels/string_ops.h>  // str_pattern
@@ -3912,6 +3913,53 @@ dstd::Result<void> require_evaluated(dstd::Span<const Series> outs,
     return {};
 }
 
+dstd::Vector<DataType> types_of(dstd::Span<const Series* const> inputs) {
+    dstd::Vector<DataType> out;
+    out.reserve(inputs.size());
+    for (const Series* s : inputs) out.push_back(s->data_type());
+    return out;
+}
+
+// The roots compiled into one program, so hash-consing (CSE) spans all of
+// them. The ops borrow from the roots' nodes and from the compiler's UDF
+// bindings, so both live here, and a Program never moves.
+struct Program {
+    Program(dstd::Span<const Expr> r, dstd::Span<const Series* const> inputs)
+        : roots(r.begin(), r.end()),
+          input_types(types_of(inputs)),
+          c(input_types) {}
+    Program(const Program&) = delete;
+    Program& operator=(const Program&) = delete;
+
+    dstd::Vector<Expr> roots;
+    dstd::Vector<DataType> input_types;
+    Compiler c;
+    dstd::Vector<Series> flat;  // the inputs the program loads, shared
+    dstd::Vector<int> finals;   // the slot of each root
+};
+
+dstd::Result<dstd::UniquePtr<Program>> compile_program(
+    dstd::Span<const Expr> roots, dstd::Span<const Series* const> inputs) {
+    auto p = dstd::make_unique<Program>(roots, inputs);
+    p->finals.reserve(roots.size());
+    for (const Expr& root : p->roots) {
+        if (!root.valid())
+            return common::make_error(common::ErrorCode::InvalidArgument,
+                                      "expr: null expression");
+        p->finals.push_back(p->c.column(p->c.compile(root.node().get())).slot);
+        if (p->c.failed())
+            return common::make_error(common::ErrorCode::InvalidArgument,
+                                      p->c.error());
+    }
+    p->flat.resize(inputs.size());
+    for (const SlotOp& op : p->c.program)
+        if (op.opcode == OpLoad) {
+            const auto i = static_cast<std::size_t>(op.param);
+            if (!p->flat[i].valid()) p->flat[i] = inputs[i]->share();
+        }
+    return p;
+}
+
 constexpr std::int64_t GRAIN = 1 << 16;
 
 }  // namespace
@@ -3944,34 +3992,19 @@ dstd::Result<dstd::Vector<Series>> eval_many(
         return outs;
     }
 
-    // One compiler for all roots: hash-consing (CSE) spans the whole program.
-    dstd::Vector<DataType> input_types;
-    input_types.reserve(inputs.size());
-    for (const Series* s : inputs) input_types.push_back(s->data_type());
-    Compiler c(input_types);
-    EvalError error;
-    dstd::Vector<int> finals;
-    finals.reserve(roots.size());
-    for (const Expr& root : roots) {
-        if (!root.valid())
-            return common::make_error(common::ErrorCode::InvalidArgument,
-                                      "expr: null expression");
-        finals.push_back(c.column(c.compile(root.node().get())).slot);
-        if (c.failed())
-            return common::make_error(common::ErrorCode::InvalidArgument,
-                                      c.error());
-    }
-
+    dstd::Result<dstd::UniquePtr<Program>> compiled =
+        compile_program(roots, inputs);
+    if (!compiled) return compiled.error();
+    const Program& prog = **compiled;
+    const dstd::Span<const SlotOp> program(prog.c.program);
+    const dstd::Span<const Series> flat(prog.flat);
+    const dstd::Span<const int> finals(prog.finals);
     // Inputs are read in place; each chunk's OP_LOAD slices its rows as a
     // view of the input (a window that spans chunks of a CHUNKED input is
     // joined there, in parallel).
     dstd::Vector<bool> used(inputs.size(), false);
-    for (const SlotOp& op : c.program)
-        if (op.opcode == OpLoad)
-            used[static_cast<std::size_t>(op.param)] = true;
-    dstd::Vector<Series> flat(inputs.size());
-    for (std::size_t i = 0; i < inputs.size(); ++i)
-        if (used[i]) flat[i] = inputs[i]->share();
+    for (std::size_t i = 0; i < inputs.size(); ++i) used[i] = flat[i].valid();
+    EvalError error;
 
     const std::int64_t n = inputs.front()->length();
     // Window starts: a CHUNKED input's own chunks when every chunked input
@@ -3995,7 +4028,7 @@ dstd::Result<dstd::Vector<Series>> eval_many(
     if (!by_chunk) {
         if (n <= GRAIN) {
             dstd::Vector<Series> outs =
-                eval_chunk(c.program, flat, finals, 0, n, error);
+                eval_chunk(program, flat, finals, 0, n, error);
             if (auto ok = require_evaluated(outs, error); !ok)
                 return ok.error();
             return outs;
@@ -4015,7 +4048,7 @@ dstd::Result<dstd::Vector<Series>> eval_many(
             const std::int64_t lo = bounds[static_cast<std::size_t>(k)];
             const std::int64_t hi = bounds[static_cast<std::size_t>(k) + 1];
             parts[static_cast<std::size_t>(k)] =
-                eval_chunk(c.program, flat, finals, lo, hi - lo, error);
+                eval_chunk(program, flat, finals, lo, hi - lo, error);
         }
     });
     for (const dstd::Vector<Series>& part : parts)
@@ -4040,6 +4073,46 @@ dstd::Result<dstd::Vector<Series>> eval_many(
         if (!joined) return joined.error();
         outs.push_back(std::move(*joined));
     }
+    return outs;
+}
+
+struct ExprWindows::Impl {
+    dstd::UniquePtr<Program> program;
+    coro::CancelView cancel;
+};
+
+ExprWindows::ExprWindows(dstd::UniquePtr<Impl> impl) noexcept
+    : impl_(std::move(impl)) {}
+ExprWindows::ExprWindows(ExprWindows&&) noexcept = default;
+ExprWindows& ExprWindows::operator=(ExprWindows&&) noexcept = default;
+ExprWindows::~ExprWindows() = default;
+
+dstd::Result<ExprWindows> ExprWindows::compile(
+    dstd::Span<const Expr> roots, dstd::Span<const Series* const> inputs) {
+    if (roots.empty())
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  "expr: needs at least one expression");
+    if (inputs.empty())
+        return common::make_error(common::ErrorCode::InvalidArgument,
+                                  "expr: needs at least one input column");
+    dstd::Result<dstd::UniquePtr<Program>> compiled =
+        compile_program(roots, inputs);
+    if (!compiled) return compiled.error();
+    auto impl = dstd::make_unique<Impl>();
+    impl->program = std::move(*compiled);
+    impl->cancel = udf_cancel();
+    return ExprWindows(std::move(impl));
+}
+
+dstd::Result<dstd::Vector<Series>> ExprWindows::eval(std::int64_t offset,
+                                                     std::int64_t len) const {
+    const UdfCancelScope cancel_scope(impl_->cancel);
+    const Program& p = *impl_->program;
+    EvalError error;
+    dstd::Vector<Series> outs =
+        eval_chunk(p.c.program, p.flat, p.finals, offset, len, error);
+    if (dstd::Result<void> ok = require_evaluated(outs, error); !ok)
+        return ok.error();
     return outs;
 }
 

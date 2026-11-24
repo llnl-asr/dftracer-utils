@@ -78,6 +78,18 @@ def test_from_dict_borrowed_series_outlives_source_frame():
     assert _col(b, "vv") == [1, 2, 3, 4]
 
 
+def test_from_dict_reads_a_pandas_index_as_a_pandas_series():
+    pd = pytest.importorskip("pandas")
+    values = pd.array(["a", None], dtype="string")
+    for key in [pd.Index(values, name="p"), pd.Series(values, name="p")]:
+        f = DataFrame.from_dict({"k": key, "s": [[], []]})
+        assert f.columns == ["k", "s"]
+        assert _col(f, "k") == ["a", None]
+        assert _col(f, "s") == [[], []]
+        assert f.to_arrow().schema.field("s").type == pa.list_(pa.string())
+        assert f.to_pandas().index.tolist() == [0, 1]
+
+
 def test_group_by_dynamic_origin():
     # ts start at 5000; every=700 does not divide 5000 so alignment matters.
     df = _df({"ts": [5000 + 100 * i for i in range(20)], "v": list(range(20))})

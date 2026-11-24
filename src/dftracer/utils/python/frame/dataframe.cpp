@@ -16,6 +16,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/frame_ops.h>
+#include <dftracer/utils/dataframe/internal/frame_buffers.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -42,6 +43,7 @@
 #include <dftracer/utils/python/frame/join_helpers.h>
 #include <dftracer/utils/python/frame/lazyframe.h>
 #include <dftracer/utils/python/frame/series.h>
+#include <dftracer/utils/python/runtime/task_handle.h>
 
 #include <atomic>
 #include <cstdint>
@@ -1814,6 +1816,141 @@ PyObject* dataframe_from_bytes(PyObject* /*self*/, PyObject* obj) {
     return make_dataframe(std::move(*f));
 }
 
+// One column buffer of a frame, read only, that a pickle carries out of band.
+// The view holds its block, so the bytes live as long as this object.
+struct FrameBufferObject {
+    PyObject_HEAD dataframe::BufferView view;
+};
+
+void FrameBuffer_dealloc(PyObject* self) {
+    reinterpret_cast<FrameBufferObject*>(self)->view.~BufferView();
+    Py_TYPE(self)->tp_free(self);
+}
+
+int FrameBuffer_getbuffer(PyObject* self, Py_buffer* view, int flags) {
+    static std::uint8_t empty = 0;
+    const dataframe::BufferView& v =
+        reinterpret_cast<FrameBufferObject*>(self)->view;
+    auto* data = const_cast<std::uint8_t*>(v.data());
+    return PyBuffer_FillInfo(view, self, data != nullptr ? data : &empty,
+                             static_cast<Py_ssize_t>(v.size()), 1, flags);
+}
+
+PyBufferProcs FrameBuffer_as_buffer = {FrameBuffer_getbuffer, nullptr};
+
+PyTypeObject FrameBufferType = [] {
+    PyTypeObject t{.ob_base = PyVarObject_HEAD_INIT(nullptr, 0)};
+    t.tp_name = "dftracer.utils.dftracer_utils_ext._FrameBuffer";
+    t.tp_basicsize = sizeof(FrameBufferObject);
+    t.tp_dealloc = FrameBuffer_dealloc;
+    t.tp_flags = Py_TPFLAGS_DEFAULT;
+    t.tp_doc = "One read-only column buffer of a pickled DataFrame.";
+    t.tp_as_buffer = &FrameBuffer_as_buffer;
+    return t;
+}();
+
+PyObject* dataframe_to_buffers(PyObject* /*self*/, PyObject* obj) {
+    DataFrameObject* b = as_native<DataFrameObject>(obj);
+    if (!b) return nullptr;
+    return guard([&]() -> PyObject* {
+        const DataFrame frame = to_dataframe(b);
+        auto out = without_gil(frame.num_rows(), [&] {
+            return dataframe::frame_to_buffers(frame);
+        });
+        if (!out) {
+            PyErr_SetString(PyExc_TypeError, out.error().c_str());
+            return nullptr;
+        }
+        PyObject* header = PyBytes_FromStringAndSize(
+            out->header.data(), static_cast<Py_ssize_t>(out->header.size()));
+        if (!header) return nullptr;
+        PyObject* list =
+            PyList_New(static_cast<Py_ssize_t>(out->buffers.size()));
+        if (!list) {
+            Py_DECREF(header);
+            return nullptr;
+        }
+        for (std::size_t i = 0; i < out->buffers.size(); ++i) {
+            auto* item = PyObject_New(FrameBufferObject, &FrameBufferType);
+            if (!item) {
+                Py_DECREF(header);
+                Py_DECREF(list);
+                return nullptr;
+            }
+            new (&item->view) dataframe::BufferView(std::move(out->buffers[i]));
+            PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i),
+                            reinterpret_cast<PyObject*>(item));
+        }
+        return Py_BuildValue("(NN)", header, list);
+    });
+}
+
+struct HeldPyBuffer {
+    Py_buffer view;
+};
+
+// A received buffer is released when the last column that reads it goes,
+// which may be on a thread that does not hold the GIL. After the interpreter
+// exits the buffer is left to the process exit.
+void release_held_buffer(const void* p) {
+    dstd::UniquePtr<HeldPyBuffer> held(
+        static_cast<HeldPyBuffer*>(const_cast<void*>(p)));
+    if (PyGILState_Check()) {
+        PyBuffer_Release(&held->view);
+        return;
+    }
+    if (!python::runtime::enter_python()) {
+        (void)held.release();
+        return;
+    }
+    PyGILState_STATE gil = PyGILState_Ensure();
+    PyBuffer_Release(&held->view);
+    PyGILState_Release(gil);
+    python::runtime::leave_python();
+}
+
+PyObject* dataframe_from_buffers(PyObject* /*self*/, PyObject* args) {
+    PyObject* header_obj = nullptr;
+    PyObject* buffers_obj = nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &header_obj, &buffers_obj))
+        return nullptr;
+    PyObject* seq = PySequence_Fast(buffers_obj, "buffers must be a sequence");
+    if (!seq) return nullptr;
+    const Py_ssize_t count = PySequence_Fast_GET_SIZE(seq);
+    dstd::Vector<dataframe::ReceivedBuffer> received;
+    received.reserve(static_cast<std::size_t>(count));
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        auto held = dstd::make_unique<HeldPyBuffer>();
+        if (PyObject_GetBuffer(PySequence_Fast_GET_ITEM(seq, i), &held->view,
+                               PyBUF_SIMPLE) < 0) {
+            Py_DECREF(seq);
+            return nullptr;
+        }
+        const auto* data = static_cast<const std::uint8_t*>(held->view.buf);
+        const auto size = static_cast<std::size_t>(held->view.len);
+        const bool fixed = held->view.readonly != 0;
+        received.push_back(
+            {data, size, fixed,
+             dstd::adopt_shared_ptr(static_cast<const void*>(held.release()),
+                                    release_held_buffer)});
+    }
+    Py_DECREF(seq);
+    Py_buffer header;
+    if (PyObject_GetBuffer(header_obj, &header, PyBUF_SIMPLE) < 0)
+        return nullptr;
+    auto f = dataframe::frame_from_buffers(
+        dstd::StringView(static_cast<const char*>(header.buf),
+                         static_cast<std::size_t>(header.len)),
+        received);
+    PyBuffer_Release(&header);
+    if (!f) {
+        PyErr_SetString(PyExc_ValueError,
+                        "not a DataFrame pickled by this version");
+        return nullptr;
+    }
+    return make_dataframe(std::move(*f));
+}
+
 PyObject* DataFrame_get_num_rows(PyObject* self, void*) {
     DataFrameObject* b = as_native<DataFrameObject>(self);
     if (!b) return nullptr;
@@ -2237,6 +2374,29 @@ int init_dataframe(PyObject* m) {
     if (!bytes_fn) return -1;
     if (PyModule_AddObject(m, "_dataframe_from_bytes", bytes_fn) < 0) {
         Py_DECREF(bytes_fn);
+        return -1;
+    }
+    if (register_type(m, &FrameBufferType, "_FrameBuffer") < 0) return -1;
+    static PyMethodDef to_buffers_def = {
+        "_dataframe_to_buffers", dataframe_to_buffers, METH_O,
+        "_dataframe_to_buffers(frame) -> (header, buffers): the frame as a "
+        "header and read-only column buffers, with no copy."};
+    PyObject* to_buffers_fn =
+        PyCFunction_NewEx(&to_buffers_def, nullptr, nullptr);
+    if (!to_buffers_fn) return -1;
+    if (PyModule_AddObject(m, "_dataframe_to_buffers", to_buffers_fn) < 0) {
+        Py_DECREF(to_buffers_fn);
+        return -1;
+    }
+    static PyMethodDef from_buffers_def = {
+        "_dataframe_from_buffers", dataframe_from_buffers, METH_VARARGS,
+        "_dataframe_from_buffers(header, buffers) -> DataFrame that reads the "
+        "buffers in place and keeps them alive."};
+    PyObject* from_buffers_fn =
+        PyCFunction_NewEx(&from_buffers_def, nullptr, nullptr);
+    if (!from_buffers_fn) return -1;
+    if (PyModule_AddObject(m, "_dataframe_from_buffers", from_buffers_fn) < 0) {
+        Py_DECREF(from_buffers_fn);
         return -1;
     }
     return 0;

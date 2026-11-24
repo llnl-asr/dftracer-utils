@@ -26,6 +26,7 @@ from ..dftracer_utils_ext import (
 from ..dftracer_utils_ext import Index as _Index
 from ..dftracer_utils_ext import plan_lpt_partition as _plan_lpt_partition
 from ..dftracer_utils_ext import scan_files as _scan_files
+from ..dftracer_utils_ext import tables_among_traces as _tables_among_traces
 from ..index import AggregationConfig, Indexer
 from ._progress import ProgressAggregator, worker_progress_forwarder
 from ._workers import _require_workers
@@ -193,6 +194,8 @@ def distributed_index(
             raise ValueError("files must name at least one path")
         _log.info("distributed_index: sizing %d pre-listed files", len(listed))
         entries = [(p, os.path.getsize(p)) for p in listed]
+    skip = _tables_among_traces([p for (p, _) in entries])
+    entries = [e for e, table in zip(entries, skip) if not table]
     _log.info("distributed_index: scanned %d files in %.1fs", len(entries), time.monotonic() - _t0)
 
     if not entries:

@@ -909,7 +909,9 @@ std::uint64_t read_f64_bits(const Series& c, std::int64_t i) {
 
 // A stable hash of one cell, so the same value hashes identically on every
 // node.
+// A null hashes the same whatever value sits under it, so nulls go together.
 std::uint64_t hash_cell(const Series& c, std::int64_t i) {
+    if (c.is_null(i)) return 0;
     switch (c.type()) {
         case TypeId::String:
             return dstd::hash::xxh3_64(c.string_at(i));

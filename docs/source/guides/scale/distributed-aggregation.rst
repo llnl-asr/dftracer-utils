@@ -218,6 +218,7 @@ a ``map_fn`` and concatenates each record family.
 reads: a directory is scanned with the indexer's input patterns and skips its
 index and output folders, and a glob or a file is kept only when its name
 matches those patterns. A glob takes every folder it matches.
+When the files hold both traces and dftu.table files, such as checkpoints written next to the traces, the tables are left out.
 
 See also
 --------

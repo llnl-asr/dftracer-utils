@@ -59,8 +59,9 @@ Table files
 A file whose first line has ``ph`` 4, ``name`` ``"dftu.table"`` and
 ``args.format`` ``"dftu.table"`` is a typed table (see
 :doc:`/guides/data/save-tables`). ``TraceViewer`` reads one table, a folder of
-parts, or a list of them as a table; a set that mixes tables and traces raises
-``DFTUtilsValueError`` and names one file of each kind. A first line that
+parts, or a list of them as a table; a set that mixes tables and traces reads
+only the traces, so a folder can hold traces and the tables written next to
+them. A first line that
 claims the format but is malformed, or has an unknown ``format_version``,
 raises and is never read as a trace.
 

@@ -743,6 +743,18 @@ dstd::Result<void> to_arrow_stream(LazyFrame plan, Runtime& runtime,
         dstd::make_unique<LazyBody>(std::move(plan), runtime).release(), out);
 }
 
+namespace {
+
+// A batch of no rows of `schema`, for a stream that ends with no batch.
+bool empty_batch(const ArrowSchema* schema, nanoarrow::UniqueArray& out) {
+    ArrowError err;
+    return ArrowArrayInitFromSchema(out.get(), schema, &err) == NANOARROW_OK &&
+           ArrowArrayStartAppending(out.get()) == NANOARROW_OK &&
+           ArrowArrayFinishBuildingDefault(out.get(), &err) == NANOARROW_OK;
+}
+
+}  // namespace
+
 dstd::Result<Series> series_from_arrow_stream(ArrowArrayStream* in) {
     if (in == nullptr)
         return common::make_error<"series_from_arrow_stream: no stream">(
@@ -765,10 +777,20 @@ dstd::Result<Series> series_from_arrow_stream(ArrowArrayStream* in) {
                 "hold">(common::ErrorCode::InvalidArgument);
         parts.push_back(std::move(column));
     }
-    if (parts.empty())
-        return common::make_error<
-            "series_from_arrow_stream: the stream ended with no batch">(
-            common::ErrorCode::InvalidArgument);
+    if (parts.empty()) {
+        nanoarrow::UniqueArray none;
+        if (!empty_batch(schema.get(), none))
+            return common::make_error<
+                "series_from_arrow_stream: an Arrow type the engine cannot "
+                "hold">(common::ErrorCode::InvalidArgument);
+        Series column =
+            detail::import_series(schema.get(), none.get(), nullptr);
+        if (!column.valid())
+            return common::make_error<
+                "series_from_arrow_stream: an Arrow type the engine cannot "
+                "hold">(common::ErrorCode::InvalidArgument);
+        return column;
+    }
     return dataframe::chunked_column(std::move(parts));
 }
 
@@ -809,10 +831,22 @@ dstd::Result<DataFrame> dataframe_from_arrow_stream(ArrowArrayStream* in) {
                                                   frame.names[i]);
         parts.push_back(std::move(frame));
     }
-    if (parts.empty())
-        return common::make_error<
-            "dataframe_from_arrow_stream: the stream ended with no batch">(
-            common::ErrorCode::InvalidArgument);
+    if (parts.empty()) {
+        nanoarrow::UniqueArray none;
+        if (!empty_batch(schema.get(), none))
+            return common::make_error<
+                "dataframe_from_arrow_stream: an Arrow type the engine cannot "
+                "hold">(common::ErrorCode::InvalidArgument);
+        DataFrame frame =
+            detail::import_frame(schema.get(), none.get(), nullptr);
+        for (std::size_t i = 0; i < frame.columns.size(); ++i)
+            if (!frame.columns[i].valid())
+                return common::make_error<
+                    "dataframe_from_arrow_stream: an Arrow type the engine "
+                    "cannot hold in column '{}'">(common::ErrorCode::NotFound,
+                                                  frame.names[i]);
+        return frame;
+    }
     DataFrame out;
     out.names = parts.front().names;
     out.columns.reserve(out.names.size());

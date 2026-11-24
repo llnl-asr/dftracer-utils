@@ -47,9 +47,9 @@ namespace dftracer::utils::python::runtime {
 
 namespace {
 
-// Workers that may still take the GIL to run callbacks. The exit hook stops new
-// ones and waits for those inside a callback, so none reaches
-// PyGILState_Ensure once the interpreter finalizes.
+// Native threads that may still take the GIL. The exit hook stops new ones and
+// waits for those inside, so none reaches PyGILState_Ensure once the
+// interpreter finalizes.
 struct CallbackGate {
     std::mutex mutex;
     std::condition_variable idle;
@@ -92,12 +92,7 @@ void AsyncState::finish() {
     }
     ended_.notify_all();
     if (pending.empty()) return;
-    CallbackGate &gate = callback_gate();
-    {
-        std::lock_guard<std::mutex> lock(gate.mutex);
-        if (gate.closing || python_is_finalizing()) return;
-        ++gate.active;
-    }
+    if (!enter_python()) return;
     PyGILState_STATE gil = PyGILState_Ensure();
     for (PyObject *fn : pending) {
         call_callback(fn, owner);
@@ -105,6 +100,19 @@ void AsyncState::finish() {
     }
     Py_DECREF(owner);
     PyGILState_Release(gil);
+    leave_python();
+}
+
+bool enter_python() {
+    CallbackGate &gate = callback_gate();
+    std::lock_guard<std::mutex> lock(gate.mutex);
+    if (gate.closing || python_is_finalizing()) return false;
+    ++gate.active;
+    return true;
+}
+
+void leave_python() {
+    CallbackGate &gate = callback_gate();
     std::lock_guard<std::mutex> lock(gate.mutex);
     --gate.active;
     gate.idle.notify_all();

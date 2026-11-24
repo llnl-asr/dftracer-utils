@@ -17,7 +17,7 @@ import math
 import os
 import re
 import types
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Tuple, Union
 
 from . import dftracer_utils_ext as _ext
 from ._dataframe import DataFrame, _bound
@@ -25,12 +25,15 @@ from ._sink import _raw_columns
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
     import pandas as pd
     import pyarrow as pa
 
     from ._enums import DType
 
     PathLike = Union[str, "os.PathLike[str]"]
+    # A MultiIndex level as its values and a code per row.
+    CodedLevel = Tuple[pd.Index, npt.NDArray[Any]]
     JsonValue = Union[None, bool, int, float, str, List["JsonValue"], Dict[str, "JsonValue"]]
     Meta = Dict[str, JsonValue]
     SetType = Callable[[List[JsonValue]], object]
@@ -90,9 +93,13 @@ def _object_cells(name: str, values: pd.Series) -> tuple[str | None, list[str | 
     """The cells of an object column as text, and its container kind or None.
 
     A str cell is the string itself, a set or list cell is JSON text of its
-    elements. A column of sets and lists mixed, of nested containers, or of
+    elements. A column of str and null cells only gives no cells, as the
+    column imports as it is. A column of sets and lists mixed, of nested containers, or of
     any other object is refused.
     """
+    _, pd = _pandas_libs()
+    if pd.api.types.infer_dtype(values, skipna=True) in ("string", "empty"):
+        return None, []
     kinds = set()
     for v in values:
         if isinstance(v, (set, frozenset)):
@@ -102,7 +109,6 @@ def _object_cells(name: str, values: pd.Series) -> tuple[str | None, list[str | 
     if len(kinds) > 1:
         raise ValueError(f"column {name!r} mixes sets and lists")
     elem = kinds.pop() if kinds else None
-    _, pd = _pandas_libs()
     cells: list[str | None] = []
     for v in values:
         if v is None or v is pd.NA or (isinstance(v, float) and math.isnan(v)):
@@ -335,7 +341,7 @@ def _write_header(
         if own is not None:
             table = df.to_arrow()
             fields: list[dict[str, Any]] = own["fields"]
-            columns = [_flat(table.column(i)) for i in range(len(fields))]
+            columns = [_plain(table.column(i)) for i in range(len(fields))]
             if all(_fits(str(f["name"]), a, f) for f, a in zip(fields, columns)):
                 own = {**own, "table": name or own.get("table") or stem}
                 if meta is not None:
@@ -348,13 +354,49 @@ def _write_header(
 # -- decoding ---------------------------------------------------------------
 
 
-def _flat(column: pa.ChunkedArray) -> pa.Array:
+def _plain(column: pa.ChunkedArray) -> pa.ChunkedArray:
+    """``column`` with its dictionary decoded; its chunks stay as they are, so a
+    conversion joins them once."""
     _, _, pa = _libs()
     if pa.types.is_dictionary(column.type):
         column = column.cast(column.type.value_type)
-    if column.num_chunks == 1:
-        return column.chunk(0)
-    return pa.concat_arrays(column.chunks) if column.num_chunks else pa.array([], type=column.type)
+    return column
+
+
+def _numpy(
+    arr: pa.ChunkedArray, dtype: np.dtype[Any], fill: object = None, share: bool = False
+) -> npt.NDArray[Any]:
+    """``arr`` as one NumPy array of ``dtype``, nulls set to ``fill``. One copy,
+    made a chunk at a time; with ``share`` a column of one chunk with no nulls is
+    the read-only Arrow buffer itself."""
+    np, _, arrow = _libs()
+    target = arrow.from_numpy_dtype(dtype)
+
+    def part(chunk: pa.Array) -> npt.NDArray[Any]:
+        if fill is not None and chunk.null_count:
+            chunk = chunk.fill_null(fill)
+        values: npt.NDArray[Any] = chunk.cast(target, safe=True).to_numpy(zero_copy_only=False)
+        return values
+
+    if share and arr.num_chunks == 1 and not arr.null_count:
+        return part(arr.chunk(0)).astype(dtype, copy=False)
+    out: npt.NDArray[Any] = np.empty(len(arr), dtype=dtype)
+    at = 0
+    for chunk in arr.chunks:
+        out[at : at + len(chunk)] = part(chunk)
+        at += len(chunk)
+    return out
+
+
+def _null_mask(arr: pa.ChunkedArray) -> npt.NDArray[np.bool_]:
+    numpy, _, _ = _libs()
+    out: npt.NDArray[np.bool_] = numpy.zeros(len(arr), dtype=numpy.bool_)
+    at = 0
+    for chunk in arr.chunks:
+        if chunk.null_count:
+            out[at : at + len(chunk)] = chunk.is_null().to_numpy(zero_copy_only=False)
+        at += len(chunk)
+    return out
 
 
 def _resolve(dtype: str) -> Dtype:
@@ -367,7 +409,7 @@ def _resolve(dtype: str) -> Dtype:
         raise
 
 
-def _restore_category(name: str, arr: pa.Array, field: dict[str, Any]) -> pd.Categorical:
+def _restore_category(name: str, arr: pa.ChunkedArray, field: dict[str, Any]) -> pd.Categorical:
     """A category column. Only a null is missing; a value that is not a label is
     an error. A file with no ``categories_dtype`` (older DFAnalyzer) also takes
     the string "NaN" as missing when "NaN" is no label, and a NaN float."""
@@ -380,8 +422,7 @@ def _restore_category(name: str, arr: pa.Array, field: dict[str, Any]) -> pd.Cat
         labels = [_FLOAT_TEXT.get(c, c) if isinstance(c, str) else c for c in labels]
     elif legacy and not all(isinstance(c, str) for c in labels):
         labels = [_FLOAT_TEXT.get(c, c) if isinstance(c, str) else c for c in labels]
-    null = arr.is_null().to_numpy(zero_copy_only=False)
-    missing = null.copy()
+    missing = _null_mask(arr)
     text = all(isinstance(c, str) for c in labels)
     if _is_text(arr.type) and text:
         values = arr.to_numpy(zero_copy_only=False)
@@ -441,7 +482,7 @@ def _resolved(name: str, field: dict[str, Any]) -> Dtype:
     return resolved
 
 
-def _fits(name: str, arr: pa.Array, field: dict[str, Any]) -> bool:
+def _fits(name: str, arr: pa.ChunkedArray, field: dict[str, Any]) -> bool:
     """Whether the column's current Arrow type is the one the header implies, so
     that restoring it cannot wrap, truncate or turn a null into a value."""
     np, pd, pa = _libs()
@@ -476,7 +517,9 @@ def _fits(name: str, arr: pa.Array, field: dict[str, Any]) -> bool:
     return not (isinstance(resolved, np.dtype) and resolved.kind != "f" and arr.null_count)
 
 
-def _restore(name: str, arr: pa.Array, field: dict[str, Any], set_type: SetType = set) -> Column:
+def _restore(
+    name: str, arr: pa.ChunkedArray, field: dict[str, Any], set_type: SetType = set
+) -> Column:
     np, pd, pa = _libs()
     dtype = str(field["dtype"])
     if dtype == "category":
@@ -502,24 +545,17 @@ def _restore(name: str, arr: pa.Array, field: dict[str, Any], set_type: SetType 
     share = int(pd.__version__.split(".")[0]) >= 3
     if isinstance(resolved, np.dtype):
         if resolved.kind == "f" and arr.null_count:
-            return arr.fill_null(math.nan).to_numpy(zero_copy_only=False).astype(resolved)
-        values = arr.cast(pa.from_numpy_dtype(resolved), safe=True).to_numpy(zero_copy_only=False)
-        return values.astype(resolved, copy=not share)
+            return _numpy(arr, resolved, math.nan)
+        return _numpy(arr, resolved, share=share)
     if isinstance(resolved, pd.ArrowDtype):
         return pd.arrays.ArrowExtensionArray(arr.cast(resolved.pyarrow_dtype, safe=True))
     if isinstance(resolved, pd.StringDtype):
-        return resolved.__from_arrow__(pa.chunked_array([arr]))
+        return resolved.__from_arrow__(arr)
     numpy_dtype = getattr(resolved, "numpy_dtype", None)
     if numpy_dtype is not None and isinstance(resolved, pd.api.extensions.ExtensionDtype):
         fill = False if numpy_dtype == np.dtype(bool) else 0
-        filled = arr.fill_null(fill) if arr.null_count else arr
-        data = (
-            filled.cast(pa.from_numpy_dtype(numpy_dtype), safe=True)
-            .to_numpy(zero_copy_only=False)
-            .astype(numpy_dtype, copy=not share)
-        )
-        mask = arr.is_null().to_numpy(zero_copy_only=False)
-        return resolved.construct_array_type()(data, mask)
+        data = _numpy(arr, numpy_dtype, fill, share)
+        return resolved.construct_array_type()(data, _null_mask(arr))
     raise TypeError(f"dtype {field['dtype']} cannot be restored")
 
 
@@ -532,19 +568,78 @@ def _exact_pandas(frame: DataFrame, header: Header, set_type: SetType = set) -> 
     if frame._names() != names:
         return None
     table = frame.to_arrow()
-    columns = [_flat(table.column(i)) for i in range(len(names))]
+    columns = [_plain(table.column(i)) for i in range(len(names))]
     if not all(_fits(n, a, f) for n, a, f in zip(names, columns, fields)):
         return None
+    index_fields: list[str] = header.get("index", [])
+    # Levels of a MultiIndex come from the column dictionaries; a level that
+    # cannot is restored whole and factorized by pandas.
+    coded: dict[str, CodedLevel | None] = {}
     try:
-        data = {n: _restore(n, a, f, set_type) for n, a, f in zip(names, columns, fields)}
+        if len(index_fields) > 1:
+            for n in index_fields:
+                i = names.index(n)
+                coded[n] = _index_level(n, columns[i], fields[i], set_type)
+        data = {
+            n: _restore(n, a, f, set_type)
+            for n, a, f in zip(names, columns, fields)
+            if coded.get(n) is None
+        }
     except pa.ArrowInvalid:
         return None
-    df = pd.DataFrame(data, columns=names, copy=False)
-    index_fields: list[str] = header.get("index", [])
-    if index_fields:
-        df = df.set_index(index_fields)
-        df.index.names = header.get("index_names") or index_fields
+    if not index_fields:
+        return pd.DataFrame(data, columns=names, copy=False)
+    # The index is set in place: set_index would copy every data column.
+    level_names = header.get("index_names") or index_fields
+    if len(index_fields) == 1:
+        level = data.pop(index_fields[0])
+        df = pd.DataFrame(data, columns=list(data), copy=False)
+        df.index = pd.Index(level, name=level_names[0])
+        return df
+    levels: list[Any] = []
+    codes: list[Any] = []
+    for n in index_fields:
+        pair = coded.get(n)
+        if pair is None:
+            alone = pd.MultiIndex.from_arrays([data.pop(n)])
+            pair = (alone.levels[0], alone.codes[0])
+        levels.append(pair[0])
+        codes.append(pair[1])
+    del coded
+    df = pd.DataFrame(data, columns=list(data), copy=False)
+    df.index = pd.MultiIndex(levels=levels, codes=codes, names=level_names, verify_integrity=False)
     return df
+
+
+def _index_level(
+    name: str, arr: pa.ChunkedArray, field: dict[str, Any], set_type: SetType
+) -> CodedLevel | None:
+    """One MultiIndex level as its sorted values and a code per row, as
+    ``MultiIndex.from_arrays`` makes it, built from the Arrow dictionary of the
+    column so no value is made per row. None for a column of another kind."""
+    numpy, pandas, arrow = _libs()
+    if str(field["dtype"]) == "category" or field.get("elem"):
+        return None
+    if not (_is_text(arr.type) or arrow.types.is_integer(arr.type)) or arr.num_chunks == 0:
+        return None
+    encoded = arr.dictionary_encode()
+    if encoded.num_chunks == 0:
+        return None
+    dictionary = encoded.chunk(0).dictionary
+    values = pandas.Index(_restore(name, arrow.chunked_array([dictionary]), field, set_type))
+    order = values.argsort()
+    rank: npt.NDArray[Any] = numpy.empty(len(order) + 1, dtype=numpy.intp)
+    rank[order] = numpy.arange(len(order))
+    rank[-1] = -1
+    codes: npt.NDArray[Any] = numpy.empty(len(arr), dtype=numpy.intp)
+    at = 0
+    for chunk in encoded.chunks:
+        if not chunk.dictionary.equals(dictionary):
+            return None
+        indices = chunk.indices.fill_null(-1).to_numpy(zero_copy_only=False)
+        codes[at : at + len(chunk)] = rank[indices]
+        at += len(chunk)
+    return values.take(order), codes
 
 
 def _merged_header(headers: list[Header]) -> Header:

@@ -745,7 +745,8 @@ class Series {
     /// Bool mask of the repeats: `keep` 0 leaves the first row of each value
     /// unmarked, 1 the last; another value marks every row of a repeated value.
     Series duplicated(std::int32_t keep = 0) const;
-    /// Whether the column is sorted ascending (or descending); single scan.
+    /// Whether the column is sorted ascending (or descending) with every null
+    /// after the values, as @ref argsort orders it; single scan.
     bool is_sorted(bool descending = false) const;
     Series drop_nulls() const;  ///< Selection over the non-null rows.
     /// The rows that are not NaN, nulls kept; a column that is not a float is

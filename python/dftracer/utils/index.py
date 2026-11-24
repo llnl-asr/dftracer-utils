@@ -227,7 +227,11 @@ class Indexer:
             view of no rows); an empty directory or a glob with no match is
             an index of no files. A file that is not a trace raises
             ``DFTUtilsIOError`` when ``ensure`` or ``build`` indexes it;
-            ``status`` reads no content, so it does not.
+            ``status`` reads only the first line of each file, so it does
+            not. When the files hold both traces and dftu.table files, the
+            tables are left out; when every file is a table, the tables are
+            indexed. A first line that claims dftu.table but is malformed
+            raises on the first ``status``, ``ensure`` or ``build``.
         index_dir: Directory for .dftindex stores (default: next to files).
         require_checkpoint: Build checkpoint tier (default True).
         require_bloom: Build the bloom tier: True for the defaults, or a
@@ -521,7 +525,7 @@ class Indexer:
         return self._native.query_file_pids(path)
 
     def query_all_file_pids(self) -> Dict[str, Set[int]]:
-        """Query PIDs for all indexed files.
+        """Query PIDs for all indexed files of this indexer.
 
         Returns a dictionary mapping trace path to the set of PIDs observed
         in that file. This is useful for distributed aggregation to assign
@@ -533,7 +537,9 @@ class Indexer:
         return self._native.query_all_file_pids()
 
     def query_file_info(self) -> _FileInfo:
-        """Query every indexed file with its PIDs in a single DB open.
+        """Query every indexed file of this indexer with its PIDs in a single DB
+        open. Files of the index root that are not among its inputs, such as
+        a table written next to the traces, are left out.
 
         Returns:
             dict mapping trace path (str) to set of PIDs (int).

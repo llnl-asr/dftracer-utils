@@ -2,8 +2,12 @@
 #ifndef DFTRACER_UTILS_TRACE_TABLE_TABLE_DECODE_H
 #define DFTRACER_UTILS_TRACE_TABLE_TABLE_DECODE_H
 
+#include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -13,7 +17,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 
 namespace dftracer::utils::trace::table::detail {
 
@@ -51,11 +54,13 @@ struct Decoded {
 /// cell is never checked. `range` must have @ref PADDING readable bytes after
 /// its end. `parts` is how many pieces it is cut into and parsed in parallel;
 /// 0 is automatic. A row that is not JSON, lacks a wanted field or holds a
-/// value its dtype cannot take is a Parse error.
+/// value its dtype cannot take is a Parse error, which names the row counted
+/// from `row_base`.
 dstd::Result<Decoded> decode_lines(const Header& header,
                                    dstd::Span<const std::size_t> wanted,
                                    dstd::StringView range,
-                                   std::size_t parts = 0);
+                                   std::size_t parts = 0,
+                                   std::size_t row_base = 0);
 
 /// Reads a whole file into one buffer.
 dstd::Result<Buffer> read_whole(dstd::StringView path);
@@ -66,17 +71,59 @@ bool has_gzip_magic(const unsigned char* bytes, std::size_t size);
 /// What a parallel inflate of a gzip file did.
 struct InflateStats {
     std::size_t members_in_parallel = 0;
+    /// Members inflated one at a time to find their true end.
+    std::size_t members_alone = 0;
     bool inflated_in_order = false;
-    /// The content would pass the caller's limit; nothing was inflated.
-    bool exceeded = false;
 };
 
 /// The whole content of a gzip file, its members inflated in parallel when
-/// their marks hold, else one after another. A content over `max_bytes` is not
-/// inflated: the result is empty and `stats.exceeded` is set.
-dstd::Result<Buffer> inflate_gzip(
-    const Buffer& compressed, InflateStats& stats,
-    std::size_t max_bytes = std::numeric_limits<std::size_t>::max());
+/// their marks hold, else one after another.
+dstd::Result<Buffer> inflate_gzip(const Buffer& compressed,
+                                  InflateStats& stats);
+
+/// Reads a table file a slab of text at a time, so what it holds stays about
+/// one slab of text and the compressed bytes under it, whatever the file size.
+/// The gzip members of a slab inflate in parallel. When a member mark does not
+/// hold (a false mark, a header the scan does not take, a trailer that does not
+/// match), the member at the last start that held inflates alone to find its
+/// true end, and the parallel inflate goes on after it. A member whose end is
+/// not found in the bytes held, or whose text passes the hold, sends the rest
+/// of the file to an in-order inflate, still a slab at a time.
+class SlabReader {
+   public:
+    /// `file` must stay open while the reader lives.
+    SlabReader(const dstd::File& file, std::uint64_t file_size, bool gzip,
+               std::size_t slab_bytes);
+
+    /// The next text, about `slab_bytes` long and cut anywhere, sealed; empty
+    /// at the end of the file.
+    coro::CoroTask<dstd::Result<Buffer>> next();
+
+    const InflateStats& stats() const { return stats_; }
+
+   private:
+    dstd::Result<void> read_more(std::size_t want);
+    void scan();
+    void start_in_order();
+    void drop(std::size_t used);
+    dstd::Result<bool> inflate_first(Buffer& out);
+    dstd::Result<bool> inflate_ready(Buffer& out);
+
+    const dstd::File& file_;
+    std::uint64_t file_size_;
+    bool gzip_;
+    std::size_t slab_;
+    InflateStats stats_;
+    // Gzip: file bytes [held_at_, read_at_) in comp_, with the member starts
+    // found in it (the first is always 0) and how far it was scanned.
+    Buffer comp_;
+    std::uint64_t held_at_ = 0;
+    std::uint64_t read_at_ = 0;
+    dstd::Vector<std::size_t> starts_;
+    std::size_t scanned_ = 1;
+    dstd::Optional<coro::AsyncGenerator<dstd::Result<dstd::StringView>>>
+        in_order_;
+};
 
 }  // namespace dftracer::utils::trace::table::detail
 

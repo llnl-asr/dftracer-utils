@@ -516,6 +516,7 @@ def pandas_to_native(s: pd.Series) -> Series:
     categories are strings becomes a dictionary-encoded string column, in
     category order where pyarrow is installed; other categories keep their
     values."""
+    import numpy as np
     import pandas as pd
 
     dtype = s.dtype
@@ -543,8 +544,14 @@ def pandas_to_native(s: pd.Series) -> Series:
     kind = getattr(dtype, "kind", "O")
     if kind in "biuf":
         if pd.api.types.is_extension_array_dtype(dtype):
+            # A masked array's own values are borrowed; the value under a null
+            # is never read, as for a numpy masked array.
+            data = getattr(s.array, "_data", None)
             masked = cast("_MaskedDtype", dtype)
-            values = s.to_numpy(dtype=masked.numpy_dtype, na_value=masked.numpy_dtype.type(0))
+            if isinstance(data, np.ndarray) and data.dtype == masked.numpy_dtype:
+                values = data
+            else:
+                values = s.to_numpy(dtype=masked.numpy_dtype, na_value=masked.numpy_dtype.type(0))
         else:
             values = s.to_numpy()
         return numpy_to_native(values, hidden)

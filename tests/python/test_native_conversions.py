@@ -408,3 +408,16 @@ def test_wrappers_run_without_arrow():
     assert len(grid) == 4 and grid["v"].to_list() == [1.0, None, None, 2.0]
     dummies = dftu.Series.from_list(["a|b", "b", None]).str.get_dummies().to_dict()
     assert dummies["b"] == [1, 1, 0]
+
+
+@pytest.mark.parametrize("dtype", ["Int64", "Float64", "UInt8", "boolean"])
+def test_from_pandas_borrows_a_masked_column_and_ignores_the_values_under_nulls(dtype):
+    pd = pytest.importorskip("pandas")
+    s = pd.Series([1, None, 0, None], dtype=dtype)
+    s.array._data[1] = s.array._data[0]
+    native = dftu.DataFrame.from_pandas(pd.DataFrame({"x": s, "k": [1, 2, 3, 4]}))
+    assert native["x"].to_list() == s.astype(object).where(s.notna(), None).tolist()
+    assert native["x"].null_count == 2
+    parts = native.hash_partition(["x"], 4)
+    assert sorted(p["x"].null_count for p in parts) == [0, 0, 0, 2]
+    pd.testing.assert_series_equal(native.to_pandas()["x"], s, check_names=False)

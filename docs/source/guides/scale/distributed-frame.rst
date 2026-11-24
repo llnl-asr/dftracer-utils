@@ -102,6 +102,16 @@ the data twice. Every key lands in the same output partition as in the one-stage
 form; only the row order inside a partition can differ. ``stages=1`` or
 ``stages=2`` forces a choice.
 
+A shuffle holds the input partitions and one copy of their rows.
+It splits each input partition into pieces, and each output partition keeps its pieces as chunked columns, with no second copy.
+``to_frame()`` also keeps the partitions as chunks.
+On a cluster, the data that moves between workers also takes the transfer buffers of Dask while it is in flight.
+
+A ``DataFrame`` pickles with protocol 5 as a small header and one out-of-band buffer per column buffer.
+Dask sends these buffers with no copy on the sender, and the receiver's frame reads the received buffers in place and keeps them alive.
+A column that is not stored as one flat buffer, such as a chunked or dictionary column, is made flat before it is sent.
+``from_frames`` and the broadcast side of ``join`` send the frames straight to the workers, not through the scheduler.
+
 ``join`` with ``strategy="broadcast"`` copies ``other`` to every worker and joins
 each partition where it lives; it supports ``how="inner"`` or ``"left"`` only,
 because an unmatched row of the broadcast side would repeat on every partition.

@@ -19,6 +19,7 @@
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/indexer.h>
 #include <dftracer/utils/trace/index/write_feed.h>
 #include <dftracer/utils/trace/table/table_header.h>
@@ -49,6 +50,14 @@ constexpr dstd::StringView HEADER_PREFIX =
 constexpr dstd::StringView ARGS_OPEN = "{\"nrows\":";
 constexpr dstd::StringView ARGS_KEY = "args.";
 constexpr std::size_t LINES_FLUSH_BYTES = 1024 * 1024;
+// Rows the serial loop formats at a time. A wave of the parallel loop holds at
+// most about WAVE_TEXT_BYTES of text, cut into about SLICES_PER_THREAD slices
+// per runtime thread of at least MIN_SLICE_ROWS rows, so the threads end
+// together.
+constexpr std::size_t FORMAT_SLICE_ROWS = 4096;
+constexpr std::size_t WAVE_TEXT_BYTES = std::size_t{64} << 20;
+constexpr std::size_t SLICES_PER_THREAD = 4;
+constexpr std::size_t MIN_SLICE_ROWS = 256;
 constexpr std::size_t GZIP_MEMBER_HEADER_BYTES = 10;
 constexpr std::size_t STORED_BLOCK_HEADER_BYTES = 5;
 
@@ -454,6 +463,11 @@ struct OutputWriter::Impl {
     dstd::Vector<PartDone> done;
     dstd::String lines;
     dstd::Vector<Arg> scratch_args;
+    // Text bytes per row of the rows formatted so far, 0 before any; the
+    // parallel loop sizes its waves by it.
+    std::size_t row_bytes = 0;
+    dstd::Vector<dstd::String> wave_texts;
+    dstd::Vector<dstd::Vector<Arg>> wave_args;
 
     // partitioned output
     struct Partition {
@@ -576,17 +590,35 @@ struct OutputWriter::Impl {
     dstd::Result<void> prepare_header(dstd::StringView args);
     dstd::Result<void> prepare_header_from(const dataframe::DataFrame* batch);
     dstd::Result<void> prepare_batch(const dataframe::DataFrame& batch);
+    /// Rows [begin, end) as lines appended to `out`; `first_row` is the
+    /// part's number of row `begin`, `row_base` its number in the whole
+    /// output (for errors), and `args` is the caller's scratch, so calls with
+    /// their own `out` and `args` may run at once.
     dstd::Result<void> format_records(const dataframe::DataFrame& batch,
                                       std::size_t begin, std::size_t end,
                                       dstd::String& out,
-                                      std::uint64_t first_row);
+                                      std::uint64_t first_row,
+                                      std::uint64_t row_base,
+                                      dstd::Vector<Arg>& args) const;
     dstd::Result<void> format_events(const dataframe::DataFrame& batch,
                                      std::size_t begin, std::size_t end,
-                                     dstd::String& out);
+                                     dstd::String& out,
+                                     dstd::Vector<Arg>& args) const;
+    dstd::Result<void> format_rows(const dataframe::DataFrame& batch,
+                                   std::size_t begin, std::size_t end,
+                                   dstd::String& out, std::uint64_t first_row,
+                                   std::uint64_t row_base,
+                                   dstd::Vector<Arg>& args) const {
+        return records() ? format_records(batch, begin, end, out, first_row,
+                                          row_base, args)
+                         : format_events(batch, begin, end, out, args);
+    }
     coro::CoroTask<dstd::Result<OutputSummary>> finish_all();
     coro::CoroTask<dstd::Result<void>> drain_feeds();
     coro::CoroTask<dstd::Result<void>> write_batch(
         const dataframe::DataFrame& batch);
+    coro::CoroTask<dstd::Result<void>> write_waves(
+        const dataframe::DataFrame& batch, std::size_t begin, std::size_t end);
     coro::CoroTask<dstd::Result<void>> write_text(dstd::StringView text);
     coro::CoroTask<dstd::Result<void>> write_scoped(
         const dataframe::DataFrame* batch, dstd::StringView text);
@@ -870,9 +902,9 @@ dstd::Result<void> OutputWriter::Impl::prepare_batch(
 
 dstd::Result<void> OutputWriter::Impl::format_records(
     const dataframe::DataFrame& batch, std::size_t begin, std::size_t end,
-    dstd::String& out, std::uint64_t first_row) {
+    dstd::String& out, std::uint64_t first_row, std::uint64_t row_base,
+    dstd::Vector<Arg>& args) const {
     const std::size_t ncols = columns.size();
-    dstd::Vector<Arg>& args = scratch_args;
     args.resize(ncols);
     for (std::size_t i = 0; i < ncols; ++i)
         args[i].key = dstd::StringView(batch.names[i]);
@@ -886,7 +918,7 @@ dstd::Result<void> OutputWriter::Impl::format_records(
                     return common::make_error<
                         "row {}, column {}: a raw cell "
                         "is empty or holds a newline">(
-                        ErrorCode::InvalidArgument, rows + (row - begin),
+                        ErrorCode::InvalidArgument, row_base + (row - begin),
                         dstd::StringView(batch.names[i]));
             }
         }
@@ -898,9 +930,8 @@ dstd::Result<void> OutputWriter::Impl::format_records(
 
 dstd::Result<void> OutputWriter::Impl::format_events(
     const dataframe::DataFrame& batch, std::size_t begin, std::size_t end,
-    dstd::String& out) {
+    dstd::String& out, dstd::Vector<Arg>& args) const {
     const EventColumns& ec = event_columns;
-    dstd::Vector<Arg>& args = scratch_args;
     for (std::size_t row = begin; row < end; ++row) {
         auto name = event_text(columns[ec.name], row, "name");
         if (!name) return name.error();
@@ -1578,9 +1609,8 @@ coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::write_partitioned(
             if (!step) co_return step;
         }
         const std::size_t before = p.buf.size();
-        auto formatted =
-            records() ? format_records(batch, row, row + 1, p.buf, p.part_rows)
-                      : format_events(batch, row, row + 1, p.buf);
+        auto formatted = format_rows(batch, row, row + 1, p.buf, p.part_rows,
+                                     rows, scratch_args);
         if (!formatted) co_return formatted;
         ++p.part_rows;
         ++p.buf_rows;
@@ -1750,6 +1780,81 @@ OutputWriter::OutputWriter(OutputWriter&&) noexcept = default;
 OutputWriter& OutputWriter::operator=(OutputWriter&&) noexcept = default;
 OutputWriter::~OutputWriter() = default;
 
+// Rows [begin, end) of one part, formatted a wave at a time: each slice of a
+// wave on its own runtime thread into its own text, then appended in order, so
+// the output is the text the serial loop writes.
+coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::write_waves(
+    const dataframe::DataFrame& batch, std::size_t begin, std::size_t end) {
+    auto flushing = flush_lines();
+    auto flushed = co_await std::move(flushing);
+    if (!flushed) co_return flushed;
+    Runtime& runtime = default_runtime();
+    const std::size_t width = std::max<std::size_t>(1, runtime.threads());
+    const std::size_t most_slices = width * SLICES_PER_THREAD;
+    if (wave_texts.size() < most_slices) {
+        wave_texts.resize(most_slices);
+        wave_args.resize(most_slices);
+    }
+    dstd::Vector<dstd::Optional<dstd::Error>> errors(most_slices);
+    std::size_t at = begin;
+    while (at < end) {
+        // The first wave of the writer is one slice, so the size of a row is
+        // known before more text is held at once; each wave measures it again
+        // for the next.
+        const std::size_t wave_rows =
+            row_bytes == 0
+                ? FORMAT_SLICE_ROWS
+                : std::max<std::size_t>(1, WAVE_TEXT_BYTES / row_bytes);
+        const std::size_t wave_end = std::min<std::size_t>(end, at + wave_rows);
+        const std::size_t span = wave_end - at;
+        const std::size_t slices =
+            row_bytes == 0 ? 1
+                           : std::clamp<std::size_t>(span / MIN_SLICE_ROWS, 1,
+                                                     most_slices);
+        const std::size_t slice_rows = (span + slices - 1) / slices;
+        const std::uint64_t part_base = part_rows;
+        const std::uint64_t row_base = rows;
+        const std::size_t wave_begin = at;
+        for (std::size_t i = 0; i < slices; ++i) errors[i].reset();
+        auto ran = runtime.parallel_for(
+            static_cast<std::int64_t>(slices), 1,
+            [&](std::int64_t first, std::int64_t last) {
+                for (std::int64_t k = first; k < last; ++k) {
+                    const auto i = static_cast<std::size_t>(k);
+                    const std::size_t from = wave_begin + i * slice_rows;
+                    const std::size_t to =
+                        std::min<std::size_t>(wave_end, from + slice_rows);
+                    wave_texts[i].clear();
+                    if (from >= to) continue;
+                    auto formatted = format_rows(
+                        batch, from, to, wave_texts[i],
+                        part_base + (from - wave_begin),
+                        row_base + (from - wave_begin), wave_args[i]);
+                    if (!formatted) errors[i] = formatted.error();
+                }
+            });
+        if (!ran) co_return ran.error();
+        for (std::size_t i = 0; i < slices; ++i)
+            if (errors[i]) co_return *errors[i];
+        std::size_t bytes = 0;
+        for (std::size_t i = 0; i < slices; ++i) {
+            bytes += wave_texts[i].size();
+            auto appending = append_text(wave_texts[i]);
+            auto appended = co_await std::move(appending);
+            if (!appended) co_return appended;
+            // A wave whose rows grew past the estimate keeps no text that
+            // large for the next.
+            if (wave_texts[i].capacity() > WAVE_TEXT_BYTES)
+                wave_texts[i] = dstd::String();
+        }
+        row_bytes = std::max<std::size_t>(1, bytes / span);
+        part_rows += span;
+        rows += span;
+        at = wave_end;
+    }
+    co_return dstd::Result<void>{};
+}
+
 coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::write_batch(
     const dataframe::DataFrame& batch) {
     Impl& s = *this;
@@ -1770,14 +1875,22 @@ coro::CoroTask<dstd::Result<void>> OutputWriter::Impl::write_batch(
             end = std::min<std::size_t>(
                 end,
                 at + static_cast<std::size_t>(s.opts.part_size - s.part_rows));
+        // With no byte cap on a part, format waves of slices in parallel and
+        // append them in order; the text in flight stays one wave.
+        if (s.opts.part_bytes == 0 && end - at > FORMAT_SLICE_ROWS) {
+            auto waving = s.write_waves(batch, at, end);
+            auto waved = co_await std::move(waving);
+            if (!waved) co_return waved;
+            at = end;
+            continue;
+        }
         // Format in slices so the scratch text stays small.
         std::size_t slice = at;
         while (slice < end) {
-            const std::size_t stop = std::min<std::size_t>(end, slice + 4096);
-            auto formatted =
-                s.records()
-                    ? s.format_records(batch, slice, stop, s.lines, s.part_rows)
-                    : s.format_events(batch, slice, stop, s.lines);
+            const std::size_t stop =
+                std::min<std::size_t>(end, slice + FORMAT_SLICE_ROWS);
+            auto formatted = s.format_rows(batch, slice, stop, s.lines,
+                                           s.part_rows, s.rows, s.scratch_args);
             if (!formatted) co_return formatted.error();
             s.part_rows += stop - slice;
             s.rows += stop - slice;

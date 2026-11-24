@@ -21,7 +21,7 @@ import dftracer.utils as dftu  # noqa: E402
 from dftracer.utils import DataFrame, col  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as ext  # noqa: E402
 from dftracer.utils.index import Indexer  # noqa: E402
-from dftracer.utils.trace import TraceViewer  # noqa: E402
+from dftracer.utils.trace import TraceViewer, discover_trace_files  # noqa: E402
 
 from .test_table_io import EQUAL, load_table, matrix, save_table, sets_equal_nan  # noqa: E402
 
@@ -108,6 +108,22 @@ def test_a_zero_row_table_keeps_its_columns(tmp_path):
     assert frame.num_rows == 0 and frame.columns == ["i", "s"]
 
 
+@pytest.mark.parametrize("rows", [0, 3])
+def test_a_table_with_a_string_and_an_int_index_level_restores_its_index(tmp_path, rows):
+    df = pd.DataFrame(
+        {
+            "name": pd.Series(["a", "b", None][:rows], dtype="string"),
+            "bin": pd.Series([3, 1, 3][:rows], dtype="int64"),
+            "x": pd.Series([1.5, 2.5, 3.5][:rows], dtype="float64"),
+        }
+    ).set_index(["name", "bin"])
+    path = str(tmp_path / "t.pfw.gz")
+    save_table(df, path, name="t")
+    got = TraceViewer(path).collect().to_pandas()
+    pd.testing.assert_frame_equal(got, df)
+    assert [str(level.dtype) for level in got.index.levels] == ["string", "int64"]
+
+
 def test_a_folder_and_a_list_read_the_parts_in_part_number_order(tmp_path):
     parts = []
     folder = tmp_path / "parts"
@@ -146,15 +162,24 @@ def test_parts_that_disagree_raise_before_any_row(tmp_path):
         TraceViewer(str(tmp_path))
 
 
-def test_tables_and_traces_together_raise_naming_each(tmp_path):
+def test_tables_listed_with_traces_are_left_out(tmp_path):
     table = str(tmp_path / "t.pfw.gz")
     save_table(pd.DataFrame({"a": [1]}), table, name="t")
-    trace = str(tmp_path / "x.pfw")
-    with open(trace, "w") as f:
-        f.write('[\n{"name":"n","cat":"c","pid":1,"tid":1,"ts":1,"dur":1,"ph":"X"}\n')
-    with pytest.raises(ValueError) as err:
-        TraceViewer([table, trace])
-    assert table in str(err.value) and trace in str(err.value)
+    trace = write_trace(tmp_path / "x.pfw.gz", 1, 1)
+    view = TraceViewer([table, trace])
+    assert not ext.TraceViewer.is_table(view)
+    assert view.collect().to_pandas()["name"].tolist() == ["read"]
+
+
+def test_dask_tasks_of_one_file_leave_out_tables_listed_with_traces(tmp_path):
+    pytest.importorskip("dask")
+    from dftracer.utils.dask import DaskTraceViewer
+
+    table = str(tmp_path / "t.pfw.gz")
+    save_table(pd.DataFrame({"a": [1]}), table, name="t")
+    trace = write_trace(tmp_path / "x.pfw.gz", 1, 1)
+    assert DaskTraceViewer([table, trace])._shards() == [[trace]]
+    assert DaskTraceViewer([table])._shards() == [[table]]
 
 
 def test_a_claimed_header_that_is_wrong_raises_and_never_reads_as_a_trace(tmp_path):
@@ -847,3 +872,73 @@ def test_filters_at_the_bounds_of_a_narrow_column_agree_indexed_and_scanned(tmp_
         scanned = TraceViewer(plain).filter(predicate).collect()
         indexed = TraceViewer(idx).filter(predicate).collect()
         assert scanned[name].to_list() == indexed[name].to_list() == df[name][mask].tolist()
+
+
+def write_trace(path, pid, n):
+    lines = [
+        json.dumps(
+            {
+                "id": i,
+                "name": "read",
+                "cat": "POSIX",
+                "pid": pid,
+                "tid": 1,
+                "ts": 10 * i,
+                "dur": 2,
+                "ph": "X",
+            }
+        )
+        for i in range(n)
+    ]
+    with gzip.open(path, "wt") as f:
+        f.write("\n".join(lines) + "\n")
+    return str(path)
+
+
+def test_tables_beside_traces_are_left_out_of_trace_reads(tmp_path):
+    traces = [
+        write_trace(tmp_path / "trace-1.pfw.gz", 7, 30),
+        write_trace(tmp_path / "trace-2.pfw.gz", 8, 20),
+    ]
+    frame = DataFrame.from_pandas(pd.DataFrame({"pid": [1, 2, 3], "x": [1.5, 2.5, 3.5]}))
+    tables = [str(tmp_path / "view.pfw.gz"), str(tmp_path / "flat.pfw.gz")]
+    frame.write_table(tables[0], name="view")
+    save_table(frame, tables[1], name="flat")
+
+    assert discover_trace_files(tmp_path) == traces
+    assert discover_trace_files(str(tmp_path / "*.pfw.gz")) == traces
+    assert ext.tables_among_traces([*traces, *tables]) == [False, False, True, True]
+    assert ext.tables_among_traces(tables) == [False, False]
+
+    # A table indexed on its own shares the index root of the traces.
+    Indexer(tables[1]).build()
+    for files in [str(tmp_path), [*traces, *tables]]:
+        assert len(TraceViewer(files).collect()) == 50
+        with Indexer(files) as indexer:
+            indexer.ensure()
+            want = {traces[0]: {7}, traces[1]: {8}}
+            assert indexer.query_file_info() == want
+            assert indexer.query_all_file_pids() == want
+
+    alone = TraceViewer(tables)
+    assert ext.TraceViewer.is_table(alone)
+    assert len(alone.collect()) == 6
+    assert TraceViewer(tables[1]).collect().to_pandas()["x"].tolist() == [1.5, 2.5, 3.5]
+
+
+def test_a_broken_table_among_traces_raises_and_is_never_read_as_a_trace(tmp_path):
+    trace = write_trace(tmp_path / "trace-1.pfw.gz", 7, 3)
+    table = str(tmp_path / "t.pfw")
+    save_table(pd.DataFrame({"a": [1]}), table, name="t")
+    text = open(table).read()
+    os.remove(table)
+    (tmp_path / "v.pfw.gz").write_bytes(
+        gzip.compress(text.replace('"format_version":"1.0"', '"format_version":"2.0"', 1).encode())
+    )
+    with pytest.raises(ext.DFTUtilsError, match="format_version"):
+        discover_trace_files(tmp_path)
+    with pytest.raises(ext.DFTUtilsError, match="format_version"):
+        TraceViewer(str(tmp_path)).collect()
+    with pytest.raises(ext.DFTUtilsError, match="format_version"):
+        Indexer(str(tmp_path)).ensure()
+    assert trace

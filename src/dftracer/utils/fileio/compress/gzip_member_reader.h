@@ -24,11 +24,12 @@ namespace dftracer::utils::fileio::compress {
 /// bytes is streamed in steps of whole lines, losing at most that much work. A
 /// last member cut short yields its complete lines when `recover_truncated` is
 /// set, else it yields an error. A failure is yielded as an error item
-/// (Compression or Io), after which the generator ends.
+/// (Compression or Io), after which the generator ends. Decoding starts at
+/// byte `start`, which must be a member start.
 inline coro::AsyncGenerator<dstd::Result<dstd::StringView>> decode_gzip_members(
     int fd, std::uint64_t file_size,
     std::size_t stream_above = std::size_t{32} << 20,
-    bool recover_truncated = true) {
+    bool recover_truncated = true, std::uint64_t start = 0) {
     constexpr std::size_t READ_CHUNK = 1u << 20;
     constexpr std::size_t INIT_OUT = 1u << 20;
     stream_above = std::max(stream_above, INIT_OUT);
@@ -72,8 +73,8 @@ inline coro::AsyncGenerator<dstd::Result<dstd::StringView>> decode_gzip_members(
     std::size_t head = 0;
     std::size_t tail = 0;
     dstd::UniquePtr<unsigned char[]> comp;
-    std::uint64_t comp_off = 0;
-    std::uint64_t next_read = 0;
+    std::uint64_t comp_off = start;
+    std::uint64_t next_read = start;
 
     while (comp_off < file_size) {
         DecompressResult res{};

@@ -14,6 +14,9 @@ See :class:`~dftracer.utils.Series` for the column counterpart.
 from __future__ import annotations
 
 import datetime
+import operator
+import pickle
+import sys
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -22,6 +25,7 @@ from typing import (
     Mapping,
     Optional,
     Sequence,
+    SupportsIndex,
     Tuple,
     Union,
     cast,
@@ -62,7 +66,7 @@ if TYPE_CHECKING:
     import polars as pl
     import pyarrow as pa
     from pandas.api.extensions import ExtensionArray
-    from typing_extensions import Self
+    from typing_extensions import Buffer, Self
 
     from ._groupby import GroupBy
     from ._lazyframe import LazyFrame
@@ -544,7 +548,8 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         from ._table import _describe_pandas
 
         imported, header = _describe_pandas(df, columns, levels)
-        frame = _frame_of(imported, Series.from_pandas)
+        # The levels are columns of the frame, so a column takes no labels of its own.
+        frame = _frame_of(imported, Series._from_pandas_values)
         if names:
             frame = _bound(_ext.DataFrame.with_index(frame, names))
         if header is not None:
@@ -578,8 +583,9 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
     @classmethod
     def from_dict(cls, mapping: Mapping[str, object]) -> DataFrame:
         """Import a ``{name: array-like}`` mapping: Series, lists of scalars, NumPy
-        arrays and pandas or polars Series import natively; anything else (a
-        pyarrow array, nested lists) goes through pyarrow."""
+        arrays, pandas or polars Series and flat pandas indexes (their values)
+        import natively; anything else (a pyarrow array, nested lists) goes
+        through pyarrow."""
         native = _native_columns(mapping)
         if native is not None:
             return DataFrame(_ext._dataframe_from_columns(*native))
@@ -1096,9 +1102,16 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         """The columns are immutable, so a deep copy is a shallow one."""
         return self.copy()
 
-    # Opaque Arrow C Data Interface capsule; Python has no capsule type.
-    def __reduce__(self) -> tuple[Callable[[bytes], DataFrame], tuple[bytes, ...]]:
-        return (_dataframe_from_bytes, (_ext.DataFrame.to_bytes(self),))
+    def __reduce_ex__(
+        self, protocol: SupportsIndex
+    ) -> tuple[Callable[..., DataFrame], tuple[object, ...]]:
+        """With protocol 5 or higher, a header and one ``pickle.PickleBuffer`` per
+        column buffer, so a pickler with a ``buffer_callback`` sends the columns
+        with no copy; below 5, the native frame bytes."""
+        if operator.index(protocol) < 5:
+            return (_dataframe_from_bytes, (_ext.DataFrame.to_bytes(self),))
+        header, buffers = _ext._dataframe_to_buffers(self)
+        return (_dataframe_from_buffers, (header, *[pickle.PickleBuffer(b) for b in buffers]))
 
     def apply(self, func: Expr | Callable[..., object], axis: int = 0) -> Series | DataFrame:
         """With a column expression: evaluate it against this frame and return
@@ -2241,6 +2254,16 @@ def _native_columns(
                 cols.append(Series.from_pandas(cast(Any, value)))
             except TypeError:
                 return None
+        elif _is_flat_pandas_index(value):
+            # an Index gives values, not row labels, as in the pandas constructor
+            try:
+                cols.append(
+                    Series.from_pandas(
+                        sys.modules["pandas"].Series(cast(Any, value).array, copy=False)
+                    )
+                )
+            except TypeError:
+                return None
         elif type(value).__module__.startswith("polars") and type(value).__name__ == "Series":
             try:
                 cols.append(Series.from_polars(cast(Any, value)))
@@ -2255,6 +2278,11 @@ def _native_columns(
             return None
         names.append(name)
     return names, cols
+
+
+def _is_flat_pandas_index(value: object) -> bool:
+    pd = sys.modules.get("pandas")
+    return pd is not None and isinstance(value, pd.Index) and not isinstance(value, pd.MultiIndex)
 
 
 def _with_series_labels(names: list[str], cols: list[Series]) -> DataFrame:
@@ -2304,6 +2332,11 @@ def _with_series_labels(names: list[str], cols: list[Series]) -> DataFrame:
 def _dataframe_from_bytes(data: bytes) -> DataFrame:
     """The DataFrame a pickle holds (``DataFrame.to_bytes`` of the native frame format)."""
     return DataFrame(_ext._dataframe_from_bytes(data))
+
+
+def _dataframe_from_buffers(header: bytes, *buffers: Buffer) -> DataFrame:
+    """The DataFrame a protocol 5 pickle holds; its columns read ``buffers`` in place."""
+    return DataFrame(_ext._dataframe_from_buffers(header, buffers))
 
 
 def _dataframe_from_arrow(table: pa.Table) -> DataFrame:

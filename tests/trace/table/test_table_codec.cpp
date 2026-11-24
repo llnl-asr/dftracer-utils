@@ -345,12 +345,12 @@ TEST_SUITE("trace::table codec") {
         const dstd::String text = read_text(plain);
         auto want = dftu_utils_test::ok(read_table(plain));
         const dstd::String one = gzip_members(text, text.size());
-        // An extra field holding 1f 8b 08 00 puts a false member start in the
-        // file.
+        // An extra field holding a whole gzip header puts a false member start
+        // in the file.
         dstd::String forged = one.substr(0, 3);
         forged += '\x04';
         forged.append(one.data() + 4, 6);
-        forged.append("\x04\x00\x1f\x8b\x08\x00", 6);
+        forged.append("\x0a\x00\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03", 12);
         forged.append(one.data() + 10, one.size() - 10);
         const dstd::String path = env.dir() + "/forged.pfw.gz";
         write_text(path, forged);

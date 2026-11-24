@@ -125,6 +125,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Set `DFTRACER_UTILS_JCC_KERNELS` to `plain`, `jcc` or `auto`.
 - Build zstd 1.5.7 from source with hidden symbols and bundle zlib-ng with hidden symbols, so a program that also loads the system zstd or zlib no longer binds to ours.
   Link Vectorscan only into the duql library.
+- Make `DaskFrame.shuffle` and `DaskFrame.to_frame` keep the pieces of each partition as chunked columns, so a shuffle holds the input and one copy of its rows, not two.
+- Send the frames of `DaskFrame.from_frames` and of a broadcast `DaskFrame.join` straight to the workers, so the client no longer holds a second copy for the scheduler.
+- Pickle a `DataFrame` with protocol 5 as out-of-band column buffers, so Dask and other protocol 5 users send its columns with no copy and the receiver reads them in place.
+- Make `DataFrame.from_pandas` convert the row index once, not once per column, so a frame with a `MultiIndex` imports much faster and with far less memory.
+- Format the rows of `write_table` and the trace sinks on all runtime threads, in slices sized so the threads finish together.
+- Escape JSON strings a run of plain bytes at a time.
+- Read a table file in parts on all runtime threads at any size, so a read holds about one part of text and its compressed bytes, not the whole file.
+  A table read in more than one part gives chunked columns, and a gzip member whose start is not marked no longer sends the rest of the file to one thread.
+- Make `to_pandas` of a table frame build the row index in place and convert chunked columns one chunk at a time, so it holds about half the memory it did.
+- Build the string and integer levels of a table's `MultiIndex` from the column dictionaries in `to_pandas`, so no Python object is made per row.
+- Make `DataFrame.from_pandas` borrow the values of a nullable pandas column (`Int64`, `Float64`, `boolean`) in place of copying them.
 - Read YAML with our own reader in place of rapidyaml and yaml-cpp.
   A mapping with a duplicate key is now an error, and anchors, aliases, tags, complex keys, directives and null keys are refused with an error that names the feature.
 
@@ -210,6 +221,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix importing an Arrow stream or chunked array with no batch, which raised an error in place of giving no rows of its type.
+- Fix `hash_partition` and `partition_id` sending null keys to different parts when different values sit under the nulls.
+  A null dictionary entry now goes with the other nulls too.
+- Fix `Series.group_by` grouping null keys by the values under them; all null keys now form one null group.
+- Fix `rolling` sums and means, `is_sorted` and `search_sorted` reading the values under nulls.
+  `is_sorted` now wants every null after the values, and `search_sorted` puts a null after every value.
+- Fix a table read that stopped at an empty gzip member and lost the rows after it.
+- Fix a table read that held all the text of one large gzip member in memory; such a member now streams.
+- Fix `TraceViewer`, `Indexer` and `discover_trace_files` on a folder that holds traces and dftu.table files, such as checkpoints written next to the traces.
+  They now read only the traces, and `Indexer.query_file_info` lists only the files of the indexer.
+- Fix `DataFrame.from_dict` refusing a column of empty lists next to a pandas `Index`.
+  A pandas `Index` now imports as a pandas `Series` does.
 - Fix `DataFrame.with_column`, `with_columns`, `assign` and `select` giving a frame with columns of different lengths.
 - Fix a rare abort at interpreter exit when a daemon thread waits on a batch Python UDF.
   The thread now ends with a bare `SystemExit` and prints no traceback.

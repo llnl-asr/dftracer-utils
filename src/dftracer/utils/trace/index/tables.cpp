@@ -1039,7 +1039,8 @@ file_column_types(const Snapshot& snapshot, const FileRef& file) {
 void put_file_metadata(FileBuild& build, std::uint64_t checkpoint_size,
                        std::uint64_t total_lines, std::uint64_t total_uc_size,
                        bool truncated, bool has_open_line,
-                       std::uint64_t next_member_idx, bool has_mid_line_chunk) {
+                       std::uint64_t next_member_idx, bool has_mid_line_chunk,
+                       bool table_rows_complete) {
     put_value(
         build, Ext::Members, file_key(store::layout::members::METADATA),
         store::internal::encoding::encode_metadata_record(
@@ -1051,7 +1052,10 @@ void put_file_metadata(FileBuild& build, std::uint64_t checkpoint_size,
                      : 0) |
                 (has_mid_line_chunk
                      ? store::internal::encoding::METADATA_FLAG_MID_LINE_CHUNK
-                     : 0),
+                     : 0) |
+                (table_rows_complete ? store::internal::encoding::
+                                           METADATA_FLAG_TABLE_ROWS_COMPLETE
+                                     : 0),
             next_member_idx));
 }
 

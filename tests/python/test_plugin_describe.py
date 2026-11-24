@@ -29,7 +29,7 @@ def test_a_file_no_format_claims_is_a_notfound_error(tmp_path):
         pytest.skip("extension built without Arrow support")
     plain = tmp_path / "plain.dft"
     plain.write_text("nothing here claims this file\n")
-    with pytest.raises(dft.DFTUtilsNotFoundError, match="no format claims"):
+    with pytest.raises(dft.errors.DFTUtilsNotFoundError, match="no format claims"):
         dft.scan_file(str(plain)).collect()
 
 

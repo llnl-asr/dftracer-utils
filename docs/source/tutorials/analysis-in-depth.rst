@@ -51,7 +51,7 @@ by name so the output is stable.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          df = (
              TraceViewer("app.pfw.gz")
@@ -130,7 +130,8 @@ duration is at least 100 microseconds.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer, col
+         from dftracer.utils import col
+         from dftracer.utils.trace import TraceViewer
 
          q = col("name").like("%r%") & (col("dur") >= 100)
 
@@ -263,7 +264,8 @@ see it match.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer, F
+         from dftracer.utils import F
+         from dftracer.utils.trace import TraceViewer
 
          df = (
              TraceViewer("app.pfw.gz")
@@ -329,7 +331,7 @@ see it match.
 
              Series avg = df.column("sum_dur").cast(TypeId::Float64)
                               .div(df.column("count").cast(TypeId::Float64));
-             df = df.with_column("avg_dur", avg);
+             df = df.with_column("avg_dur", avg).value();
 
              auto name = df.column("name");
              const auto count = df.column("count").materialize();
@@ -418,8 +420,8 @@ total duration in milliseconds.
              Series sum_f = df.column("sum_dur").cast(TypeId::Float64);
              Series avg_dur = sum_f.div(df.column("count").cast(TypeId::Float64));
              Series total_ms = df.column("sum_dur").cast(TypeId::Float64) / 1000.0;
-             df = df.with_column("avg_dur", avg_dur)
-                      .with_column("total_ms", total_ms);
+             df = df.with_column("avg_dur", avg_dur).value()
+                      .with_column("total_ms", total_ms).value();
 
              auto name = df.column("name");
              const auto count = df.column("count").materialize();
@@ -530,13 +532,13 @@ Expected output:
    DataFrame Table
 
 To write rows back out as a trace, use the viewer instead of the frame.
-``export_trace`` writes the selected events as a gzip trace and ``sink_json``
-writes them as NDJSON. Both return the scan stats:
+``TraceViewer.sink_trace`` writes the selected events as an indexed gzip trace and
+returns a ``SinkSummary``:
 
 .. code-block:: python
 
-   stats = TraceViewer("app.pfw.gz").filter('name == "read"').export_trace("reads.pfw.gz")
-   print(stats["events_matched"])
+   summary = TraceViewer("app.pfw.gz").filter('name == "read"').sink_trace("reads.pfw.gz")
+   print(summary.rows)
 
 Expected output:
 
@@ -560,7 +562,7 @@ What you learned
 - Write the query as duql text or with the Python duql builder, and derive
   columns inside the query.
 - Convert to pandas / Arrow at the edge in Python, or write the selected
-  events with ``export_trace``.
+  events with ``sink``.
   C++ already holds the native frame.
 
 For the full frame and column reference, see :doc:`../guides/data/dataframe` and

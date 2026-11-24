@@ -3,6 +3,7 @@
 // match), dataframe (a column), trace and store and io (index a plain trace),
 // utilities (the host ops registration).
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/trace/index/c_api.h>
@@ -99,7 +100,7 @@ int main() {
 
     std::error_code ec;
     auto dir = std::filesystem::temp_directory_path(ec) /
-               ("dftu_pkgconfig_static_" + std::to_string(::getpid()));
+               ("dftu_pkgconfig_static_" + dstd::to_string(::getpid()));
     std::filesystem::create_directories(dir, ec);
     const int rc = check_index(dir);
     std::filesystem::remove_all(dir, ec);

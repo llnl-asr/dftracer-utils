@@ -80,6 +80,12 @@ DataFrame DataFrame::drop_nulls() const { return dataframe::drop_nulls(*this); }
 DataFrame DataFrame::fill_null(Scalar value) const {
     return dataframe::fill_null(*this, value);
 }
+dstd::Result<DataFrame> DataFrame::drop_nans() const {
+    return dataframe::drop_nans(*this);
+}
+dstd::Result<DataFrame> DataFrame::fill_nan(Scalar value) const {
+    return dataframe::fill_nan(*this, value);
+}
 dstd::Result<DataFrame> DataFrame::unique(
     dstd::Span<const dstd::String> subset) const {
     return dataframe::unique(*this, subset);
@@ -130,8 +136,8 @@ dstd::Result<DataFrame> DataFrame::rename(
     dstd::Span<const dstd::String> new_names) const {
     return dataframe::rename(*this, new_names);
 }
-DataFrame DataFrame::with_column(dstd::StringView name,
-                                 const Series& col) const {
+dstd::Result<DataFrame> DataFrame::with_column(dstd::StringView name,
+                                               const Series& col) const {
     return dataframe::with_column(*this, name, col);
 }
 

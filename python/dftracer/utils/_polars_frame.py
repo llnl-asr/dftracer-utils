@@ -6,17 +6,30 @@ horizontal reductions, the stacks, `partition_by`, `gather_every`,
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Iterator, Literal, Sequence
+import types
+from typing import TYPE_CHECKING, Iterator, Literal, Sequence, cast
 
+from . import dftracer_utils_ext as _ext
 from ._convert import _require_pyarrow
-from ._pandas_frame import column_series, is_numeric_series
-from .series import Series
+from ._pandas_frame import is_numeric_series
+from ._series import Series
+from ._series_index import column_series
 
 if TYPE_CHECKING:
-    from .dataframe import DataFrame
-    from .enums import DType
-    from .expr import Expr
-    from .groupby import GroupKey
+    from ._dataframe import DataFrame
+    from ._enums import DType
+    from ._expr import Expr
+    from ._groupby import GroupKey
+
+
+def _require_polars() -> types.ModuleType:
+    try:
+        import polars as pl
+    except ImportError:
+        raise ImportError(
+            "polars is required for to_polars(). Install with: pip install polars"
+        ) from None
+    return cast("types.ModuleType", pl)
 
 
 class FramePolarsMixin:
@@ -26,7 +39,7 @@ class FramePolarsMixin:
     __slots__ = ()
 
     def _frame(self) -> DataFrame:
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         assert isinstance(self, DataFrame)
         return self
@@ -43,11 +56,11 @@ class FramePolarsMixin:
         if not cols:
             raise ValueError("sum_horizontal: no numeric column")
         f = self._frame()
-        out = column_series(f, cols[0]).astype("float64").fillna(0.0)
-        present = column_series(f, cols[0]).notna()
+        out = column_series(f, cols[0]).astype("float64").fill_null(0.0)
+        present = column_series(f, cols[0]).is_not_null()
         for c in cols[1:]:
-            out = out + column_series(f, c).astype("float64").fillna(0.0)
-            present = present.logical(1, column_series(f, c).notna())
+            out = out + column_series(f, c).astype("float64").fill_null(0.0)
+            present = present.logical(1, column_series(f, c).is_not_null())
         return out.where(present, out.shift(len(out)))
 
     def mean_horizontal(self) -> Series:
@@ -55,9 +68,9 @@ class FramePolarsMixin:
         if not cols:
             raise ValueError("mean_horizontal: no numeric column")
         f = self._frame()
-        count = column_series(f, cols[0]).notna().astype("int64")
+        count = column_series(f, cols[0]).is_not_null().astype("int64")
         for c in cols[1:]:
-            count = count + column_series(f, c).notna().astype("int64")
+            count = count + column_series(f, c).is_not_null().astype("int64")
         total = self.sum_horizontal()
         return total / count.where(count.ge(1), count.shift(len(count)))
 
@@ -76,8 +89,8 @@ class FramePolarsMixin:
         for c in cols[1:]:
             other = column_series(f, c).astype("float64")
             # Fill each side from the other so a lone value wins, then pick.
-            other = other.where(other.notna(), out)
-            out = out.where(out.notna(), other)
+            other = other.where(other.is_not_null(), out)
+            out = out.where(out.is_not_null(), other)
             diff = other - out
             pick_other = diff.lt(0) if min else diff.gt(0)
             out = other.where(pick_other, out)
@@ -87,7 +100,7 @@ class FramePolarsMixin:
     def hstack(self, columns: DataFrame | Sequence[Series] | dict[str, Series]) -> DataFrame:
         """This frame with ``columns`` (a frame, a ``{name: Series}`` or
         Series with names) appended on the right (polars ``hstack``)."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         out = self._frame()
         if isinstance(columns, DataFrame):
@@ -151,7 +164,7 @@ class FramePolarsMixin:
         """One frame per distinct key (polars ``partition_by``), in first-seen
         key order; ``as_dict`` keys them by the key value (a tuple for several
         columns)."""
-        from .groupby import GroupBy
+        from ._groupby import GroupBy
 
         f = self._frame()
         keys = [by] if isinstance(by, str) else list(by)
@@ -234,39 +247,25 @@ class FramePolarsMixin:
         f = self._frame()
         return len(f.unique(subset))
 
-    def fill_nan(self, value: int | float | None) -> DataFrame:
-        """Each float column's NaN replaced by ``value`` (null for ``None``)."""
-        f = self._frame()
-        out = f
-        for c in f._names():
-            s = column_series(f, c)
-            if not is_numeric_series(s):
-                continue
-            nan = s.is_nan()
-            if value is None:
-                out = out.with_column(c, s.where(nan.logical_not(), s.shift(len(s))))
-            else:
-                out = out.with_column(c, s.where(nan.logical_not(), float(value)))
-        return out
-
     def drop_nans(self, subset: str | Sequence[str] | None = None) -> DataFrame:
-        """The rows with no NaN in the float columns (or in ``subset``)."""
+        """The rows with no NaN in the float columns (or in ``subset``); a null
+        is not a NaN, so a null row stays."""
+        from ._dataframe import _bound
+
         f = self._frame()
-        names = (
-            [subset]
-            if isinstance(subset, str)
-            else list(subset)
-            if subset
-            else list(f._polars_names())
-        )
-        keep = None
+        if subset is None:
+            return _bound(_ext.DataFrame.drop_nans(f))
+        names = [subset] if isinstance(subset, str) else list(subset)
+        keep: Series | None = None
         for c in names:
             s = column_series(f, c)
-            if not is_numeric_series(s):
+            if not s.dtype.is_float:
                 continue
-            ok = s.is_nan().logical_not()
+            ok = s.is_nan().fill_null(False).logical_not()
             keep = ok if keep is None else keep.logical(0, ok)
-        return f if keep is None else f.filter(keep)
+        if keep is None or bool(keep.all()):
+            return _bound(_ext.DataFrame.share(f))
+        return _bound(f.filter(keep))
 
     # -- writers, through pyarrow -------------------------------------------------
     def write_parquet(self, path: str, **kwargs: object) -> None:

@@ -19,9 +19,9 @@ import pytest
 pa = pytest.importorskip("pyarrow")
 pq = pytest.importorskip("pyarrow.parquet")
 
-from dftracer.utils.dataframe import DataFrame  # noqa: E402
-from dftracer.utils.enums import DType  # noqa: E402
-from dftracer.utils.series import Series  # noqa: E402
+from dftracer.utils._dataframe import DataFrame  # noqa: E402
+from dftracer.utils._enums import DType  # noqa: E402
+from dftracer.utils._series import Series  # noqa: E402
 
 # name -> (pyarrow array, expected DType, expected pylist).
 _TYPE_CASES = {

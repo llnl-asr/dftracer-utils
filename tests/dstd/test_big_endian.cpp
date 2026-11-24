@@ -26,6 +26,15 @@ TEST_SUITE("big_endian") {
         CHECK(dstd::read_u16_be(b) == 0x0102);
     }
 
+    TEST_CASE("big_endian - view reads match pointer reads") {
+        dstd::String s;
+        dstd::append_u64_be(s, 0x0102030405060708ULL);
+        CHECK(dstd::read_u64_be(dstd::StringView(s)) == 0x0102030405060708ULL);
+        CHECK(dstd::read_u32_be(dstd::StringView(s).substr(4)) == 0x05060708U);
+        CHECK(dstd::read_u16_be(dstd::StringView(s).substr(6)) == 0x0708);
+        CHECK(dstd::read_u64_be(dstd::ByteView(s)) == 0x0102030405060708ULL);
+    }
+
     TEST_CASE("big_endian - integer and double round trips") {
         std::uint8_t b[8];
         for (std::uint64_t v : {std::uint64_t{0}, std::uint64_t{1},

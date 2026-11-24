@@ -6,10 +6,11 @@ import html
 import math
 from typing import TYPE_CHECKING, List, Sequence, Tuple
 
+from ._enums import DType
+
 if TYPE_CHECKING:
-    from .dataframe import DataFrame
-    from .enums import DType
-    from .series import Series
+    from ._dataframe import DataFrame
+    from ._series import Series
 
 MAX_ROWS = 60
 EDGE_ROWS = 5
@@ -43,10 +44,6 @@ def _cells(values: Sequence[object], is_float: bool) -> List[str]:
     return ["None" if v is None else str(v) for v in values]
 
 
-def _is_float(dtype: "DType") -> bool:
-    return str(getattr(dtype, "name", "")).startswith("FLOAT")
-
-
 def _shown(n: int) -> "Tuple[bool, List[int]]":
     if n <= MAX_ROWS:
         return False, list(range(n))
@@ -58,7 +55,7 @@ def _column(series: "Series", cut: bool) -> List[str]:
         values = series.head(EDGE_ROWS).to_list() + series.tail(EDGE_ROWS).to_list()
     else:
         values = series.to_list()
-    cells = _cells(values, _is_float(series.dtype))
+    cells = _cells(values, series.dtype.is_float or series.dtype is DType.FLOAT16)
     if cut:
         cells.insert(EDGE_ROWS, _ELLIPSIS)
     return cells

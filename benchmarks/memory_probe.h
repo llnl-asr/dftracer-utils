@@ -98,7 +98,7 @@ namespace detail {
 
 inline std::uint64_t kib_field(std::string_view line, std::string_view key) {
     const std::size_t n = key.size();
-    if (line.compare(0, n, key) != 0) return 0;
+    if (!line.starts_with(key)) return 0;
     return std::strtoull(line.data() + n, nullptr, 10) * 1024;
 }
 

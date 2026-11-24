@@ -252,7 +252,8 @@ void put_file_metadata(FileBuild& build, std::uint64_t checkpoint_size,
                        std::uint64_t total_lines, std::uint64_t total_uc_size,
                        bool truncated, bool has_open_line = false,
                        std::uint64_t next_member_idx = 0,
-                       bool has_mid_line_chunk = false);
+                       bool has_mid_line_chunk = false,
+                       bool table_rows_complete = false);
 void put_gzip_member(FileBuild& build, const gzip::GzipMemberRecord& member);
 void put_restart_window(FileBuild& build, std::uint64_t member_idx,
                         dstd::StringView window);

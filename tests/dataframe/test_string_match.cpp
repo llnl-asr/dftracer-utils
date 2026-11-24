@@ -5,6 +5,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/cpu_features.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/string_match.h>
 #include <dftracer/utils/dataframe/series.h>
@@ -257,11 +258,10 @@ TEST_SUITE("string match") {
     TEST_CASE("the request in the environment picks the kernels" *
               doctest::skip()) {
         fresh_process::announce();
-        const char* request = std::getenv("DFTRACER_UTILS_JCC_KERNELS");
-        REQUIRE(request != nullptr);
+        const auto request = common::Env::get("DFTRACER_UTILS_JCC_KERNELS");
+        REQUIRE(request.has_value());
         const StringMatch* want = string_match_variant(
-            dstd::StringView(request) == "jcc" ? JccKernels::Jcc
-                                               : JccKernels::Plain);
+            *request == "jcc" ? JccKernels::Jcc : JccKernels::Plain);
         if (!want) want = string_match_variant(JccKernels::Plain);
         CHECK(&dataframe::kernels::string_match() == want);
     }

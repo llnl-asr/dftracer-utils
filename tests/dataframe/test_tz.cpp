@@ -4,6 +4,7 @@
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/tz.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -541,10 +542,10 @@ Converted convert_one(const tz::Zone& zone, std::int64_t wall, TimeUnit unit,
 }
 
 std::uint64_t next_random(std::uint64_t& state) {
-    state += 0x9E3779B97F4A7C15ULL;
+    state += dstd::hash::GOLDEN_RATIO;
     std::uint64_t z = state;
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    z = (z ^ (z >> 30)) * dstd::hash::SPLITMIX64_MUL1;
+    z = (z ^ (z >> 27)) * dstd::hash::SPLITMIX64_MUL2;
     return z ^ (z >> 31);
 }
 

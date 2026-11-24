@@ -278,11 +278,9 @@ TEST_SUITE("slice views") {
             Series base = strings_of(rows_for(true), type);
             Series got{dftu_series_slice(base.handle(), 3, 7)};
             const char* lo = base.data<char>();
-            const char* hi = lo + base.offsets()[N];
             const char* p = got.data<char>();
-            CHECK(p >= lo);
-            CHECK(p <= hi);
-            CHECK(p == lo + base.offsets()[3]);
+            CHECK(p == lo);
+            CHECK(got.offsets() == base.offsets() + 3);
         }
     }
 
@@ -405,8 +403,9 @@ TEST_SUITE("slice views") {
             df.filter(dftu_utils_test::eval_ok(col(0) > std::int64_t{10}, in));
         dstd::Vector<const Series*> kin;
         for (const Series& c : kept.columns) kin.push_back(&c);
-        DataFrame want = kept.with_column(
-            "j", dftu_utils_test::eval_ok(col(0) + col(0), kin));
+        DataFrame want = kept.with_column("j", dftu_utils_test::eval_ok(
+                                                   col(0) + col(0), kin))
+                             .value();
 
         REQUIRE(lazy.num_columns() == want.num_columns());
         CHECK(lazy.names == want.names);

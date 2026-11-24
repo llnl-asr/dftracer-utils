@@ -25,52 +25,53 @@ here is a call with the column as its first argument: ``c("dur").sum()`` is
 
 from __future__ import annotations
 
-from .col import (
+from .._public import set_home as _set_home
+from ._col import (
     Col as Col,
 )
-from .col import (
+from ._col import (
     Named as Named,
 )
-from .col import (
+from ._col import (
     SortKey as SortKey,
 )
-from .col import (
+from ._col import (
     c as c,
 )
-from .col import (
+from ._col import (
     case_ as case_,
 )
-from .col import (
+from ._col import (
     duration as duration,
 )
-from .col import (
+from ._col import (
     fn as fn,
 )
-from .col import (
+from ._col import (
     lit as lit,
 )
-from .col import (
+from ._col import (
     param as param,
 )
-from .col import (
+from ._col import (
     tup as tup,
 )
-from .pipe import (
+from ._pipe import (
     Pipe as Pipe,
 )
-from .pipe import (
+from ._pipe import (
     Source as Source,
 )
-from .pipe import (
+from ._pipe import (
     load_path as load_path,
 )
-from .pipe import (
+from ._pipe import (
     rowset as rowset,
 )
-from .pipe import (
+from ._pipe import (
     source as source,
 )
-from .pipe import (
+from ._pipe import (
     sub as sub,
 )
 
@@ -92,3 +93,5 @@ __all__ = [
     "sub",
     "tup",
 ]
+
+_set_home(__name__, globals(), __all__)

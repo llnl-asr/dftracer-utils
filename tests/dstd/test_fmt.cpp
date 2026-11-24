@@ -127,7 +127,7 @@ TEST_CASE("long strings") {
     const dstd::String out = dstd::fmt<"<{}|{}>">(big, 7);
     CHECK(out.size() == 10000 + 4);
     CHECK(out.front() == '<');
-    CHECK(out.substr(out.size() - 3) == "|7>");
+    CHECK(out.ends_with("|7>"));
 }
 
 namespace {

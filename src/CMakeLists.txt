@@ -117,6 +117,7 @@ set(DFTRACER_UTILS_DSTD_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/fs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/os.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/path.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/process.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/shared_string.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/shutdown.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/string_intern.cpp
@@ -178,6 +179,7 @@ set(DFTRACER_UTILS_RUNTIME_SOURCES
     # Async I/O
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/filesystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/fs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/inputs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs/local_stat.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/fs_on_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/io/io.cpp
@@ -281,6 +283,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/record_schema.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/record_schema_yaml.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/source.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/write_feed.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/bloom_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/extensions/bloom_fold.cpp
@@ -316,6 +319,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/build/batch_builder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/build/file_group.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/build/new_members.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/build/table_rows.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/build/resolver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/build/index_write_lock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/index/build/resolve_and_build.cpp
@@ -462,7 +466,6 @@ set(DFTRACER_UTILS_TRACE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_counter_format.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_executor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/sharded_view.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/view_export_index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/result_join.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/views/c_api.cpp
 
@@ -471,7 +474,19 @@ set(DFTRACER_UTILS_TRACE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/reader/internal/member_decode_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/reader/internal/gzip_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/reader/internal/reader_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/reader/error.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/reader/error.cpp
+
+    # Writer
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/writer/trace_writer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/writer/output_writer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/writer/sink_plan.cpp
+
+    # Table codec
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/table/table_header.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/table/table_decode.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/table/table_reader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/table/table_source.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/table/table_writer.cpp)
 
 set(DFTRACER_UTILS_ARROW_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/arrow/arrow.cpp
@@ -3249,6 +3264,10 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index/batch_indexer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/trace_viewer.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/trace_viewer.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/table_codec.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/table_codec.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/trace_writer.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace/trace_writer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/plugins/plugin_host.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/op_runner.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/frame/ops.cpp
@@ -3256,6 +3275,20 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/plugins/plugin_host.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime/runtime.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime/runtime.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/bind.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/bind.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/emit.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/format.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/mutable_value.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/mutable_value.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/records.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/records.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/text_source.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/text_source.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/value.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/value.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/writer.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/formats/writer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/store/store.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/store/store.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime/task_handle.cpp

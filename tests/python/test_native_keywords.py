@@ -10,7 +10,7 @@ import pytest
 
 from dftracer.utils import DataFrame
 from dftracer.utils import dftracer_utils_ext as _ext
-from dftracer.utils.series import Series
+from dftracer.utils._series import Series
 
 # (method, keyword names of the old Python signature, in order)
 OLD_KEYWORDS = [

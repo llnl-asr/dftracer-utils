@@ -1551,6 +1551,11 @@ class Lowering {
                     return std::move(*call);
                 } else if constexpr (std::is_same_v<T, Sink>) {
                     duql::PipelineSink out;
+                    out.kind = n.kind == Sink::Kind::Trace
+                                   ? duql::PipelineSink::Kind::Trace
+                               : n.kind == Sink::Kind::Table
+                                   ? duql::PipelineSink::Kind::Table
+                                   : duql::PipelineSink::Kind::Plugin;
                     out.name = n.name;
                     out.options = n.options;
                     out.text = text_of(s.span);

@@ -106,9 +106,8 @@ def _case_groups() -> float:
 
 
 def _timestamps():
-    from dftracer.utils import Series
+    from dftracer.utils import DType, Series
     from dftracer.utils import dftracer_utils_ext as ext
-    from dftracer.utils.enums import DType
 
     ticks = Series([1_700_000_000_000_000 + v * 997 for v in range(ROWS)]).astype("int64")
     return ext._series_retype(ticks, int(DType.TIMESTAMP), 2, "")
@@ -161,7 +160,7 @@ def _double_op():
 
 
 def _case_run_op() -> float:
-    from dftracer.utils import jit_op
+    from dftracer.utils import _jit_op as jit_op
 
     double = _double_op()
     jit_op.run_op(double, 1)

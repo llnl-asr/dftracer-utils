@@ -15,7 +15,7 @@ def _ndjson(path):
     with gzip.open(path, "wt") as out:
         for i in range(RECORDS):
             out.write('{"op":"%s","lat":%d,"io":{"off":%d}}\n' % (OPS[i % 3], i % 50, i * 4096))
-    with dftu.Indexer(files=[path]) as ix:
+    with dftu.index.Indexer(files=[path]) as ix:
         ix.ensure()
     return path
 
@@ -26,17 +26,17 @@ def trace(tmp_path):
 
 
 def test_rows_are_named_by_path(trace):
-    t = dftu.TraceViewer(trace).collect()
+    t = dftu.trace.TraceViewer(trace).collect()
     assert len(t) == RECORDS
     assert set(t.columns) == {"op", "lat", "io.off"}
-    assert set(dftu.TraceViewer(trace).schema) == {"op", "lat", "io.off"}
+    assert set(dftu.trace.TraceViewer(trace).schema) == {"op", "lat", "io.off"}
 
 
 def test_filters_and_groups_read_paths(trace):
-    rows = dftu.TraceViewer(trace).duql('op == "read"').collect()
+    rows = dftu.trace.TraceViewer(trace).duql('op == "read"').collect()
     assert len(rows) == RECORDS // 3
 
-    t = dftu.TraceViewer(trace).group_by("op").agg("count", "sum:lat").collect()
+    t = dftu.trace.TraceViewer(trace).group_by("op").agg("count", "sum:lat").collect()
     got = {r["op"]: (r["count"], r["sum_lat"]) for r in t.to_dicts()}
     want = {
         op: (RECORDS // 3, sum(i % 50 for i in range(RECORDS) if OPS[i % 3] == op)) for op in OPS
@@ -45,5 +45,5 @@ def test_filters_and_groups_read_paths(trace):
 
 
 def test_time_operations_need_a_time_role(trace):
-    with pytest.raises(dftu.DFTUtilsValueError, match="needs a time role"):
-        dftu.TraceViewer(trace).time_bucket(100)
+    with pytest.raises(dftu.errors.DFTUtilsValueError, match="needs a time role"):
+        dftu.trace.TraceViewer(trace).time_bucket(100)

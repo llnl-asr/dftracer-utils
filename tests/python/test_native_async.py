@@ -11,8 +11,10 @@ import time
 
 import pytest
 
-from dftracer.utils import DataFrame, Indexer, IndexStatus, Runtime, TaskHandle, col
+from dftracer.utils import DataFrame, col
 from dftracer.utils import dftracer_utils_ext as _ext
+from dftracer.utils.index import Indexer, IndexStatus
+from dftracer.utils.runtime import Runtime, TaskHandle
 
 from .common import Environment
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/agg/detail.h>
+#include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -12,18 +13,32 @@
 namespace dftracer::utils::dataframe {
 
 namespace {
-// Reorders `v` (blocks of `stride` elements per group) into `perm` order.
+// Reorders `v` (blocks of `stride` elements per group) into `perm` order, in
+// place: `heads` holds one group of each cycle of `perm` that moves.
 template <class Vec>
 void permute_blocks(Vec& v, dstd::Span<const std::int64_t> perm,
-                    std::size_t stride) {
+                    dstd::Span<const std::int64_t> heads, std::size_t stride) {
     if (stride == 0 || v.empty()) return;
-    Vec tmp(v.size());
-    for (std::size_t g = 0; g < perm.size(); ++g) {
-        const std::size_t src = static_cast<std::size_t>(perm[g]) * stride;
-        for (std::size_t j = 0; j < stride; ++j)
-            tmp[g * stride + j] = std::move(v[src + j]);
-    }
-    v.swap(tmp);
+    parallel_for(static_cast<std::int64_t>(heads.size()), 8192,
+                 [&](std::int64_t hb, std::int64_t he) {
+                     Vec carried(stride);
+                     for (std::int64_t i = hb; i < he; ++i) {
+                         const auto h = static_cast<std::size_t>(heads[i]);
+                         for (std::size_t j = 0; j < stride; ++j)
+                             carried[j] = std::move(v[h * stride + j]);
+                         std::size_t g = h;
+                         for (;;) {
+                             const auto src = static_cast<std::size_t>(perm[g]);
+                             if (src == h) break;
+                             for (std::size_t j = 0; j < stride; ++j)
+                                 v[g * stride + j] =
+                                     std::move(v[src * stride + j]);
+                             g = src;
+                         }
+                         for (std::size_t j = 0; j < stride; ++j)
+                             v[g * stride + j] = std::move(carried[j]);
+                     }
+                 });
 }
 
 dstd::Vector<std::int64_t> iota_to(std::size_t n) {
@@ -45,63 +60,77 @@ void agg_sort_groups(AggState& st) {
 }
 
 void agg_permute_groups(AggState& st, dstd::Span<const std::int64_t> perm) {
-    st.settle_light();
     const std::int64_t ng = st.ngroups();
+    dstd::Vector<std::int64_t> heads;
+    {
+        dstd::Vector<bool> seen(static_cast<std::size_t>(ng), false);
+        for (std::int64_t g = 0; g < ng; ++g) {
+            if (seen[static_cast<std::size_t>(g)]) continue;
+            std::int64_t at = g;
+            do {
+                seen[static_cast<std::size_t>(at)] = true;
+                at = perm[static_cast<std::size_t>(at)];
+            } while (at != g);
+            if (perm[static_cast<std::size_t>(g)] != g) heads.push_back(g);
+        }
+    }
     for (std::size_t k = 0; k < st.nkeys; ++k) {
         if (st.key_is_bytes[k])
-            permute_blocks(st.skey_cols[k], perm, 1);
+            permute_blocks(st.skey_cols[k], perm, heads, 1);
         else
-            permute_blocks(st.ikey_cols[k], perm, 1);
-        permute_blocks(st.nkey_cols[k], perm, 1);
+            permute_blocks(st.ikey_cols[k], perm, heads, 1);
+        permute_blocks(st.nkey_cols[k], perm, heads, 1);
     }
-    permute_blocks(st.counts, perm, 1);
-    if (agg_first_rows_known(st)) permute_blocks(st.group_first_row, perm, 1);
-    permute_blocks(st.fstats, perm, st.nf);
+    permute_blocks(st.counts, perm, heads, 1);
+    if (agg_first_rows_known(st))
+        permute_blocks(st.group_first_row, perm, heads, 1);
+    permute_blocks(st.fstats, perm, heads, st.nf);
+    permute_blocks(st.light, perm, heads, st.light_stride);
     if (st.has_fl) {
-        permute_blocks(st.fl_first, perm, st.nf);
-        permute_blocks(st.fl_last, perm, st.nf);
-        permute_blocks(st.fl_first_s, perm, st.nf);
-        permute_blocks(st.fl_last_s, perm, st.nf);
-        permute_blocks(st.fl_first_idx, perm, st.nf);
-        permute_blocks(st.fl_last_idx, perm, st.nf);
+        permute_blocks(st.fl_first, perm, heads, st.nf);
+        permute_blocks(st.fl_last, perm, heads, st.nf);
+        permute_blocks(st.fl_first_s, perm, heads, st.nf);
+        permute_blocks(st.fl_last_s, perm, heads, st.nf);
+        permute_blocks(st.fl_first_idx, perm, heads, st.nf);
+        permute_blocks(st.fl_last_idx, perm, heads, st.nf);
     }
-    if (st.has_sketch) permute_blocks(st.sketches, perm, st.n_sketch);
+    if (st.has_sketch) permute_blocks(st.sketches, perm, heads, st.n_sketch);
     if (st.has_arg) {
-        permute_blocks(st.arg_by, perm, st.n_arg);
-        permute_blocks(st.arg_has, perm, st.n_arg);
-        permute_blocks(st.arg_repr, perm, st.n_arg_repr);
+        permute_blocks(st.arg_by, perm, heads, st.n_arg);
+        permute_blocks(st.arg_has, perm, heads, st.n_arg);
+        permute_blocks(st.arg_repr, perm, heads, st.n_arg_repr);
     }
     if (st.has_apos) {
-        permute_blocks(st.apos_bits, perm, st.n_apos);
-        permute_blocks(st.apos_rank, perm, st.n_apos);
-        permute_blocks(st.apos_dom, perm, st.n_apos);
+        permute_blocks(st.apos_bits, perm, heads, st.n_apos);
+        permute_blocks(st.apos_rank, perm, heads, st.n_apos);
+        permute_blocks(st.apos_dom, perm, heads, st.n_apos);
     }
     if (st.has_bw) {
-        permute_blocks(st.bw_acc, perm, st.n_bw);
-        permute_blocks(st.bw_seen, perm, st.n_bw);
+        permute_blocks(st.bw_acc, perm, heads, st.n_bw);
+        permute_blocks(st.bw_seen, perm, heads, st.n_bw);
     }
-    if (st.has_bitor) permute_blocks(st.bitor_acc, perm, st.n_bitor);
-    if (st.has_prod) permute_blocks(st.prod_acc, perm, st.n_prod);
-    if (st.has_qv) permute_blocks(st.qv, perm, st.n_qv);
-    if (st.has_msk) permute_blocks(st.msk, perm, st.n_msk);
-    if (st.has_kmv) permute_blocks(st.kmv, perm, st.n_kmv);
-    if (st.has_lst) permute_blocks(st.lst, perm, st.n_lst);
-    if (st.has_ss) permute_blocks(st.ss_counters, perm, st.n_ss);
-    if (st.has_co) permute_blocks(st.co, perm, st.n_co);
-    if (st.has_set) permute_blocks(st.sets, perm, st.n_set);
+    if (st.has_bitor) permute_blocks(st.bitor_acc, perm, heads, st.n_bitor);
+    if (st.has_prod) permute_blocks(st.prod_acc, perm, heads, st.n_prod);
+    if (st.has_qv) permute_blocks(st.qv, perm, heads, st.n_qv);
+    if (st.has_msk) permute_blocks(st.msk, perm, heads, st.n_msk);
+    if (st.has_kmv) permute_blocks(st.kmv, perm, heads, st.n_kmv);
+    if (st.has_lst) permute_blocks(st.lst, perm, heads, st.n_lst);
+    if (st.has_ss) permute_blocks(st.ss_counters, perm, heads, st.n_ss);
+    if (st.has_co) permute_blocks(st.co, perm, heads, st.n_co);
+    if (st.has_set) permute_blocks(st.sets, perm, heads, st.n_set);
     if (st.has_occ) {
-        permute_blocks(st.occ_deltas, perm, st.n_occ);
-        permute_blocks(st.occ_total, perm, st.n_occ);
-        permute_blocks(st.occ_ts, perm, st.n_occ);
-        permute_blocks(st.occ_te, perm, st.n_occ);
+        permute_blocks(st.occ_deltas, perm, heads, st.n_occ);
+        permute_blocks(st.occ_total, perm, heads, st.n_occ);
+        permute_blocks(st.occ_ts, perm, heads, st.n_occ);
+        permute_blocks(st.occ_te, perm, heads, st.n_occ);
     }
     st.udaf_permute(perm);
     if (st.has_dyn) {
         if (st.dyn_light_on)
-            permute_blocks(st.dyn_light, perm, 1);
+            permute_blocks(st.dyn_light, perm, heads, 1);
         else
-            permute_blocks(st.dyn_fs, perm, 1);
-        if (st.dyn_has_sketch) permute_blocks(st.dyn_sketch, perm, 1);
+            permute_blocks(st.dyn_fs, perm, heads, 1);
+        if (st.dyn_has_sketch) permute_blocks(st.dyn_sketch, perm, heads, 1);
     }
     // The caches in front of key_buckets go; the hash chains keep their
     // members, renumbered.
@@ -117,6 +146,13 @@ void agg_permute_groups(AggState& st, dstd::Span<const std::int64_t> perm) {
     auto renumber = [&](std::int64_t g) {
         return g < 0 ? g : at[static_cast<std::size_t>(g)];
     };
+    if (!st.light_carry.empty()) {
+        dstd::HashMap<std::size_t, std::int64_t> carried;
+        for (const auto& [slot, wraps] : st.light_carry)
+            carried[static_cast<std::size_t>(at[slot / st.nf]) * st.nf +
+                    slot % st.nf] = wraps;
+        st.light_carry.swap(carried);
+    }
     for (auto& [h, g] : st.key_buckets) g = renumber(g);
     dstd::Vector<std::int64_t> next(at.size());
     for (std::size_t i = 0; i < at.size(); ++i)

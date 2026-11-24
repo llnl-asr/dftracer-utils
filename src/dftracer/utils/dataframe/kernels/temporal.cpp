@@ -776,6 +776,13 @@ dftu_series* dftu_series_tz_localize(const dftu_series* v, const char* name,
         return nullptr;
     }
     const tz::Zone* zone = *found;
+    // A zone at UTC all the time keeps every value: only the label changes.
+    std::int32_t fixed = 0;
+    if (zone->fixed_offset(&fixed) && fixed == 0) {
+        auto* out = new dftu_series(*v);
+        out->set_timezone(zone_name);
+        return out;
+    }
     tz::ToUtcOptions options;
     options.ambiguous = static_cast<tz::Ambiguous>(ambiguous);
     options.nonexistent = static_cast<tz::Nonexistent>(nonexistent);

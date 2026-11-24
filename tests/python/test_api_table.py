@@ -23,9 +23,9 @@ pytest.importorskip("dftracer.utils.dftracer_utils_ext")
 import dftracer.utils as dft  # noqa: E402
 from dftracer.utils import Expr, GroupBy  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as ext  # noqa: E402
-from dftracer.utils.enums import DType  # noqa: E402
-from dftracer.utils.lazyframe import LazyGroupBy  # noqa: E402
-from dftracer.utils.series import _DtAccessor, _ListAccessor, _StrAccessor  # noqa: E402
+from dftracer.utils._enums import DType  # noqa: E402
+from dftracer.utils._lazyframe import LazyGroupBy  # noqa: E402
+from dftracer.utils._series import _DtAccessor, _ListAccessor, _StrAccessor  # noqa: E402
 
 _ROOT = Path(__file__).resolve().parents[2]
 _ALLOWLIST = Path(__file__).parent / "api_allowlist.txt"
@@ -159,11 +159,11 @@ def test_accessor_row_runs_its_op_like_the_series_method_of_the_op(row):
 
 
 def test_an_accessor_row_the_column_does_not_fit_raises_its_error():
-    with pytest.raises(dft.DFTUtilsValueError, match="list_len: not a List column"):
+    with pytest.raises(dft.errors.DFTUtilsValueError, match="list_len: not a List column"):
         dft.Series([1, 2]).list.len()
-    with pytest.raises(dft.DFTUtilsValueError, match="list_get: not a List column"):
+    with pytest.raises(dft.errors.DFTUtilsValueError, match="list_get: not a List column"):
         dft.Series([1, 2]).list.get(0)
-    with pytest.raises(dft.DFTUtilsValueError, match="str_count: not a String column"):
+    with pytest.raises(dft.errors.DFTUtilsValueError, match="str_count: not a String column"):
         dft.Series([1, 2]).str.count("a")
     with pytest.raises(TypeError):
         dft.Series(["a"]).str.zfill("x")
@@ -172,9 +172,9 @@ def test_an_accessor_row_the_column_does_not_fit_raises_its_error():
 
 
 def test_a_row_the_column_does_not_fit_raises_its_error():
-    with pytest.raises(dft.DFTUtilsValueError, match="list_len: not a List column"):
+    with pytest.raises(dft.errors.DFTUtilsValueError, match="list_len: not a List column"):
         ext.Series.list_len(dft.Series([1, 2]))
-    with pytest.raises(dft.DFTUtilsValueError, match="null column"):
+    with pytest.raises(dft.errors.DFTUtilsValueError, match="null column"):
         ext.Series.abs(dft.Series(["a"]))
 
 
@@ -217,6 +217,7 @@ def test_the_expr_rows_evaluate_like_the_series_methods():
         assert _nan_equal(got.to_list(), want.to_list()), row.name
 
 
+@pytest.mark.skipif(sys.version_info < (3, 9), reason="gen_pyi.py needs ast.unparse")
 def test_committed_declarations_equal_the_generated_ones():
     run = subprocess.run(
         [sys.executable, str(_ROOT / "scripts" / "gen_pyi.py"), "--check"],
@@ -288,7 +289,7 @@ def _expr_node_of(method):
     """The node class that Expr.<method> builds, read from its source: the class
     a `return Class(...)` calls, `ColumnOpNode` for a `return self._op(...)`, else
     None."""
-    tree = ast.parse(Path(importlib.import_module("dftracer.utils.expr").__file__).read_text())
+    tree = ast.parse(Path(importlib.import_module("dftracer.utils._expr").__file__).read_text())
     classes = {n.name for n in tree.body if isinstance(n, ast.ClassDef)}
     expr = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Expr")
     for fn in expr.body:
@@ -440,6 +441,9 @@ def test_duplicate_code_does_not_grow():
     run = subprocess.run(
         [
             "uvx",
+            # pylint 4 needs 3.10; a bare uvx can pick a cached older one.
+            "--python",
+            ">=3.10",
             f"pylint=={_PYLINT_VERSION}",
             "--disable=all",
             "--enable=duplicate-code",

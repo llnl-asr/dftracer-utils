@@ -159,16 +159,16 @@ dstd::Vector<dstd::String> trace_files(dstd::StringView input) {
         files.emplace_back(input);
         return files;
     }
-    require_ok(dstd::fs::walk(
-                   input,
-                   [&](dstd::PathView path, dstd::fs::FileKind kind) {
-                       const dstd::StringView p = path.str();
-                       if (kind == dstd::fs::FileKind::File && p.size() > 7 &&
-                           p.compare(p.size() - 7, 7, ".pfw.gz") == 0)
-                           files.emplace_back(p);
-                       return dstd::fs::WalkAction::Continue;
-                   }),
-               "walk");
+    require_ok(
+        dstd::fs::walk(input,
+                       [&](dstd::PathView path, dstd::fs::FileKind kind) {
+                           const dstd::StringView p = path.str();
+                           if (kind == dstd::fs::FileKind::File &&
+                               p.size() > 7 && p.ends_with(".pfw.gz"))
+                               files.emplace_back(p);
+                           return dstd::fs::WalkAction::Continue;
+                       }),
+        "walk");
     std::sort(files.begin(), files.end());
     return files;
 }
@@ -268,8 +268,10 @@ coro::CoroTask<QuerySet> sample_queries(dstd::String file) {
 
 dstd::String number_text(double d) {
     char buf[40];
-    std::snprintf(buf, sizeof(buf), "%.9g", d);
-    return buf;
+    const char* const end =
+        dstd::to_chars_general(buf, buf + sizeof(buf), d, 9);
+    return dstd::String(
+        buf, end != nullptr ? static_cast<std::size_t>(end - buf) : 0);
 }
 
 // Genesis output is not a trace: a long-format file has one `gtype` per line

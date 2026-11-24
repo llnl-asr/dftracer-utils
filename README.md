@@ -22,7 +22,7 @@ pip install dftracer-utils
 ```
 
 ```python
-from dftracer.utils import TraceViewer
+from dftracer.utils.trace import TraceViewer
 
 view = TraceViewer("traces/")            # a directory of .pfw / .pfw.gz files
 df = (

@@ -101,6 +101,24 @@ TEST_CASE("C++ builder numeric typing round-trips") {
     CHECK(field_eq("ok", true).to_string() == "ok == true");
 }
 
+TEST_CASE("C++ builder keeps every digit of a double literal") {
+    const double values[] = {9007199254740992.0,
+                             9007199254741142.0,
+                             9.223372036854775e18,
+                             0.1 + 0.2,
+                             1e-300,
+                             -2.5e17};
+    for (const double v : values) {
+        CAPTURE(v);
+        const auto built = field_gt("x", v).build();
+        REQUIRE(built.has_value());
+        const dstd::String text = built->to_string();
+        const auto at = text.find("> ");
+        REQUIRE(at != dstd::String::npos);
+        CHECK(std::strtod(text.c_str() + at + 2, nullptr) == v);
+    }
+}
+
 TEST_CASE("C++ builder combinators match parse") {
     auto built = (field_eq("cat", "POSIX") && field_gt("dur", 50)).build();
     REQUIRE(built.has_value());

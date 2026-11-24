@@ -4,6 +4,7 @@
 #include <dftracer/utils/comm/backend/messaging.h>
 #include <dftracer/utils/comm/channel.h>
 #include <dftracer/utils/comm/group.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/result.h>
@@ -41,10 +42,9 @@ dstd::Optional<dstd::Error> run_here(Runtime& rt, Body body) {
 TEST_SUITE("CommMpiMessaging") {
     TEST_CASE("the communicator has one rank per process") {
         comm::Communicator communicator = start_mpi();
-        const char* expected = std::getenv("DFTU_TEST_NP");
-        if (expected != nullptr)
-            CHECK(communicator.size() ==
-                  static_cast<std::uint32_t>(std::atoi(expected)));
+        const auto expected = common::Env::get<int>("DFTU_TEST_NP");
+        if (expected.has_value())
+            CHECK(communicator.size() == static_cast<std::uint32_t>(*expected));
         CHECK(communicator.rank() < communicator.size());
         comm::Group world = communicator.world(communicator.rank());
         CHECK(world.size() == communicator.size());

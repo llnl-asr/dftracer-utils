@@ -45,9 +45,9 @@ def tv(tmp_path_factory):
     with gzip.open(path, "wt") as f:
         for r in RECORDS:
             f.write(json.dumps(r) + "\n")
-    with dftu.Indexer(files=[path]) as indexer:
+    with dftu.index.Indexer(files=[path]) as indexer:
         indexer.ensure()
-    return dftu.TraceViewer(path)
+    return dftu.trace.TraceViewer(path)
 
 
 @pytest.fixture(scope="module")
@@ -161,7 +161,7 @@ def test_pivot_matches_python(tv, frame, values):
 
 
 def test_open_pivot_is_the_last_stage(tv):
-    with pytest.raises(dftu.DFTUtilsValueError, match="in"):
+    with pytest.raises(dftu.errors.DFTUtilsValueError, match="in"):
         tv.duql("pivot metric { n = count() } | take 1")
 
 
@@ -226,5 +226,5 @@ def test_quantifier_after_the_scan_matches_the_scan(tv):
 
 
 def test_mixed_arrays_fail_after_the_scan(tv):
-    with pytest.raises(dftu.DFTUtilsValueError, match="mix types"):
+    with pytest.raises(dftu.errors.DFTUtilsValueError, match="mix types"):
         tv.duql("derive z = 1 | where any(h, . > 3)").collect()

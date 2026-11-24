@@ -14,7 +14,7 @@ pytest.importorskip("dftracer.utils.dftracer_utils_ext")
 
 import dftracer.utils as dft  # noqa: E402
 from dftracer.utils import Expr, GroupBy  # noqa: E402
-from dftracer.utils.lazyframe import LazyGroupBy  # noqa: E402
+from dftracer.utils._lazyframe import LazyGroupBy  # noqa: E402
 
 pd = pytest.importorskip("pandas")
 
@@ -74,15 +74,15 @@ def test_the_canonical_names_follow_polars():
 
 def test_a_removed_spelling_is_gone():
     for cls, name in (
-        (dft.TraceViewer, "query"),
-        (dft.TraceViewer, "explain_query"),
-        (dft.TraceViewer, "limit"),
+        (dft.trace.TraceViewer, "query"),
+        (dft.trace.TraceViewer, "explain_query"),
+        (dft.trace.TraceViewer, "limit"),
         (dft.Series, "skewness"),
         (dft.Series, "_null_mask"),
         (dft.Series, "_valid_mask"),
     ):
         assert not hasattr(cls, name), (cls, name)
-    import dftracer.utils.expr as expr
+    import dftracer.utils._expr as expr
 
     assert not hasattr(expr, "Field") and not hasattr(expr, "ColumnExpr")
 

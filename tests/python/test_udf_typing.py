@@ -37,7 +37,16 @@ def _ty(path: Path) -> subprocess.CompletedProcess:
 
 def _mypy(tmp_path: Path, *paths: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["uvx", "mypy", "--strict", "--cache-dir", str(tmp_path / "mypy_cache"), *map(str, paths)],
+        [
+            "uvx",
+            "--python",
+            sys.executable,
+            "mypy",
+            "--strict",
+            "--cache-dir",
+            str(tmp_path / "mypy_cache"),
+            *map(str, paths),
+        ],
         capture_output=True,
         text=True,
         cwd=_ROOT,

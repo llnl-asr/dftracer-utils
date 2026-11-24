@@ -21,7 +21,7 @@ From Python
 
 .. code-block:: python
 
-   from dftracer.utils import get_log_level, set_log_level, set_log_color
+   from dftracer.utils.runtime import get_log_level, set_log_level, set_log_color
 
    set_log_level("debug")     # trace | debug | info | warn | error | off
    print(get_log_level())     # "debug"

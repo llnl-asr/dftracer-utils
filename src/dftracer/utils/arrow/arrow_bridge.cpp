@@ -679,7 +679,9 @@ BufferView import_bits(const void* bits, std::int64_t offset, std::int64_t n,
 
 void import_validity(dftu_series* col, const ArrowArray* arr,
                      const dstd::SharedPtr<void>& owner) {
-    if (arr->n_buffers == 0 || arr->buffers[0] == nullptr) return;
+    if (arr->n_buffers == 0 || arr->buffers[0] == nullptr ||
+        arr->null_count == 0)
+        return;
     col->validity =
         import_bits(arr->buffers[0], arr->offset, arr->length, owner);
     if (arr->null_count < 0) {
@@ -688,6 +690,8 @@ void import_validity(dftu_series* col, const ArrowArray* arr,
             nulls += !((col->validity.data()[i >> 3] >> (i & 7)) & 1);
         col->null_count = nulls;
     }
+    // A column with no nulls has no bitmap; slices and kernels rely on it.
+    if (col->null_count == 0) col->validity = {};
 }
 
 // A child of a sliced parent: the parent's offset shifts the child's window.

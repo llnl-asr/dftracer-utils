@@ -268,9 +268,11 @@ inline constexpr const char* EXTENSION = ".dftindex";
 /// dstd::fs::match_name.
 inline constexpr const char* INPUT_FILE_PATTERNS[] = {"*.gz"};
 /// Folders discovery does not enter: index data, the default output of
-/// dftracer_split and record schema specs, none of which hold input traces.
-inline constexpr const char* SCAN_SKIP_DIRS[] = {".dftindex*", "split",
-                                                 "schemas"};
+/// dftracer_split and record schema specs, none of which hold input traces,
+/// and the staging folders of a table writer (`.<name>.tmp-<id>` and
+/// `.<name>.old-<id>`).
+inline constexpr const char* SCAN_SKIP_DIRS[] = {
+    ".dftindex*", "split", "schemas", ".*.tmp-*", ".*.old-*"};
 }  // namespace indexer
 
 namespace reader {
@@ -285,6 +287,16 @@ static constexpr std::size_t FILE_IO_BUFFER_SIZE =
 /// 1024 levels the DOM parser accepts.
 static constexpr std::size_t MAX_READ_DEPTH = 128;
 }  // namespace reader
+
+namespace scan {
+/// A scan unit is admitted against the plan's memory budget by
+/// UNIT_FIXED_BYTES plus UNIT_BYTES_PER_SPAN_BYTE times its uncompressed span.
+/// The fixed part is what a running unit holds whatever its span (read
+/// buffers, a batch of parsed events, row builders and their heap pages); the
+/// rest grows with the rows the span builds.
+static constexpr std::uint64_t UNIT_FIXED_BYTES = std::uint64_t{20} << 20;
+static constexpr std::uint64_t UNIT_BYTES_PER_SPAN_BYTE = 1;
+}  // namespace scan
 
 }  // namespace dftracer::utils::common::constants
 

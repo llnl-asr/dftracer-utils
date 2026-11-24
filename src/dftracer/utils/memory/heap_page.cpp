@@ -158,8 +158,10 @@ struct Heap {
     std::atomic<Heap*> stack_next;
     Heap* all_next;
     std::atomic<std::ptrdiff_t> reserved;
+    std::uint64_t relief_next;
     std::uint32_t remote_count;
     std::uint32_t chain_count;
+    bool retiring;
     Chain chains[REMOTE_BUFFER];
     AttribCache attrib;
 };
@@ -188,11 +190,13 @@ static_assert(CACHE_COUNT <= 64);
 std::atomic<std::ptrdiff_t> g_cache_reserved{0};
 std::atomic<std::size_t> g_budget_purged{0};
 
-// Freed and still backed bytes of every heap and cache. Past IDLE_BACKED_CAP a
+// Freed and still backed bytes of every heap and cache. Past g_idle_cap a
 // heap that frees purges its own idle pages at once, so retention follows this
 // bound instead of the free rate times the decay time, which grows with the
 // thread count.
 std::atomic<std::ptrdiff_t> g_idle_backed{0};
+std::atomic<std::ptrdiff_t> g_idle_cap{
+    static_cast<std::ptrdiff_t>(IDLE_BACKED_CAP)};
 
 void idle_add(std::size_t bytes) noexcept {
     g_idle_backed.fetch_add(static_cast<std::ptrdiff_t>(bytes),
@@ -206,7 +210,7 @@ void idle_sub(std::size_t bytes) noexcept {
 
 bool idle_over_cap() noexcept {
     return g_idle_backed.load(std::memory_order_relaxed) >
-           static_cast<std::ptrdiff_t>(IDLE_BACKED_CAP);
+           g_idle_cap.load(std::memory_order_relaxed);
 }
 pthread_key_t g_key;
 pthread_once_t g_once = PTHREAD_ONCE_INIT;
@@ -581,10 +585,15 @@ bool slow_path(Heap& h) noexcept {
     return drain_inbox(h);
 }
 
+std::uint64_t now_ms() noexcept;
+void purge_heap(Heap& h, std::uint64_t now, std::uint64_t delay,
+                std::size_t max_spans) noexcept;
+
 void thread_exit(void* arg) {
     auto* h = static_cast<Heap*>(arg);
     flush_remote(*h);
     drain_inbox(*h);
+    purge_heap(*h, now_ms(), 0, UNLIMITED);
     attrib_set_scope(h->attrib, GENERAL_POOL_ID);
     t_heap = nullptr;
     t_page_attrib = nullptr;
@@ -659,16 +668,13 @@ std::uint64_t now_ms() noexcept { return dstd::coarse_now_ns() / 1000000ULL; }
 
 bool purge_range(void* p, std::size_t n) noexcept {
 #if defined(__APPLE__)
-    return os_madvise(p, n, MADV_FREE_REUSABLE) == 0;
+    // MADV_FREE_REUSABLE leaves the pages in the resident size until the
+    // kernel is short of memory, so a purge would not lower what the process
+    // holds. A fresh mapping over the range frees them now.
+    return os_mmap(p, n, PROT_READ | PROT_WRITE,
+                   MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0) != MAP_FAILED;
 #else
     return os_madvise(p, n, MADV_DONTNEED) == 0;
-#endif
-}
-
-void reuse_range([[maybe_unused]] void* p,
-                 [[maybe_unused]] std::size_t n) noexcept {
-#if defined(__APPLE__)
-    os_madvise(p, n, MADV_FREE_REUSE);
 #endif
 }
 
@@ -703,9 +709,6 @@ void unpurge_pages(Heap& h, SpanHeader* s, std::size_t index,
                    std::size_t n) noexcept {
     std::uint64_t mask = run_bits(index, n) & s->purged_mask;
     if (mask == 0) return;
-    for_each_page_run(mask, [&](std::size_t first, std::size_t count) {
-        reuse_range(page_base(s, first), count * HEAP_PAGE_SIZE);
-    });
     s->purged_mask &= ~mask;
     bump(h.reserved,
          static_cast<std::size_t>(std::popcount(mask)) * HEAP_PAGE_SIZE, true);
@@ -873,14 +876,48 @@ void purge_span_pages(Heap& h, SpanHeader* s, std::uint64_t now,
     while (idle != 0) {
         auto i = static_cast<std::size_t>(std::countr_zero(idle));
         idle &= idle - 1;
-        if (now - s->free_since[i] >= delay) mask |= std::uint64_t{1} << i;
+        // A page freed inside this purge can carry a later stamp than now.
+        const std::uint64_t since = std::min(now, s->free_since[i]);
+        if (now - since >= delay) mask |= std::uint64_t{1} << i;
     }
     if (mask != 0)
         bump(h.reserved, purge_pages(s, mask) * HEAP_PAGE_SIZE, false);
 }
 
+void give_run(Heap& h, SpanHeader* s, std::size_t index,
+              std::size_t n) noexcept;
+
+// A class keeps its last page when the page empties, so a block freed and
+// taken again does not move a page each time. Held one per class per heap, such
+// pages add up with the thread count, and the idle cap does not see them. A
+// page that stays empty from one purge to the next goes to the idle pool, and
+// any empty page goes on a trim. Its pages field counts those purges and is
+// reset each time the page empties again. A page relisted after it filled can
+// sit in front of an empty one, so the whole list is walked. give_run can purge
+// again from inside; that purge leaves the lists to this walk.
+void retire_empty_pages(Heap& h, bool trim) noexcept {
+    if (h.retiring) return;
+    h.retiring = true;
+    for (std::size_t cls = 0; cls < CLASS_COUNT; ++cls) {
+        PageDesc* d = h.avail[cls];
+        while (d != nullptr) {
+            PageDesc* next = d->next;
+            if (d->used == 0 && (trim || ++d->pages >= 2)) {
+                list_remove(h.avail[cls], d);
+                d->listed = false;
+                d->kind = PageKind::Free;
+                SpanHeader* s = span_of(d);
+                give_run(h, s, static_cast<std::size_t>(d - s->pages), 1);
+            }
+            d = next;
+        }
+    }
+    h.retiring = false;
+}
+
 void purge_heap(Heap& h, std::uint64_t now, std::uint64_t delay,
                 std::size_t max_spans) noexcept {
+    retire_empty_pages(h, delay == 0);
     SpanHeader* s = max_spans == UNLIMITED || h.purge_cursor == nullptr
                         ? h.spans
                         : h.purge_cursor;
@@ -900,12 +937,17 @@ void decay_step(Heap& h) noexcept {
     decay_live_caches(now, delay, CACHE_ENTRIES_PER_CALL);
 }
 
-// Past the cap, purge this heap's idle pages and then the oldest cache entries,
-// whatever their age. Other heaps purge their own when they next free.
+// Past the cap, purge this heap's idle pages and then every cache entry that
+// has sat idle for RELIEF_AGE_MS, at most once per RELIEF_INTERVAL_MS, so pages
+// that a busy heap frees and takes again are not purged and faulted back.
+// Other heaps purge their own when they next free. A heap that finds a cache
+// busy skips it, so the one that holds it purges for all.
 void relieve_idle(Heap& h) noexcept {
     std::uint64_t now = now_ms();
-    purge_heap(h, now, 0, UNLIMITED);
-    if (idle_over_cap()) decay_live_caches(now, 0, CACHE_ENTRIES_PER_CALL);
+    if (now < h.relief_next) return;
+    h.relief_next = now + RELIEF_INTERVAL_MS;
+    purge_heap(h, now, RELIEF_AGE_MS, UNLIMITED);
+    if (idle_over_cap()) decay_live_caches(now, RELIEF_AGE_MS, UNLIMITED);
 }
 
 void stamp_free_pages(SpanHeader* s, std::size_t index, std::size_t n,
@@ -946,7 +988,6 @@ SpanHeader* adopt_cached_run(Heap& h, std::size_t run) noexcept {
     if (s == nullptr) s = stack_pop(g_caches[1 + own].cold);
     if (s == nullptr) return nullptr;
     if (s->purged_mask != 0) {
-        reuse_range(page_base(s, 1), s->map_bytes - HEAP_PAGE_SIZE);
         s->purged_mask = 0;
         cache_take_accounting(HEAP_PAGE_SIZE);
     } else {
@@ -1143,6 +1184,7 @@ bool find_in_spans(Heap& h, std::size_t n, std::size_t step,
 }
 
 Run acquire_run(Heap& h, std::size_t n, std::size_t step) {
+    drain_inbox(h);
     Run run{};
     if (find_in_spans(h, n, step, run)) return run;
     if (slow_path(h) && find_in_spans(h, n, step, run)) return run;
@@ -1161,6 +1203,7 @@ PageDesc* new_small_page(Heap& h, std::size_t cls) {
     d->free_list = nullptr;
     d->used = 0;
     d->bump = 0;
+    d->pages = 0;
     d->capacity = SMALL_LAYOUTS[cls].capacity;
     d->ids = page_ids(r.span, r.index, SMALL_LAYOUTS[cls]);
     asan_unpoison(page_base(r.span, r.index), SMALL_LAYOUTS[cls].side);
@@ -1228,7 +1271,11 @@ void free_small_block(Heap& h, SpanHeader* s, std::size_t index,
     if (!d->listed) {
         list_push(h.avail[cls], d);
         d->listed = true;
-    } else if (d->used == 0 && (d->prev != nullptr || d->next != nullptr)) {
+    } else if (d->used == 0) {
+        if (d->prev == nullptr && d->next == nullptr) {
+            d->pages = 0;
+            return;
+        }
         list_remove(h.avail[cls], d);
         d->listed = false;
         d->kind = PageKind::Free;
@@ -1522,7 +1569,11 @@ void page_deallocate(void* p, std::size_t size) noexcept {
     release(p, size, true);
 }
 
-void page_trim_thread() noexcept { trim_own_heap(now_ms()); }
+void page_trim_thread() noexcept {
+    const std::uint64_t now = now_ms();
+    trim_own_heap(now);
+    decay_live_caches(now, decay_ms(), UNLIMITED);
+}
 
 void page_trim(Mode mode) noexcept {
     std::uint64_t now = now_ms();
@@ -1660,6 +1711,17 @@ PageStats page_stats() noexcept {
     std::ptrdiff_t live = attrib_live_total();
     return {static_cast<std::size_t>(std::max<std::ptrdiff_t>(live, 0)),
             page_reserved()};
+}
+
+void page_set_idle_cap(std::size_t bytes) noexcept {
+    g_idle_cap.store(static_cast<std::ptrdiff_t>(
+                         std::clamp(bytes, IDLE_BACKED_MIN, IDLE_BACKED_CAP)),
+                     std::memory_order_relaxed);
+}
+
+std::size_t page_idle_backed() noexcept {
+    return static_cast<std::size_t>(std::max<std::ptrdiff_t>(
+        g_idle_backed.load(std::memory_order_relaxed), 0));
 }
 
 std::size_t page_budget_purged() noexcept {

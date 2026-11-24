@@ -9,20 +9,11 @@ from typing import Dict, List, Set, Union, cast
 
 from typing_extensions import assert_type
 
-from dftracer.utils import (
-    DataFrame,
-    Expr,
-    GroupBy,
-    Indexer,
-    LazyFrame,
-    LazyResult,
-    TraceViewer,
-    col,
-)
+from dftracer.utils import DataFrame, Expr, GroupBy, LazyFrame, LazyResult, SinkSummary, col
 from dftracer.utils import collect_all as collect_all
-from dftracer.utils.index import ExplainEntry, IndexStatus, ManifestEntry
+from dftracer.utils.index import ExplainEntry, Indexer, IndexStatus, ManifestEntry
 from dftracer.utils.schemas import JsonValue
-from dftracer.utils.trace import Handle
+from dftracer.utils.trace import Handle, TraceViewer
 
 df = cast("DataFrame", None)
 lf = cast("LazyFrame", None)
@@ -48,10 +39,10 @@ assert_type(collect_all(mixed), List[Union[DataFrame, int]])
 with tv.session() as session:
     frame_handle = session.collect(lf)
     value_handle = session.collect(count)
-    stats_handle = session.sink_json(tv, "out.json")
+    sink_handle = session.sink_trace(tv, "out.pfw.gz")
     assert_type(frame_handle, Handle[DataFrame])
     assert_type(value_handle, Handle[int])
-    assert_type(stats_handle, Handle[Dict[str, JsonValue]])
+    assert_type(sink_handle, Handle[SinkSummary])
 assert_type(frame_handle.result(), DataFrame)
 assert_type(value_handle.result(), int)
 

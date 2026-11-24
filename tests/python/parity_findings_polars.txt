@@ -118,10 +118,8 @@ frame.describe#1[N] | shape | [shape] rows 6 vs 9
 frame.corr#1[N] | shape | [shape] columns ['column', 'a', 'b'] vs ['a', 'b']
 frame.sum_horizontal#1[N] | semantics | [values] [2.5, None, nan, -0.5, 5.0] vs [2.5, 0.0, nan, -0.5, 5.0]
 frame.fill_null#3[N] | keyword | [error] ours raised TypeError: DataFrame.fill_null() got an unexpected keyword argument 'strategy'
-frame.fill_nan#1[N] | semantics | [dtype] a: float64 vs int64
 frame.drop_nulls#2[M] | keyword | [error] ours raised TypeError: DataFrame.drop_nulls() takes 1 positional argument but 2 were given
 frame.drop_nulls#3[M] | keyword | [error] ours raised TypeError: DataFrame.drop_nulls() got an unexpected keyword argument 'subset'
-frame.drop_nans#1[N] | shape | [shape] rows 3 vs 4
 frame.shift#3[N] | keyword | [error] ours raised TypeError: _FramePandasMixin.shift() got an unexpected keyword argument 'fill_value'
 frame.filter#2[M] | semantics | [raises] polars raised ColumnNotFoundError, ours returned
 frame.remove#1[N] | shape | [shape] rows 4 vs 3

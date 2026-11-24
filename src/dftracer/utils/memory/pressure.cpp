@@ -107,7 +107,7 @@ Cgroup find_cgroup() noexcept {
 }
 
 bool key_is(std::string_view line, std::string_view key) noexcept {
-    return line.size() > key.size() && line.substr(0, key.size()) == key &&
+    return line.size() > key.size() && line.starts_with(key) &&
            line[key.size()] == ' ';
 }
 

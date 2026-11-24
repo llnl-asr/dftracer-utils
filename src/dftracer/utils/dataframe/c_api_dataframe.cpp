@@ -299,7 +299,7 @@ dftu_dataframe* dftu_dataframe_rename(const dftu_dataframe* df,
 dftu_dataframe* dftu_dataframe_with_column(const dftu_dataframe* df,
                                            const char* name,
                                            const dftu_series* col) {
-    if (!df) return nullptr;
+    if (!df || !name || !col) return nullptr;
     return wrap(with_borrowed(
         col, [&](const Series& c) { return df->df.with_column(name, c); }));
 }
@@ -310,6 +310,13 @@ dftu_dataframe* dftu_dataframe_drop_nulls(const dftu_dataframe* df) {
 dftu_dataframe* dftu_dataframe_fill_null(const dftu_dataframe* df,
                                          dftu_scalar value) {
     return df ? wrap(df->df.fill_null(value)) : nullptr;
+}
+dftu_dataframe* dftu_dataframe_drop_nans(const dftu_dataframe* df) {
+    return df ? wrap(df->df.drop_nans()) : nullptr;
+}
+dftu_dataframe* dftu_dataframe_fill_nan(const dftu_dataframe* df,
+                                        dftu_scalar value) {
+    return df ? wrap(df->df.fill_nan(value)) : nullptr;
 }
 dftu_dataframe* dftu_dataframe_unique(const dftu_dataframe* df) {
     return df ? wrap(df->df.unique()) : nullptr;
@@ -712,6 +719,11 @@ dftu_lazyframe* dftu_lazyframe_drop_nulls(const dftu_lazyframe* lf) {
     return wrap_lazy(lf->lf.drop_nulls());
 }
 
+dftu_lazyframe* dftu_lazyframe_drop_nans(const dftu_lazyframe* lf) {
+    if (!lf) return nullptr;
+    return wrap_lazy(lf->lf.drop_nans());
+}
+
 dftu_lazyframe* dftu_lazyframe_unique_by(const dftu_lazyframe* lf,
                                          const char* const* subset,
                                          std::int32_t n) {
@@ -794,6 +806,12 @@ dftu_lazyframe* dftu_lazyframe_fill_null(const dftu_lazyframe* lf,
                                          dftu_scalar value) {
     if (!lf) return nullptr;
     return wrap_lazy(lf->lf.fill_null(value));
+}
+
+dftu_lazyframe* dftu_lazyframe_fill_nan(const dftu_lazyframe* lf,
+                                        dftu_scalar value) {
+    if (!lf) return nullptr;
+    return wrap_lazy(lf->lf.fill_nan(value));
 }
 
 dftu_lazyframe* dftu_lazyframe_with_row_index(const dftu_lazyframe* lf,

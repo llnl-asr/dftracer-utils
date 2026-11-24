@@ -91,7 +91,7 @@ dstd::Vector<dstd::String> trace_files(
     for (const auto& entry : dftu_utils_test::list_dir(dir.path().view())) {
         const dstd::StringView name = entry.path.view().filename();
         if (name.size() > prefix.size() &&
-            name.substr(0, prefix.size()) == dstd::StringView(prefix))
+            name.starts_with(dstd::StringView(prefix)))
             found.push_back(dstd::String(entry.path.str()));
     }
     std::sort(found.begin(), found.end());

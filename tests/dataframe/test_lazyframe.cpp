@@ -286,9 +286,74 @@ class RaggedSource : public Source {
     }
 };
 
+// Gives one morsel of 3 rows and records what the last scan was told.
+class WholeProbe : public Source {
+   public:
+    explicit WholeProbe(dstd::SharedPtr<bool> seen) : seen_(std::move(seen)) {}
+    dftracer::utils::dataframe::Schema schema() const override {
+        const std::int64_t zero = 0;
+        dftracer::utils::dataframe::Schema out;
+        out.fields = {dftracer::utils::dataframe::Field{
+            "a", Series::flat_i64(&zero, 1).data_type(), true}};
+        return out;
+    }
+    dstd::Result<dftracer::utils::dataframe::ScanResult> scan(
+        const dftracer::utils::dataframe::ScanRequest& req) const override {
+        *seen_ = req.whole;
+        dftracer::utils::dataframe::ScanResult r;
+        r.cursor = dstd::make_unique<One>();
+        r.filters.assign(req.filters.size(),
+                         dftracer::utils::dataframe::Pushed::No);
+        return r;
+    }
+
+   private:
+    class One : public Cursor {
+       public:
+        coro::CoroTask<MorselResult> next(std::int64_t) override {
+            if (done_) co_return MorselResult(dstd::nullopt);
+            done_ = true;
+            const std::int64_t v[3] = {1, 2, 3};
+            Morsel m;
+            m.columns.push_back(Series::flat_i64(v, 3));
+            m.rows = 3;
+            co_return MorselResult(std::move(m));
+        }
+
+       private:
+        bool done_ = false;
+    };
+    dstd::SharedPtr<bool> seen_;
+};
+
 }  // namespace
 
 TEST_SUITE("lazyframe") {
+    TEST_CASE("only a bare collect tells the scan that morsel size is moot") {
+        auto seen = dstd::make_shared<bool>(false);
+        auto source = dstd::SharedPtr<const Source>(
+            dstd::make_shared<const WholeProbe>(seen));
+        auto bare =
+            run(dftracer::utils::dataframe::LazyFrame::scan(source).collect());
+        CHECK(bare.num_rows() == 3);
+        CHECK(*seen);
+        auto filtered = run(dftracer::utils::dataframe::LazyFrame::scan(source)
+                                .filter(col(0) > std::int64_t{0})
+                                .collect());
+        CHECK(filtered.num_rows() == 3);
+        CHECK_FALSE(*seen);
+        auto sized =
+            run(dftracer::utils::dataframe::LazyFrame::scan(source).collect(2));
+        CHECK(sized.num_rows() == 3);
+        CHECK_FALSE(*seen);
+        auto streamed = dftracer::utils::dataframe::LazyFrame::scan(source);
+        auto stream_all =
+            dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                    .submit(stream_names(streamed.stream(2)))
+                                    .get());
+        CHECK_FALSE(*seen);
+    }
+
     TEST_CASE("a stream builds its column names once, not once per morsel") {
         dstd::Vector<std::int64_t> a(40), b(40);
         for (std::int64_t i = 0; i < 40; ++i) {
@@ -331,8 +396,9 @@ TEST_SUITE("lazyframe") {
         DataFrame e = make_df();
         DataFrame ef = e.filter(
             dftu_utils_test::eval_ok(col(0) > std::int64_t{3}, ptrs(e)));
-        DataFrame ew = ef.with_column(
-            "c", dftu_utils_test::eval_ok(col(0) + col(1), ptrs(ef)));
+        DataFrame ew = ef.with_column("c", dftu_utils_test::eval_ok(
+                                               col(0) + col(1), ptrs(ef)))
+                           .value();
         DataFrame eager = dftu_utils_test::ok(
             ew.select(dftu_utils_test::span_of<dstd::String>({"a", "c"})));
 
@@ -1742,10 +1808,11 @@ TEST_SUITE("lazyframe") {
         struct Col {
             dstd::String name;
             dstd::Vector<Cell> cells;
+            bool integral = true;
         };
         dstd::Vector<Col> cols(4);
         cols[0] = {"v", {}};
-        cols[1] = {"f", {}};
+        cols[1] = {"f", {}, false};
         cols[2] = {"u", {}};
         cols[3] = {"w", {}};
         for (std::int64_t i = 0; i < n; ++i) {
@@ -1782,6 +1849,7 @@ TEST_SUITE("lazyframe") {
                 rows[keyed ? k[static_cast<std::size_t>(i)] : 0].push_back(i);
             for (const auto& [key, idx] : rows) {
                 double sum = 0.0, prod = 1.0;
+                std::uint64_t wrapped = 1;
                 Cell ext, last_present;
                 for (std::size_t j = 0; j < idx.size(); ++j) {
                     const std::int64_t i = idx[j];
@@ -1795,7 +1863,15 @@ TEST_SUITE("lazyframe") {
                             }
                             break;
                         case GroupwiseOp::CumProd:
-                            if (c) {
+                            if (c && col.integral) {
+                                wrapped *= static_cast<std::uint64_t>(
+                                    static_cast<std::int64_t>(*c));
+                                out = col.name == "w"
+                                          ? static_cast<double>(wrapped)
+                                          : static_cast<double>(
+                                                static_cast<std::int64_t>(
+                                                    wrapped));
+                            } else if (c) {
                                 prod *= *c;
                                 out = prod + (*c - *c);
                             }
@@ -2028,6 +2104,75 @@ TEST_SUITE("lazyframe") {
         }
     }
 
+    TEST_CASE("group cumprod keeps the integer type and wraps") {
+        using dftracer::utils::dataframe::composed_group_transform;
+        using dftracer::utils::dataframe::RankMethod;
+        const std::int64_t n = 6;
+        const std::int64_t big = std::numeric_limits<std::int64_t>::max();
+        const dstd::Vector<std::int64_t> k = {1, 1, 1, 2, 2, 2};
+        const dstd::Vector<std::int64_t> a = {1LL << 40, 1LL << 40, 3,
+                                              7,         big,       2};
+        const dstd::Vector<std::uint64_t> b = {
+            (1ULL << 32) + 1, (1ULL << 32) + 1, 3, 7, 1ULL << 40, 3};
+        const dstd::Vector<double> c = {1e200, 1e200, 3.0, 2.0, 3.0, 4.0};
+        const dstd::Vector<std::uint8_t> valid = {0x37};
+        DataFrame df;
+        df.names = dstd::make_shared_strings({"k", "a", "b", "c"});
+        df.columns.push_back(Series::flat_i64(k.data(), n));
+        df.columns.push_back(Series::flat_i64(a.data(), n, valid.data()));
+        df.columns.push_back(
+            Series::flat(TypeId::Uint64, b.data(), n, valid.data()));
+        df.columns.push_back(Series::flat_f64(c.data(), n));
+        const dstd::Vector<dstd::String> keys = {"k"};
+
+        const dstd::Vector<std::int64_t> want_a = {1LL << 40, 0, 0, 0, big, -2};
+        const dstd::Vector<std::uint64_t> want_b = {
+            (1ULL << 32) + 1, (1ULL << 33) + 1, 3 * (1ULL << 33) + 3, 0,
+            1ULL << 40,       3 * (1ULL << 40)};
+        const dstd::Vector<double> want_c = {
+            1e200,
+            std::numeric_limits<double>::infinity(),
+            std::numeric_limits<double>::infinity(),
+            2.0,
+            6.0,
+            24.0};
+
+        const LazyFrame fast =
+            dftu_utils_test::ok(df.lazy().group_by(keys).transform(
+                GroupwiseOp::CumProd, 0, RankMethod::Average, true));
+        REQUIRE(fast.explain().find("group_transform") != dstd::String::npos);
+        dstd::Vector<DataFrame> results;
+        results.push_back(run(fast.collect(64)));
+        results.push_back(run(fast.memory_budget(4096).collect(64)));
+        results.push_back(
+            run(dftu_utils_test::ok(composed_group_transform(
+                                        df.lazy(), keys, GroupwiseOp::CumProd,
+                                        0, RankMethod::Average, true))
+                    .collect(64)));
+        for (const DataFrame& got : results) {
+            REQUIRE(got.names == dstd::make_shared_strings({"a", "b", "c"}));
+            const Series sa = got.columns[0].materialize();
+            const Series sb = got.columns[1].materialize();
+            const Series sc = got.columns[2].materialize();
+            REQUIRE(sa.type() == TypeId::Int64);
+            REQUIRE(sb.type() == TypeId::Uint64);
+            REQUIRE(sc.type() == TypeId::Float64);
+            for (std::int64_t i = 0; i < n; ++i) {
+                const auto z = static_cast<std::size_t>(i);
+                INFO("row=" << i);
+                REQUIRE(sa.is_null(i) == (i == 3));
+                REQUIRE(sb.is_null(i) == (i == 3));
+                if (i != 3) {
+                    CHECK(sa.data<std::int64_t>()[i] == want_a[z]);
+                    CHECK(sb.data<std::uint64_t>()[i] == want_b[z]);
+                }
+                CHECK(sc.data<double>()[i] == want_c[z]);
+            }
+        }
+        expect_frames_equal(results[0], results[2]);
+        expect_frames_equal(results[1], results[2]);
+    }
+
     TEST_CASE("head_by with many hash leaves equals the in-memory result") {
         const std::int64_t n = 60000;
         dstd::Vector<std::int64_t> k(n), v(n);
@@ -2053,6 +2198,36 @@ TEST_SUITE("lazyframe") {
         const Series b = want.columns[1].materialize();
         for (std::int64_t r = 0; r < a.length(); ++r)
             REQUIRE(a.data<std::int64_t>()[r] == b.data<std::int64_t>()[r]);
+    }
+
+    TEST_CASE("an empty result keeps the columns of the plan") {
+        DataFrame df;
+        df.names = dstd::make_shared_strings({"a", "s"});
+        const dstd::Vector<std::int64_t> a = {1, 2, 3};
+        df.columns.push_back(Series::flat_i64(a.data(), 3));
+        const dstd::Vector<dstd::StringView> words = {"x", "y", "z"};
+        df.columns.push_back(Series::strings(
+            dstd::Span<const dstd::StringView>(words.data(), words.size())));
+        const LazyFrame none = df.lazy().filter(col(0) > std::int64_t{100});
+        for (const std::int64_t batch : {0, 1, 4}) {
+            INFO("batch " << batch);
+            const DataFrame got =
+                dftu_utils_test::ok(run_result(none.collect(batch)));
+            CHECK(got.num_rows() == 0);
+            REQUIRE(got.names.size() == 2);
+            CHECK(dstd::StringView(got.names[0]) == "a");
+            CHECK(dstd::StringView(got.names[1]) == "s");
+            CHECK(got.columns[0].type() == TypeId::Int64);
+            CHECK(got.columns[1].type() == TypeId::String);
+        }
+        dstd::Vector<LazyFrame> plans;
+        plans.push_back(none);
+        auto all = dftracer::utils::default_runtime()
+                       .submit(dataframe::collect_all(std::move(plans)))
+                       .get();
+        REQUIRE(all.has_value());
+        REQUIRE(all->size() == 1);
+        CHECK((*all)[0].names.size() == 2);
     }
 
     TEST_CASE("native group transforms: empty, one row, float keys, overflow") {

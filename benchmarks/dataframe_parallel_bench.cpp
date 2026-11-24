@@ -1464,7 +1464,8 @@ int main(int argc, char** argv) {
     auto eager_map = [&]() {
         Series m = df.column("v") > (rows / 2);
         DataFrame f = df.filter(m);
-        DataFrame w = f.with_column("kv", f.column("k") + f.column("v"));
+        DataFrame w =
+            dftu::bench::ok(f.with_column("kv", f.column("k") + f.column("v")));
         return dftu::bench::ok(w.select(map_columns));
     };
     auto lazy_map = [&]() {

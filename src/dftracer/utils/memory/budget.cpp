@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/memory/cgroup.h>
+#include <dftracer/utils/memory/heap_page.h>
 
+#include <atomic>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -9,6 +12,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -128,6 +132,61 @@ std::uint64_t resolve_spill_budget(std::uint64_t configured) {
         return b < MIN_MEMORY_BUDGET_BYTES ? MIN_MEMORY_BUDGET_BYTES : b;
     }
     return configured;  // explicit bytes, or NO_SPILL_BUDGET passthrough
+}
+
+namespace {
+
+// Live scopes per power of two of their budget; the lowest bucket in use sets
+// the idle cap. No lock, so a fork cannot leave one held in the child. A writer
+// that sees the version move under it computes the cap again, so the last
+// store follows the last change.
+constexpr int BUDGET_BUCKETS = 64;
+std::atomic<std::uint32_t> g_budget_scopes[BUDGET_BUCKETS];
+std::atomic<std::uint64_t> g_budget_version{0};
+
+int budget_bucket(std::uint64_t budget) noexcept {
+    if (budget == 0 || budget / 4 >= detail::IDLE_BACKED_CAP) return -1;
+    return static_cast<int>(std::bit_width(budget)) - 1;
+}
+
+void apply_idle_cap() noexcept {
+    for (;;) {
+        const std::uint64_t seen =
+            g_budget_version.load(std::memory_order_acquire);
+        std::size_t cap = detail::IDLE_BACKED_CAP;
+        for (int b = 0; b < BUDGET_BUCKETS; ++b) {
+            if (g_budget_scopes[b].load(std::memory_order_acquire) != 0) {
+                cap = (std::size_t{1} << b) / 4;
+                break;
+            }
+        }
+        detail::page_set_idle_cap(cap);
+        if (g_budget_version.load(std::memory_order_acquire) == seen) return;
+    }
+}
+
+void change_scopes(int bucket, bool add) noexcept {
+    if (add) {
+        g_budget_scopes[bucket].fetch_add(1, std::memory_order_acq_rel);
+    } else {
+        g_budget_scopes[bucket].fetch_sub(1, std::memory_order_acq_rel);
+    }
+    g_budget_version.fetch_add(1, std::memory_order_acq_rel);
+    apply_idle_cap();
+}
+
+}  // namespace
+
+JobBudgetScope::JobBudgetScope(std::uint64_t budget) noexcept
+    : bucket_(budget_bucket(budget)) {
+    if (bucket_ >= 0) change_scopes(bucket_, true);
+}
+
+JobBudgetScope::JobBudgetScope(JobBudgetScope &&other) noexcept
+    : bucket_(std::exchange(other.bucket_, -1)) {}
+
+JobBudgetScope::~JobBudgetScope() {
+    if (bucket_ >= 0) change_scopes(bucket_, false);
 }
 
 }  // namespace dftracer::utils::memory

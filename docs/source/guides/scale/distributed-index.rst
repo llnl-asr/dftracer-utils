@@ -191,7 +191,7 @@ Then catalog the shards into the manifest of an index root with
 .. code-block:: python
 
    import os
-   from dftracer.utils import write_shard_set
+   from dftracer.utils.index import write_shard_set
 
    os.makedirs("set/.dftindex", exist_ok=True)
    write_shard_set(

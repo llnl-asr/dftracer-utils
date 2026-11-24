@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -26,19 +27,19 @@ constexpr int ROUNDS = 20;
 constexpr int TASKS = 7;
 
 std::uint64_t mix(std::uint64_t h, std::uint64_t v) {
-    return (h ^ v) * 1099511628211ULL;
+    return (h ^ v) * dstd::hash::FNV1A_PRIME;
 }
 
 std::uint64_t digest_ints(const Series& s) {
     const Series flat = s.materialize();
-    std::uint64_t h = 14695981039346656037ULL;
+    std::uint64_t h = dstd::hash::FNV1A_OFFSET_BASIS;
     for (const std::int64_t v : flat.values<std::int64_t>())
         h = mix(h, static_cast<std::uint64_t>(v));
     return mix(h, static_cast<std::uint64_t>(flat.length()));
 }
 
 std::uint64_t digest_strings(const Series& s) {
-    std::uint64_t h = 14695981039346656037ULL;
+    std::uint64_t h = dstd::hash::FNV1A_OFFSET_BASIS;
     for (std::int64_t i = 0; i < s.length(); ++i)
         for (const char c : s.string_at(i))
             h = mix(h, static_cast<std::uint64_t>(c));

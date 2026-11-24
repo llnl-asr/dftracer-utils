@@ -11,13 +11,13 @@ import pytest
 pd = pytest.importorskip("pandas")
 
 from dftracer.utils import DataFrame, Series  # noqa: E402
-from dftracer.utils.enums import DType  # noqa: E402
+from dftracer.utils._enums import DType  # noqa: E402
+
+from .common import skip_below_pandas3  # noqa: E402
 
 pytestmark = pytest.mark.filterwarnings("ignore::FutureWarning", "ignore::DeprecationWarning")
 
 NAN = float("nan")
-PANDAS3 = int(pd.__version__.split(".")[0]) >= 3
-PANDAS2 = not PANDAS3
 PANDAS_BEFORE_31 = tuple(int(x) for x in pd.__version__.split(".")[:2]) < (3, 1)
 
 G = [2, 1, 2, 1, 3, 3]
@@ -103,6 +103,7 @@ def _labels(index):
 
 
 def _same(ours, want):
+    skip_below_pandas3()
     if isinstance(want, Exception):
         assert isinstance(ours, Exception), f"ours returned, pandas raised {want!r}"
         assert _kind(ours) == _kind(want), f"{ours!r} vs {want!r}"
@@ -129,14 +130,13 @@ def _same(ours, want):
 
 
 def _check(fn, pandas_obj, ours_obj):
+    skip_below_pandas3()
     _same(_outcome(fn, ours_obj), _outcome(fn, pandas_obj))
 
 
 def _skip(form, name, series=False):
     if form[0].startswith("sort false") and PANDAS_BEFORE_31:
         pytest.skip("pandas before 3.1 unstack(sort=False) returns values under the wrong labels")
-    if form[0].startswith("fill") and name == "text" and PANDAS2:
-        pytest.skip("pandas 2 holds text in object columns and fills them with any value")
     if form[0].startswith("level list") and name in ("one", "none", "onedups"):
         if series or form[0] == "level list neg":
             pytest.skip("pandas raises AttributeError for a list of levels on a plain index")
@@ -218,6 +218,7 @@ def test_frame_stack(name, form):
 
 
 def test_stack_default_is_the_new_implementation_on_pandas3():
+    skip_below_pandas3()
     pandas_frame = FRAMES["nullvals"]
     ours = DataFrame.from_pandas(pandas_frame).stack()
     want = pandas_frame.stack(future_stack=True)
@@ -264,9 +265,7 @@ def test_a_stacked_column_level_name_is_lost():
 def test_stack_then_unstack_gives_the_frame_back(name):
     pf = FRAMES[name]
     ours = DataFrame.from_pandas(pf)
-    _check(
-        lambda o: o.stack(future_stack=True).unstack() if PANDAS3 else o.stack().unstack(), pf, ours
-    )
+    _check(lambda o: o.stack(future_stack=True).unstack(), pf, ours)
 
 
 def _no_last_name(want):
@@ -353,9 +352,7 @@ def test_unstack_of_many_unsorted_cells_matches_pandas(seed):
         lambda o: o.unstack(0),
         lambda o: o.unstack(fill_value=-1.0),
     ]
-    if int(pd.__version__.split(".")[0]) >= 3:
-        # pandas 2 puts values in the wrong cells for sort=False on unsorted labels.
-        forms.append(lambda o: o.unstack(sort=False))
+    forms.append(lambda o: o.unstack(sort=False))
     for form in forms:
         _check(form, ps, Series.from_pandas(ps))
     pf = pd.DataFrame({"v": values, "w": (values * 100).astype("int64")}, index=index)
@@ -472,6 +469,7 @@ def test_a_bool_fill_on_a_number_column_is_refused():
 
 
 def _stacked_values(pf, **kw):
+    skip_below_pandas3()
     want = pf.stack(**kw)
     got = DataFrame.from_pandas(pf).stack(**kw).to_pandas()
     assert _labels(got.index) == _labels(want.index)

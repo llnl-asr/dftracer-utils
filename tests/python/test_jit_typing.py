@@ -11,6 +11,7 @@ silently loosen them.
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -65,6 +66,8 @@ def _mypy(tmp_path: Path, *paths: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [
             "uvx",
+            "--python",
+            sys.executable,
             "mypy",
             "--strict",
             "--cache-dir",

@@ -15,14 +15,14 @@ import sys
 from typing import TYPE_CHECKING, Sequence, TypeVar, cast
 
 from . import dftracer_utils_ext as _ext
-from .enums import DType
+from ._enums import DType
 
 if TYPE_CHECKING:
     import pandas as pd
 
+    from ._dataframe import DataFrame
     from ._levels import LevelArg
-    from .dataframe import DataFrame
-    from .series import Series
+    from ._series import Series
 
 _S = TypeVar("_S", bound="Series")
 _UNNAMED = re.compile(r"__index_level_\d+__")
@@ -42,13 +42,18 @@ def internal_name(name: object, level: int) -> str:
     return default_name(level) if name is None else str(name)
 
 
+def column_series(frame: DataFrame, name: str) -> Series:
+    """The Series for column ``name`` of ``frame`` without Python dispatch."""
+    return _ext.DataFrame.__getitem__(frame, name)
+
+
 def positions(n: int, start: int = 0) -> Series:
     """The Int64 column ``start .. start + n - 1`` (no name, no labels)."""
-    from .series import Series
+    from ._series import Series
 
     if n <= _WINDOW:
         return Series.from_list(list(range(start, start + n)))
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     nulls = _ext._series_nulls(int(DType.INT64), n)
     column = DataFrame({"v": nulls}).with_row_index("i")["i"]
@@ -90,7 +95,7 @@ def frame_columns(s: Series, value_name: str) -> tuple[list[str], list[Series]]:
 
 
 def to_frame(s: Series, name: str | None) -> DataFrame:
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     value = name if name is not None else (s.name if s.name is not None else "0")
     columns, series = frame_columns(s, value)
@@ -109,8 +114,8 @@ def reset(
     leads with them (the pandas names: ``index`` for an unnamed single level,
     ``level_<i>`` for an unnamed one of several), the rest stay the index; with
     ``drop`` the Series keeps its values under the remaining levels."""
+    from ._dataframe import DataFrame
     from ._levels import pick_levels
-    from .dataframe import DataFrame
 
     names = names_of(s)
     effective = names or [default_name(0)]
@@ -160,8 +165,8 @@ def labels_from(labels: object, n: int | None) -> tuple[list[str], list[Series]]
     column), a pandas ``Index`` or ``MultiIndex``, or a sequence (of tuples for
     several levels). ``ValueError`` when the length is not ``n`` (any length
     for ``None``)."""
-    from .dataframe import DataFrame
-    from .series import Series
+    from ._dataframe import DataFrame
+    from ._series import Series
 
     pd = sys.modules.get("pandas")
     np = sys.modules.get("numpy")
@@ -251,13 +256,18 @@ def rename_levels(s: Series, new_names: list[str]) -> Series:
 
 def pandas_labels(s: pd.Series) -> tuple[list[str], list[Series]] | None:
     """The levels of a pandas Series' index; ``None`` for the default
-    ``RangeIndex``."""
+    ``RangeIndex`` (``0 .. n-1`` with no name)."""
     import pandas as pd
 
-    from .series import Series
+    from ._series import Series
 
     index = s.index
-    if isinstance(index, pd.RangeIndex) and index.start == 0 and index.step == 1:
+    if (
+        isinstance(index, pd.RangeIndex)
+        and index.start == 0
+        and index.step == 1
+        and index.name is None
+    ):
         return None
     names = [internal_name(index.names[i], i) for i in range(index.nlevels)]
     levels = [

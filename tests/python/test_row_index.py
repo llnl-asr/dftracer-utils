@@ -7,6 +7,9 @@ import json
 import pytest
 
 pd = pytest.importorskip("pandas")
+
+from .common import skip_below_pandas3  # noqa: E402
+
 pa = pytest.importorskip("pyarrow")
 
 from dftracer.utils import DataFrame, col  # noqa: E402
@@ -559,3 +562,156 @@ def test_group_head_with_a_null_key_keeps_the_labels():
     ours = DataFrame.from_pandas(pdf).set_index("k")
     ref = pdf.set_index("k")
     _same_rows(ours.groupby("g").head(1), ref.groupby("g").head(1).dropna(subset=["g"]))
+
+
+def _outcome(fn):
+    try:
+        return fn()
+    except (TypeError, ValueError) as e:
+        return type(e)
+
+
+_FRAME_PAIRS = {
+    "labels": (
+        pd.DataFrame(
+            {"x": [1.0, None, 3.0], "y": ["a", None, "c"]}, index=pd.Index([10, 20, 30], name="k")
+        ),
+        pd.DataFrame(
+            {"x": [9.0, 8.0, 7.0], "z": [1, 2, 3]}, index=pd.Index([20, 30, 40], name="k")
+        ),
+    ),
+    "int partial": (pd.DataFrame({"x": [1, 2, 3]}), pd.DataFrame({"x": [7, None, 9]})),
+    "int vs float": (
+        pd.DataFrame({"x": [1, 2]}, index=[1, 2]),
+        pd.DataFrame({"x": [5.5, 6.0, 7.0]}, index=[2, 3, 4]),
+    ),
+    "column order": (
+        pd.DataFrame({"b": [1.0, None], "a": [None, 2.0]}),
+        pd.DataFrame({"a": [5.0, 6.0], "c": [7.0, 8.0]}),
+    ),
+    "other dup": (
+        pd.DataFrame({"x": [1.0, 2.0]}, index=[1, 2]),
+        pd.DataFrame({"x": [5.0, 6.0, 7.0]}, index=[1, 1, 2]),
+    ),
+    "all-null float vs int": (
+        pd.DataFrame({"a": [None, None]}, index=[1, 2], dtype=float),
+        pd.DataFrame({"a": [5, 6]}, index=[1, 2]),
+    ),
+    "int column only in other": (
+        pd.DataFrame({"x": [1.0]}, index=[1]),
+        pd.DataFrame({"z": [5, 6]}, index=[1, 2]),
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_FRAME_PAIRS))
+def test_frame_combine_first_and_update_match_pandas_by_row_label(case):
+    skip_below_pandas3()
+    a, b = _FRAME_PAIRS[case]
+    want = _outcome(lambda: a.combine_first(b))
+    got = _outcome(lambda: DataFrame.from_pandas(a).combine_first(DataFrame.from_pandas(b)))
+    if isinstance(want, type):
+        assert got is want
+    else:
+        pd.testing.assert_frame_equal(got.to_pandas(), want, check_index_type=False)
+
+    def pandas_update():
+        x = a.copy()
+        x.update(b)
+        return x
+
+    def our_update():
+        x = DataFrame.from_pandas(a)
+        x.update(DataFrame.from_pandas(b))
+        return x
+
+    want, got = _outcome(pandas_update), _outcome(our_update)
+    if isinstance(want, type):
+        assert got is want
+    else:
+        pd.testing.assert_frame_equal(got.to_pandas(), want, check_index_type=False)
+
+
+_SERIES_PAIRS = {
+    "float": (pd.Series([1.0, None, 3.0], index=[1, 2, 3]), pd.Series([9.0, 8.0], index=[2, 4])),
+    "int partial": (pd.Series([1, 2, 3], index=[1, 2, 3]), pd.Series([9, 9], index=[2, 5])),
+    "no index": (pd.Series([1, 2, 3]), pd.Series([9, 8])),
+    "lossy into int": (pd.Series([1, 2], index=[1, 2]), pd.Series([9.5], index=[2])),
+    "other dup": (pd.Series([1.0, 2.0], index=[1, 2]), pd.Series([5.0, 6.0, 7.0], index=[1, 1, 2])),
+}
+
+
+@pytest.mark.parametrize("case", list(_SERIES_PAIRS))
+def test_series_combine_first_and_update_match_pandas_by_label(case):
+    skip_below_pandas3()
+    a, b = _SERIES_PAIRS[case]
+
+    def ours(p):
+        return DataFrame.from_pandas(p.to_frame("v"))["v"]
+
+    def pandas_update():
+        x = a.copy()
+        x.update(b)
+        return x
+
+    for want, got in (
+        (_outcome(lambda: a.combine_first(b)), _outcome(lambda: ours(a).combine_first(ours(b)))),
+        (_outcome(pandas_update), _outcome(lambda: ours(a).update(ours(b)))),
+    ):
+        if isinstance(want, type):
+            assert got is want
+        else:
+            pd.testing.assert_series_equal(
+                got.to_pandas(), want, check_names=False, check_index_type=False
+            )
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pd.DataFrame(
+            {"a": [None, None, 1.0, None], "b": [None, 2.0, None, None]}, index=[5, 6, 7, 8]
+        ),
+        pd.DataFrame({"a": [None, 1.0]}, index=pd.MultiIndex.from_tuples([(1, "x"), (2, "y")])),
+        pd.DataFrame({"a": [None, None]}),
+    ],
+)
+def test_first_and_last_valid_index_give_the_row_label(frame):
+    ours = DataFrame.from_pandas(frame)
+    assert ours.first_valid_index() == frame.first_valid_index()
+    assert ours.last_valid_index() == frame.last_valid_index()
+    s = frame["a"]
+    one = DataFrame.from_pandas(s.to_frame())["a"]
+    assert one.first_valid_index() == s.first_valid_index()
+    assert one.last_valid_index() == s.last_valid_index()
+
+
+def test_a_named_range_index_keeps_its_name_through_a_round_trip():
+    frame = pd.DataFrame({"a": [1.0, 2.0, 3.0]}, index=pd.RangeIndex(3, name="k"))
+    back = DataFrame.from_pandas(frame).to_pandas()
+    assert back.index.name == "k"
+    assert back.index.tolist() == [0, 1, 2]
+    s = pd.Series([1.0, 2.0], index=pd.RangeIndex(2, name="k"), name="v")
+    one = DataFrame.from_pandas(s.to_frame())["v"].to_pandas()
+    assert one.index.name == "k"
+    plain = DataFrame.from_pandas(pd.DataFrame({"a": [1.0]})).to_pandas()
+    assert plain.index.name is None
+
+
+def test_a_named_range_index_keeps_its_name_through_arrow():
+    pa = pytest.importorskip("pyarrow")
+    frame = pd.DataFrame({"a": [1.0, 2.0, 3.0]}, index=pd.RangeIndex(3, name="k"))
+    back = DataFrame.from_arrow(pa.Table.from_pandas(frame)).to_pandas()
+    assert back.index.name == "k"
+    assert back.index.tolist() == [0, 1, 2]
+    plain = pd.DataFrame({"a": [1.0]})
+    assert DataFrame.from_arrow(pa.Table.from_pandas(plain)).to_pandas().index.name is None
+
+
+def test_series_update_keeps_its_name_and_names_the_dtype_it_refuses():
+    a = DataFrame.from_pandas(pd.Series([1, 2], index=[1, 2], name="a").to_frame())["a"]
+    b = DataFrame.from_pandas(pd.Series([9], index=[2], name="b").to_frame())["b"]
+    assert a.update(b).name == "a"
+    lossy = DataFrame.from_pandas(pd.Series([1.5], index=[2], name="b").to_frame())["b"]
+    with pytest.raises(TypeError, match="int64"):
+        a.update(lossy)

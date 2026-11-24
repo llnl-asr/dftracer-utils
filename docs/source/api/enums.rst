@@ -10,13 +10,14 @@ its string value: ``phase(Phase.EVENTS)`` is the same call as
 ``time_unit="us"``. The enums exist so callers get a discoverable, typo-safe
 set instead of bare strings; the string form remains valid everywhere.
 
-All four are exported at the package top level (``dftracer.utils.Phase``, and
-so on).
+``GroupKey``, ``AggOp`` and ``TimeUnit`` are exported at the package top level
+(``dftracer.utils.GroupKey``, and so on). ``Phase`` is only in
+``dftracer.utils.trace``.
 
 Builder vocabularies
 --------------------
 
-.. autoclass:: dftracer.utils.Phase
+.. autoclass:: dftracer.utils.trace.Phase
    :members:
    :undoc-members:
 
@@ -46,8 +47,8 @@ Series dtypes
 ``DType`` is an ``IntEnum`` that mirrors the engine's type ids; it is also
 exported at the package top level. ``is_integer``, ``is_float`` and
 ``is_numeric`` classify a type, and ``int_range`` gives the ``(min, max)`` of an
-integer type (``None`` for the others). ``dftracer.utils.enums`` is the one
-table for dtypes and time units; the other modules derive their lookups from it.
+integer type (``None`` for the others). The package keeps one table for
+dtypes and time units; its other parts derive their lookups from it.
 
 Time units
 ----------

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
@@ -698,9 +699,7 @@ fields:
         dstd::Vector<dstd::String> lines;
         for (char c : {'a', 'b', 'c'})
             for (int i = 0; i < 1000; ++i) {
-                char n[8];
-                std::snprintf(n, sizeof(n), "%c%04d", c, i);
-                lines.push_back(R"({"name":")" + dstd::String(n) +
+                lines.push_back(R"({"name":")" + dstd::fmt<"{}{:04}">(c, i) +
                                 R"(","pid":)" + dstd::to_string(i) + "}");
             }
         // Chunks of more than 256 names carry no bloom, so zones prune.

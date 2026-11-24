@@ -701,6 +701,51 @@ TEST_CASE("dftu_dataframe opaque C ABI: build, inspect, frame ops") {
     dftu_dataframe_free(df);
 }
 
+TEST_CASE("with_column refuses a column whose length differs from the frame") {
+    DataFrame df;
+    df.names.push_back(dstd::SharedString{"a"});
+    df.columns.push_back(i64({1, 2, 3}));
+
+    auto longer = df.with_column("b", i64({1, 2, 3, 4}));
+    REQUIRE_FALSE(longer);
+    CHECK(longer.error().condition() == dstd::Condition::InvalidArgument);
+    CHECK(dstd::String(longer.error().message()).find("length") !=
+          dstd::String::npos);
+    CHECK_FALSE(df.with_column("b", i64({1, 2})));
+
+    auto same = df.with_column("b", i64({4, 5, 6}));
+    REQUIRE(same);
+    CHECK(same->num_columns() == 2);
+
+    // The only column may be replaced by one of another length.
+    auto lone = df.with_column("a", i64(dstd::Vector<std::int64_t>(1, 9)));
+    REQUIRE(lone);
+    CHECK(lone->num_rows() == 1);
+
+    // A frame with no columns takes any length.
+    auto empty = DataFrame{}.with_column("x", i64({1, 2, 3, 4, 5}));
+    REQUIRE(empty);
+    CHECK(empty->num_rows() == 5);
+
+    // The C ABI returns NULL on a mismatch.
+    Series id = i64({1, 2, 3});
+    const char* names[] = {"id"};
+    dftu_series* cols[] = {id.release()};
+    dftu_dataframe* cdf = dftu_dataframe_new(names, cols, 1);
+    REQUIRE(cdf != nullptr);
+    Series bad = i64({1, 2});
+    CHECK(dftu_dataframe_with_column(cdf, "b", bad.handle()) == nullptr);
+    Series fine = i64({4, 5, 6});
+    CHECK(dftu_dataframe_with_column(cdf, nullptr, fine.handle()) == nullptr);
+    CHECK(dftu_dataframe_with_column(cdf, "b", nullptr) == nullptr);
+    Series good = i64({7, 8, 9});
+    dftu_dataframe* added = dftu_dataframe_with_column(cdf, "b", good.handle());
+    REQUIRE(added != nullptr);
+    CHECK(dftu_dataframe_num_columns(added) == 2);
+    dftu_dataframe_free(added);
+    dftu_dataframe_free(cdf);
+}
+
 TEST_CASE("Expr operators build and evaluate a fused expression") {
     Series a = i64({1, 2, 3, 4});
     Series b = i64({10, 20, 30, 40});

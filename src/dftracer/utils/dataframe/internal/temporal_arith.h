@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_TEMPORAL_ARITH_H
 
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -121,7 +122,7 @@ inline dstd::Optional<dstd::Vector<std::int64_t>> rescale_ticks_up(
     dstd::Vector<std::int64_t> out(n);
     for (std::size_t i = 0; i < n; ++i) {
         std::int64_t r;
-        if (__builtin_mul_overflow(p[i], ratio, &r)) return dstd::nullopt;
+        if (dstd::bits::mul_overflow(p[i], ratio, &r)) return dstd::nullopt;
         out[i] = r;
     }
     return out;

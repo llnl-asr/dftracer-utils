@@ -153,14 +153,22 @@ PY_METHOD(Series, is_unique, "dftu.series.is_unique", NONE, BOOL, KEEP, YES, "",
           "Bool mask: value occurs exactly once.")
 PY_METHOD(Series, is_duplicated, "dftu.series.is_duplicated", NONE, BOOL, KEEP, YES, "", "", "",
           "Bool mask: value is repeated.")
-PY_METHOD(Series, drop_nulls, "dftu.series.drop_nulls", NONE, SAME, KEEP, NO, "", "", "",
+PY_METHOD(Series, isna, "dftu.series.na_mask", NONE, BOOL, KEEP, NO, "", "", "",
+          "Bool mask: row is null or, in a float column, NaN (pandas isna).")
+PY_METHOD(Series, notna, "dftu.series.notna_mask", NONE, BOOL, KEEP, NO, "", "", "",
+          "Bool mask: row is present and not NaN (pandas notna).")
+PY_METHOD(Series, drop_nulls, "dftu.series.drop_nulls", NONE, SAME, KEEP, YES, "", "", "",
           "Drop null rows -> Series.")
+PY_METHOD(Series, drop_nans, "dftu.series.drop_nans", NONE, SAME, KEEP, YES, "", "", "",
+          "Drop NaN rows of a float column -> Series; a null stays.")
 PY_METHOD(Series, reverse, "dftu.series.reverse", NONE, SAME, KEEP, YES, "", "", "",
           "Rows in reverse order -> Series.")
 PY_METHOD(Series, interpolate, "dftu.series.interpolate", NONE, FLOAT, KEEP, YES, "", "", "",
           "interpolate() -> Float64 Series with null interiors linearly filled.")
 PY_METHOD(Series, fill_null, "dftu.series.fillna", SCALAR, SAME, KEEP, NO, "value", "", "",
           "fill_null(value) -> Series with nulls replaced.")
+PY_METHOD(Series, fill_nan, "dftu.series.fill_nan", SCALAR, SAME, KEEP, NO, "value", "", "",
+          "fill_nan(value) -> Series with the NaN of a float column replaced (null for None).")
 PY_METHOD(Series, clip, "dftu.series.clip", NUMBER2, SAME, KEEP, NO, "lower", "upper", "",
           "clip(lower, upper) -> Series clamped to [lower, upper] (SIMD).")
 PY_METHOD(Series, is_between, "dftu.series.is_between", NUMBER2, BOOL, KEEP, NO, "lower", "upper", "",

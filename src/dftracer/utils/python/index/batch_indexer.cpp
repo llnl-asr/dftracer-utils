@@ -61,7 +61,6 @@ using namespace dftracer::utils::trace::index::schemas::dft::agg;
 
 static void Indexer_dealloc(IndexerObject* self) {
     Py_XDECREF(self->runtime_obj);
-    Py_XDECREF(self->directory);
     Py_XDECREF(self->files);
     Py_XDECREF(self->index_dir);
     Py_XDECREF(self->group_keys);
@@ -77,7 +76,6 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject*, PyObject*) {
     IndexerObject* self = (IndexerObject*)type->tp_alloc(type, 0);
     if (self) {
         self->runtime_obj = nullptr;
-        self->directory = nullptr;
         self->files = nullptr;
         self->index_dir = nullptr;
         self->require_checkpoint = 1;
@@ -241,11 +239,10 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     }
 
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> input_paths;
-    dftracer::utils::dstd::Optional<dftracer::utils::dstd::String> input_dir;
-    if (!dftracer::utils::python::core::parse_trace_files(
-            files_arg, input_paths, input_dir))
+    if (!dftracer::utils::python::core::parse_trace_files(files_arg,
+                                                          input_paths))
         return -1;
-    if (!input_dir && input_paths.empty()) {
+    if (input_paths.empty()) {
         PyErr_SetString(PyExc_ValueError, "files must name at least one path");
         return -1;
     }
@@ -268,7 +265,6 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
         }
     }
 
-    self->directory = PyUnicode_FromString(input_dir ? input_dir->c_str() : "");
     self->index_dir = PyUnicode_FromString(index_dir);
     self->require_checkpoint = require_checkpoint;
     self->require_bloom = require_bloom;
@@ -410,8 +406,6 @@ indexer_options(IndexerObject* self) {
 
 static dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>
 indexer_paths(IndexerObject* self) {
-    const char* directory = as_utf8(self->directory);
-    if (directory && directory[0] != '\0') return {directory};
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths;
     if (self->files && PyList_Check(self->files)) {
         Py_ssize_t n = PyList_Size(self->files);
@@ -944,7 +938,7 @@ static PyGetSetDef Indexer_getsetters[] = {{NULL, NULL, NULL, NULL, NULL}};
 
 PyTypeObject IndexerType = {
     .ob_base = PyVarObject_HEAD_INIT(nullptr, 0).tp_name =
-        "dftracer_utils_ext.Indexer",
+        "dftracer.utils.dftracer_utils_ext.Indexer",
     .tp_basicsize = sizeof(IndexerObject),
     .tp_dealloc = (destructor)Indexer_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
@@ -955,8 +949,9 @@ PyTypeObject IndexerType = {
         "        compute_percentiles=True, parallelism=0, runtime=None)\n"
         "--\n\n"
         "Indexer with tiered index building.\n\n"
-        "files is one path, a directory (scanned for gzip files, *.gz) or a\n"
-        "list of paths.\n\n"
+        "files is one path or a list of paths; each is a file, a directory\n"
+        "(scanned recursively for gzip files, *.gz) or a glob (*, ?, [...],\n"
+        "**).\n\n"
         "Supports:\n"
         "- Tier 1: Checkpoints (require_checkpoint)\n"
         "- Tier 2: Bloom filters (require_bloom)\n"

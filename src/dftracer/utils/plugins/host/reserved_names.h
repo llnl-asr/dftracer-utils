@@ -19,7 +19,7 @@ inline constexpr dstd::StringView HOST_NAME_PREFIX = "dftu.";
 /// plugin and the planner resolve. constexpr so a host-registered literal can
 /// be checked where it is written.
 constexpr bool is_host_namespace(dstd::StringView name) noexcept {
-    return name.substr(0, HOST_NAME_PREFIX.size()) == HOST_NAME_PREFIX;
+    return name.starts_with(HOST_NAME_PREFIX);
 }
 
 /// True when `name` has the `<plugin>.<name>` shape a plugin must use.
@@ -38,8 +38,7 @@ constexpr bool name_in_plugin_namespace(dstd::StringView name,
                                         dstd::StringView plugin) noexcept {
     if (plugin.empty() || is_host_namespace(name)) return false;
     if (name == plugin) return true;
-    return name.size() > plugin.size() + 1 &&
-           name.substr(0, plugin.size()) == plugin &&
+    return name.size() > plugin.size() + 1 && name.starts_with(plugin) &&
            name[plugin.size()] == '.';
 }
 

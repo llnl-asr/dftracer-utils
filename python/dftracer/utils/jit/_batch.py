@@ -12,7 +12,7 @@ per-event loop in the emitted code.
 from __future__ import annotations
 
 import ast
-from typing import Any, Callable, Iterable, NoReturn
+from typing import Any, Callable, Iterable, NoReturn, cast
 
 from .._c_text import c_str_literal
 from .._eval import ARITH_CODE, COMPARE_CODE
@@ -21,7 +21,7 @@ from .._jit_errors import JitError, Source
 VOCABULARY = (
     'df["col"], numbers, + - * /, unary -, comparisons (a < x <= b), & | ~ on masks, '
     "s[mask], s.where(mask, other), abs(s) or s.abs(), s.clip(lo, hi), s.isnull(), "
-    "s.notnull(), s.fill_null(v), and the reductions s.sum(), s.min(), s.max(), "
+    "s.notnull(), s.isna(), s.notna(), s.fill_null(v), and the reductions s.sum(), s.min(), s.max(), "
     "s.count() and s.mean()"
 )
 
@@ -104,13 +104,13 @@ def _fail(reason: str, node: ast.AST | None) -> NoReturn:
     raise err
 
 
-def _unwrap(node: ast.expr) -> ast.expr:
+def _unwrap(node: ast.AST) -> ast.expr:
     index = getattr(ast, "Index", None)
     if index is not None and isinstance(node, index):
         value = getattr(node, "value", node)
         assert isinstance(value, ast.expr)
         return value
-    return node
+    return cast(ast.expr, node)
 
 
 class _V:
@@ -718,11 +718,16 @@ class _Lowering:
             if node.args:
                 _fail(".abs() takes no arguments", node)
             return self._abs(s, node)
-        if name in ("isnull", "notnull"):
+        if name in ("isnull", "notnull", "isna", "notna"):
             if node.args:
                 _fail(f".{name}() takes no arguments", node)
             return _V(
-                "isnull", "mask", "int", s.domain, args=(s,), value=1 if name == "isnull" else 0
+                "isnull",
+                "mask",
+                "int",
+                s.domain,
+                args=(s,),
+                value=1 if name in ("isnull", "isna") else 0,
             )
         if name == "fill_null":
             if len(node.args) != 1:
@@ -851,7 +856,7 @@ class _Lowering:
         elif v.kind == "not":
             self._line(f"{name} = dftu_expr_not({self._expr(v.args[0])});")
         elif v.kind == "isnull":
-            self._line(f"{name} = dftu_expr_is_null({self._expr(v.args[0])}, {v.value});")
+            self._line(f"{name} = dftu_expr_is_na({self._expr(v.args[0])}, {v.value});")
         elif v.kind == "fill":
             a, fill = (self._expr(c) for c in v.args)
             self._line(f"{{ const dftu_expr* _args[2] = {{{a}, {fill}}};")

@@ -387,7 +387,7 @@ static PyGetSetDef Runtime_getsetters[] = {
 
 PyTypeObject RuntimeType = {
     .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-        "dftracer_utils_ext.Runtime",
+        "dftracer.utils.dftracer_utils_ext.Runtime",
     .tp_basicsize = sizeof(RuntimeObject),
     .tp_dealloc = (destructor)Runtime_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,

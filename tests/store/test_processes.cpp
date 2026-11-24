@@ -290,7 +290,7 @@ std::size_t count_data_files(dstd::StringView root) {
     std::size_t count = 0;
     for (const auto& e : dftu_utils_test::list_dir(root)) {
         const dstd::String name(e.path.view().filename());
-        if (name.size() > 4 && name.compare(name.size() - 4, 4, ".dfs") == 0) {
+        if (name.size() > 4 && name.ends_with(".dfs")) {
             ++count;
         }
     }

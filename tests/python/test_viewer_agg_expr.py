@@ -9,7 +9,8 @@ import pytest
 pa = pytest.importorskip("pyarrow")
 
 import dftracer.utils as dft  # noqa: E402
-from dftracer.utils import F, TraceViewer  # noqa: E402
+from dftracer.utils import F  # noqa: E402
+from dftracer.utils.trace import TraceViewer  # noqa: E402
 
 from .common import Environment  # noqa: E402
 
@@ -18,7 +19,7 @@ from .common import Environment  # noqa: E402
 def indexed_trace():
     with Environment(lines=400) as env:
         gz = env.create_test_gzip_file()
-        with dft.Indexer(files=[gz]) as ix:
+        with dft.index.Indexer(files=[gz]) as ix:
             ix.ensure()
         yield gz
 

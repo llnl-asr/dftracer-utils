@@ -22,6 +22,8 @@ import dftracer.utils as dft  # noqa: E402
 from dftracer.utils import DataFrame, col  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
 
+from .common import valgrind_scale  # noqa: E402
+
 pytestmark = pytest.mark.skipif(
     not hasattr(_ext, "LazyFrame") or not hasattr(_ext, "udf_register_batch"),
     reason="extension built without Arrow support",
@@ -111,16 +113,18 @@ def test_expr_apply_and_eval_many(df, twice):
 
 
 def test_trace_viewer_duql(tmp_path, twice):
+    # Reading, parsing and inflating the trace costs the most under Valgrind.
+    rows = valgrind_scale(ROWS)
     events = [
         {"ph": 1, "name": "read", "cat": "POSIX", "pid": 1, "tid": i, "ts": i, "dur": i % 97}
-        for i in range(ROWS)
+        for i in range(rows)
     ]
     path = tmp_path / "t.pfw.gz"
     path.write_bytes(gzip.compress(("\n".join(json.dumps(e) for e in events) + "\n").encode()))
     got = (
-        dft.TraceViewer(str(path))
+        dft.trace.TraceViewer(str(path))
         .duql("derive d = twice(dur) | agg { n = count() }")
         .collect()
         .to_dict()
     )
-    assert got["n"] == [ROWS]
+    assert got["n"] == [rows]

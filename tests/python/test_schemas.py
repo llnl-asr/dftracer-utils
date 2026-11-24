@@ -73,11 +73,11 @@ def test_register_list_and_conflicts():
     schemas.register(
         {"id": "py_nginx", "fields": {"status": {"type": "int"}, "request_time": {"type": "float"}}}
     )
-    with pytest.raises(dftu.DFTUtilsValueError, match="first.json"):
+    with pytest.raises(dftu.errors.DFTUtilsValueError, match="first.json"):
         schemas.register(
             {"id": "py_nginx", "fields": {"status": {"type": "string"}}}, source="second.json"
         )
-    with pytest.raises(dftu.DFTUtilsValueError, match="detect"):
+    with pytest.raises(dftu.errors.DFTUtilsValueError, match="detect"):
         schemas.register("id: py_bad\ndetect: {require: [x]}\n")
 
 
@@ -134,7 +134,7 @@ def test_a_class_source_row_set_runs_from(tmp_path):
     with gzip.open(path, "wt") as f:
         for status in (200, 503, 404, 500):
             f.write(json.dumps({"status": status}) + "\n")
-    tv = dftu.TraceViewer(path, record_schema=PyWeb)
+    tv = dftu.trace.TraceViewer(path, record_schema=PyWeb)
     got = tv.duql("from errors | select status").collect().to_dict()
     assert sorted(got["status"]) == [500, 503]
 
@@ -151,14 +151,14 @@ def test_a_json_field_reads_canonical_text(tmp_path):
         '{"kind":"x"}',
     ]
     path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
-    tv = dftu.TraceViewer(str(path), record_schema=PyTagged)
+    tv = dftu.trace.TraceViewer(str(path), record_schema=PyTagged)
     tags = tv.select("tags").collect()["tags"]._to_pylist()
     assert tags == ['["a","b"]', '{"a":2,"b":1}', None]
     assert len(tv.duql('json(tags) == \'{"a":2,"b":1}\'').collect()) == 1
     assert len(tv.duql('tags == \'{"a":2,"b":1}\'').collect()) == 0
     got = next(s for s in schemas.list() if s["id"] == "py_tagged")
     assert [f["type"] for f in got["fields"]] == ["string", "json"]
-    with pytest.raises(dftu.DFTUtilsValueError, match="json"):
+    with pytest.raises(dftu.errors.DFTUtilsValueError, match="json"):
 
         class PyDftJson(schemas.DFTracer, id="py_dft_json"):
             blob: Json = field(path="args.blob")
@@ -168,7 +168,7 @@ def test_a_field_of_mixed_types_is_a_json_column(tmp_path):
     path = tmp_path / "mixed.ndjson.gz"
     lines = [json.dumps({"k": i, "retry": [0, 1, 2.5, "3", 3][i % 5]}) for i in range(10)]
     path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
-    tv = dftu.TraceViewer(str(path))
+    tv = dftu.trace.TraceViewer(str(path))
     retry = tv.duql("sort k | take 5 | select retry").collect()["retry"]
     assert retry.is_json
     assert retry.to_list() == [0, 1, 2.5, "3", 3]
@@ -180,7 +180,7 @@ def test_a_json_column_round_trips_through_arrow(tmp_path):
     path = tmp_path / "mixed.ndjson.gz"
     lines = [json.dumps({"k": i, "retry": [0, 1, 2.5, "3", 3][i % 5]}) for i in range(10)]
     path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
-    tv = dftu.TraceViewer(str(path))
+    tv = dftu.trace.TraceViewer(str(path))
     retry = tv.duql("sort k | take 5 | select retry").collect()["retry"]
     arrow = retry.to_arrow()
     assert arrow.to_pylist() == ["0", "1", "2.5", '"3"', "3"]
@@ -201,9 +201,9 @@ def test_schema_tree_nests_paths(tmp_path):
     path = tmp_path / "tree.ndjson.gz"
     lines = ['{"op":"read","io":{"off":4096}}', '{"op":"write","io":{"off":0}}']
     path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
-    with dftu.Indexer(files=[str(path)], schema=PyTree) as ix:
+    with dftu.index.Indexer(files=[str(path)], schema=PyTree) as ix:
         ix.ensure()
-    tree = dftu.TraceViewer(str(path)).schema_tree()
+    tree = dftu.trace.TraceViewer(str(path)).schema_tree()
     assert tree["op"] == {"type": "string", "count": 2, "field": "op", "declared_type": "string"}
     assert tree["io"]["children"]["off"]["count"] == 2
     assert tree["io"]["children"]["off"]["declared_type"] == "int"
@@ -229,22 +229,22 @@ def test_a_class_extends_by_inheritance():
 
 
 def test_bad_classes_raise_at_definition():
-    with pytest.raises(dftu.DFTUtilsValueError, match="tags"):
+    with pytest.raises(dftu.errors.DFTUtilsValueError, match="tags"):
 
         class BadType(RecordSchema, id="py_bad_type"):
             tags: list
 
-    with pytest.raises(dftu.DFTUtilsValueError, match="needs an id"):
+    with pytest.raises(dftu.errors.DFTUtilsValueError, match="needs an id"):
 
         class NoId(RecordSchema):
             x: int
 
-    with pytest.raises(dftu.DFTUtilsValueError, match="unit"):
+    with pytest.raises(dftu.errors.DFTUtilsValueError, match="unit"):
 
         class BadUnit(RecordSchema, id="py_bad_unit"):
             x: int = field(unit="ms")
 
-    with pytest.raises(dftu.DFTUtilsValueError, match="PyConflict"):
+    with pytest.raises(dftu.errors.DFTUtilsValueError, match="PyConflict"):
 
         class PyConflict(RecordSchema, id="py_nginx"):
             other: str
@@ -286,21 +286,21 @@ def test_schemas_next_to_the_index_are_used(tmp_path):
         "  upstream: {type: string, always_index: true}\n"
         "index: {path_budget: 0}\n"
     )
-    with dftu.Indexer(files=[trace], index_dir=str(index_dir)) as ix:
+    with dftu.index.Indexer(files=[trace], index_dir=str(index_dir)) as ix:
         ix.ensure()
         explained = ix.explain('upstream == "u2"')[0]
     assert len(explained["read"]) < explained["chunks"]
-    viewer = dftu.TraceViewer(trace, index_dir=str(index_dir / ".dftindex"))
+    viewer = dftu.trace.TraceViewer(trace, index_dir=str(index_dir / ".dftindex"))
     rows = viewer.duql('upstream == "u2"').collect()
     assert len(rows) == 300
 
 
 def test_trace_viewer_record_schema_override(tmp_path):
     trace = _nginx(str(tmp_path / "access.ndjson.gz"))
-    t = dftu.TraceViewer(trace, record_schema=schemas.Generic).collect()
+    t = dftu.trace.TraceViewer(trace, record_schema=schemas.Generic).collect()
     assert {"status", "upstream"} <= set(t.columns)
-    with pytest.raises(dftu.DFTUtilsValueError, match="no_such_schema"):
-        dftu.TraceViewer(trace, record_schema="no_such_schema")
+    with pytest.raises(dftu.errors.DFTUtilsValueError, match="no_such_schema"):
+        dftu.trace.TraceViewer(trace, record_schema="no_such_schema")
 
 
 def test_schema_path_environment_and_spec_edits(tmp_path):
@@ -313,7 +313,7 @@ def test_schema_path_environment_and_spec_edits(tmp_path):
     env = {"DFTRACER_UTILS_SCHEMA_PATH": str(spec_dir)}
     build = f"""
         import dftracer.utils as d
-        with d.Indexer(files=[{trace!r}], index_dir={index_dir!r}) as ix:
+        with d.index.Indexer(files=[{trace!r}], index_dir={index_dir!r}) as ix:
             print("needs", len(ix.status().needs_work))
             ix.ensure()
         print("ids", [s["id"] for s in d.schemas.list()])
@@ -340,7 +340,7 @@ def test_schema_path_environment_and_spec_edits(tmp_path):
     # Read without the schema registered: an error that says where to load it.
     read = f"""
         import dftracer.utils as d
-        d.TraceViewer({trace!r}, index_dir={index_dir + "/.dftindex"!r}).collect()
+        d.trace.TraceViewer({trace!r}, index_dir={index_dir + "/.dftindex"!r}).collect()
     """
     code, out = _run(read, {"DFTRACER_UTILS_SCHEMA_PATH": ""})
     assert code == 1, out
@@ -364,7 +364,7 @@ def test_schema_path_environment_and_spec_edits(tmp_path):
     ],
 )
 def test_data_condition_detection_cannot_evaluate_is_rejected(source):
-    with pytest.raises(dftu.DFTUtilsValueError, match="data row set"):
+    with pytest.raises(dftu.errors.DFTUtilsValueError, match="data row set"):
         schemas.register(
             {
                 "id": "py_bad_data",
@@ -387,7 +387,7 @@ def test_failed_schema_path_load_is_reported_and_retried(tmp_path):
                      lambda: d.schemas.explain({trace!r})):
             try:
                 call()
-            except d.DFTUtilsValueError as e:
+            except d.errors.DFTUtilsValueError as e:
                 assert "bogus" in str(e), e
             else:
                 raise SystemExit("no error")
@@ -414,7 +414,7 @@ def test_old_locations_are_not_read(tmp_path):
     code, out = _run(
         f"""
         import dftracer.utils as d
-        with d.Indexer(files=[{trace!r}], index_dir={str(index_dir)!r}) as ix:
+        with d.index.Indexer(files=[{trace!r}], index_dir={str(index_dir)!r}) as ix:
             ix.ensure()
         print("ids", [s["id"] for s in d.schemas.list()])
         print("detected", d.schemas.detect({trace!r}))
@@ -435,7 +435,7 @@ def test_schema_stats_share_is_listed_and_validated():
     assert got["stats_share"] == pytest.approx(0.2)
     assert got["path_budget"] == 50
     for bad in ("0", "1.5"):
-        with pytest.raises(dftu.DFTUtilsValueError, match="index.stats_share"):
+        with pytest.raises(dftu.errors.DFTUtilsValueError, match="index.stats_share"):
             schemas.register(
                 f"id: py_share_bad\nindex: {{stats_share: {bad}}}\n", source="bad.yaml"
             )

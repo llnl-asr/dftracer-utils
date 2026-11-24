@@ -29,6 +29,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Fetch the web UI that the CI web job built
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.11
 
@@ -89,6 +95,12 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Fetch the web UI that the CI web job built
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -153,6 +165,12 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Fetch the web UI that the CI web job built
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -221,12 +239,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Fetch the web UI that the CI web job built
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v6.1.0
         with:
           python-version: "3.12"
           cache: "pip"
           cache-dependency-path: "pyproject.toml"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.0.0
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -290,12 +317,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Fetch the web UI that the CI web job built
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v6.1.0
         with:
           python-version: "3.12"
           cache: "pip"
           cache-dependency-path: "pyproject.toml"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.0.0
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.11

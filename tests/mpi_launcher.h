@@ -5,6 +5,7 @@
 // Helpers of the tests that start a tool under an MPI launcher. Only the test
 // files that exist with the MPI option ON include it.
 
+#include <dftracer/utils/common/env.h>
 #include <testing_utilities.h>
 
 namespace dftu_utils_test {
@@ -14,8 +15,11 @@ namespace dftu_utils_test {
 // Locate an MPI launcher: $MPIEXEC_EXECUTABLE if set, else mpiexec/mpirun on
 // PATH. Returns "" if none is found.
 inline dftracer::utils::dstd::String find_mpi_launcher() {
-    const char* env_path = std::getenv("MPIEXEC_EXECUTABLE");
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
+    if (const auto env_path =
+            dftracer::utils::common::Env::get("MPIEXEC_EXECUTABLE")) {
+        const dftracer::utils::dstd::String path(*env_path);
+        if (::access(path.c_str(), X_OK) == 0) return path;
+    }
     for (const auto& name : {"mpiexec", "mpirun"}) {
         dftracer::utils::dstd::String cmd =
             dftracer::utils::dstd::String("command -v ") + name +

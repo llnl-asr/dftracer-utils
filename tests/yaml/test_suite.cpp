@@ -157,11 +157,11 @@ unsigned features_of_text(dstd::StringView text,
         place(Anchor, '&');
         place(Alias, '*');
         place(Tag, '!');
-        if (line.substr(0, 3) == "...") {
+        if (line.starts_with("...")) {
             is_prefix = true;
             continue;
         }
-        if (line.substr(0, 3) == "---") {
+        if (line.starts_with("---")) {
             is_prefix = false;
             continue;
         }

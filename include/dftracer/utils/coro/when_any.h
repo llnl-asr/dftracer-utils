@@ -432,12 +432,15 @@ struct WhenAnyTupleState : detail::WhenAnyCompletionState {
 
     dstd::Optional<dstd::Tuple<Awaitables...>> awaitables;
     std::atomic<bool> completed{false};
+    /// The index of a timer that won on its own thread, or TOTAL.
+    std::atomic<std::size_t> fired_winner{TOTAL};
     WhenAnyTupleResult<Awaitables...> result;
     dstd::Vector<dstd::SharedPtr<std::atomic<bool>>> cancellation_tokens;
 
     explicit WhenAnyTupleState(Awaitables&&... aws)
         : awaitables(std::in_place, std::forward<Awaitables>(aws)...) {
         wrappers_total = TOTAL;
+        hook_timers(std::make_index_sequence<TOTAL>{});
         cancellation_tokens.reserve(TOTAL);
         std::apply(
             [this](auto&... a) {
@@ -453,6 +456,30 @@ struct WhenAnyTupleState : detail::WhenAnyCompletionState {
                     ...);
             },
             *awaitables);
+    }
+
+    // A timer wins and cancels the others on the timer thread. Its wrapper
+    // resumes only on a free worker, and a task that computes without a wait
+    // can hold every worker until it ends, so the cancel it polls would never
+    // come.
+    template <std::size_t... Is>
+    void hook_timers(std::index_sequence<Is...>) noexcept {
+        (
+            [&] {
+                auto& aw = std::get<Is>(*awaitables);
+                if constexpr (requires { aw.on_fire(&timer_fired<Is>, this); })
+                    aw.on_fire(&timer_fired<Is>, this);
+            }(),
+            ...);
+    }
+
+    template <std::size_t I>
+    static void timer_fired(void* self) noexcept {
+        auto* state = static_cast<WhenAnyTupleState*>(self);
+        if (!state->claim()) return;
+        state->template store_winner<I>(dstd::Monostate{});
+        state->fired_winner.store(I, std::memory_order_release);
+        state->cancel_losers(I, std::make_index_sequence<TOTAL>{});
     }
 
     /// True for the first wrapper to call, which then owns the result.
@@ -547,6 +574,9 @@ class WhenAnyTupleAwaitable {
                 }
                 state->template finish_winner<I>(std::move(outcome.error),
                                                  outcome.stopped);
+            } else if (state->fired_winner.load(std::memory_order_acquire) ==
+                       I) {
+                state->on_first_complete();
             }
             state->on_wrapper_finished();
             co_return;
@@ -580,6 +610,27 @@ class WhenAnyTupleAwaitable {
             auto* root = h.promise().get_root_promise();
             state_->executor = root->get_executor();
         }
+
+        // Before the first child starts, as the vector form does: a fired
+        // timer reads a loser's executor in cancel() on the timer thread.
+        Executor* executor = state_->executor != nullptr
+                                 ? state_->executor
+                                 : detail::current_executor();
+        std::apply(
+            [executor](auto&... aws) {
+                (
+                    [executor](auto& aw) {
+                        if constexpr (requires {
+                                          aw.handle().promise().executor;
+                                      }) {
+                            auto& promise = aw.handle().promise();
+                            if (promise.executor == nullptr)
+                                promise.executor = executor;
+                        }
+                    }(aws),
+                    ...);
+            },
+            *state_->awaitables);
 
         launch_all(std::make_index_sequence<sizeof...(Awaitables)>{});
 
@@ -657,6 +708,8 @@ class TimeoutAwaitable {
         Outcome outcome = Outcome::Pending;
         detail::ParkNode* park = nullptr;
         detail::ParkOwner owner;
+        void (*fire_hook)(void*) noexcept = nullptr;
+        void* fire_context = nullptr;
 
         void cancel() noexcept {
             if (latch.on_cancelled()) {
@@ -675,6 +728,7 @@ class TimeoutAwaitable {
         void on_fire() noexcept {
             if (latch.on_completed()) {
                 outcome = Outcome::Fired;
+                if (fire_hook != nullptr) fire_hook(fire_context);
                 resume_continuation(executor, handle);
             }
         }
@@ -769,6 +823,14 @@ class TimeoutAwaitable {
 
     /// Ends the wait early. Thread-safe. Does nothing once the wait is over.
     void cancel() noexcept { state_->cancel(); }
+
+    /// Calls @p hook with @p context on the timer thread when the time passes,
+    /// before the waiter resumes, which may wait for a free worker. Set it
+    /// before the wait starts.
+    void on_fire(void (*hook)(void*) noexcept, void* context) noexcept {
+        state_->fire_hook = hook;
+        state_->fire_context = context;
+    }
 };
 
 /**

@@ -7,11 +7,9 @@
 namespace dftracer::utils::common {
 
 ArchiveFormat FormatDetector::detect(dstd::StringView file_path) {
-    if (file_path.size() >= 3 &&
-        file_path.substr(file_path.size() - 3) == ".gz") {
+    if (file_path.size() >= 3 && file_path.ends_with(".gz")) {
         return ArchiveFormat::Gzip;
-    } else if (file_path.size() >= 5 &&
-               file_path.substr(file_path.size() - 5) == ".gzip") {
+    } else if (file_path.size() >= 5 && file_path.ends_with(".gzip")) {
         return ArchiveFormat::Gzip;
     }
 

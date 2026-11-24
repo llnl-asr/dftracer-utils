@@ -10,7 +10,7 @@ pa = pytest.importorskip("pyarrow")
 
 from dftracer.utils import F  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
-from dftracer.utils.dataframe import _dataframe_from_arrow  # noqa: E402
+from dftracer.utils._dataframe import _dataframe_from_arrow  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     not hasattr(_ext, "_series_from_arrow"),

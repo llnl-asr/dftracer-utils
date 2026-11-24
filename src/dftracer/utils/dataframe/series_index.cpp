@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/internal/label_index.h>
 #include <dftracer/utils/dataframe/kernels/cast.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
+#include <dftracer/utils/dataframe/kernels/nan_rows.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -419,6 +420,18 @@ Series Series::drop_nulls() const {
     });
 }
 
+Series Series::drop_nans() const {
+    if (!has_index()) return derived(dftu_series_drop_nans(handle_));
+    const Series bare = without_index();
+    std::int64_t nans = 0;
+    const Series keep = keep_non_nan(bare, &nans);
+    if (nans < 0) return Series{};
+    if (nans == 0) return share();
+    return through_frame(*this, [&](const DataFrame& f) {
+        return dstd::Result<DataFrame>(f.filter(keep));
+    });
+}
+
 Series Series::unique(bool maintain_order) const {
     Series out =
         derived(dftu_series_unique_nulls(handle_, maintain_order ? 1 : 0));
@@ -780,6 +793,15 @@ dstd::Result<LabelJoin> join_rows(dstd::Span<const Level> la,
         out.levels.push_back(result.columns[i].share());
     out.left = positions_of(result.columns[k]);
     out.right = positions_of(result.columns[k + 1]);
+    if (how == JoinHow::Left && static_cast<std::int64_t>(out.left.size()) ==
+                                    la.front().column.length()) {
+        out.left_whole = true;
+        for (std::size_t i = 0; i < out.left.size(); ++i)
+            if (out.left[i] != static_cast<std::int64_t>(i)) {
+                out.left_whole = false;
+                break;
+            }
+    }
     return out;
 }
 
@@ -795,6 +817,16 @@ dstd::Result<LabelJoin> join_labels(dstd::Vector<Level> la,
         return invalid_argument<
             "cannot align a row index of {} levels with one of {}">(la.size(),
                                                                     lb.size());
+    // A left join keeps the labels of the left side as they are and a right
+    // join those of the right side, as pandas 3.1 does. An inner join of
+    // several levels keeps the left side's too: pandas takes them from the left
+    // index, as its tuple labels have one type. The rest take the common type.
+    const bool keep_left =
+        how == JoinHow::Left || (how == JoinHow::Inner && la.size() > 1);
+    dstd::Vector<Series> kept;
+    if (keep_left || how == JoinHow::Right)
+        for (const Level& l : keep_left ? la : lb)
+            kept.push_back(l.column.share());
     std::size_t bad = 0;
     if (!promote_levels(la, lb, bad))
         return invalid_argument<
@@ -813,6 +845,16 @@ dstd::Result<LabelJoin> join_labels(dstd::Vector<Level> la,
     if (how == JoinHow::Right) {
         std::swap(joined->left, joined->right);
         joined->left_whole = false;
+    }
+    const dstd::Vector<std::int64_t>& rows =
+        keep_left ? joined->left : joined->right;
+    for (std::size_t i = 0; i < kept.size(); ++i) {
+        if (joined->levels[i].type() == kept[i].type()) continue;
+        joined->levels[i] =
+            joined->left_whole ? std::move(kept[i]) : kept[i].take(rows);
+        if (!joined->levels[i].valid())
+            return invalid_argument<
+                "cannot align: the labels cannot be gathered">();
     }
     return joined;
 }
@@ -922,9 +964,16 @@ dstd::Result<AlignedSeries> align_labels(const Series& a, const Series& b,
                                          JoinHow how) {
     auto joined = join_labels(levels_of(a), levels_of(b), how);
     if (!joined) return joined.error();
-    if (joined->same)
+    if (joined->same) {
+        // Equal labels of other types stay as each side has them, as in pandas.
+        const dstd::Vector<Series> la = label_levels(a);
+        const dstd::Vector<Series> lb = label_levels(b);
+        for (std::size_t i = 0; i < la.size() && la.size() == lb.size(); ++i)
+            if (la[i].type() != lb[i].type())
+                return AlignedSeries{a.share(), b.share()};
         return a.has_index() ? AlignedSeries{a.share(), b.with_index_of(a)}
                              : AlignedSeries{a.share(), b.without_index()};
+    }
     dstd::Vector<dstd::StringView> views;
     for (const dstd::String& name : joined->names) views.emplace_back(name);
     Series left = joined->left_whole
@@ -943,17 +992,62 @@ dstd::Result<AlignedSeries> align_labels(const Series& a, const Series& b,
     return AlignedSeries{std::move(left), std::move(right)};
 }
 
+namespace {
+
+// A left align of `a` on `b` when both have labels of one type and no null
+// label: the rows of `b` for the labels of `a`, through the cached hash of `b`,
+// with `a` as it is. No value when it does not apply, or when `b` repeats a
+// label (the join meets every row of a repeated label).
+dstd::Optional<AlignedFrames> left_by_reindex(const DataFrame& a,
+                                              const DataFrame& b,
+                                              const Series& fill) {
+    if (a.index_names().empty() || b.index_names().empty())
+        return dstd::nullopt;
+    const dstd::Vector<Level> la = frame_levels(a);
+    const dstd::Vector<Level> lb = frame_levels(b);
+    if (la.size() != lb.size()) return dstd::nullopt;
+    dstd::Vector<Series> keys;
+    dstd::Vector<Series> levels;
+    dstd::Vector<dstd::String> names;
+    for (std::size_t i = 0; i < la.size(); ++i) {
+        if (la[i].column.type() != lb[i].column.type() ||
+            la[i].column.null_count() > 0 || lb[i].column.null_count() > 0)
+            return dstd::nullopt;
+        keys.push_back(la[i].column.share());
+        levels.push_back(lb[i].column.share());
+        names.push_back(la[i].name);
+    }
+    if (same_levels(la, lb)) return AlignedFrames{a.share(), b.share()};
+    auto pos = reindex_labels(b.row_index ? b.row_index->cache.get() : nullptr,
+                              levels, b.num_rows(), keys, ReindexOptions{});
+    if (!pos) return dstd::nullopt;
+    auto right = gathered_frame(b, *pos, names, keys, fill);
+    if (!right) return dstd::nullopt;
+    return AlignedFrames{a.share(), std::move(*right)};
+}
+
+}  // namespace
+
 dstd::Result<AlignedFrames> align_rows(const DataFrame& a, const DataFrame& b,
                                        JoinHow how, const Series& fill) {
+    if (how == JoinHow::Left) {
+        if (auto fast = left_by_reindex(a, b, fill)) return std::move(*fast);
+    } else if (how == JoinHow::Right) {
+        if (auto fast = left_by_reindex(b, a, fill))
+            return AlignedFrames{std::move(fast->right), std::move(fast->left)};
+    }
     auto joined = join_labels(frame_levels(a), frame_levels(b), how);
     if (!joined) return joined.error();
     if (joined->same) return AlignedFrames{a.share(), b.share()};
-    auto left =
-        gathered_frame(a, joined->left, joined->names, joined->levels, fill);
-    if (!left) return dstd::Unexpected<dstd::Error>(left.error());
     auto right =
         gathered_frame(b, joined->right, joined->names, joined->levels, fill);
     if (!right) return dstd::Unexpected<dstd::Error>(right.error());
+    // A left join that kept every row of `a` in order leaves `a` as it is.
+    if (joined->left_whole && !a.index_names().empty())
+        return AlignedFrames{a.share(), std::move(*right)};
+    auto left =
+        gathered_frame(a, joined->left, joined->names, joined->levels, fill);
+    if (!left) return dstd::Unexpected<dstd::Error>(left.error());
     return AlignedFrames{std::move(*left), std::move(*right)};
 }
 

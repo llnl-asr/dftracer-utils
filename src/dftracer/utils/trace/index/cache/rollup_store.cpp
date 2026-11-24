@@ -65,23 +65,18 @@ class DescCursor {
     explicit DescCursor(dstd::StringView data) : data_(data) {}
 
     std::uint32_t be32() {
-        return dstd::read_u32_be(bytes(take(sizeof(std::uint32_t))));
+        return dstd::read_u32_be(take(sizeof(std::uint32_t)));
     }
     std::uint64_t be64() {
-        return dstd::read_u64_be(bytes(take(sizeof(std::uint64_t))));
+        return dstd::read_u64_be(take(sizeof(std::uint64_t)));
     }
     dstd::StringView str() {
-        const std::size_t len =
-            dstd::read_u16_be(bytes(take(sizeof(std::uint16_t))));
+        const std::size_t len = dstd::read_u16_be(take(sizeof(std::uint16_t)));
         return take(len);
     }
     bool failed() const { return failed_; }
 
    private:
-    static const std::uint8_t* bytes(dstd::StringView s) {
-        return reinterpret_cast<const std::uint8_t*>(s.data());
-    }
-
     dstd::StringView take(std::size_t n) {
         static constexpr char ZEROS[8] = {};
         if (failed_ || off_ + n > data_.size()) {

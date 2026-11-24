@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/common/worker_share.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/string.h>
@@ -17,6 +18,7 @@
 #include <dftracer/utils/python/core/call.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/method.h>
+#include <dftracer/utils/python/formats/bind.h>
 #include <dftracer/utils/python/frame/columnar_eval.h>
 #include <dftracer/utils/python/frame/dataframe.h>
 #include <dftracer/utils/python/frame/lazyframe.h>
@@ -33,7 +35,9 @@
 #include <dftracer/utils/python/store/store.h>
 #include <dftracer/utils/python/trace/distribution.h>
 #include <dftracer/utils/python/trace/streaming_iterator.h>
+#include <dftracer/utils/python/trace/table_codec.h>
 #include <dftracer/utils/python/trace/trace_viewer.h>
+#include <dftracer/utils/python/trace/trace_writer.h>
 #include <dftracer/utils/trace/index/schemas/dft/agg/system_metrics.h>
 
 namespace {
@@ -287,6 +291,11 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (PyModule_AddIntConstant(m, "PLUGIN_ABI_VERSION",
                                 DFTRACER_UTILS_PLUGIN_ABI_VERSION) < 0)
         return NULL;
+    // The dftu.table format the writers and readers speak.
+    if (PyModule_AddStringConstant(m, "TABLE_FORMAT_VERSION",
+                                   DFTRACER_UTILS_TABLE_FORMAT_VERSION_STRING) <
+        0)
+        return NULL;
     {
         const auto& patterns =
             dftracer::utils::common::constants::indexer::INPUT_FILE_PATTERNS;
@@ -323,6 +332,7 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (dftracer::utils::python::runtime::init_task_handle(m) < 0) return NULL;
     if (dftracer::utils::python::runtime::init_runtime(m) < 0) return NULL;
     if (dftracer::utils::python::store::init_store(m) < 0) return NULL;
+    if (dftracer::utils::python::formats::init_formats(m) < 0) return NULL;
     if (dftracer::utils::python::core::init_arrow_batch_capsule(m) < 0)
         return NULL;
     if (dftracer::utils::python::trace::init_arrow_streaming_iterator(m) < 0)
@@ -330,6 +340,8 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (dftracer::utils::python::core::init_arrow_batch_stream(m) < 0)
         return NULL;
     if (dftracer::utils::python::trace::init_trace_viewer(m) < 0) return NULL;
+    if (dftracer::utils::python::trace::init_trace_writer(m) < 0) return NULL;
+    if (dftracer::utils::python::trace::init_table_codec(m) < 0) return NULL;
     if (dftracer::utils::python::plugins::init_plugin_host(m) < 0) return NULL;
     if (dftracer::utils::python::frame::init_op_runner(m) < 0) return NULL;
     if (dftracer::utils::python::frame::init_ops(m) < 0) return NULL;

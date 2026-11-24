@@ -1608,7 +1608,7 @@ void persist_gzip_index_artifacts(trace::index::FileBuild& build,
         build, artifacts.checkpoint_size, artifacts.total_lines,
         artifacts.total_uc_size, artifacts.truncated, artifacts.has_open_line,
         artifacts.members.empty() ? 0 : artifacts.members.back().member_idx + 1,
-        has_mid_line_chunk);
+        has_mid_line_chunk, artifacts.table_rows_complete);
     build.finish(trace::index::store::IndexExtension::Members, 0);
 }
 

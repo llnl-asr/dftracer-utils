@@ -40,11 +40,14 @@ class StringIntern {
     static constexpr std::size_t CHUNK_BYTES = std::size_t{1} << 20;
 
     /// Owned bytes that a column can hold by `shared_ptr`. Take views only
-    /// inside records that `locate` returned.
+    /// inside records that `locate` returned. The bytes sit at the end of the
+    /// block that holds the chunk and its shared count, so a chunk is one
+    /// allocation.
     class Chunk {
        public:
-        Chunk(std::size_t size, memory::Pool& pool);
-        ~Chunk();
+        /// @p data is read when the chunk is made, after its block exists.
+        Chunk(char* const& data, std::size_t bytes) noexcept
+            : data_(data), size_(bytes) {}
         Chunk(const Chunk&) = delete;
         Chunk& operator=(const Chunk&) = delete;
 
@@ -205,6 +208,10 @@ class StringIntern {
     };
 
     const char* slot_value(std::uint32_t id) const;
+    static constexpr std::size_t slot_offset() noexcept {
+        constexpr std::size_t SLOT_ALIGN = alignof(IndexSlot);
+        return (sizeof(Index) + SLOT_ALIGN - 1) & ~(SLOT_ALIGN - 1);
+    }
     static StringView record_view(const void* rec);
     static std::uint32_t record_chunk(const void* rec);
     const ChunkRef* chunk_ref(std::uint32_t i) const;

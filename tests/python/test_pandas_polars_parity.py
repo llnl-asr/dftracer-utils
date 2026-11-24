@@ -7,10 +7,11 @@ import pytest
 
 pa = pytest.importorskip("pyarrow")
 
-from dftracer.utils import DataFrame, DFTUtilsNotFoundError, Series, col  # noqa: E402
+from dftracer.utils import DataFrame, Series, col  # noqa: E402
 from dftracer.utils import pandas as upd  # noqa: E402
 from dftracer.utils import polars as upl  # noqa: E402
-from dftracer.utils.enums import DType  # noqa: E402
+from dftracer.utils._enums import DType  # noqa: E402
+from dftracer.utils.errors import DFTUtilsNotFoundError  # noqa: E402
 
 
 def _df(mapping):

@@ -1552,17 +1552,28 @@ TEST_CASE("window - randomized frames match a naive per-row reference") {
                             return best;
                         }),
                 false);
+            const bool integral = vc.type == TypeId::Int64;
             add(specs, want,
                 spec(WindowFunc::RunningProd, n, dstd::fmt<"rprod_{}">(n)),
-                TypeId::Float64,
-                per_row(s,
-                        [&v](const Part& part, std::size_t i) -> Val {
-                            double prod = 1.0;
+                integral ? TypeId::Int64 : TypeId::Float64,
+                per_row(
+                    s,
+                    [&v, integral](const Part& part, std::size_t i) -> Val {
+                        if (integral) {
+                            std::uint64_t wrapped = 1;
                             for (std::size_t j = 0; j <= i; ++j)
-                                if (v[part[j]]) prod *= *v[part[j]];
-                            return prod;
-                        }),
-                true);
+                                if (v[part[j]])
+                                    wrapped *= static_cast<std::uint64_t>(
+                                        static_cast<std::int64_t>(*v[part[j]]));
+                            return static_cast<double>(
+                                static_cast<std::int64_t>(wrapped));
+                        }
+                        double prod = 1.0;
+                        for (std::size_t j = 0; j <= i; ++j)
+                            if (v[part[j]]) prod *= *v[part[j]];
+                        return prod;
+                    }),
+                !integral);
             add(specs, want,
                 spec(WindowFunc::Delta, n, dstd::fmt<"delta_{}">(n)), vc.type,
                 per_row(s,
@@ -1829,8 +1840,10 @@ dstd::String key_at(const Series& c, std::int64_t i) {
             return dstd::to_string(c.data<std::int64_t>()[i]);
         case TypeId::Float64: {
             char buf[40];
-            std::snprintf(buf, sizeof buf, "%.17g", c.data<double>()[i]);
-            return buf;
+            const char* const end = dstd::to_chars_general(
+                buf, buf + sizeof buf, c.data<double>()[i], 17);
+            return dstd::String(
+                buf, end != nullptr ? static_cast<std::size_t>(end - buf) : 0);
         }
         case TypeId::String:
             return dstd::String(c.string_at(i));

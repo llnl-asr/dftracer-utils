@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <coro/failing.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/map.h>
@@ -45,7 +46,7 @@ void check_failed(const R& result, dstd::StringView message) {
 
 TEST_CASE("Runtime - an unsized I/O pool has one thread per worker") {
 #ifndef DFTRACER_UTILS_VALGRIND_MODE
-    if (std::getenv("DFTRACER_UTILS_IO_THREADS") != nullptr) return;
+    if (common::Env::get("DFTRACER_UTILS_IO_THREADS").has_value()) return;
     Runtime rt(3);
     CHECK(rt.io_threads() == 3);
     rt.shutdown();
@@ -370,7 +371,7 @@ TEST_CASE("TaskHandle - auto-generated name when empty") {
     Runtime rt(2);
     auto h = rt.submit(noop_async());
     CHECK(!h.name.empty());
-    CHECK(h.name.substr(0, 5) == "task-");
+    CHECK(h.name.starts_with("task-"));
     dftu_utils_test::ok(h.wait());
 }
 

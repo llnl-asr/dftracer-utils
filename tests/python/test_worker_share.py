@@ -27,12 +27,12 @@ def host(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _observe(_: int) -> tuple[int, int, int]:
-    rt = dft.get_default_runtime()
+    rt = dft.runtime.get_default_runtime()
     return rt.threads, rt.io_threads, _process_memory_budget()
 
 
 def test_share_divides_cpus_and_budget() -> None:
-    share = dft.worker_share(4)
+    share = dft.runtime.worker_share(4)
     assert (share.threads, share.io_threads) == (HOST_CPUS // 4, HOST_CPUS // 4)
     assert share.memory_budget == HOST_BUDGET // 4
     assert dict(share.env) == {
@@ -43,23 +43,27 @@ def test_share_divides_cpus_and_budget() -> None:
 
 
 def test_share_has_a_floor_and_validates() -> None:
-    crowded = dft.worker_share(1000)
+    crowded = dft.runtime.worker_share(1000)
     assert crowded.threads == 1
     assert crowded.memory_budget == 64 << 20
     with pytest.raises(ValueError):
-        dft.worker_share(0)
+        dft.runtime.worker_share(0)
     with pytest.raises(AttributeError):
         crowded.threads = 2  # type: ignore[misc]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="fork is POSIX only")
+# The test forks a threaded process on purpose to check fork safety.
+@pytest.mark.filterwarnings(
+    "ignore:This process .* is multi-threaded, use of fork:DeprecationWarning"
+)
 def test_forked_child_with_inherited_state_takes_the_share() -> None:
     # The parent already has a runtime and a memory budget; the fork copies the
     # budget, so only an explicit apply can change it.
-    dft.get_default_runtime()
+    dft.runtime.get_default_runtime()
     ctx = multiprocessing.get_context("fork")
     with ProcessPoolExecutor(
-        max_workers=1, mp_context=ctx, initializer=dft.apply_worker_share, initargs=(4,)
+        max_workers=1, mp_context=ctx, initializer=dft.runtime.apply_worker_share, initargs=(4,)
     ) as pool:
         threads, io_threads, budget = pool.submit(_observe, 0).result()
     assert (threads, io_threads) == (HOST_CPUS // 4, valgrind_capped_threads(HOST_CPUS // 4))
@@ -69,7 +73,7 @@ def test_forked_child_with_inherited_state_takes_the_share() -> None:
 def test_spawned_child_takes_the_share() -> None:
     ctx = multiprocessing.get_context("spawn")
     with ProcessPoolExecutor(
-        max_workers=1, mp_context=ctx, initializer=dft.apply_worker_share, initargs=(4,)
+        max_workers=1, mp_context=ctx, initializer=dft.runtime.apply_worker_share, initargs=(4,)
     ) as pool:
         threads, io_threads, budget = pool.submit(_observe, 0).result()
     assert (threads, io_threads) == (HOST_CPUS // 4, valgrind_capped_threads(HOST_CPUS // 4))
@@ -77,8 +81,8 @@ def test_spawned_child_takes_the_share() -> None:
 
 
 def _apply_after_runtime_exists(_: int) -> tuple[int, int, int]:
-    dft.get_default_runtime()
-    dft.apply_worker_share(8)
+    dft.runtime.get_default_runtime()
+    dft.runtime.apply_worker_share(8)
     return _observe(0)
 
 
@@ -93,7 +97,7 @@ def test_apply_resizes_a_runtime_that_exists() -> None:
 def _apply_repeatedly(_: int) -> list[int]:
     budgets = []
     for workers in (4, 4, 2, 4):
-        dft.apply_worker_share(workers)
+        dft.runtime.apply_worker_share(workers)
         budgets.append(_process_memory_budget())
     return budgets
 

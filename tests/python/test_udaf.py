@@ -272,7 +272,7 @@ def test_over_runs_a_udaf_per_group_and_broadcasts_it():
 
 
 def test_trace_viewer_agg_refuses_a_udaf_naming_it():
-    from dftracer.utils.trace.partials import agg_specs
+    from dftracer.utils.trace._partials import agg_specs
 
     plugins = Plugins([_PLUGIN])
     with pytest.raises(TypeError, match="p50"):
@@ -281,7 +281,7 @@ def test_trace_viewer_agg_refuses_a_udaf_naming_it():
 
 
 def test_dask_agg_refuses_a_udaf_naming_it():
-    dask_frame = pytest.importorskip("dftracer.utils.dask.frame")
+    dask_frame = pytest.importorskip("dftracer.utils.dask._frame")
     plugins = Plugins([_PLUGIN])
     with pytest.raises(TypeError, match="p50"):
         dask_frame._parse("m", dft.udaf["p50"](col("v")))

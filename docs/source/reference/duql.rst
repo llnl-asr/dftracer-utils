@@ -524,6 +524,9 @@ On a View, a query is a pipeline of stages joined by ``|``:
    * - ``sink "name" k "v", ...``
      - Writes every row to the plugin sink ``name`` and ends the pipeline (see
        `Sinks`_).
+   * - ``sink trace "path" k "v", ...``, ``sink table "path" k "v", ...``
+     - Writes every row as a DFTracer trace or a typed table at ``path`` and
+       ends the pipeline (see `Sinks`_).
    * - ``name(args)``
      - The stages of a pipeline macro (see `Macros`_).
    * - ``window [k1, k2] [sort s] { a = expr, ... }``
@@ -1363,8 +1366,8 @@ prefix, and none can take a built-in's name.
 - A ``let`` or sub-query side that calls a UDAF is not stored in the lookup
   cache.
 
-Explain
-~~~~~~~
+Explain lines
+~~~~~~~~~~~~~
 
 ``View::explain_duql``, ``TraceViewer.explain_duql``,
 ``dftu_view_explain_duql`` and ``dftracer_view -q ... --explain`` print
@@ -1624,7 +1627,9 @@ Sinks
 ~~~~~
 
 ``sink "name" key "value", key2 "value2"`` writes the rows of the pipeline
-to the plugin sink ``name`` and is the last stage: a stage after it is a parse
+to the plugin sink ``name``, ``sink trace "path" ...`` writes them as a
+DFTracer trace and ``sink table "path" ...`` as a ``dftu.table`` file. A sink
+is the last stage: a stage after it is a parse
 error (``A stage cannot follow 'sink': 'sink' ends a pipeline``). The name and
 every value are double-quoted strings; a key is a bare name. The sink is a
 plugin's (see :doc:`../plugins`), so the run loads the plugin that registers it
@@ -1633,6 +1638,20 @@ before the query executes.
 .. code-block:: text
 
    from data | where dur > 1000 | sink "csv.write" path "out.csv"
+   from data | sink table "out" partition_by "cat,pid" mode "overwrite"
+
+A trace sink needs the event envelope (``name``, ``cat``, ``pid``, ``tid``,
+``ts``, ``ph``, with ``dur`` and ``args.<key>`` columns); a table sink writes
+any rows. The path is a folder of ``part-NNNNN.pfw.gz`` files unless it ends in
+``.pfw.gz`` or ``.pfw``. The options are the arguments of
+``LazyFrame.sink_trace`` and ``LazyFrame.sink_table``, each a quoted string:
+``mode`` (``error`` or ``overwrite``), ``part_size``, ``partition_by`` (column
+names separated by commas), ``max_open_files``, ``max_partitions``,
+``compress`` and
+``build_index`` (``true`` or ``false``), ``level``, ``member_size`` (bytes, or a
+size such as ``4MiB``) and, for a table, ``name`` and ``meta`` (a JSON object).
+An unknown option is an error. A plugin sink ignores none of its options: they
+reach the plugin as written.
 
 A pipeline that ends in ``sink`` returns one row of the totals, with the
 integer columns ``rows`` and ``batches``: ``rows`` is the count the sink took

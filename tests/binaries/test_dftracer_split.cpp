@@ -59,7 +59,7 @@ int count_gz_lines_in_dir(dstd::StringView dir) {
     for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (!(entry.kind == dstd::fs::FileKind::File)) continue;
         const dstd::String p(entry.path.str());
-        if (p.size() < 7 || p.substr(p.size() - 7) != ".pfw.gz") continue;
+        if (p.size() < 7 || !p.ends_with(".pfw.gz")) continue;
 
         gzFile gz = gzopen(p.c_str(), "rb");
         if (!gz) continue;
@@ -85,7 +85,7 @@ int count_gz_files(dstd::StringView dir) {
     for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (!(entry.kind == dstd::fs::FileKind::File)) continue;
         const dstd::String p(entry.path.str());
-        if (p.size() >= 7 && p.substr(p.size() - 7) == ".pfw.gz") ++n;
+        if (p.size() >= 7 && p.ends_with(".pfw.gz")) ++n;
     }
     return n;
 }
@@ -97,7 +97,7 @@ int count_gzip_members(dstd::StringView dir) {
     for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (!(entry.kind == dstd::fs::FileKind::File)) continue;
         const dstd::String p(entry.path.str());
-        if (p.size() < 7 || p.substr(p.size() - 7) != ".pfw.gz") continue;
+        if (p.size() < 7 || !p.ends_with(".pfw.gz")) continue;
         const dstd::String buf = dftu_utils_test::read_text(p);
         for (std::size_t i = 0; i + 2 < buf.size(); ++i)
             if (static_cast<unsigned char>(buf[i]) == 0x1f &&
@@ -113,7 +113,7 @@ bool all_files_start_with_event(dstd::StringView dir) {
     for (const auto& entry : dftu_utils_test::list_dir(dir)) {
         if (!(entry.kind == dstd::fs::FileKind::File)) continue;
         const dstd::String p(entry.path.str());
-        if (p.size() < 7 || p.substr(p.size() - 7) != ".pfw.gz") continue;
+        if (p.size() < 7 || !p.ends_with(".pfw.gz")) continue;
 
         gzFile gz = gzopen(p.c_str(), "rb");
         if (!gz) return false;

@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from dftracer.utils import discover_trace_files
+from dftracer.utils.trace import discover_trace_files
 
 
 def _touch(path, gz=True):

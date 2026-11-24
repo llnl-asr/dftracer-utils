@@ -13,11 +13,12 @@ pd = pytest.importorskip("pandas")
 
 from dftracer.utils import DataFrame, Series  # noqa: E402
 
+from .common import skip_below_pandas3  # noqa: E402
+
 pytestmark = pytest.mark.filterwarnings("ignore::FutureWarning", "ignore::DeprecationWarning")
 
-PANDAS3 = int(pd.__version__.split(".")[0]) >= 3
 PANDAS31 = tuple(int(p) for p in pd.__version__.split(".")[:2]) >= (3, 1)
-PANDAS30 = PANDAS3 and not PANDAS31
+PANDAS30 = not PANDAS31
 NAN = float("nan")
 
 INDEXES = {
@@ -123,6 +124,7 @@ def _wrap(x):
 
 def check(make, call, *, dtypes=True):
     """Run ``call`` on the pandas objects ``make()`` builds and on ours."""
+    skip_below_pandas3()
     pandas_objects = make()
     ref = _run(lambda: call(*pandas_objects))
     ours = _run(lambda: call(*[_wrap(x) for x in make()]))
@@ -386,7 +388,6 @@ def test_frame_reindex_fill_value(fill):
     check(make, lambda d: d.reindex([20, 40], columns=["b", "q"], fill_value=fill))
 
 
-@pytest.mark.skipif(not PANDAS3, reason="pandas 2 widens a text column to object")
 def test_frame_reindex_fill_value_text_column():
     check(
         lambda: (pd.DataFrame({"c": ["x", "y"]}, index=[1, 2]),),
@@ -619,7 +620,21 @@ def test_frame_align_fill_value(fill, axis):
     )
 
 
-@pytest.mark.parametrize("kind", ["unique", "dup", "dups mono", "same", "perm"])
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "unique",
+        "dup",
+        "dups mono",
+        "dups unsorted",
+        "same",
+        "perm",
+        "subset",
+        "decreasing",
+        "text",
+        "nan",
+    ],
+)
 @pytest.mark.parametrize("join", ["outer", "inner", "left", "right"])
 def test_frame_align_row_labels(kind, join):
     a, b = PAIRS[kind]
@@ -884,3 +899,48 @@ def test_series_align_of_sorted_unique_integer_labels_matches_pandas(join):
 def test_series_align_with_repeated_or_unsorted_labels_matches_pandas(join):
     check(lambda: (_s([5, 1, 3, 9]), _s([3, 4, 5], "w")), lambda a, b: a.align(b, join=join))
     check(lambda: (_s([1, 2, 2, 9]), _s([2, 4, 9], "w")), lambda a, b: a.align(b, join=join))
+
+
+@pytest.mark.parametrize("join", ["left", "right", "inner", "outer"])
+def test_frame_align_keeps_the_kept_side_label_type(join):
+    check(
+        lambda: (
+            pd.DataFrame({"x": [1, 2, 3]}, index=pd.Index([1, 2, 3], name="k")),
+            pd.DataFrame({"y": [4, 5, 6]}, index=pd.Index([1.0, 2.0, 4.0], name="k")),
+        ),
+        lambda p, q: p.align(q, join=join),
+    )
+
+
+@pytest.mark.parametrize("join", ["left", "right", "inner", "outer"])
+def test_align_keeps_large_int_labels_exact(join):
+    big = 2**53 + 1
+    check(lambda: (_s([big, 5]), _s([float(2**53), 7.5], "w")), lambda a, b: a.align(b, join=join))
+    check(
+        lambda: (_s([big, 5]).to_frame(), _s([float(2**53), 7.5], "w").to_frame()),
+        lambda a, b: a.align(b, join=join),
+    )
+
+
+@pytest.mark.parametrize("join", ["left", "right", "inner", "outer"])
+def test_series_align_on_equal_labels_of_other_types_keeps_each_type(join):
+    check(lambda: (_s([1, 2, 3]), _s([1.0, 2.0, 3.0], "w")), lambda a, b: a.align(b, join=join))
+
+
+def _two_levels(numbers, values):
+    return pd.Series(
+        values,
+        index=pd.MultiIndex.from_arrays([numbers, list("xyz")[: len(numbers)]], names=["k", "s"]),
+    )
+
+
+@pytest.mark.parametrize("join", ["left", "right", "inner", "outer"])
+@pytest.mark.parametrize("flip", [False, True])
+def test_align_of_several_levels_keeps_the_pandas_level_type(join, flip):
+    def make():
+        a = _two_levels([1, 2, 3], [1.0, 2.0, 3.0])
+        b = _two_levels([1.0, 2.0, 4.0], [4.0, 5.0, 6.0])
+        return (b, a) if flip else (a, b)
+
+    check(make, lambda a, b: a.align(b, join=join))
+    check(lambda: tuple(s.to_frame("v") for s in make()), lambda a, b: a.align(b, join=join))

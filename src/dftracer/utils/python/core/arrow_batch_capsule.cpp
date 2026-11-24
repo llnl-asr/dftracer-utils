@@ -104,7 +104,7 @@ static PyGetSetDef ArrowBatchCapsule_getsetters[] = {
 
 PyTypeObject ArrowBatchCapsuleType = {
     .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-        "dftracer_utils_ext._ArrowBatchCapsule",
+        "dftracer.utils.dftracer_utils_ext._ArrowBatchCapsule",
     .tp_basicsize = sizeof(ArrowBatchCapsuleObject),
     .tp_dealloc = (destructor)ArrowBatchCapsule_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT,

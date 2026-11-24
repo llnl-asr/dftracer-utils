@@ -31,19 +31,19 @@ _ANY_ALLOWED = {
 # plugin results), the opaque value of a Task handle and the codec.
 # The count may only go down; lower it when a signature gets a precise type.
 _OBJECT_BASELINE = {
-    "utils/dataframe.py": 1,
-    "utils/dftracer_utils_ext.pyi": 12,
-    "utils/expr.py": 3,
-    "utils/groupby.py": 3,
-    "utils/jit/maps.py": 12,
-    "utils/jit/monoids.py": 1,
+    "utils/_dataframe.py": 1,
+    "utils/dftracer_utils_ext.pyi": 11,
+    "utils/_expr.py": 3,
+    "utils/_groupby.py": 3,
+    "utils/jit/_maps.py": 12,
+    "utils/jit/_monoids.py": 1,
     "utils/jit/ops.py": 1,
-    "utils/jit/package.py": 3,
-    "utils/jit_op.py": 1,
+    "utils/jit/_package.py": 3,
+    "utils/_jit_op.py": 1,
     "utils/runtime.py": 2,
-    "utils/series.py": 2,
-    "utils/store/codec.py": 2,
-    "utils/trace/viewer.py": 1,
+    "utils/_series.py": 2,
+    "utils/store/_codec.py": 2,
+    "utils/trace/_viewer.py": 1,
 }
 
 
@@ -67,7 +67,9 @@ def _mentions(node):
             pass
     if _is_callable_subscript(node):
         # The parameters of a callable are part of the signature; its result is not.
-        elts = getattr(node.slice, "elts", [])
+        # Python 3.8 wraps a subscript in ast.Index.
+        sl = node.slice.value if type(node.slice).__name__ == "Index" else node.slice
+        elts = getattr(sl, "elts", [])
         for child in [node.value, *elts[:-1]]:
             found += _mentions(child)
     else:
@@ -121,11 +123,30 @@ def _scan(body, prefix, path, out):
             _scan(n.orelse, prefix, path, out)
 
 
+# Private modules that hold the public classes and functions of the package: the
+# names are public through their package, so their signatures are public too.
+_IMPLEMENTATION_OF_PUBLIC_NAMES = frozenset(
+    f"{pkg}/_{mod}"
+    for pkg, mods in {
+        "utils": "agg dataframe enums expr groupby lazyframe series table jit_op",
+        "utils/trace": "viewer writer live index_records lazy partials",
+        "utils/store": "store codec",
+        "utils/dask": "frame viewer worker index progress",
+        "utils/duql": "col pipe",
+        "utils/jit": "compiler maps monoids package plugin prims types vfold",
+    }.items()
+    for mod in mods.split()
+)
+
+
 def _public_signature_mentions():
     out = []
     for path in sorted([*_ROOT.rglob("*.py"), *_ROOT.rglob("*.pyi")]):
         parts = path.relative_to(_ROOT).with_suffix("").parts
-        if any(p.startswith("_") and p != "__init__" for p in parts):
+        stem = path.relative_to(_ROOT).with_suffix("").as_posix()
+        if stem not in _IMPLEMENTATION_OF_PUBLIC_NAMES and any(
+            p.startswith("_") and p != "__init__" for p in parts
+        ):
             continue
         rel = path.relative_to(_ROOT).as_posix()
         _scan(ast.parse(path.read_text(encoding="utf-8")).body, "", rel, out)

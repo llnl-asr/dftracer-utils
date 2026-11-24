@@ -38,8 +38,7 @@ MetadataCollectorUtility::operator()(
     meta.success = false;
 
     const dstd::String& file_path = input.file_path;
-    if (file_path.size() <= 3 ||
-        file_path.substr(file_path.size() - 3) != ".gz") {
+    if (file_path.size() <= 3 || !file_path.ends_with(".gz")) {
         const dstd::String message = dstd::fmt<
             "Not a gzip trace: {} (dftracer traces must be gzip-compressed)">(
             file_path);

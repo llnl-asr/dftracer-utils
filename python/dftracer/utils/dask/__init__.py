@@ -10,20 +10,20 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .._lazy import lazy_names
+from .._lazy import lazy_names as _lazy_names
 
 if TYPE_CHECKING:
-    from .frame import DaskFrame as DaskFrame
-    from .index import DistributedIndexResult as DistributedIndexResult
-    from .index import assign_files_by_pid as assign_files_by_pid
-    from .index import distributed_index as distributed_index
-    from .progress import ProgressAggregator as ProgressAggregator
-    from .viewer import DaskAggregatedTraceViewer as DaskAggregatedTraceViewer
-    from .viewer import DaskTraceViewer as DaskTraceViewer
-    from .viewer import QueryPage as QueryPage
-    from .viewer import distributed_write_trace as distributed_write_trace
-    from .worker import DFTracerUtilsDaskWorkerPlugin as DFTracerUtilsDaskWorkerPlugin
-    from .worker import register_auto_thread_plugin as register_auto_thread_plugin
+    from ._frame import DaskFrame as DaskFrame
+    from ._index import DistributedIndexResult as DistributedIndexResult
+    from ._index import assign_files_by_pid as assign_files_by_pid
+    from ._index import distributed_index as distributed_index
+    from ._progress import ProgressAggregator as ProgressAggregator
+    from ._viewer import DaskAggregatedTraceViewer as DaskAggregatedTraceViewer
+    from ._viewer import DaskTraceViewer as DaskTraceViewer
+    from ._viewer import QueryPage as QueryPage
+    from ._viewer import distributed_write_trace as distributed_write_trace
+    from ._worker import DFTracerUtilsDaskWorkerPlugin as DFTracerUtilsDaskWorkerPlugin
+    from ._worker import register_auto_thread_plugin as register_auto_thread_plugin
 
 __all__ = [
     "DaskFrame",
@@ -40,17 +40,17 @@ __all__ = [
 ]
 
 _SUBMODULE = {
-    "DaskFrame": "frame",
-    "DistributedIndexResult": "index",
-    "assign_files_by_pid": "index",
-    "distributed_index": "index",
-    "ProgressAggregator": "progress",
-    "DaskAggregatedTraceViewer": "viewer",
-    "DaskTraceViewer": "viewer",
-    "QueryPage": "viewer",
-    "distributed_write_trace": "viewer",
-    "DFTracerUtilsDaskWorkerPlugin": "worker",
-    "register_auto_thread_plugin": "worker",
+    "DaskFrame": "_frame",
+    "DistributedIndexResult": "_index",
+    "assign_files_by_pid": "_index",
+    "distributed_index": "_index",
+    "ProgressAggregator": "_progress",
+    "DaskAggregatedTraceViewer": "_viewer",
+    "DaskTraceViewer": "_viewer",
+    "QueryPage": "_viewer",
+    "distributed_write_trace": "_viewer",
+    "DFTracerUtilsDaskWorkerPlugin": "_worker",
+    "register_auto_thread_plugin": "_worker",
 }
 
-__getattr__, __dir__ = lazy_names(__name__, globals(), _SUBMODULE)
+__getattr__, __dir__ = _lazy_names(__name__, globals(), _SUBMODULE)

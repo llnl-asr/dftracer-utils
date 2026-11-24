@@ -11,6 +11,9 @@ import random
 import pytest
 
 pd = pytest.importorskip("pandas")
+
+from .common import skip_below_pandas3  # noqa: E402
+
 zoneinfo = pytest.importorskip("zoneinfo")
 
 from dftracer.utils import DataFrame, Series  # noqa: E402
@@ -26,6 +29,13 @@ ZONES = [
     "Asia/Kolkata",
     "Pacific/Chatham",
 ]
+
+
+def _valgrind_first(values):
+    """``values`` for a parametrize, with the first marked to run under
+    Valgrind, which runs only the marked cases of this file: every case takes
+    too long there."""
+    return [pytest.param(values[0], marks=pytest.mark.valgrind), *values[1:]]
 
 
 def _transitions(zone, first=2018, last=2027):
@@ -118,7 +128,7 @@ PARTS = [
 ]
 
 
-@pytest.mark.parametrize("zone", ZONES)
+@pytest.mark.parametrize("zone", _valgrind_first(ZONES))
 @pytest.mark.parametrize("part", PARTS)
 def test_every_calendar_part_reads_the_wall_time(zone, part):
     p = stamps(zone)
@@ -128,7 +138,7 @@ def test_every_calendar_part_reads_the_wall_time(zone, part):
     assert [int(v) for v in got.to_list()] == [int(v) for v in want.tolist()]
 
 
-@pytest.mark.parametrize("zone", ZONES)
+@pytest.mark.parametrize("zone", _valgrind_first(ZONES))
 def test_date_time_names_and_isocalendar(zone):
     p = stamps(zone)
     o = ours(p)
@@ -152,7 +162,7 @@ FORMATS = [
 ]
 
 
-@pytest.mark.parametrize("zone", ZONES)
+@pytest.mark.parametrize("zone", _valgrind_first(ZONES))
 @pytest.mark.parametrize("fmt", FORMATS)
 def test_strftime_prints_the_offset_and_abbreviation(zone, fmt):
     p = stamps(zone)
@@ -176,7 +186,7 @@ def _round_each(series, method, freq):
     return out
 
 
-@pytest.mark.parametrize("zone", ZONES)
+@pytest.mark.parametrize("zone", _valgrind_first(ZONES))
 @pytest.mark.parametrize("method", ["floor", "ceil", "round"])
 @pytest.mark.parametrize("freq", FREQS)
 def test_floor_ceil_round_work_on_the_wall_time(zone, method, freq):
@@ -197,6 +207,7 @@ def test_floor_ceil_round_work_on_the_wall_time(zone, method, freq):
             assert a == b, f"{t}: ours {a}, pandas {b}"
 
 
+@pytest.mark.valgrind
 def test_normalize_is_the_local_midnight():
     for zone in ZONES:
         p = stamps(zone)
@@ -216,7 +227,7 @@ def test_normalize_is_the_local_midnight():
         assert got == want
 
 
-@pytest.mark.parametrize("zone", ZONES)
+@pytest.mark.parametrize("zone", _valgrind_first(ZONES))
 def test_tz_convert_keeps_the_instants_and_changes_the_wall_time(zone):
     p = stamps("UTC", instants(zone))
     o = ours(p)
@@ -253,7 +264,7 @@ def _try(fn, *args, **kwargs):
         return e
 
 
-@pytest.mark.parametrize("zone", ZONES)
+@pytest.mark.parametrize("zone", _valgrind_first(ZONES))
 @pytest.mark.parametrize("ambiguous", ["raise", "NaT", True, False])
 @pytest.mark.parametrize("nonexistent", ["raise", "shift_forward", "shift_backward", "NaT"])
 def test_tz_localize_each_option_row_by_row(zone, ambiguous, nonexistent):
@@ -265,7 +276,7 @@ def test_tz_localize_each_option_row_by_row(zone, ambiguous, nonexistent):
         got = _try(ours(one).dt.tz_localize, zone, ambiguous=flag, nonexistent=nonexistent)
         if isinstance(want, Exception):
             assert isinstance(got, Exception), f"{t}: pandas raised {want!r}, ours returned"
-            if PANDAS3:
+            if PANDAS3:  # pandas 2 raises a pytz error, not a ValueError
                 assert isinstance(got, ValueError) == isinstance(want, ValueError)
             continue
         assert not isinstance(got, Exception), f"{t}: ours raised {got!r}"
@@ -279,7 +290,7 @@ def test_tz_localize_each_option_row_by_row(zone, ambiguous, nonexistent):
         assert (g is pd.NaT and w is pd.NaT) or g == w, f"{t}: ours {g}, pandas {w}"
 
 
-@pytest.mark.parametrize("zone", ZONES)
+@pytest.mark.parametrize("zone", _valgrind_first(ZONES))
 def test_tz_localize_infer_over_a_column(zone):
     walls = _walls(zone)
     for t in transitions(zone):
@@ -299,6 +310,7 @@ def test_tz_localize_infer_over_a_column(zone):
     assert len(walls)
 
 
+@pytest.mark.valgrind
 def test_a_boolean_array_picks_a_side_per_row():
     zone = "America/New_York"
     run = pd.Series(
@@ -312,6 +324,7 @@ def test_a_boolean_array_picks_a_side_per_row():
         ours(run).dt.tz_localize(zone, ambiguous=[True])
 
 
+@pytest.mark.valgrind
 def test_tz_localize_and_back_is_the_wall_time_and_errors_match():
     p = stamps("America/New_York")
     o = ours(p)
@@ -328,6 +341,7 @@ def test_tz_localize_and_back_is_the_wall_time_and_errors_match():
             o.dt.tz_convert(bad)
 
 
+@pytest.mark.valgrind
 def test_an_unknown_zone_on_an_existing_column_fails_not_reads_utc():
     o = ours(stamps("UTC"))
     from dftracer.utils import dftracer_utils_ext as ext  # noqa: F401
@@ -336,7 +350,7 @@ def test_an_unknown_zone_on_an_existing_column_fails_not_reads_utc():
     assert bad.dt.hour.to_list() == o.dt.hour.to_list()
 
 
-@pytest.mark.parametrize("zone", ZONES)
+@pytest.mark.parametrize("zone", _valgrind_first(ZONES))
 def test_naive_and_utc_parts_are_unchanged(zone):
     p = stamps("UTC", instants(zone))
     for tz in ("UTC", None):
@@ -371,8 +385,7 @@ def _frame(zone, ticks=None):
 def _same(x, y):
     if isinstance(y, Exception):
         assert isinstance(x, Exception), f"ours returned, pandas raised {y!r}"
-        if PANDAS3:
-            assert isinstance(x, ValueError) == isinstance(y, ValueError)
+        assert isinstance(x, ValueError) == isinstance(y, ValueError)
         return
     assert not isinstance(x, Exception), f"ours raised {x!r}"
     x = x.to_pandas() if hasattr(x, "to_pandas") else x
@@ -389,13 +402,16 @@ def _same(x, y):
 
 
 def _check(fn, p, o):
+    skip_below_pandas3()
     _same(_try(lambda: fn(o)), _try(lambda: fn(p)))
 
 
 RULES = ["1h", "15min", "1D", "D", "2D", "W", "W-WED", "ME", "MS", "QE", "YE", "3h"]
 
 
-@pytest.mark.parametrize("zone", ["America/New_York", "Europe/London", "Australia/Lord_Howe"])
+@pytest.mark.parametrize(
+    "zone", _valgrind_first(["America/New_York", "Europe/London", "Australia/Lord_Howe"])
+)
 @pytest.mark.parametrize("rule", RULES)
 def test_resample_on_a_zone_with_dst(zone, rule):
     p = _frame(zone)
@@ -404,7 +420,9 @@ def test_resample_on_a_zone_with_dst(zone, rule):
         _check(lambda x, fn=fn: getattr(x.resample(rule), fn)(), p, o)
 
 
-@pytest.mark.parametrize("zone", ["America/New_York", "Europe/London", "Asia/Kolkata"])
+@pytest.mark.parametrize(
+    "zone", _valgrind_first(["America/New_York", "Europe/London", "Asia/Kolkata"])
+)
 @pytest.mark.parametrize("rule", ["1h", "3h", "7min"])
 @pytest.mark.parametrize("origin", ["epoch", "start", "start_day", "end", "end_day"])
 def test_resample_origin_keywords_on_a_zone(zone, rule, origin):
@@ -417,10 +435,8 @@ def test_resample_origin_keywords_on_a_zone(zone, rule, origin):
 
 @pytest.mark.parametrize("closed", [None, "left", "right"])
 @pytest.mark.parametrize("label", [None, "left", "right"])
-@pytest.mark.parametrize("rule", ["1D", "W", "ME", "1h"])
+@pytest.mark.parametrize("rule", _valgrind_first(["1D", "W", "ME", "1h"]))
 def test_resample_closed_and_label_on_new_york(rule, closed, label):
-    if rule == "1D" and closed == "right" and not PANDAS3:
-        pytest.skip("pandas 2 closes a day of a zone-aware index on the right another way than 3.1")
     zone = "America/New_York"
     start = pd.Timestamp("2024-03-08", tz="UTC").value // 1000
     ticks = [start + i * 1_800_000_000 for i in range(0, 48 * 5)]
@@ -430,6 +446,7 @@ def test_resample_closed_and_label_on_new_york(rule, closed, label):
         _check(lambda x, fn=fn: getattr(x.resample(rule, closed=closed, label=label), fn)(), p, o)
 
 
+@pytest.mark.valgrind
 def test_a_day_of_a_dst_change_is_23_or_25_hours():
     zone = "America/New_York"
     for day, hours in (("2024-03-10", 23), ("2024-11-03", 25), ("2024-06-01", 24)):
@@ -443,7 +460,9 @@ def test_a_day_of_a_dst_change_is_23_or_25_hours():
         assert max(want["a"]) in (hours, hours - 1, hours + 1) or hours == 24
 
 
-@pytest.mark.parametrize("zone", ["America/New_York", "Europe/London", "Asia/Kolkata"])
+@pytest.mark.parametrize(
+    "zone", _valgrind_first(["America/New_York", "Europe/London", "Asia/Kolkata"])
+)
 def test_at_time_and_between_time_across_dst(zone):
     p = _frame(zone)
     o = DataFrame.from_pandas(p)
@@ -454,7 +473,7 @@ def test_at_time_and_between_time_across_dst(zone):
             _check(lambda x, lo=lo, hi=hi, i=inclusive: x.between_time(lo, hi, inclusive=i), p, o)
 
 
-@pytest.mark.parametrize("zone", ["America/New_York", "Europe/London"])
+@pytest.mark.parametrize("zone", _valgrind_first(["America/New_York", "Europe/London"]))
 @pytest.mark.parametrize("freq", ["1h", "D", "15min", "W", "ME"])
 def test_asfreq_on_a_zone(zone, freq):
     start = pd.Timestamp("2024-03-08", tz="UTC").value // 1000
@@ -465,7 +484,7 @@ def test_asfreq_on_a_zone(zone, freq):
     _check(lambda x: x.asfreq(freq, normalize=True), p, o)
 
 
-@pytest.mark.parametrize("zone", ["America/New_York", "Asia/Kolkata"])
+@pytest.mark.parametrize("zone", _valgrind_first(["America/New_York", "Asia/Kolkata"]))
 def test_index_tz_localize_and_convert_with_options(zone):
     naive = _frame("UTC").tz_localize(None)
     walls = _walls(zone)
@@ -499,7 +518,7 @@ needs_polars = pytest.mark.skipif(pl is None, reason="polars is not installed")
 
 
 @needs_polars
-@pytest.mark.parametrize("zone", ZONES)
+@pytest.mark.parametrize("zone", _valgrind_first(ZONES))
 def test_polars_convert_time_zone_and_replace_time_zone(zone):
     # polars ends its zone rules in 2037; the instants stop before it.
     ticks = [t for t in instants(zone) if t < 2_100_000_000 * 1_000_000]
@@ -517,7 +536,9 @@ def test_polars_convert_time_zone_and_replace_time_zone(zone):
 
 
 @needs_polars
-@pytest.mark.parametrize("zone", ["America/New_York", "Europe/London", "Australia/Lord_Howe"])
+@pytest.mark.parametrize(
+    "zone", _valgrind_first(["America/New_York", "Europe/London", "Australia/Lord_Howe"])
+)
 @pytest.mark.parametrize("ambiguous", ["raise", "earliest", "latest", "null"])
 @pytest.mark.parametrize("non_existent", ["raise", "null"])
 def test_polars_replace_time_zone_options(zone, ambiguous, non_existent):
@@ -535,6 +556,7 @@ def test_polars_replace_time_zone_options(zone, ambiguous, non_existent):
         assert (w is None and g is pd.NaT) or pd.Timestamp(w) == g, f"{t}: {g} vs {w}"
 
 
+@pytest.mark.valgrind
 @needs_polars
 def test_polars_names_reject_other_values():
     mine = ours(pd.Series(pd.to_datetime(["2024-01-01"])).dt.as_unit("us"))
@@ -547,6 +569,7 @@ def test_polars_names_reject_other_values():
 # ---- lazy expressions ----------------------------------------------------------------
 
 
+@pytest.mark.valgrind
 def test_expressions_read_the_wall_time_too():
     from dftracer.utils import col
 
@@ -572,6 +595,7 @@ def test_expressions_read_the_wall_time_too():
 # ---- where the engine finds zone files -----------------------------------------------
 
 
+@pytest.mark.valgrind
 def test_the_search_path_comes_from_zoneinfo_and_tzdata():
     from dftracer.utils._tz import zone_directories
 
@@ -584,6 +608,7 @@ def test_the_search_path_comes_from_zoneinfo_and_tzdata():
     assert any(f.startswith(tzdata.__path__[0]) for f in folders)
 
 
+@pytest.mark.valgrind
 def test_a_zone_file_in_the_given_directory_is_found(tmp_path):
     import shutil
 
@@ -604,6 +629,7 @@ def test_a_zone_file_in_the_given_directory_is_found(tmp_path):
         _tz.install_search_path()
 
 
+@pytest.mark.valgrind
 def test_the_search_path_is_split_at_the_platform_separator(tmp_path):
     import shutil
 
@@ -626,6 +652,7 @@ def test_the_search_path_is_split_at_the_platform_separator(tmp_path):
 # ---- differences from pandas, on purpose ---------------------------------------------
 
 
+@pytest.mark.valgrind
 def test_a_fixed_offset_name_is_read_as_written():
     naive = Series.from_pandas(pd.Series(pd.to_datetime(["2024-07-01 12:00"])).dt.as_unit("us"))
     for name in ("+0530", "+05:30"):
@@ -633,6 +660,7 @@ def test_a_fixed_offset_name_is_read_as_written():
         assert (got.dt.hour.to_list(), got.dt.minute.to_list()) == ([6], [30]), name
 
 
+@pytest.mark.valgrind
 def test_shift_forward_and_backward_use_the_instant_of_the_change():
     # Lord Howe skips 02:00 to 02:30 on 2024-10-06: the change is 15:30 UTC the day before.
     naive = Series.from_pandas(pd.Series(pd.to_datetime(["2024-10-06 02:15"])).dt.as_unit("us"))
@@ -652,7 +680,7 @@ def test_shift_forward_and_backward_use_the_instant_of_the_change():
 
 
 @needs_polars
-@pytest.mark.parametrize("zone", ZONES)
+@pytest.mark.parametrize("zone", _valgrind_first(ZONES))
 def test_pandas_arrow_and_polars_round_trips_keep_the_zone(zone):
     pa = pytest.importorskip("pyarrow")
     p = stamps(zone)
@@ -683,6 +711,7 @@ def _lazy_localize(wall, **kwargs):
     return lazy.with_columns(col("t").dt.tz_localize("America/New_York", **kwargs).alias("u"))
 
 
+@pytest.mark.valgrind
 @pytest.mark.parametrize(
     ("wall", "kwargs", "text"),
     [
@@ -698,6 +727,7 @@ def test_a_lazy_tz_localize_failure_reads_like_the_eager_one(wall, kwargs, text)
         eager.dt.tz_localize("America/New_York")
 
 
+@pytest.mark.valgrind
 def test_a_failure_does_not_outlive_the_call_that_met_it():
     bad = ours(pd.Series(pd.to_datetime(["2024-03-10 02:30"])).dt.as_unit("us"))
     with pytest.raises(ValueError):
@@ -710,6 +740,7 @@ def test_a_failure_does_not_outlive_the_call_that_met_it():
     assert "nonexistent" not in str(caught.value)
 
 
+@pytest.mark.valgrind
 def test_a_lazy_shift_beyond_the_packed_range_is_refused():
     wall = ["2024-03-10 02:30"]
     big = datetime.timedelta(days=3)

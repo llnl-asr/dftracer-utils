@@ -16,8 +16,7 @@ inline constexpr dstd::StringView ARGS_PREFIX = "args.";
 /// bare ("cqe.raw_ns") or prefixed ("args.cqe.raw_ns"). A field that is exactly
 /// "args." (no remainder) is left unchanged.
 inline dstd::StringView strip_args_prefix(dstd::StringView field) {
-    if (field.size() > ARGS_PREFIX.size() &&
-        field.substr(0, ARGS_PREFIX.size()) == ARGS_PREFIX)
+    if (field.size() > ARGS_PREFIX.size() && field.starts_with(ARGS_PREFIX))
         return field.substr(ARGS_PREFIX.size());
     return field;
 }

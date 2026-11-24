@@ -13,9 +13,18 @@ import pytest
 pytest.importorskip("dftracer.utils.dftracer_utils_ext")
 
 import dftracer.utils as dft  # noqa: E402
-from dftracer.utils import DFTUtilsValueError, col  # noqa: E402
+from dftracer.utils import col
+from dftracer.utils.errors import DFTUtilsValueError
 
 pd = pytest.importorskip("pandas")
+
+# Current pandas spellings of the names newer pandas deprecates; ours stay as aliases.
+_PANDAS_DT_NAMES = {
+    "weekday": "day_of_week",
+    "dayofweek": "day_of_week",
+    "dayofyear": "day_of_year",
+    "daysinmonth": "days_in_month",
+}
 
 STRINGS = ["abc", " Hello World ", None, "", "a,b,c", "ABC def", "12", "  "]
 STAMPS = [
@@ -59,7 +68,7 @@ def test_the_new_series_dt_methods_match_pandas_and_the_expr_methods():
     s = _ts_series()
     p = pd.Series([pd.Timestamp(v) if v is not None else pd.NaT for v in STAMPS])
     iso = p.dt.isocalendar()
-    assert _lists(s.dt.ordinal_day().to_list()) == _lists(p.dt.dayofyear.astype("float"))
+    assert _lists(s.dt.ordinal_day().to_list()) == _lists(p.dt.day_of_year.astype("float"))
     assert s.dt.week().to_list() == _lists(iso["week"].astype("float"))
     assert s.dt.iso_year().to_list() == _lists(iso["year"].astype("float"))
     assert s.dt.epoch("s").to_list() == [
@@ -78,7 +87,9 @@ def test_the_series_dt_pandas_names_are_properties_and_the_polars_names_methods(
     for name in ("year", "month", "day", "hour", "minute", "second", "weekday", "dayofweek"):
         got = getattr(s.dt, name)
         assert isinstance(got, dft.Series), name
-        assert got.to_list() == _lists(getattr(p.dt, name).astype("float")), name
+        assert got.to_list() == _lists(
+            getattr(p.dt, _PANDAS_DT_NAMES.get(name, name)).astype("float")
+        ), name
     for name in ("epoch", "iso_year", "ordinal_day", "truncate", "week"):
         assert callable(getattr(s.dt, name)) and not isinstance(getattr(s.dt, name), dft.Series)
 
@@ -86,7 +97,7 @@ def test_the_series_dt_pandas_names_are_properties_and_the_polars_names_methods(
 def test_weekday_is_zero_based_on_a_series_and_one_based_on_an_expr():
     s = _ts_series()
     p = pd.Series([pd.Timestamp(v) if v is not None else pd.NaT for v in STAMPS])
-    zero = _lists(p.dt.weekday.astype("float"))
+    zero = _lists(p.dt.day_of_week.astype("float"))
     assert s.dt.weekday.to_list() == zero
     assert s.dt.dayofweek.to_list() == s.dt.day_of_week.to_list() == zero
     assert _on_expr(s, lambda e: e.dt.dayofweek()) == zero
@@ -144,6 +155,7 @@ def test_total_seconds_agrees_on_a_duration_and_an_int_column():
 
 
 def test_tz_localize_and_tz_convert_agree_across_series_and_expr():
+    pytest.importorskip("zoneinfo")  # a zoned value needs zoneinfo
     s = _ts_series()
     utc_series = s.dt.tz_localize("UTC")
     frame = dft.DataFrame({"x": s})

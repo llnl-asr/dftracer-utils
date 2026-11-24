@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -62,9 +63,8 @@ dstd::String big_trace_text() {
 // not in making the input.
 dstd::String write_big_trace(dstd::CStringView dir, int n) {
     static const dstd::String text = big_trace_text();
-    char name[32];
-    std::snprintf(name, sizeof(name), "/b%04d.pfw.gz", n);
-    return dftu_utils_test::write_gz_trace(dstd::String(dir) + name, text);
+    return dftu_utils_test::write_gz_trace(
+        dstd::String(dir) + dstd::fmt<"/b{:04}.pfw.gz">(n), text);
 }
 
 // The most live bytes above the start that the memory manager reports each

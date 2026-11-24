@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_TRACE_READER_INTERNAL_STREAMS_GZIP_STREAM_H
 #define DFTRACER_UTILS_TRACE_READER_INTERNAL_STREAMS_GZIP_STREAM_H
 
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/hasher.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
@@ -83,9 +84,7 @@ class GzipStream : public StreamBase {
     // buffer from buffer_, refilling via the derived read_async() when empty.
     coro::CoroTask<dstd::Result<std::size_t>> read_async(
         char *buffer, std::size_t buffer_size) override {
-#ifdef __GNUC__
-        __builtin_prefetch(buffer, 1, 3);
-#endif
+        dstd::bits::prefetch_write(buffer);
 
         // Check if we have unconsumed data from previous read
         if (buffer_pos_ < valid_bytes_) {

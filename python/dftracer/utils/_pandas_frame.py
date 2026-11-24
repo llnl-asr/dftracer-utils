@@ -22,6 +22,7 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
+from ._enums import DType, rule_to_units
 from ._label_align import LabelAlignMixin
 from ._levels import (
     LevelArg,
@@ -31,9 +32,18 @@ from ._levels import (
     sort_plan,
     sorted_positions,
 )
-from ._pandas_series import OMITTED, Omitted, replace_in, replace_pairs, valid_edge
+from ._pandas_series import (
+    OMITTED,
+    Omitted,
+    edge_label,
+    present_edge,
+    replace_in,
+    replace_pairs,
+)
 from ._reshape import stack_frame, unstack_frame
+from ._series import Series
 from ._series_index import (
+    column_series,
     default_name,
     drop_levels,
     internal_name,
@@ -43,18 +53,17 @@ from ._series_index import (
 )
 from ._time_index import TimeIndexMixin
 from ._value_counts import frame_value_counts, native_counts
-from .enums import DType, rule_to_units
-from .series import Series
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
     from typing_extensions import Concatenate, ParamSpec, Self
 
     from ._apply import Row
+    from ._dataframe import DataFrame
+    from ._groupby import GroupBy
     from ._pandas_series import ReplaceKey, ReplaceValue
-    from .dataframe import DataFrame
     from .dftracer_utils_ext import Scalar
-    from .groupby import GroupBy
 
 _R = TypeVar("_R")
 if TYPE_CHECKING:
@@ -70,13 +79,9 @@ def is_numeric_series(s: Series) -> bool:
 
 
 def _group(frame: DataFrame, keys: Sequence[str]) -> GroupBy:
-    from .groupby import GroupBy
+    from ._groupby import GroupBy
 
     return GroupBy(frame, list(keys))
-
-
-def column_series(frame: DataFrame, name: str) -> Series:
-    return _ext.DataFrame.__getitem__(frame, name)
 
 
 class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFrame):
@@ -88,7 +93,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
     columns: List[str]
 
     def _frame(self) -> DataFrame:
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         assert isinstance(self, DataFrame)
         return self
@@ -124,7 +129,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
     def _operand(self, other: Operand, name: str) -> int | float | Series:
         """The right-hand side for column ``name``: a scalar, a row-aligned
         Series (positional), or the same-named column of a frame."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         if isinstance(other, DataFrame):
             if name not in other:
@@ -143,7 +148,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         return other
 
     def _binary(self, other: Operand, op: str, reverse: bool = False) -> DataFrame:
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         names = [c for c in self.columns if is_numeric_series(self._col(c))]
         if isinstance(other, DataFrame):
@@ -245,7 +250,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
 
     # -- comparisons: a Bool frame ---------------------------------------------
     def _compare(self, other: Operand, op: str) -> DataFrame:
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         out: dict[str, Series] = {}
         for name in self.columns:
@@ -415,7 +420,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
     def _reduce_scalar(
         self, fn: Callable[[Series], object], numeric_only: bool = True
     ) -> DataFrame:
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         out: dict[str, list[object]] = {}
         for name in self.columns:
@@ -500,8 +505,8 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         return self._pairwise("covar_samp")
 
     def _pairwise(self, agg: str) -> DataFrame:
-        from .dataframe import DataFrame
-        from .expr import Agg, Col
+        from ._dataframe import DataFrame
+        from ._expr import Agg, Col
 
         names = [c for c in self.columns if is_numeric_series(self._col(c))]
         specs = [Agg(agg, Col(b), f"{a}__{b}", by=Col(a)) for a in names for b in names]
@@ -598,11 +603,11 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         return [self._frame().index, list(self.columns)]
 
     @property
-    def values(self) -> np.ndarray:
+    def values(self) -> npt.NDArray[np.generic]:
         """The frame as a 2-D NumPy array (``to_numpy``)."""
         return self.to_numpy()
 
-    def to_numpy(self) -> np.ndarray:
+    def to_numpy(self) -> npt.NDArray[np.generic]:
         import numpy as np
 
         return np.column_stack([self._col(c).to_numpy() for c in self.columns])
@@ -614,7 +619,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
     def transpose(self) -> DataFrame:
         """Rows become columns named ``0``.. (``T``); values widen to one type
         as pandas does."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         rows = self._frame().to_dict()
         names = self.columns
@@ -714,9 +719,12 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
 
     def pop(self, name: str) -> Series:
         """Remove ``name`` from this handle and return it."""
+        from ._loc import rebind
+
         out = self._col(name)
-        _ext.DataFrame._replace(
-            self, _ext.DataFrame.select(self, *[c for c in self._frame()._names() if c != name])
+        rebind(
+            self._frame(),
+            _ext.DataFrame.select(self, *[c for c in self._frame()._names() if c != name]),
         )
         return out
 
@@ -724,12 +732,12 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         """Put ``column`` at position ``loc`` (this handle is rebound)."""
         if column in self._frame():
             raise ValueError(f"insert: column {column!r} already exists")
-        from ._loc import Rows, assign_rows
+        from ._loc import Rows, assign_rows, rebind
 
         assign_rows(self._frame(), Rows.all(), [column], value)
         order = [c for c in self._frame()._names() if c != column]
         order.insert(loc, column)
-        _ext.DataFrame._replace(self, _ext.DataFrame.select(self, *order))
+        rebind(self._frame(), _ext.DataFrame.select(self, *order))
 
     def _level_names(self) -> list[str]:
         return list(_ext.DataFrame.index_names(self))
@@ -821,7 +829,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         return self._frame().rename(dict(zip(self.columns, names)))
 
     def equals(self, other: object) -> bool:
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         if not isinstance(other, DataFrame) or self.columns != other.columns:
             return False
@@ -860,7 +868,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
 
     def truncate(self, before: object | None = None, after: object | None = None) -> DataFrame:
         """Rows with index labels in ``[before, after]`` (:attr:`loc`)."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         out = self._frame().loc[slice(before, after)]
         assert isinstance(out, DataFrame)
@@ -923,17 +931,11 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         return self._valid_edge(first=False)
 
     def _valid_edge(self, first: bool) -> object | None:
-        any_valid = None
-        for name in self.columns:
-            m = self._col(name).notna()
-            any_valid = m if any_valid is None else any_valid.logical(1, m)
-        if any_valid is None:
+        edges = [present_edge(self._col(name), first) for name in self.columns]
+        found = [p for p in edges if p is not None]
+        if not found:
             return None
-        pos = valid_edge(any_valid, first)
-        if pos is None:
-            return None
-        labels = self._frame().index
-        return labels[pos] if isinstance(labels, Series) else pos
+        return edge_label(self._frame().index, min(found) if first else max(found))
 
     def select_dtypes(
         self, include: Sequence[object] | None = None, exclude: Sequence[object] | None = None
@@ -969,7 +971,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
 
     def memory_usage(self) -> DataFrame:
         """One row: the bytes each column's Arrow buffers hold."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         return DataFrame({c: [self._col(c).nbytes] for c in self.columns})
 
@@ -1013,7 +1015,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         one row per differing cell with ``row``, ``column``, ``self`` and
         ``other`` (the two values as strings; a null on one side is a
         difference), by column then row; :meth:`Series.compare` per column."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         if self.columns != other.columns:
             raise ValueError("compare: the frames must hold the same columns")
@@ -1042,7 +1044,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
     def corrwith(self, other: DataFrame) -> DataFrame:
         """One row: each numeric column's Pearson correlation with ``other``'s
         same-named column (positional), pandas ``DataFrame.corrwith``."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         out: dict[str, list[float]] = {}
         for name in self.columns:
@@ -1164,29 +1166,52 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         return self.transpose()
 
     def combine_first(self, other: DataFrame) -> DataFrame:
-        """This frame with nulls filled from ``other``'s same-named columns
-        (positional)."""
+        """The pandas ``combine_first``: both frames on the union of their row
+        labels and columns, with this frame's value where it has one and
+        ``other``'s elsewhere."""
+        from ._pandas_series import kept_type, present_or, realigned
+
+        frame = self._frame()
+        mine, theirs = frame.align(other, join="outer")
+        theirs = cast("DataFrame", theirs)
+        names = [*frame.columns, *(n for n in other.columns if n not in frame)]
+        mine = mine[names]
         out: dict[str, Series] = {}
-        for name in self.columns:
-            if name in other:
-                s = self._col(name)
-                out[name] = s.where(s.notna(), column_series(other, name))
-        return self._rebuild(out)
+        for name in names:
+            if name not in other:
+                out[name] = realigned(column_series(mine, name), column_series(frame, name))
+            elif name not in frame:
+                out[name] = realigned(column_series(theirs, name), column_series(other, name))
+            else:
+                kept = kept_type(column_series(frame, name), column_series(other, name))
+                out[name] = present_or(column_series(mine, name), column_series(theirs, name), kept)
+        return mine._rebuild(out)
 
     def update(self, other: DataFrame) -> None:
-        """Overwrite this handle's values with ``other``'s present values in
-        the same-named columns (positional; the handle is rebound)."""
+        """The pandas ``update``: ``other`` on this frame's row labels, and its
+        present values over this frame's in the columns both have (the handle is
+        rebound)."""
+        from ._pandas_series import has_duplicate_labels, kept_by_update, present_or
+
+        frame = self._frame()
+        if has_duplicate_labels(other):
+            raise ValueError("Update not allowed with duplicate indexes on other.")
+        mine, theirs = frame.align(other, join="left", axis=0)
+        theirs = cast("DataFrame", theirs)
         out: dict[str, Series] = {}
-        for name in self.columns:
-            if name in other:
-                o = column_series(other, name)
-                out[name] = o.where(o.notna(), self._col(name))
-        _ext.DataFrame._replace(self, self._rebuild(out))
+        for name in mine.columns:
+            s = column_series(mine, name)
+            if name in theirs:
+                s = kept_by_update(present_or(column_series(theirs, name), s), s.dtype)
+            out[name] = s
+        from ._loc import rebind
+
+        rebind(self._frame(), mine._rebuild(out))
 
     def dot(self, other: Series | DataFrame) -> Series | DataFrame:
         """Matrix product with a Series (one value per column) or a frame
         (each column of ``other`` against each of ours)."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         names = [c for c in self.columns if is_numeric_series(self._col(c))]
         if isinstance(other, Series):
@@ -1202,7 +1227,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         columns: Sequence[str] | None = None,
     ) -> DataFrame:
         """A frame from row dicts or row tuples (with ``columns``)."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         rows = list(records)
         if not rows:
@@ -1219,7 +1244,7 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
 
     # -- the datetime-index methods, over the one index column (or `on`) ------
     def _time_column(self, on: str | None, op: str) -> tuple[str, Series]:
-        from .dataframe import single_index
+        from ._dataframe import single_index
 
         name = on if on is not None else single_index(self.index_names(), op)
         if name not in self._frame():

@@ -9,13 +9,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, Literal, Sequence, Union, cast
 
+from ._enums import DType
 from ._series_index import default_name, public_name
-from .enums import DType
 
 if TYPE_CHECKING:
     from typing_extensions import Self
 
-    from .series import Series
+    from ._series import Series
 
 Level = Union[int, str, None]
 LevelArg = Union[Level, Sequence[Level]]
@@ -131,8 +131,8 @@ def sorted_positions(
     """The row positions that order the rows by the label ``levels``, each in
     its direction; ``key`` is applied to the first ``keyed`` levels, a Series named
     like the level."""
+    from ._dataframe import DataFrame
     from ._series_index import positions
-    from .dataframe import DataFrame
 
     if na_position not in ("first", "last"):
         raise ValueError("na_position must be 'first' or 'last'")
@@ -158,7 +158,7 @@ def label_text(level: Series, prefix: str, suffix: str) -> Series:
     label prints as pandas 3 prints it: ``NaT`` for a time, else ``nan``).
     Numbers, Bool and text go through the string kernels (cast, then a
     concatenation); the other types print each label in Python."""
-    from .series import Series
+    from ._series import Series
 
     if level.dtype not in _NATIVE_TEXT:
         null = "NaT" if level.dtype in (DType.TIMESTAMP, DType.DURATION) else "nan"
@@ -166,7 +166,7 @@ def label_text(level: Series, prefix: str, suffix: str) -> Series:
         return Series.from_list(texts) if texts else level.cast(DType.STRING)
     text = cast(
         "Series[str]",
-        (level if level.dtype == DType.STRING else level.cast(DType.STRING)).fillna("nan"),
+        (level if level.dtype == DType.STRING else level.cast(DType.STRING)).fill_null("nan"),
     )
     if prefix:
         text = _cat(_cat(text.str.slice(0, 0), prefix), text)

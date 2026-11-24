@@ -10,6 +10,8 @@
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/thread.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/memory/config.h>
+#include <dftracer/utils/memory/heap_page.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
 #include <doctest/doctest.h>
@@ -18,6 +20,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <thread>
 
 using namespace dftracer::utils;
@@ -38,6 +41,31 @@ coro::CoroTask<void> bump(std::atomic<int>* done) {
 coro::CoroTask<void> gated(std::atomic<bool>* go, std::atomic<int>* done) {
     while (!go->load(std::memory_order_acquire)) std::this_thread::yield();
     done->fetch_add(1, std::memory_order_relaxed);
+    co_return;
+}
+
+constexpr std::size_t HALF_RUN = memory::detail::HEAP_PAGE_SIZE + 5000;
+constexpr int HALF_BLOCKS = 64;
+
+// Holds its worker until *go, then leaves that worker's heap with idle pages:
+// every other block is freed, so its spans stay in the heap.
+coro::CoroTask<void> hold_half(std::atomic<int>* started, std::atomic<bool>* go,
+                               std::atomic<int>* done,
+                               dstd::Vector<void*>* kept) {
+    started->fetch_add(1, std::memory_order_acq_rel);
+    while (!go->load(std::memory_order_acquire)) std::this_thread::yield();
+    void* blocks[HALF_BLOCKS];
+    for (void*& b : blocks) {
+        b = memory::detail::page_allocate(HALF_RUN, 16);
+        std::memset(b, 1, HALF_RUN);
+    }
+    for (int i = 0; i < HALF_BLOCKS; ++i) {
+        if (i % 2 == 0)
+            memory::detail::page_deallocate(blocks[i], HALF_RUN);
+        else
+            kept->push_back(blocks[i]);
+    }
+    done->fetch_add(1, std::memory_order_release);
     co_return;
 }
 
@@ -212,6 +240,45 @@ TEST_SUITE("DynamicWorkers") {
         // Idle well under the keep-alive: workers must not have retired yet.
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         CHECK(exec->live_workers() > 1);  // still warm
+    }
+
+    // A pool that retires workers wakes every parked one, so a park that never
+    // times out must still let an idle worker give its pages back.
+    TEST_CASE("idle workers give back their pages while retires wake them") {
+        if (memory::config().backend != memory::Backend::PageHeap) return;
+        constexpr int WORKERS = 8;
+        Runtime rt(ExecutorConfig{.thread_count = WORKERS});
+        auto* exec = static_cast<ThreadPoolExecutor*>(rt.executor());
+        REQUIRE(exec->live_workers() == WORKERS);
+        std::atomic<int> started{0};
+        std::atomic<bool> go{false};
+        std::atomic<int> done{0};
+        dstd::Vector<void*> kept[WORKERS];
+        for (auto& k : kept) k.reserve(HALF_BLOCKS);
+        const std::size_t idle_before = memory::detail::page_idle_backed();
+        for (int i = 0; i < WORKERS; ++i)
+            rt.submit(hold_half(&started, &go, &done, &kept[i]));
+        // Each task holds its worker until all have started, so every worker,
+        // the ones kept as well as the retired ones, ends with idle pages.
+        const auto limit = dstd::steady_now() + std::chrono::seconds(10);
+        while (started.load(std::memory_order_acquire) < WORKERS &&
+               dstd::steady_now() < limit)
+            std::this_thread::yield();
+        REQUIRE(started.load() == WORKERS);
+        go.store(true, std::memory_order_release);
+        rt.wait_all();
+        REQUIRE(done.load() == WORKERS);
+        const std::size_t idle_after_work = memory::detail::page_idle_backed();
+        for (int i = 0; i < 5; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            exec->retire_worker();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        const std::size_t idle = memory::detail::page_idle_backed();
+        for (auto& k : kept)
+            for (void* b : k) memory::detail::page_deallocate(b, HALF_RUN);
+        CHECK(idle_after_work >= WORKERS * memory::detail::HEAP_PAGE_SIZE);
+        CHECK(idle < idle_before + 32 * memory::detail::HEAP_PAGE_SIZE);
     }
 
     TEST_CASE("a parked driver gives its permit to a worker leaving a block") {

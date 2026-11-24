@@ -217,8 +217,7 @@ void sweep_stale(dstd::PathView root, dstd::StringView prefix) {
     const dstd::String tag = dstd::fmt<"{}_">(host_tag());
     for (const dstd::fs::DirEntry& entry : *listing) {
         const dstd::StringView name = entry.name;
-        if (name.size() <= prefix.size() + 1 ||
-            name.compare(0, prefix.size(), prefix) != 0 ||
+        if (name.size() <= prefix.size() + 1 || !name.starts_with(prefix) ||
             name[prefix.size()] != '_')
             continue;
         if (name.compare(prefix.size() + 1, tag.size(), tag) != 0) continue;

@@ -16,6 +16,12 @@ is the proof at scale: its pandas column and ours are the same code
 ``nlargest``, ``.str.contains``), checked for the same result and timed
 side by side; see :doc:`../runtime/performance`.
 
+``dftracer.utils.pandas`` and ``dftracer.utils.polars`` are compatibility
+namespaces: they re-export the same engine classes that ``dftracer.utils``
+exports, with the pandas or polars module-level functions beside them, so
+``import dftracer.utils.polars as pl`` reads like polars. They are the one place
+a name has a second import path.
+
 
 .. _pandas-polars-names:
 
@@ -27,7 +33,7 @@ A method has one canonical name, the polars one: ``fill_null``, ``is_null``,
 ``cum_sum``, ``forward_fill``, ``group_by``, ``sort``, ``unique``, ``gather``,
 ``head``. The pandas spelling is an alias, the same object under another
 name, from one table (``python/dftracer/utils/_aliases.py``) that each class
-reads when it is built; ``s.fillna`` **is** ``s.fill_null``. A pandas name
+reads when it is built; ``s.cumsum`` **is** ``s.cum_sum``. A pandas name
 whose keywords or result differ from the canonical method is a small function
 in its class (marked "own signature" below), so ``df.sort_values("a",
 ascending=False, na_position="first")`` and ``df.groupby("k").sum()`` give what
@@ -42,13 +48,13 @@ the polars call.
      - pandas spellings (alias = canonical)
      - polars spellings
    * - ``Series``
-     - ``aggregate`` = ``agg``, ``astype`` = ``cast``, ``isna`` = ``is_null``, ``isnull`` = ``is_null``, ``notna`` = ``is_not_null``, ``notnull`` = ``is_not_null``, ``dropna`` = ``drop_nulls``, ``fillna`` = ``fill_null``, ``isin`` = ``is_in``, ``nunique`` = ``n_unique``, ``prod`` = ``product``, ``argmax`` = ``arg_max``, ``idxmax`` = ``arg_max``, ``argmin`` = ``arg_min``, ``idxmin`` = ``arg_min``, ``cumsum`` = ``cum_sum``, ``cumprod`` = ``cum_prod``, ``cummax`` = ``cum_max``, ``cummin`` = ``cum_min``, ``searchsorted`` = ``search_sorted``, ``tolist`` = ``to_list``, ``ffill`` = ``forward_fill``, ``pad`` = ``forward_fill``, ``bfill`` = ``backward_fill``, ``backfill`` = ``backward_fill``, ``kurt`` (own signature) = ``kurtosis``, ``take`` = ``gather``, ``iat`` = ``iloc``, ``at`` (own signature) = ``iloc``, ``loc`` (own signature) = ``iloc``, ``rtruediv`` = ``rdiv``, ``divide`` = ``truediv``, ``div`` = ``truediv``, ``multiply`` = ``mul``, ``subtract`` = ``sub``, ``sort_values`` (own signature) = ``sort``, ``nlargest`` (own signature) = ``top_k``, ``nsmallest`` (own signature) = ``bottom_k``, ``drop_duplicates`` (own signature) = ``unique``, ``between`` (own signature) = ``is_between``
+     - ``aggregate`` = ``agg``, ``astype`` = ``cast``, ``isnull`` = ``isna``, ``notnull`` = ``notna``, ``dropna`` (own signature) = ``drop_nulls``, ``fillna`` (own signature) = ``fill_null``, ``isin`` = ``is_in``, ``nunique`` = ``n_unique``, ``prod`` = ``product``, ``argmax`` = ``arg_max``, ``idxmax`` = ``arg_max``, ``argmin`` = ``arg_min``, ``idxmin`` = ``arg_min``, ``cumsum`` = ``cum_sum``, ``cumprod`` = ``cum_prod``, ``cummax`` = ``cum_max``, ``cummin`` = ``cum_min``, ``searchsorted`` = ``search_sorted``, ``tolist`` = ``to_list``, ``ffill`` = ``forward_fill``, ``pad`` = ``forward_fill``, ``bfill`` = ``backward_fill``, ``backfill`` = ``backward_fill``, ``kurt`` (own signature) = ``kurtosis``, ``take`` = ``gather``, ``iat`` = ``iloc``, ``at`` (own signature) = ``iloc``, ``loc`` (own signature) = ``iloc``, ``rtruediv`` = ``rdiv``, ``divide`` = ``truediv``, ``div`` = ``truediv``, ``multiply`` = ``mul``, ``subtract`` = ``sub``, ``sort_values`` (own signature) = ``sort``, ``nlargest`` (own signature) = ``top_k``, ``nsmallest`` (own signature) = ``bottom_k``, ``drop_duplicates`` (own signature) = ``unique``, ``between`` (own signature) = ``is_between``
      - ``alias`` = ``rename``, ``clone`` = ``copy``, ``limit`` = ``head``, ``not_`` = ``__invert__``
    * - ``Expr``
-     - ``isna`` = ``is_null``, ``isnull`` = ``is_null``, ``notna`` = ``is_not_null``, ``notnull`` = ``is_not_null``, ``isin`` = ``is_in``, ``astype`` = ``cast``, ``fillna`` = ``fill_null``, ``cumsum`` = ``cum_sum``, ``cumprod`` = ``cum_prod``, ``cummax`` = ``cum_max``, ``cummin`` = ``cum_min``, ``ffill`` = ``forward_fill``, ``bfill`` = ``backward_fill``, ``between`` (own signature) = ``is_between``, ``startswith`` = ``starts_with``, ``endswith`` = ``ends_with``
+     - ``isnull`` = ``isna``, ``notnull`` = ``notna``, ``isin`` = ``is_in``, ``astype`` = ``cast``, ``fillna`` (own signature) = ``fill_null``, ``cumsum`` = ``cum_sum``, ``cumprod`` = ``cum_prod``, ``cummax`` = ``cum_max``, ``cummin`` = ``cum_min``, ``ffill`` = ``forward_fill``, ``bfill`` = ``backward_fill``, ``between`` (own signature) = ``is_between``, ``startswith`` = ``starts_with``, ``endswith`` = ``ends_with``
      - none
    * - ``DataFrame``
-     - ``aggregate`` = ``agg``, ``astype`` = ``cast``, ``dropna`` = ``drop_nulls``, ``fillna`` = ``fill_null``, ``groupby`` (own signature) = ``group_by``, ``sort_values`` (own signature) = ``sort``, ``drop_duplicates`` = ``unique``, ``take`` = ``gather``, ``nlargest`` (own signature) = ``top_k``, ``nsmallest`` (own signature) = ``top_k``, ``divide`` = ``div``, ``truediv`` = ``div``, ``multiply`` = ``mul``, ``subtract`` = ``sub``, ``product`` = ``prod``, ``rtruediv`` = ``rdiv``, ``map`` = ``applymap``, ``isnull`` = ``isna``, ``notnull`` = ``notna``, ``backfill`` = ``bfill``, ``pad`` = ``ffill``
+     - ``aggregate`` = ``agg``, ``astype`` = ``cast``, ``dropna`` (own signature) = ``drop_nulls``, ``fillna`` (own signature) = ``fill_null``, ``groupby`` (own signature) = ``group_by``, ``sort_values`` (own signature) = ``sort``, ``drop_duplicates`` = ``unique``, ``take`` = ``gather``, ``nlargest`` (own signature) = ``top_k``, ``nsmallest`` (own signature) = ``top_k``, ``divide`` = ``div``, ``truediv`` = ``div``, ``multiply`` = ``mul``, ``subtract`` = ``sub``, ``product`` = ``prod``, ``rtruediv`` = ``rdiv``, ``map`` = ``applymap``, ``isnull`` = ``isna``, ``notnull`` = ``notna``, ``backfill`` = ``bfill``, ``pad`` = ``ffill``
      - ``limit`` = ``head``, ``clone`` = ``copy``, ``select_seq`` = ``select``, ``with_columns_seq`` = ``with_columns``
    * - ``LazyFrame``
      - ``aggregate`` = ``agg``, ``sort_values`` (own signature) = ``sort``, ``drop_duplicates`` = ``unique``, ``take`` = ``gather``
@@ -56,7 +62,7 @@ the polars call.
    * - ``GroupBy``
      - ``aggregate`` = ``agg``, ``product`` = ``prod``
      - none
-   * - ``LazyGroupBy``
+   * - ``dftracer.utils.typing.LazyGroupBy``
      - ``aggregate`` = ``agg``, ``product`` = ``prod``
      - none
 
@@ -190,6 +196,10 @@ when both sides are indexed on exactly their join keys, and ``concat`` and
 the same rules, so ``collect()`` has the index the eager op gives. An unindexed
 frame stays unindexed under every rule.
 
+``DataFrame.join`` with no key is the pandas join on the row labels, and ``merge`` takes ``left_index`` and ``right_index``.
+See :doc:`joins` for the suffixes and the result index.
+``LazyFrame.join`` stays keyed, as in Polars.
+
 ``select`` keeps the index names whose columns it keeps: ``select("k", "v")`` on
 a frame indexed by ``k`` and ``j`` keeps ``k`` as the index and drops ``j`` from
 the names. The index follows the rule of each op, never "all or nothing".
@@ -215,10 +225,8 @@ aggregate result is indexed by the keys, as in pandas, even when the frame had
 no index; ``groupby(..., as_index=False)`` and the Polars ``group_by`` keep the
 keys as columns.
 
-Two dtype differences of the pandas ``groupby`` stay for now. The running
-product ``cumprod`` of an integer column is ``float64`` (pandas keeps ``int64``
-and wraps past its range); it is exact up to 2**53, and past that it is a
-float, visibly, not a wrong integer. ``shift(fill_value=...)`` raises
+One dtype difference of the pandas ``groupby`` stays for now.
+``shift(fill_value=...)`` raises
 ``TypeError`` for a fill the column cannot hold (text takes text, a bool column
 a bool, a number column a number), where pandas gives an object column.
 
@@ -723,7 +731,7 @@ string methods ``lower``, ``upper``, ``strip``, ``lstrip``, ``rstrip``,
 ``startswith``, ``endswith``, ``replace`` and ``contains``; and ``x.isna()``,
 ``isnull()``, ``notna()``, ``notnull()``. Nulls propagate as the column operators
 propagate them (``a > 1`` is null where ``a`` is), where pandas compares NaN as
-false; ``(x.isna() | x == 0)`` is true where ``x`` is null, as in pandas.
+false; ``(x.isna() | x == 0)`` is true where ``x`` is null or NaN, as in pandas.
 
 Not supported, each with an error that names it: ``@name`` locals and ``@`` matrix
 products, backtick column names, ``inplace``, bitwise ``&`` ``|`` ``~`` on integer
@@ -776,8 +784,40 @@ gives null for no match. The cases are listed as findings: ``Series.quantile``
 defaults to ``linear`` (Polars ``nearest``; pass ``interpolation``),
 ``Series.str.find`` gives -1 for no match (Polars null), ``rank``, ``ge``, ``gt``
 and the comparison operators treat a NaN as IEEE does (Polars ranks it above
-every number), and a float NaN is a value and not a null where pandas reads it
-as missing.
+every number).
+
+NaN and null
+------------
+
+A float column can hold a null and a NaN, and they are two different things.
+A null is a missing value.
+A NaN is a number that is not a number, a value of the column.
+The Polars names see them apart and the pandas names see them as one.
+
+The Polars names keep NaN as a value.
+``is_null``, ``is_not_null``, ``fill_null`` and ``drop_nulls`` see only the nulls.
+``is_nan``, ``is_not_nan``, ``fill_nan`` and ``drop_nans`` see only the NaN.
+``is_nan`` and ``is_not_nan`` give null for a null row.
+``fill_nan(None)`` turns each NaN into a null.
+These names exist on ``Series``, ``Expr``, ``DataFrame`` and ``LazyFrame``.
+``is_nan`` and ``is_not_nan`` exist only on ``Series`` and ``Expr``, as in Polars.
+A frame applies ``fill_nan`` and ``drop_nans`` to its float columns and leaves the other columns as they are.
+A column of another type has no NaN, so ``fill_nan`` and ``drop_nans`` return it unchanged.
+
+The pandas names treat NaN as missing, as pandas does.
+``isna``, ``isnull``, ``notna`` and ``notnull`` are true or false for a null and for a NaN of a float column.
+On a column of any other type they test only the nulls.
+``fillna(value)`` fills the nulls and the NaN.
+``dropna()`` drops the rows with a null or a NaN, and on a frame it keeps its ``how``, ``thresh``, ``subset`` and ``axis`` keywords.
+``fillna`` on a frame also takes a ``{column: value}`` mapping.
+``fillna(value)`` runs ``fill_nan(value)`` then ``fill_null(value)``.
+``dropna()`` runs ``drop_nulls()`` then ``drop_nans()``.
+
+Inside the library, a method that must see only the nulls uses the Polars name.
+``first_valid_index`` and ``last_valid_index`` skip nulls only.
+A function given to ``apply`` and an expression given to ``df.eval`` use the pandas names as pandas does.
+``lambda x: x.isna()``, ``lambda x: x.fillna(0)`` and ``df.eval("x.isna()")`` treat a NaN of a float column as missing.
+``x is None`` tests only the nulls.
 
 The quantile of a group is exact: ``col("x").quantile(q, interpolation)``,
 ``percentile(p)`` and ``median()`` keep every present value of the group, 8

@@ -95,8 +95,8 @@ def built(tmp_path):
 
 def test_the_summary_prunes_chunks_and_a_query_gives_the_rows_of_no_index(tmp_path, built):
     trace = write_trace(tmp_path)
-    with dft.load_plugin(built):
-        ix = dft.Indexer(
+    with dft.plugins.load_plugin(built):
+        ix = dft.index.Indexer(
             trace, index_dir=str(tmp_path / "idx"), summaries={"size": ["acme.size_range"]}
         )
         status = ix.ensure()
@@ -115,10 +115,14 @@ def test_the_summary_prunes_chunks_and_a_query_gives_the_rows_of_no_index(tmp_pa
         assert eq["read"] == [5]
 
         indexed = (
-            dft.TraceViewer(trace, index_dir=str(tmp_path / "idx")).duql("size >= 1000").collect()
+            dft.trace.TraceViewer(trace, index_dir=str(tmp_path / "idx"))
+            .duql("size >= 1000")
+            .collect()
         )
         plain = (
-            dft.TraceViewer(trace, index_dir=str(tmp_path / "none")).duql("size >= 1000").collect()
+            dft.trace.TraceViewer(trace, index_dir=str(tmp_path / "none"))
+            .duql("size >= 1000")
+            .collect()
         )
         assert sorted(indexed.to_dict()["ts"]) == sorted(plain.to_dict()["ts"])
         assert sorted(indexed.to_dict()["ts"]) == [
@@ -128,8 +132,8 @@ def test_the_summary_prunes_chunks_and_a_query_gives_the_rows_of_no_index(tmp_pa
 
 def test_a_path_that_lists_only_the_summary_keeps_no_builtin_summary(tmp_path, built):
     trace = write_trace(tmp_path)
-    with dft.load_plugin(built):
-        ix = dft.Indexer(
+    with dft.plugins.load_plugin(built):
+        ix = dft.index.Indexer(
             trace, index_dir=str(tmp_path / "idx"), summaries={"size": ["acme.size_range"]}
         )
         ix.ensure()
@@ -141,11 +145,11 @@ def test_a_path_that_lists_only_the_summary_keeps_no_builtin_summary(tmp_path, b
 
 def test_the_summary_must_take_the_path(tmp_path, built):
     trace = write_trace(tmp_path)
-    with dft.load_plugin(built):
-        ix = dft.Indexer(
+    with dft.plugins.load_plugin(built):
+        ix = dft.index.Indexer(
             trace, index_dir=str(tmp_path / "idx"), summaries={"other": ["acme.size_range"]}
         )
-        with pytest.raises(dft.DFTUtilsValueError, match="acme.size_range"):
+        with pytest.raises(dft.errors.DFTUtilsValueError, match="acme.size_range"):
             ix.status()
 
 
@@ -180,8 +184,8 @@ def test_the_summary_prunes_after_its_python_class_is_gone(tmp_path):
     del GoneRange
     gc.collect()
     trace = write_trace(tmp_path)
-    with dft.load_plugin(path):
-        ix = dft.Indexer(
+    with dft.plugins.load_plugin(path):
+        ix = dft.index.Indexer(
             trace, index_dir=str(tmp_path / "idx"), summaries={"size": ["acme.gone_range"]}
         )
         ix.ensure()
@@ -359,25 +363,27 @@ class WideRange:
 )
 def test_values_above_two_to_the_53_give_the_rows_of_no_index(tmp_path, query):
     trace = write_wide_trace(tmp_path)
-    plain = dft.TraceViewer(trace, index_dir=str(tmp_path / "none")).duql(query).collect()
-    with dft.load_plugin(jit.build(WideRange)):
-        ix = dft.Indexer(
+    plain = dft.trace.TraceViewer(trace, index_dir=str(tmp_path / "none")).duql(query).collect()
+    with dft.plugins.load_plugin(jit.build(WideRange)):
+        ix = dft.index.Indexer(
             trace, index_dir=str(tmp_path / "idx"), summaries={"x": ["acme.wide_range"]}
         )
         ix.ensure()
-        indexed = dft.TraceViewer(trace, index_dir=str(tmp_path / "idx")).duql(query).collect()
+        indexed = (
+            dft.trace.TraceViewer(trace, index_dir=str(tmp_path / "idx")).duql(query).collect()
+        )
     assert sorted(indexed.to_dict().get("ts", [])) == sorted(plain.to_dict().get("ts", []))
 
 
 def test_a_bloom_field_with_a_plugin_only_choice_does_not_rebuild(tmp_path):
     trace = write_wide_trace(tmp_path)
-    with dft.load_plugin(jit.build(WideRange)):
+    with dft.plugins.load_plugin(jit.build(WideRange)):
 
         def indexer():
-            return dft.Indexer(
+            return dft.index.Indexer(
                 trace,
                 index_dir=str(tmp_path / "idx"),
-                require_bloom=dft.BloomConfig(fields=["x"]),
+                require_bloom=dft.index.BloomConfig(fields=["x"]),
                 summaries={"x": ["acme.wide_range"]},
             )
 

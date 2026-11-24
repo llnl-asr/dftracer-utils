@@ -19,7 +19,8 @@ Where a plan comes from
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer, DataFrame, col
+         from dftracer.utils import DataFrame, col
+         from dftracer.utils.trace import TraceViewer
 
          plan = TraceViewer("traces/").filter('cat == "POSIX"')  # a plan over the scan
          plan = df.lazy()                                        # a plan over a frame
@@ -461,7 +462,7 @@ kinds of root in one list and returns a list. A reduction of a bound column
 
          fg, both, stats, mean_dur = dft.collect_all([
              tv.flamegraph(), tv.containment(),
-             tv.sink_json("out.pfw", lazy=True), tv["dur"].mean(),
+             tv.sink_trace("out.pfw.gz", lazy=True), tv["dur"].mean(),
          ])
          both.call_tree, both.flamegraph   # the Containment fields
 

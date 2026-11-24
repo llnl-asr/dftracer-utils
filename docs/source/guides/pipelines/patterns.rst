@@ -71,7 +71,7 @@ run work; pick the one that matches how you need to wait:
 
       .. code-block:: python
 
-         from dftracer.utils import Runtime
+         from dftracer.utils.runtime import Runtime
 
          rt = Runtime()
          handle = rt.submit(lambda x: x * 2, 21)   # a Python callable becomes a task

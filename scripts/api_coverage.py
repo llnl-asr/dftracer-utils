@@ -100,9 +100,9 @@ def _expr_instance() -> object:
 def _ours(lib: str) -> Dict[str, Optional[object]]:
     import dftracer.utils as dft
 
-    expr = importlib.import_module("dftracer.utils.expr")
-    lazyframe = importlib.import_module("dftracer.utils.lazyframe")
-    series = importlib.import_module("dftracer.utils.series")
+    expr = importlib.import_module("dftracer.utils._expr")
+    lazyframe = importlib.import_module("dftracer.utils._lazyframe")
+    series = importlib.import_module("dftracer.utils._series")
 
     s_str, s_dt, s_list = series._StrAccessor, series._DtAccessor, series._ListAccessor
     common = {

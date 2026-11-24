@@ -251,7 +251,7 @@ PyObject *new_task_handle(dstd::SharedPtr<AsyncState> state) {
 int init_task_handle(PyObject *m) {
     TaskHandleType = {};
     TaskHandleType.ob_base = {PyObject_HEAD_INIT(nullptr) 0};
-    TaskHandleType.tp_name = "dftracer_utils_ext.TaskHandle";
+    TaskHandleType.tp_name = "dftracer.utils.dftracer_utils_ext.TaskHandle";
     TaskHandleType.tp_basicsize = sizeof(TaskHandleObject);
     TaskHandleType.tp_dealloc =
         reinterpret_cast<destructor>(TaskHandle_dealloc);

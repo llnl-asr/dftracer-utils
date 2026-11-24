@@ -243,8 +243,7 @@ void ingest(Acc& a, dstd::StringView line) {
     // ---- legacy dftracer_prov helper records (prov_entity:/prov_type:/PROV).
     // Entity declaration: a metadata record keyed prov_entity:<hash>.
     // Entity type description: prov_type:<type> = "<role>|<description>".
-    if (key.size() > TYPE_PREFIX.size() &&
-        key.substr(0, TYPE_PREFIX.size()) == TYPE_PREFIX) {
+    if (key.size() > TYPE_PREFIX.size() && key.starts_with(TYPE_PREFIX)) {
         dstd::String name(key.substr(TYPE_PREFIX.size()));
         if (!a.types.count(name)) {
             dstd::StringView val = str_field(args, "value");
@@ -261,8 +260,7 @@ void ingest(Acc& a, dstd::StringView line) {
         }
         return;
     }
-    if (key.size() > ENTITY_PREFIX.size() &&
-        key.substr(0, ENTITY_PREFIX.size()) == ENTITY_PREFIX) {
+    if (key.size() > ENTITY_PREFIX.size() && key.starts_with(ENTITY_PREFIX)) {
         ++a.stats.entity_records;
         dstd::String hash(key.substr(ENTITY_PREFIX.size()));
         auto& e = a.entities[hash];
@@ -575,30 +573,23 @@ IoAcc merge_io(IoAcc&& x, IoAcc&& y) {
     return std::move(x);
 }
 
-bool starts_with(dstd::StringView s, dstd::StringView p) {
-    return s.size() >= p.size() && s.substr(0, p.size()) == p;
-}
-bool ends_with(dstd::StringView s, dstd::StringView p) {
-    return s.size() >= p.size() && s.substr(s.size() - p.size()) == p;
-}
-
 // Interpreter/system noise that is never a science entity.
 bool excluded(dstd::StringView p) {
     if (p.empty() || p.front() != '/')
         return true;  // relative ("."), unresolved
     for (auto suf : {".py", ".pyc", ".pyi", ".so", ".pth", ".typed"})
-        if (ends_with(p, suf)) return true;
+        if (p.ends_with(suf)) return true;
     // Runtime caches and JIT scratch: ROCm comgr kernel compiles, Triton/DaCe
     // build dirs, XDG/OpenMM caches.
     for (auto sub : {"/site-packages/", "/dist-packages/", "/__pycache__/",
                      ".so.", "/lib/python", "/.cache/", "/comgr-", "/cache/",
                      "/triton/", "/dace/", "openmm.cache", "/cppattn_cache"})
         if (p.find(sub) != dstd::StringView::npos) return true;
-    if (starts_with(p, "/dev/shm/")) return false;
+    if (p.starts_with("/dev/shm/")) return false;
     for (auto pre :
          {"/proc/", "/sys/", "/dev/", "/etc/", "/usr/lib", "/usr/share/",
           "/lib/", "/lib64/", "/opt/rocm", "/opt/cray/", "/collab/usr/"})
-        if (starts_with(p, pre)) return true;
+        if (p.starts_with(pre)) return true;
     return p == "/dev/null" || p.empty();
 }
 
@@ -665,7 +656,7 @@ dstd::Pair<dstd::String, dstd::String> split_mount(
     for (const auto& m : table) {
         if (m.path.size() <= 1) continue;
         if (path == m.path ||
-            (starts_with(path, m.path) && path[m.path.size()] == '/')) {
+            (path.starts_with(m.path) && path[m.path.size()] == '/')) {
             if (!best || m.path.size() > best->path.size()) best = &m;
         }
     }
@@ -675,7 +666,7 @@ dstd::Pair<dstd::String, dstd::String> split_mount(
     };
     if (best) return {best->path, rel_of(best->path.size())};
     // Rabbit (NNF) staging mounts are per-job and absent on the serving host.
-    if (starts_with(path, "/mnt/nnf/")) {
+    if (path.starts_with("/mnt/nnf/")) {
         auto e = path.find('/', 9);
         dstd::String m(e == dstd::StringView::npos ? path : path.substr(0, e));
         return {m, rel_of(m.size())};
@@ -997,7 +988,7 @@ coro::CoroTask<dstd::Result<ProvenanceGraph>> extract_provenance_graph(
         for (const auto& [fh, path] : io_acc.fh) {
             bool match =
                 path == e.uri ||
-                (starts_with(path, e.uri) &&
+                (path.starts_with(e.uri) &&
                  (e.uri.back() == '/' || path[e.uri.size()] == '/' ||
                   path[e.uri.size()] == '_' || path[e.uri.size()] == '.'));
             if (match && add_file(fh, path))
@@ -1017,7 +1008,7 @@ coro::CoroTask<dstd::Result<ProvenanceGraph>> extract_provenance_graph(
             dstd::String t = "unknown";
             for (const auto& mt : table)
                 if (mt.path == m) t = mt.fstype;
-            if (t == "unknown" && starts_with(m, "/mnt/nnf/")) t = "rabbit";
+            if (t == "unknown" && m.starts_with("/mnt/nnf/")) t = "rabbit";
             mount_type[m] = t;
         }
         g.files.push_back(std::move(f));

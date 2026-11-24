@@ -2,6 +2,7 @@
 // `dftracer_plugin`: the scaffolds `new` writes and the child process `check`
 // runs.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/span.h>
@@ -18,8 +19,10 @@ using namespace dftracer::utils;
 namespace {
 
 dstd::String env_or_probe(dstd::CStringView var, dstd::String name) {
-    const char* p = std::getenv(var.c_str());
-    if (p != nullptr && ::access(p, R_OK) == 0) return p;
+    if (const auto p = common::Env::get(var)) {
+        const dstd::String path(*p);
+        if (::access(path.c_str(), R_OK) == 0) return path;
+    }
     for (const dstd::String& c : {"./" + name, "../" + name, "../../" + name}) {
         if (::access(c.c_str(), R_OK) == 0) return c;
     }

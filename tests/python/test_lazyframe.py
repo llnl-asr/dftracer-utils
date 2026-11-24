@@ -12,14 +12,9 @@ import pytest
 
 pa = pytest.importorskip("pyarrow")
 
-from dftracer.utils import (  # noqa: E402
-    DataFrame,
-    DFTUtilsNotFoundError,
-    LazyFrame,
-    col,
-    lazy,
-)
+from dftracer.utils import DataFrame, LazyFrame, col, lazy  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
+from dftracer.utils.errors import DFTUtilsNotFoundError  # noqa: E402
 
 _HAS_ARROW = hasattr(_ext, "LazyFrame")
 pytestmark = pytest.mark.skipif(not _HAS_ARROW, reason="extension built without Arrow support")
@@ -188,7 +183,7 @@ def test_is_null_expr_lazy_and_eager():
 
 
 def test_head_by_keeps_first_n_rows_per_key_in_input_order():
-    from dftracer.utils import Runtime
+    from dftracer.utils.runtime import Runtime
 
     df = _df(
         {

@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/query/overlap.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -95,7 +96,7 @@ T add_saturating(T a, T b) {
         return a + b;
     } else {
         T r;
-        if (!__builtin_add_overflow(a, b, &r)) return r;
+        if (!dstd::bits::add_overflow(a, b, &r)) return r;
         return b > 0 ? std::numeric_limits<T>::max()
                      : std::numeric_limits<T>::lowest();
     }

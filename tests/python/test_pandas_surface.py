@@ -12,7 +12,16 @@ import pytest
 pa = pytest.importorskip("pyarrow")
 pd = pytest.importorskip("pandas")
 
-from dftracer.utils import DataFrame, DFTUtilsValueError, Series, col  # noqa: E402
+from dftracer.utils import DataFrame, Series, col  # noqa: E402
+from dftracer.utils.errors import DFTUtilsValueError  # noqa: E402
+
+# Current pandas spellings of the names newer pandas deprecates; ours stay as aliases.
+_PANDAS_DT_NAMES = {
+    "weekday": "day_of_week",
+    "dayofweek": "day_of_week",
+    "dayofyear": "day_of_year",
+    "daysinmonth": "days_in_month",
+}
 
 # include_groups= landed in pandas 2.2; before it, apply() forwards the keyword
 # to the function.
@@ -532,7 +541,8 @@ def test_dt_accessor_matches_pandas():
         "is_quarter_start",
         "is_quarter_end",
     ):
-        assert getattr(s.dt, name).to_list() == getattr(p.dt, name).tolist(), name
+        ref_name = _PANDAS_DT_NAMES.get(name, name)
+        assert getattr(s.dt, name).to_list() == getattr(p.dt, ref_name).tolist(), name
     iso = _d(s.dt.isocalendar())
     ref = p.dt.isocalendar()
     assert iso == {c: ref[c].tolist() for c in ("year", "week", "day")}
@@ -911,6 +921,42 @@ def test_tz_localize_and_tz_convert_match_pandas():
     )
     with pytest.raises(TypeError):
         df.reset_index().tz_localize("UTC")  # no Timestamp index
+
+
+def test_groupby_cumprod_wraps_integers_like_pandas():
+    np = pytest.importorskip("numpy")
+    big = 2**63 - 1
+    k = [1, 1, 1, 2, 2, 2]
+    i = [2**40, 2**40, 3, big, 2, 2]
+    u = [2**32 + 1, 2**32 + 1, 3, 2**63, 2, 2]
+    f = [1e200, 1e200, 3.0, 2.0, 3.0, 4.0]
+    df = DataFrame(
+        {
+            "k": k,
+            "i": Series.from_numpy(np.array(i, dtype=np.int64)),
+            "u": Series.from_numpy(np.array(u, dtype=np.uint64)),
+            "f": f,
+        }
+    )
+    p = pd.DataFrame(
+        {
+            "k": k,
+            "i": np.array(i, dtype=np.int64),
+            "u": np.array(u, dtype=np.uint64),
+            "f": f,
+        }
+    )
+    want = p.groupby("k").cumprod()
+    assert str(want["i"].dtype) == "int64" and str(want["u"].dtype) == "uint64"
+    for got in (df.group_by("k").cumprod(), df.lazy().group_by("k").cumprod().collect()):
+        out = _d(got)
+        for c in ("i", "u", "f"):
+            assert out[c] == want[c].tolist(), c
+        assert [str(got.to_pandas()[c].dtype) for c in ("i", "u", "f")] == [
+            "int64",
+            "uint64",
+            "float64",
+        ]
 
 
 def test_groupby_prod_cumprod_median_quantile_match_pandas():
@@ -1585,7 +1631,7 @@ def test_sketch_quantile_matches_duql_merge(tmp_path):
     import gzip
     import random
 
-    from dftracer.utils import TraceViewer
+    from dftracer.utils.trace import TraceViewer
 
     trace = str(tmp_path / "t.pfw.gz")
     rng = random.Random(3)

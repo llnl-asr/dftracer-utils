@@ -19,6 +19,7 @@
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_duql_internal.h>
+#include <dftracer/utils/trace/writer/sink_plan.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -220,7 +221,14 @@ Status Applier::stage(const duql::PipelineSink& s) {
     if (!main_)
         return refuse<"'sink {}' is only allowed in the main pipeline">(s.name);
     leave_scan("sink");
-    auto wrapped = dataframe::sink_plan(v_.lazy(), s.name, s.options, 0);
+    auto wrapped = s.kind == duql::PipelineSink::Kind::Plugin
+                       ? dataframe::sink_plan(v_.lazy(), s.name, s.options, 0)
+                       : trace::writer::output_sink_plan(
+                             v_.lazy(),
+                             s.kind == duql::PipelineSink::Kind::Trace
+                                 ? trace::writer::OutputRows::Events
+                                 : trace::writer::OutputRows::Records,
+                             s.name, s.options);
     if (!wrapped) return wrapped.error();
     lines.push_back(dstd::fmt<"sink {}">(s.name));
     v_ = v_.with_lazy(std::move(*wrapped));

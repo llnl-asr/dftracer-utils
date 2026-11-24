@@ -114,7 +114,7 @@ jobs:
       os: macos-latest
 
   test-ubuntu-22-04:
-    needs: [changes, deps-ubuntu-22-04]
+    needs: [changes, deps-ubuntu-22-04, web]
     if: needs.changes.outputs.code == 'true' || needs.changes.outputs.coverage == 'true'
     permissions:
       contents: read
@@ -127,7 +127,7 @@ jobs:
       shards: 4
 
   test-single-ubuntu-22-04:
-    needs: [changes, deps-ubuntu-22-04]
+    needs: [changes, deps-ubuntu-22-04, web]
     if: needs.changes.outputs.code == 'true' || needs.changes.outputs.coverage == 'true'
     permissions:
       contents: read
@@ -149,10 +149,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Fetch the web UI that the CI web job built
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
+
       - name: Set up Python
         uses: actions/setup-python@v6.1.0
         with:
           python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.0.0
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -185,7 +194,7 @@ jobs:
           make test-single
 
   test-ubuntu-22-04-arm:
-    needs: [changes, deps-ubuntu-22-04-arm]
+    needs: [changes, deps-ubuntu-22-04-arm, web]
     if: needs.changes.outputs.code == 'true' || needs.changes.outputs.coverage == 'true'
     permissions:
       contents: read
@@ -198,7 +207,7 @@ jobs:
       shards: 3
 
   test-ubuntu-24-04:
-    needs: [changes, deps-ubuntu-24-04]
+    needs: [changes, deps-ubuntu-24-04, web]
     if: needs.changes.outputs.code == 'true' || needs.changes.outputs.coverage == 'true'
     permissions:
       contents: read
@@ -211,7 +220,7 @@ jobs:
       shards: 3
 
   test-macos:
-    needs: [changes, deps-macos]
+    needs: [changes, deps-macos, web]
     if: needs.changes.outputs.code == 'true' || needs.changes.outputs.coverage == 'true'
     permissions:
       contents: read
@@ -224,7 +233,7 @@ jobs:
       shards: 4
 
   valgrind:
-    needs: [changes, deps-ubuntu-24-04]
+    needs: [changes, deps-ubuntu-24-04, web]
     if: needs.changes.outputs.code == 'true'
     permissions:
       contents: read
@@ -247,7 +256,7 @@ jobs:
 
   web:
     needs: changes
-    if: needs.changes.outputs.web == 'true'
+    if: needs.changes.outputs.web == 'true' || needs.changes.outputs.code == 'true' || needs.changes.outputs.coverage == 'true'
     name: Web UI
     runs-on: ubuntu-latest
     steps:
@@ -259,35 +268,45 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Build web UI (embedded in dftracer_server)
+      - name: Build web UI (embedded in dftracer_server and the wheels)
         working-directory: web
         run: |
           npm ci
           npm run build
 
-      - name: Check web UI (typecheck, lint, test)
-        working-directory: web
-        run: |
-          npm run typecheck
-          npm run lint
-          npm test
-
       - name: Upload web bundle
         uses: actions/upload-artifact@v6.0.0
         with:
           name: web-dist
-          path: web/dist/index.html
-          retention-days: 1
+          path: web/dist/*.html
+          retention-days: 7
 
+  web-check:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    name: Web UI checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
-
-
+      - name: Check web UI (typecheck, lint, test)
+        working-directory: web
+        run: |
+          npm ci
+          npm run typecheck
+          npm run lint
+          npm test
 
   wheel-linux:
     permissions:
       contents: read
-    needs: changes
+    needs: [changes, web]
     if: needs.changes.outputs.code == 'true'
     uses: ./.github/workflows/wheel.yml
     with:
@@ -297,7 +316,7 @@ jobs:
   wheel-linux-arm:
     permissions:
       contents: read
-    needs: changes
+    needs: [changes, web]
     if: needs.changes.outputs.code == 'true'
     uses: ./.github/workflows/wheel.yml
     with:
@@ -307,7 +326,7 @@ jobs:
   wheel-macos:
     permissions:
       contents: read
-    needs: changes
+    needs: [changes, web]
     if: needs.changes.outputs.code == 'true'
     uses: ./.github/workflows/wheel.yml
     with:

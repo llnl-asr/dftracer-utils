@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
@@ -203,6 +204,31 @@ TEST_CASE("rename") {
 
     const auto missing =
         dstd::fs::rename(in(dir, "nope").view(), in(dir, "c.txt").view());
+    REQUIRE_FALSE(missing.has_value());
+    CHECK(missing.error().is(dstd::Condition::NotFound));
+}
+
+TEST_CASE("rename_no_replace never replaces") {
+    dftu_utils_test::ScopedTestDir dir("dstd_fs_rename_no_replace");
+    dir.create_file("a.txt", "new");
+    dir.create_file("b.txt", "old");
+
+    auto refused = dstd::fs::rename_no_replace(in(dir, "a.txt").view(),
+                                               in(dir, "b.txt").view());
+    REQUIRE(refused.has_value());
+    CHECK_FALSE(*refused);
+    CHECK(read_text(in(dir, "a.txt")) == "new");
+    CHECK(read_text(in(dir, "b.txt")) == "old");
+
+    auto moved = dstd::fs::rename_no_replace(in(dir, "a.txt").view(),
+                                             in(dir, "c.txt").view());
+    REQUIRE(moved.has_value());
+    CHECK(*moved);
+    CHECK_FALSE(dstd::fs::exists(in(dir, "a.txt").view()).value());
+    CHECK(read_text(in(dir, "c.txt")) == "new");
+
+    auto missing = dstd::fs::rename_no_replace(in(dir, "nope").view(),
+                                               in(dir, "d.txt").view());
     REQUIRE_FALSE(missing.has_value());
     CHECK(missing.error().is(dstd::Condition::NotFound));
 }
@@ -449,9 +475,8 @@ TEST_CASE("space and temp_directory") {
     CHECK_FALSE(temp.empty());
     CHECK(dstd::PathView(temp).is_absolute());
     CHECK(dstd::fs::exists(temp.view()).value());
-    const char* given = std::getenv("TMPDIR");
-    if (given != nullptr && given[0] != '\0') {
-        CHECK(temp.str() == given);
+    if (const auto given = common::Env::get("TMPDIR")) {
+        CHECK(temp.str() == *given);
     }
 }
 
@@ -974,4 +999,56 @@ TEST_CASE("match_name") {
     CHECK_FALSE(match_name("a?b", "a/b"));
     CHECK(match_name("a/b", "a/b"));
     CHECK(match_name("*/b", "/b"));
+}
+
+TEST_CASE("glob_match_name classes") {
+    using dstd::fs::glob_match_name;
+    CHECK(glob_match_name("[abc]", "a"));
+    CHECK(glob_match_name("[abc]", "c"));
+    CHECK_FALSE(glob_match_name("[abc]", "d"));
+    CHECK_FALSE(glob_match_name("[abc]", ""));
+    CHECK_FALSE(glob_match_name("[abc]", "ab"));
+    CHECK(glob_match_name("t[0-9].gz", "t7.gz"));
+    CHECK_FALSE(glob_match_name("t[0-9].gz", "tx.gz"));
+    CHECK(glob_match_name("[a-cx-z]", "y"));
+    CHECK_FALSE(glob_match_name("[a-cx-z]", "m"));
+    CHECK(glob_match_name("[!a-c]", "d"));
+    CHECK_FALSE(glob_match_name("[!a-c]", "b"));
+    CHECK(glob_match_name("[^a-c]", "d"));
+    CHECK_FALSE(glob_match_name("[^a-c]", "b"));
+    // A ']' first in the class, and a '-' first or last, are literal.
+    CHECK(glob_match_name("[]a]", "]"));
+    CHECK(glob_match_name("[]a]", "a"));
+    CHECK(glob_match_name("[!]a]", "b"));
+    CHECK_FALSE(glob_match_name("[!]a]", "]"));
+    CHECK(glob_match_name("[-a]", "-"));
+    CHECK(glob_match_name("[a-]", "-"));
+    CHECK_FALSE(glob_match_name("[a-]", "b"));
+    // An unterminated class is the text '['.
+    CHECK(glob_match_name("[abc", "[abc"));
+    CHECK_FALSE(glob_match_name("[abc", "a"));
+    CHECK(glob_match_name("a[", "a["));
+    CHECK(glob_match_name("[]", "[]"));
+    // A class is one character, so it never matches '/'.
+    CHECK_FALSE(glob_match_name("a[!x]b", "a/b"));
+    // Wildcards mix with classes and star runs.
+    CHECK(glob_match_name("*[0-9]?.gz", "run3x.gz"));
+    CHECK(glob_match_name("**.gz", "a.gz"));
+    CHECK(glob_match_name("*", ".hidden"));
+    CHECK(glob_match_name("?*", ".hidden"));
+    // No escaping: a backslash is itself.
+    CHECK(glob_match_name("a\\*", "a\\xyz"));
+    CHECK_FALSE(glob_match_name("a\\*", "a*"));
+    CHECK(glob_match_name("a\\*", "a\\*"));
+}
+
+TEST_CASE("has_glob_chars") {
+    using dstd::fs::has_glob_chars;
+    CHECK(has_glob_chars("a/*.gz"));
+    CHECK(has_glob_chars("a?"));
+    CHECK(has_glob_chars("a/[x]"));
+    CHECK(has_glob_chars("**"));
+    CHECK_FALSE(has_glob_chars("a/b.gz"));
+    CHECK_FALSE(has_glob_chars(""));
+    CHECK_FALSE(has_glob_chars("a\\b"));
 }

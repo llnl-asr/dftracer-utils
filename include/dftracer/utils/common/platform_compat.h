@@ -116,6 +116,9 @@ std::size_t available_parallelism() noexcept;
 
 }  // namespace dftracer::utils::common
 
+// Marks a point the program never reaches, so the optimizer may drop the path.
+#define DFTRACER_UTILS_UNREACHABLE() __builtin_unreachable()
+
 // ThreadSanitizer annotations for custom synchronization primitives.
 #if defined(__SANITIZE_THREAD__)
 #define DFTRACER_UTILS_TSAN_ENABLED 1

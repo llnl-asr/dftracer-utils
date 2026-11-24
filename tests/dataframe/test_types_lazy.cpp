@@ -365,8 +365,10 @@ TEST_SUITE("dataframe_types_lazy") {
             {
                 LazyFrame lf = src.lazy().with_column("v2", col(1));
                 DataFrame lazy_r = run(lf.collect());
-                DataFrame eager_r = src.with_column(
-                    "v2", dftu_utils_test::eval_ok(col(1), ptrs(src)));
+                DataFrame eager_r =
+                    src.with_column("v2",
+                                    dftu_utils_test::eval_ok(col(1), ptrs(src)))
+                        .value();
                 REQUIRE(lazy_r.columns.size() == 3);
                 check_v_equal(lazy_r.columns[2], eager_r.columns[2]);
             }

@@ -11,8 +11,9 @@ import shutil
 
 import pytest
 
-from dftracer.utils import Runtime, jit
+from dftracer.utils import jit
 from dftracer.utils.plugins import Plugins
+from dftracer.utils.runtime import Runtime
 
 pa = pytest.importorskip("pyarrow")
 
@@ -263,6 +264,36 @@ def test_isnull_and_fill_null(trace, threads):
     }
     assert want["missing"] and want["present"]
     assert _values(_run(Nulls, trace, threads), want) == want
+
+
+@pytest.mark.parametrize("threads", THREADS)
+def test_isnull_and_notnull_count_nan_as_missing(tmp_path, threads):
+    values = ["1.5", "0.0", "3.0", "0.0", "-2.5"]
+    with gzip.open(tmp_path / "nan.pfw.gz", "wt", encoding="utf-8") as fh:
+        for n, v in enumerate(values):
+            fh.write(
+                f'{{"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":{1000 + n},'
+                f'"dur":10,"ph":1,"args":{{"f":{v}}}}}\n'
+            )
+
+    @jit.plugin
+    class Nans:
+        missing: int = 0
+        present: int = 0
+        na: int = 0
+        notna: int = 0
+
+        @jit.each_batch
+        def step(self, df):
+            f = df["args.f"]
+            ratio = f / f
+            self.missing += ratio.isnull().sum()
+            self.present += ratio.notnull().sum()
+            self.na += ratio.isna().sum()
+            self.notna += ratio.notna().sum()
+
+    want = {"missing": 2, "present": 3, "na": 2, "notna": 3}
+    assert _values(_run(Nans, str(tmp_path), threads), want) == want
 
 
 @pytest.mark.parametrize("threads", THREADS)

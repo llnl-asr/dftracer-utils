@@ -76,8 +76,8 @@ Call it
    from dftracer.utils.plugins import Plugins
 
    Plugins(["./csv.dylib"])                     # keep it alive for the call
-   summary = df.lazy().filter(dft.col("dur") > 1000).sink("csv.write", path="out.csv")
-   print(summary.rows, summary.batches)
+   summary = df.lazy().filter(dft.col("dur") > 1000).sink("out.csv", format="csv.write")
+   print(summary.rows, summary.part_count)
 
 .. code-block:: text
 

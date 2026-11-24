@@ -33,7 +33,7 @@ def _access(path):
 
 
 def test_rows_yield_schema_instances(tmp_path):
-    tv = dftu.TraceViewer(_access(tmp_path / "a.ndjson.gz"), record_schema=RowsAccess)
+    tv = dftu.trace.TraceViewer(_access(tmp_path / "a.ndjson.gz"), record_schema=RowsAccess)
     rows = list(tv.rows(RowsAccess))
     assert len(rows) == 300
     assert all(isinstance(r, RowsAccess) and isinstance(r.status, int) for r in rows)
@@ -44,24 +44,24 @@ def test_rows_yield_schema_instances(tmp_path):
 
 
 def test_rows_follow_filters(tmp_path):
-    tv = dftu.TraceViewer(_access(tmp_path / "a.ndjson.gz"), record_schema=RowsAccess)
+    tv = dftu.trace.TraceViewer(_access(tmp_path / "a.ndjson.gz"), record_schema=RowsAccess)
     rows = list(tv.duql('op == "read"').rows(RowsAccess))
     assert len(rows) == 150
     assert {r.op for r in rows} == {"read"}
 
 
 def test_rows_stream_in_chunks(tmp_path, monkeypatch):
-    tv = dftu.TraceViewer(_access(tmp_path / "a.ndjson.gz"), record_schema=RowsAccess)
+    tv = dftu.trace.TraceViewer(_access(tmp_path / "a.ndjson.gz"), record_schema=RowsAccess)
     expect = list(tv.rows(RowsAccess))
     pulled = []
-    stream = dftu.TraceViewer.stream
+    stream = dftu.trace.TraceViewer.stream
 
     def small_chunks(self, batch_size=65536):
         for chunk in stream(self, 40):
             pulled.append(len(chunk))
             yield chunk
 
-    monkeypatch.setattr(dftu.TraceViewer, "stream", small_chunks)
+    monkeypatch.setattr(dftu.trace.TraceViewer, "stream", small_chunks)
     rows = tv.rows(RowsAccess)
     first = next(rows)
     assert len(pulled) == 1 and pulled[0] < 300
@@ -88,7 +88,7 @@ def test_rows_of_a_dftracer_subclass(tmp_path):
     ]
     path = tmp_path / "t.pfw.gz"
     path.write_bytes(gzip.compress(("\n".join(json.dumps(e) for e in events) + "\n").encode()))
-    rows = list(dftu.TraceViewer(str(path)).rows(RowsDft))
+    rows = list(dftu.trace.TraceViewer(str(path)).rows(RowsDft))
     assert sorted(r.size for r in rows) == list(range(20))
 
 

@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/filter_simd.h>
 #include <dftracer/utils/dataframe/internal/scalar.h>
+#include <dftracer/utils/dstd/bits.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -34,7 +35,7 @@ std::int64_t compact_gt_lanes(const T* p, std::int64_t n, T thr,
         hwy::HWY_NAMESPACE::StoreMaskBits(
             d, m, reinterpret_cast<std::uint8_t*>(&bits));
         while (bits != 0) {
-            unsigned b = static_cast<unsigned>(__builtin_ctzll(bits));
+            unsigned b = static_cast<unsigned>(dstd::bits::ctz_u64(bits));
             out[count++] = static_cast<std::int64_t>(i + b);
             bits &= bits - 1;
         }

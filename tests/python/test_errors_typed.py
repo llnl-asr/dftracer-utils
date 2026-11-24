@@ -8,7 +8,8 @@ import os
 import pytest
 
 import dftracer.utils as dft
-from dftracer.utils import (
+from dftracer.utils import dftracer_utils_ext as ext
+from dftracer.utils.errors import (
     DFTUtilsDuqlError,
     DFTUtilsError,
     DFTUtilsIndexerError,
@@ -16,7 +17,6 @@ from dftracer.utils import (
     DFTUtilsNotFoundError,
     DFTUtilsValueError,
 )
-from dftracer.utils import dftracer_utils_ext as ext
 
 
 def _frame():
@@ -80,7 +80,7 @@ def test_batch_index_of_a_non_gzip_file_raises_base_class(tmp_path):
 
 
 def test_missing_trace_raises_not_found_class(tmp_path):
-    view = dft.TraceViewer([os.fspath(tmp_path / "missing.pfw.gz")])
+    view = dft.trace.TraceViewer([os.fspath(tmp_path / "missing.pfw.gz")])
     with pytest.raises(DFTUtilsNotFoundError):
         view.agg("count").collect()
 
@@ -89,4 +89,4 @@ def test_unreadable_trace_raises_io_class(tmp_path):
     bad = tmp_path / "bad.pfw.gz"
     bad.write_bytes(b"not gzip")
     with pytest.raises(DFTUtilsIOError):
-        dft.TraceViewer([str(bad)]).agg("count").collect()
+        dft.trace.TraceViewer([str(bad)]).agg("count").collect()

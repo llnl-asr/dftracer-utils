@@ -7,7 +7,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from dftracer.utils import DataFrame, DFTUtilsValueError, Series
+from dftracer.utils import DataFrame, Series
+from dftracer.utils.errors import DFTUtilsValueError
 
 N = 1003  # not a multiple of 8, so the last validity byte is partial
 
@@ -59,7 +60,7 @@ def test_numeric_with_nulls_nullable_and_default(dt):
     plain = s.to_pandas()
     expect = want.astype("float32" if dt == "float32" else "float64")
     assert plain.isna().equals(want.isna())
-    assert np.allclose(plain.dropna().to_numpy(), expect.dropna().to_numpy())
+    assert np.allclose(plain.dropna().to_numpy("float64"), expect.dropna().to_numpy())
     assert s.to_list() == [
         None if v is pd.NA else v.item() if hasattr(v, "item") else v for v in want.tolist()
     ]

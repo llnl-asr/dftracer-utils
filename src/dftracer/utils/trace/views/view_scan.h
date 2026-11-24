@@ -74,6 +74,9 @@ struct ScanUnit {
     dstd::SharedPtr<trace::index::gzip::CheckpointIndexer> indexer;
 };
 
+// The bytes a scan unit is admitted by against the plan's memory budget.
+std::uint64_t unit_reserve_bytes(const ScanUnit& unit);
+
 // The record_schema every file of `plan` was indexed under, or is detected as
 // when unindexed; a file without records (empty, or only metadata) takes no
 // vote. When the files have none (their record_schemas differ, or an index

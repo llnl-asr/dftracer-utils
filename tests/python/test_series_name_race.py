@@ -13,7 +13,7 @@ import textwrap
 _CODE = textwrap.dedent(
     """
     import threading
-    from dftracer.utils.series import Series
+    from dftracer.utils._series import Series
 
     n = 400000
     s = Series(["abc%d" % i for i in range(n)])

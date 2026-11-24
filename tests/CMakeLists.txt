@@ -55,10 +55,13 @@ add_test(NAME c_abi_guard
          COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target
                  c_abi_guard --config $<CONFIG>)
 
-add_executable(schema_class_bad_member EXCLUDE_FROM_ALL
-               trace/index/schema_class_bad_member.cpp)
-target_link_libraries(schema_class_bad_member
-                      PRIVATE testing_utilities)
+# Compile only, with the include paths and no link: the build then compiles
+# this file and nothing of the libraries, which CI strips of objects.
+add_library(schema_class_bad_member OBJECT EXCLUDE_FROM_ALL
+            trace/index/schema_class_bad_member.cpp)
+target_include_directories(
+  schema_class_bad_member PRIVATE ${CMAKE_SOURCE_DIR}/include
+                                  ${CMAKE_SOURCE_DIR}/src ${CMAKE_BINARY_DIR}/include)
 target_set_warnings(schema_class_bad_member)
 add_test(NAME schema_class_bad_member
          COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target
@@ -331,6 +334,99 @@ add_test(
     sh -c
     "bad=$(grep -rnE '[A-Za-z_][A-Za-z_0-9]*::now[[:space:]]*\\(\\)|clock_gettime|gettimeofday|mach_absolute_time|rdtsc|timespec_get|(::|[^A-Za-z0-9_.:])time[[:space:]]*\\([[:space:]]*(nullptr|NULL|0)[[:space:]]*\\)' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/' | grep -vE '^[^:]*/dftracer/utils/dstd/clock\\.(h|cpp):'); if [ -n \"$bad\" ]; then echo \"direct clock read; use dstd::steady_now(), dstd::steady_now_ns(), dstd::coarse_now_ns(), dstd::system_now_ns() or, for a clock a syscall names, dstd::posix_clock_now_ns():\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
+# The 64-bit hash mixing constants live in
+# <dftracer/utils/dstd/hash/constants.h>, so a typo cannot fork a hash. The
+# allow list holds code that cannot include it: memory links nothing else, and
+# the plugin SDK header is self-contained by design.
+add_test(
+  NAME one_hash_constant
+  COMMAND
+    sh -c
+    "bad=$(grep -rniE '9e3779b97f4a7c15|bf58476d1ce4e5b9|94d049bb133111eb|c2b2ae3d27d4eb4f|165667b19e3779f9|ff51afd7ed558ccd|c4ceb9fe1a85ec53|cbf29ce484222325|0*100000001b3|1469598103934665603|14695981039346656037|1099511628211' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/' | grep -vE '^[^:]*/(include/dftracer/utils/dstd/hash/constants\\.h|include/dftracer/utils/plugins/prims\\.h):|^[^:]*/src/dftracer/utils/memory/debug\\.cpp:'); if [ -n \"$bad\" ]; then echo 'hash constant typed by hand; use the names in <dftracer/utils/dstd/hash/constants.h>:'; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(NAME one_hash_constant_self
+         COMMAND
+           sh -c
+           "printf '%s\\n' 'h *= 0x9E3779B97F4A7C15ull;' | grep -qiE '9e3779b97f4a7c15|bf58476d1ce4e5b9|94d049bb133111eb|c2b2ae3d27d4eb4f|165667b19e3779f9|ff51afd7ed558ccd|c4ceb9fe1a85ec53|cbf29ce484222325|0*100000001b3|1469598103934665603|14695981039346656037|1099511628211'")
+# Compiler built-ins go through the wrappers in dstd/bits.h and
+# common/platform_compat.h, so MSVC needs one port. The allow list holds the
+# plugin SDK header (self-contained by design), the plugin examples, and only
+# the __builtin_return_address and __builtin_frame_address reads that name the
+# caller of an allocation or check a stack frame.
+add_test(
+  NAME no_builtin
+  COMMAND
+    sh -c
+    "bad=$(grep -rnF '__builtin_' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/' | grep -vE '^[^:]*/(include/dftracer/utils/dstd/(bits|int128)\\.h|include/dftracer/utils/common/(platform_compat|export)\\.h|include/dftracer/utils/plugins/prims\\.h):|^[^:]*/examples/plugins/|^[^:]*/(src/dftracer/utils/memory/[^:]*|src/dftracer/utils/dstd/concurrent_queue\\.cpp|tests/memory/test_exit_hook_order\\.cpp|tests/coro/test_async_mutex\\.cpp):[0-9]+:.*__builtin_(return|frame)_address\\('); if [ -n \"$bad\" ]; then echo 'compiler built-in; use dstd/bits.h or DFTRACER_UTILS_UNREACHABLE (common/platform_compat.h):'; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(NAME no_builtin_self
+         COMMAND
+           sh -c
+           "printf '%s\\n' 'return __builtin_ctzll(x);' | grep -qF '__builtin_'")
+# A prefix or suffix test is std::string_view::starts_with or ends_with, never a
+# substr compare. The allow list holds tests that compare two substrings or keep a plain oracle for a kernel.
+add_test(
+  NAME no_hand_starts_with
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE 'substr\\(0, .*\\) *[!=]= *[^=]|substr\\([^()]*\\.size\\(\\) *- *[^)]*\\)+ *[!=]=|\\.compare\\([^,]*size\\(\\) *- *[^,]*,|\\.compare\\(0, [^,]+, ' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/' | grep -vE '^[^:]*/tests/(dstd/test_containers|dataframe/test_string_simd|domains/analysis/comparator/test_agg_parity)\\.cpp:'); if [ -n \"$bad\" ]; then echo \"hand-made prefix or suffix test; use starts_with or ends_with:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(
+  NAME one_json_escape
+  COMMAND
+    sh -c
+    "bad=$(grep -rnF '\\u00' \"$0/include\" \"$0/src\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v -e 'dftracer/utils/dstd/vendor/' -e 'dftracer/utils/json/json_escape.h' -e 'dftracer/utils/arrow/index_metadata.cpp' -e 'dftracer/utils/duql/detail/string_literal.h' -e 'dftracer/utils/yaml/escape.h' -e 'dftracer/utils/trace/index/store/shard_manifest.cpp' -e 'dftracer/utils/plugins/host/fold_adapter.cpp'); if [ -n \"$bad\" ]; then echo \"JSON control-byte escapes belong in src/dftracer/utils/json/json_escape.h; allow behavior-specific escapers:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(
+  NAME one_hex_table
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE '0123456789abcdef|0123456789ABCDEF' \"$0/include\" \"$0/src\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v -e 'dftracer/utils/dstd/vendor/' -e 'dftracer/utils/dstd/hex.h'); if [ -n \"$bad\" ]; then echo \"hex digit tables belong in include/dftracer/utils/dstd/hex.h:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+# Every environment read goes through common::Env::get (common/env.h), so a
+# name and the meaning of an empty value are one decision. The allow list holds
+# the files that cannot call it, and why.
+add_test(
+  NAME one_getenv
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE '(^|[^A-Za-z0-9_])(std::|::)?(secure_)?getenv[[:space:]]*\\(|_NSGetEnviron|(^|[^A-Za-z0-9_])environ([^A-Za-z0-9_]|$)' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/' | grep -vE ':[0-9]+:[[:space:]]*(//|/\\*)' | grep -vE '^[^:]*/(src/dftracer/utils/common/env\\.cpp|src/dftracer/utils/dstd/fs\\.cpp|src/dftracer/utils/cli/dftracer_plugin\\.cpp|tests/binaries/test_dftracer_replay\\.cpp|tests/trace/index/input_syscalls_interpose\\.cpp|tests/comm/test_loader\\.cpp|tests/binaries/test_comm_args\\.cpp|src/dftracer/utils/memory/heap\\.cpp|tests/memory/fresh_process\\.h):|^[^:]*/tests/plugins/'); if [ -n \"$bad\" ]; then echo 'environment read; use common::Env::get() from <dftracer/utils/common/env.h> (the allow list and its reasons are in tests/CMakeLists.txt):'; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+# With the allow list off, the scan must find a raw read, so a scanner that
+# matches nothing cannot pass.
+add_test(NAME one_getenv_self
+         COMMAND
+           sh -c
+           "printf '%s\\n' 'const char* v = std::getenv(\"X\");' 'extern char** environ;' | grep -cE '(^|[^A-Za-z0-9_])(std::|::)?(secure_)?getenv[[:space:]]*\\(|(^|[^A-Za-z0-9_])environ([^A-Za-z0-9_]|$)' > /dev/null")
+# Text and numbers get their bytes from dstd::fmt and dstd::to_chars, so one
+# rounding and one padding rule hold. The allow list holds the files that are
+# the printf form or cannot reach dstd, and why.
+add_test(
+  NAME no_printf_format
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE '(^|[^A-Za-z0-9_])(v?sn?printf)[[:space:]]*\\(|(^|[^A-Za-z0-9_])std::to_string[[:space:]]*\\(|ostringstream|istringstream|stringstream' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/' | grep -vE ':[0-9]+:[[:space:]]*(//|/\\*)' | grep -vE '^[^:]*/(include/dftracer/utils/dstd/to_chars\\.h|benchmarks/fmt_bench\\.cpp|benchmarks/memory_probe\\.h|tests/dstd/test_fmt\\.cpp|tests/memory/fresh_process\\.h):|^[^:]*/src/dftracer/utils/memory/|\\.c:'); if [ -n \"$bad\" ]; then echo 'hand formatting; use dstd::fmt, dstd::fmt_append or dstd::fmt_to (<dftracer/utils/dstd/fmt.h>) for text and dstd::to_chars or dstd::to_chars_general (<dftracer/utils/dstd/to_chars.h>) for a number (the allow list and its reasons are in tests/CMakeLists.txt):'; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(NAME no_printf_format_self
+         COMMAND
+           sh -c
+           "printf '%s\\n' 'snprintf(buf, n, \"%d\", v);' 'std::to_string(n)' 'std::ostringstream os;' | grep -cE '(^|[^A-Za-z0-9_])(v?sn?printf)[[:space:]]*\\(|(^|[^A-Za-z0-9_])std::to_string[[:space:]]*\\(|ostringstream|istringstream|stringstream' > /dev/null")
+# The Arrow string view layout (size, inline bytes, buffer index, offset) is
+# decoded only by decode_view(), so a layout fix lands in one place.
+add_test(
+  NAME one_view_decode
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE 'memcpy[[:space:]]*\\([[:space:]]*&[^,]+,[^,]*\\+[[:space:]]*12[[:space:]]*,' \"$0/include/dftracer/utils/dataframe\" \"$0/src/dftracer/utils/dataframe\" \"$0/src/dftracer/utils/arrow\" --include='*.h' --include='*.cpp' --include='*.inl' | grep -vE '^[^:]*/dftracer/utils/dataframe/internal/string_reader\\.h:'); if [ -n \"$bad\" ]; then echo \"hand-written Arrow view decode; use decode_view() from dataframe/internal/string_reader.h:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+# A big-endian read over a view passes the view: dstd::read_u16_be, read_u32_be
+# and read_u64_be take a dstd::ByteView or dstd::StringView.
+add_test(
+  NAME one_be_view_read
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE 'read_(u16|u32|u64|f64)_be\\(.*reinterpret_cast<const (std::)?uint8_t' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl' | grep -v 'dftracer/utils/dstd/vendor/'); if [ -n \"$bad\" ]; then echo \"pass the view to dstd::read_u16_be, read_u32_be or read_u64_be (include/dftracer/utils/dstd/big_endian.h), not a cast pointer:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
 add_test(
   NAME store_no_upward
   COMMAND
@@ -482,6 +578,7 @@ set(TEST_CPP_SOURCES
     runtime/test_run_queues.cpp
     runtime/test_filesystem.cpp
     runtime/test_fs.cpp
+    runtime/test_fs_inputs.cpp
     runtime/test_timer_service.cpp
     common/test_logging.cpp
     common/test_error.cpp
@@ -506,6 +603,7 @@ set(TEST_CPP_SOURCES
     dstd/test_path.cpp
     dstd/test_file.cpp
     dstd/test_fs.cpp
+    dstd/test_process.cpp
     dstd/test_raw_buffer.cpp
     dstd/test_expected.cpp
     dstd/test_error.cpp
@@ -1177,6 +1275,11 @@ foreach(test_file ${TEST_BINARY_SOURCES})
 
   set_target_properties(${target_name} PROPERTIES OUTPUT_NAME ${bin_name})
 
+  # The tools load the MPI backend at run time, so only a dependency builds it.
+  if(_comm_mpi_shared AND bin_exec MATCHES "_mpi$")
+    add_dependencies(${target_name} ${_comm_mpi_shared})
+  endif()
+
   if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(${target_name} PRIVATE --coverage -fprofile-arcs
                                                -ftest-coverage)
@@ -1754,7 +1857,7 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
          test_target_dftracer_utils_${VARIANT}_no_namespace)
   endforeach()
 
-  if(TARGET dftracer_plugin)
+  if(TEST plugin_scaffold)
     list(APPEND PACKAGE_DISCOVERY_TESTS plugin_scaffold)
   endif()
 

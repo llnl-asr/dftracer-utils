@@ -137,6 +137,8 @@ dstd::Result<FileMetadataResult> decode_metadata_record(
     meta.has_open_line = (flags & encoding::METADATA_FLAG_OPEN_LINE) != 0;
     meta.has_mid_line_chunk =
         (flags & encoding::METADATA_FLAG_MID_LINE_CHUNK) != 0;
+    meta.table_rows_complete =
+        (flags & encoding::METADATA_FLAG_TABLE_ROWS_COMPLETE) != 0;
     meta.next_member_idx = cursor.u64();
     if (cursor.failed()) return cursor.error();
     return meta;

@@ -5,9 +5,10 @@ from typing import List, cast
 
 from typing_extensions import assert_type
 
-from dftracer.utils import DataFrame, GroupBy, Indexer, LazyFrame, LazyResult, TraceViewer
+from dftracer.utils import DataFrame, GroupBy, LazyFrame, LazyResult
 from dftracer.utils import collect_all as collect_all
-from dftracer.utils.trace import Handle
+from dftracer.utils.index import Indexer
+from dftracer.utils.trace import Handle, TraceViewer
 
 df = cast("DataFrame", None)
 lf = cast("LazyFrame", None)
@@ -23,5 +24,5 @@ assert_type(collect_all([count]), List[DataFrame])  # a lazy int collects to an 
 assert_type(handle.result(), str)  # the handle holds an int
 ix.manifest()[0]["nope"]  # no such key
 ix.explain(1)  # the query is text
-tv.sink_json(1)  # the path is text
+tv.sink_trace(1)  # the path is text
 ix.ensure().nope  # no such field

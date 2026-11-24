@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdio.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
@@ -370,6 +371,28 @@ Expected<void, Error> rename(PathView from, PathView to) {
     return {};
 }
 
+Expected<bool, Error> rename_no_replace(PathView from, PathView to) {
+    const PathCString source(from.str());
+    const PathCString target(to.str());
+#if defined(__APPLE__)
+    const int status =
+        ::renamex_np(source.c_str(), target.c_str(), RENAME_EXCL);
+#else
+    const int status = ::renameat2(AT_FDCWD, source.c_str(), AT_FDCWD,
+                                   target.c_str(), RENAME_NOREPLACE);
+#endif
+    if (status == 0) return true;
+    const int error = errno;
+    if (error == EEXIST) return false;
+    if (error == EINVAL || error == ENOSYS || error == ENOTSUP) {
+        return Unexpected(Error(
+            Condition::Unsupported,
+            make_message(from.str(), to.str(),
+                         "the file system cannot rename without replacing")));
+    }
+    return Unexpected(errno_error(error, from.str(), to.str()));
+}
+
 Expected<void, Error> copy_file(PathView from, PathView to, CopyMode mode) {
     const PathCString source(from.str());
     const PathCString target(to.str());
@@ -550,6 +573,95 @@ bool match_name(StringView pattern, StringView name) noexcept {
     }
     while (at < pattern.size() && pattern[at] == '*') ++at;
     return at == pattern.size();
+}
+
+bool has_glob_chars(StringView pattern) noexcept {
+    for (const char c : pattern)
+        if (c == '*' || c == '?' || c == '[') return true;
+    return false;
+}
+
+namespace {
+
+// Matches one class that starts at pattern[at] == '[' against ch. Sets `next`
+// to the index after its ']' and returns false in `closed` when there is none.
+bool match_class(StringView pattern, std::size_t at, char ch, bool& closed,
+                 std::size_t& next) noexcept {
+    std::size_t i = at + 1;
+    const bool negate =
+        i < pattern.size() && (pattern[i] == '!' || pattern[i] == '^');
+    if (negate) ++i;
+    const std::size_t first = i;
+    bool hit = false;
+    for (; i < pattern.size(); ++i) {
+        if (pattern[i] == ']' && i > first) {
+            closed = true;
+            next = i + 1;
+            return hit != negate;
+        }
+        if (i + 2 < pattern.size() && pattern[i + 1] == '-' &&
+            pattern[i + 2] != ']') {
+            if (static_cast<unsigned char>(pattern[i]) <=
+                    static_cast<unsigned char>(ch) &&
+                static_cast<unsigned char>(ch) <=
+                    static_cast<unsigned char>(pattern[i + 2]))
+                hit = true;
+            i += 2;
+        } else if (pattern[i] == ch) {
+            hit = true;
+        }
+    }
+    closed = false;
+    return false;
+}
+
+}  // namespace
+
+bool glob_match_name(StringView pattern, StringView name) noexcept {
+    std::size_t at = 0;
+    std::size_t in = 0;
+    std::size_t star = StringView::npos;
+    std::size_t resume = 0;
+    for (;;) {
+        if (in < name.size() || at < pattern.size()) {
+            if (at < pattern.size() && pattern[at] == '*') {
+                star = at++;
+                resume = in;
+                continue;
+            }
+            if (in < name.size() && at < pattern.size()) {
+                const char ch = name[in];
+                if (pattern[at] == '[') {
+                    bool closed = false;
+                    std::size_t next = 0;
+                    const bool hit = match_class(pattern, at, ch, closed, next);
+                    if (closed) {
+                        if (hit && ch != '/') {
+                            at = next;
+                            ++in;
+                            continue;
+                        }
+                    } else if (ch == '[') {
+                        ++at;
+                        ++in;
+                        continue;
+                    }
+                } else if (pattern[at] == '?' ? ch != '/' : pattern[at] == ch) {
+                    ++at;
+                    ++in;
+                    continue;
+                }
+            }
+            if (star != StringView::npos && resume < name.size() &&
+                name[resume] != '/') {
+                at = star + 1;
+                in = ++resume;
+                continue;
+            }
+            return false;
+        }
+        return true;
+    }
 }
 
 Expected<void, Error> write_file(PathView path, StringView data) {

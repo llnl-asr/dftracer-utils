@@ -11,6 +11,7 @@ failure, so a fixed case fails the run until its row is deleted. A case that
 is not listed must match pandas exactly."""
 
 import re
+import warnings
 
 import pytest
 
@@ -19,6 +20,7 @@ pd = pytest.importorskip("pandas")
 
 from dftracer.utils import DataFrame, Series  # noqa: E402
 
+from .common import skip_below_pandas3  # noqa: E402
 from .parity_common import R, compare, load_findings, norm_pandas, resolve  # noqa: E402
 
 # pandas 2 warns about behaviours it deprecates (argsort over NA, apply over
@@ -595,6 +597,10 @@ def _receiver(kind, letter, side):
 def _run(kind, method, letter, args, kwargs, side):
     recv = _receiver(kind, letter, side)
     kwargs = dict(kwargs)
+    # pandas sorts ties with numpy quicksort, whose tie order differs by
+    # platform; ours is stable, so ask pandas for the stable order.
+    if side == "pandas" and kind == "series" and method in ("argsort", "sort_values"):
+        kwargs.setdefault("kind", "stable")
     if kind == "groupby":
         recv = recv.groupby("k")
     target = recv.str if kind == "str" else recv
@@ -604,11 +610,16 @@ def _run(kind, method, letter, args, kwargs, side):
         return getattr(target, method)
     a = [resolve(x, base) for x in args]
     kw = {k: resolve(v, base) for k, v in kwargs.items()}
-    return getattr(target, method)(*a, **kw)
+    with warnings.catch_warnings():
+        if side == "pandas" and "convert_integer" in kw:
+            # Ours takes convert_integer; pandas has no replacement for it yet.
+            warnings.filterwarnings("ignore", message=".*convert_integer keyword.*")
+        return getattr(target, method)(*a, **kw)
 
 
 @pytest.mark.parametrize("kind,method,letter,args,kwargs", PARAMS)
 def test_matches_pandas(kind, method, letter, args, kwargs):
+    skip_below_pandas3()
     theirs_err = ours_err = None
     try:
         theirs = _run(kind, method, letter, args, kwargs, "pandas")

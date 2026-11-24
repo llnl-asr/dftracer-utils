@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_TESTS_INSTRUMENTATION_H
 #define DFTRACER_UTILS_TESTS_INSTRUMENTATION_H
 
+#include <dftracer/utils/common/env.h>
+
 #include <cstdlib>
 #include <cstring>
 
@@ -18,8 +20,9 @@ inline bool active() {
     return true;
 #endif
 #endif
-    const char* preload = std::getenv("LD_PRELOAD");
-    return preload != nullptr && std::strstr(preload, "vgpreload") != nullptr;
+    const auto preload = dftracer::utils::common::Env::get("LD_PRELOAD");
+    return preload.has_value() && preload->find("vgpreload") !=
+                                      dftracer::utils::dstd::StringView::npos;
 }
 
 }  // namespace instrumentation

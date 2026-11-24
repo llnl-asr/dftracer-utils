@@ -7,6 +7,7 @@
 // DFTRACER_UTILS_PRUNE_ORACLE_RECORD=<path> to write a new recording instead.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -128,8 +129,7 @@ dstd::String write_trace(dstd::CStringView dir, int seed, int events) {
             const auto a = static_cast<unsigned long long>(rng.next());
             const auto b = static_cast<unsigned long long>(rng.next());
             const auto c = static_cast<unsigned long long>(rng.next());
-            char buf[32];
-            std::snprintf(buf, sizeof(buf), "n%08llx%08llx%08llx", a, b, c);
+            const dstd::String buf = dstd::fmt<"n{:08x}{:08x}{:08x}">(a, b, c);
             op = (i < 200 && i % 5 == 0) ? "target_op" : buf;
         }
         dstd::fmt_append<
@@ -406,12 +406,13 @@ TEST_CASE("prune decisions match the recording") {
     Corpus corpus;
     const auto lines = run_oracle(corpus);
 
-    if (const char* out = std::getenv("DFTRACER_UTILS_PRUNE_ORACLE_RECORD")) {
+    if (const auto out =
+            common::Env::get("DFTRACER_UTILS_PRUNE_ORACLE_RECORD")) {
         dstd::String f;
         for (const auto& l : lines) dstd::fmt_append<"{}\n">(f, l);
         MESSAGE("recorded " << lines.size() << " lines to "
-                            << dstd::String(out));
-        dstd::fs::write_file(dstd::PathView(out), f).discard();
+                            << dstd::String(*out));
+        dstd::fs::write_file(dstd::PathView(*out), f).discard();
         return;
     }
 

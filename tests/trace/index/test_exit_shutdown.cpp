@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/trace/index/cache/cache_store.h>
@@ -36,9 +37,9 @@ dstd::String trace_text() {
 
 TEST_CASE("index: writes an index and a cache then returns" * doctest::skip()) {
     fresh_process::announce();
-    const char* dir = std::getenv(TEST_DIR_ENV);
-    REQUIRE(dir != nullptr);
-    const dstd::String root(dir);
+    const auto dir = common::Env::get(TEST_DIR_ENV);
+    REQUIRE(dir.has_value());
+    const dstd::String root(*dir);
     const dstd::String trace =
         dftu_utils_test::write_gz_trace(root + "/t.pfw.gz", trace_text());
     REQUIRE(!trace.empty());

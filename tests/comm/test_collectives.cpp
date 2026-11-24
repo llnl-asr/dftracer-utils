@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -54,6 +55,55 @@ std::string word_of(std::uint32_t rank) {
 struct Best {
     std::int32_t score;
     std::int32_t who;
+};
+
+/// A messaging that keeps the receives it is given, so a test ends one by hand
+/// after its provider is gone, as a transport thread that was already running
+/// that receive does.
+class ParkingMessaging final : public comm::backend::Messaging {
+   public:
+    explicit ParkingMessaging(dstd::SharedPtr<comm::backend::Messaging> inner)
+        : inner_(std::move(inner)) {}
+
+    comm::backend::OpId send(const comm::backend::MessageKey& key,
+                             comm::backend::Payload payload,
+                             comm::backend::StreamOpts opts,
+                             SendDone done) override {
+        return inner_->send(key, std::move(payload), opts, std::move(done));
+    }
+    comm::backend::OpId recv(const comm::backend::MessageKey&,
+                             RecvDone done) override {
+        parked_.push_back(std::move(done));
+        return comm::backend::NO_OP;
+    }
+    comm::backend::OpId recv_any_source(const comm::backend::MessageKey& key,
+                                        std::uint32_t senders,
+                                        RecvFromDone done) override {
+        return inner_->recv_any_source(key, senders, std::move(done));
+    }
+    comm::backend::OpId recv_into(const comm::backend::MessageKey& key,
+                                  std::uint32_t senders,
+                                  dstd::Span<std::byte> buffer,
+                                  RecvIntoDone done) override {
+        return inner_->recv_into(key, senders, buffer, std::move(done));
+    }
+    bool cancel(const comm::backend::MessageKey& key, comm::backend::OpId op,
+                dstd::Error why) override {
+        return inner_->cancel(key, op, std::move(why));
+    }
+    void close(const comm::backend::MessageKey& key) override {
+        inner_->close(key);
+    }
+    void abort(std::uint64_t group, dstd::Error why) override {
+        inner_->abort(group, std::move(why));
+    }
+    void release(std::uint64_t group) override { inner_->release(group); }
+
+    dstd::Vector<RecvDone>& parked() { return parked_; }
+
+   private:
+    dstd::SharedPtr<comm::backend::Messaging> inner_;
+    dstd::Vector<RecvDone> parked_;
 };
 
 }  // namespace
@@ -599,7 +649,7 @@ TEST_SUITE("CommCollectives") {
                 rt, 2,
                 [&](std::uint32_t rank) -> coro::CoroTask<dstd::Result<void>> {
                     comm::Group group = communicator.world(rank);
-                    const std::string word = "rank" + std::to_string(rank);
+                    const dstd::String word = "rank" + dstd::to_string(rank);
                     auto all_op = group.all_gather(bytes_of(word));
                     auto all = co_await all_op;
                     if (!all) co_return std::move(all).error();
@@ -811,6 +861,26 @@ TEST_SUITE("CommCollectives") {
         auto all = empty.all_gather(dstd::Span<const std::byte>()).wait();
         REQUIRE(all.has_value());
         CHECK(all->size() == 0);
+    }
+
+    TEST_CASE(
+        "a receive that ends after its provider is gone answers nothing") {
+        auto parking = dstd::make_shared<ParkingMessaging>(
+            comm::backend::make_local_messaging());
+        comm::backend::Record record;
+        record.flags = comm::backend::RECORD_TABLE;
+        auto owner = std::make_shared<std::string>("first");
+        int ended = 0;
+        auto zero = comm::backend::make_linear_collectives(parking);
+        CHECK(zero->arrive(
+            1, 0, 2, 0, record,
+            comm::backend::Contribution{bytes_of(*owner), owner, {}},
+            [&ended](const comm::backend::SlotEnd&) { ++ended; }));
+        REQUIRE(parking->parked().size() == 1);
+        zero.reset();
+        const dstd::Error late{dstd::Condition::Cancelled, "late"};
+        parking->parked()[0](dstd::Span<const std::byte>(), &late);
+        CHECK(ended == 0);
     }
 
     TEST_CASE("a provider with its own instance per rank moves the table") {

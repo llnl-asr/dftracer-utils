@@ -7,6 +7,7 @@ with a one-row frame, where pandas answers with a Series: the pandas side of
 those cases asks for the same rows with a list."""
 
 import datetime
+import warnings
 
 import pytest
 
@@ -77,7 +78,10 @@ def _kind(e):
 
 def _run(f):
     try:
-        return f()
+        with warnings.catch_warnings():
+            # The index is unsorted on purpose; pandas warns about the lookup.
+            warnings.filterwarnings("ignore", message=".*past lexsort depth.*")
+            return f()
     except Exception as e:  # noqa: BLE001
         return e
 

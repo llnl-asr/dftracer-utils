@@ -156,15 +156,11 @@ dstd::Vector<std::int64_t> ints(const DataFrame& f, dstd::StringView name) {
     return dstd::Vector<std::int64_t>(p, p + c.length());
 }
 
-bool ends_with(dstd::StringView s, dstd::StringView tail) {
-    return s.size() >= tail.size() && s.substr(s.size() - tail.size()) == tail;
-}
-
 // The open pools whose path ends in `tail`.
 dstd::Vector<memory::detail::PoolStats> pools_named(dstd::StringView tail) {
     dstd::Vector<memory::detail::PoolStats> out;
     for (memory::detail::PoolStats& p : memory::detail::pool_stats())
-        if (ends_with(p.path, tail)) out.push_back(std::move(p));
+        if (p.path.ends_with(tail)) out.push_back(std::move(p));
     return out;
 }
 

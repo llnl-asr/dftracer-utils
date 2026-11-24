@@ -6,14 +6,15 @@ views on their group key."""
 import pytest
 
 import dftracer.utils as dftu_utils
-from dftracer.utils import LazyFrame, TraceViewer
+from dftracer.utils import LazyFrame
+from dftracer.utils.trace import TraceViewer
 
 from .common import Environment
 
 
 def _indexed(env):
     gz = env.create_test_gzip_file()
-    with dftu_utils.Indexer(files=[gz]) as indexer:
+    with dftu_utils.index.Indexer(files=[gz]) as indexer:
         indexer.ensure()
     return gz
 
@@ -72,7 +73,9 @@ class TestViewJoin:
             gz = _indexed(env)
             left = TraceViewer(gz).group_by("cat").agg("count")
             right = TraceViewer(gz).group_by("pid").agg("count")
-            with pytest.raises(dftu_utils.DFTUtilsNotFoundError, match="no right column named cat"):
+            with pytest.raises(
+                dftu_utils.errors.DFTUtilsNotFoundError, match="no right column named cat"
+            ):
                 _ = left.join(right, on="cat", how="inner").columns
 
     def test_bad_how_and_bad_other_raise(self):

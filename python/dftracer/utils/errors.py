@@ -5,6 +5,7 @@ The native module defines them; this module is the one place the rest of the
 package, and ``dftracer.utils``, take them from.
 """
 
+from ._public import set_home as _set_home
 from .dftracer_utils_ext import (
     DFTUtilsAggregationError,
     DFTUtilsCompressionError,
@@ -32,3 +33,5 @@ __all__ = [
     "DFTUtilsReaderError",
     "DFTUtilsValueError",
 ]
+
+_set_home(__name__, globals(), __all__)

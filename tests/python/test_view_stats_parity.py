@@ -41,13 +41,14 @@ def test_view_agg_tier_matches_raw_scan(tmp_path):
     (cat excluded: the tier lowercases it). sumsq is event-exact via the stored
     m2, so it matches too."""
 
-    from dftracer.utils import AggregationConfig, TraceViewer
+    from dftracer.utils.index import AggregationConfig
+    from dftracer.utils.trace import TraceViewer
 
     files = [str(tmp_path / f"t{k}.pfw.gz") for k in range(2)]
     for p in files:
         _make_trace(p)
     agg = str(tmp_path / "agg")
-    with dftu_utils.Indexer(
+    with dftu_utils.index.Indexer(
         files=files,
         index_dir=agg,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
@@ -86,7 +87,8 @@ def test_view_agg_tier_serves_offset_like_raw_scan(tmp_path):
     an arg, so the engine names its column args.offset, which the tier must map
     back to its stored offset stats. A group with no offset stays null."""
 
-    from dftracer.utils import AggregationConfig, TraceViewer
+    from dftracer.utils.index import AggregationConfig
+    from dftracer.utils.trace import TraceViewer
 
     path = str(tmp_path / "t.pfw.gz")
     with gzip.open(path, "wt") as f:
@@ -98,7 +100,7 @@ def test_view_agg_tier_serves_offset_like_raw_scan(tmp_path):
                 '"ts":%d,"dur":10,"args":{"fhash":"f0"%s}}\n' % (name, 1000 + i, offset)
             )
     agg = str(tmp_path / "agg")
-    with dftu_utils.Indexer(
+    with dftu_utils.index.Indexer(
         files=[path],
         index_dir=agg,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
@@ -128,13 +130,14 @@ def test_view_agg_tier_skew_kurt_pct_match_raw_scan(tmp_path):
     """skew/kurt (from persisted m3/m4) and percentiles (from the persisted
     DDSketch) come back from the aggregation CF tier and match the raw scan."""
 
-    from dftracer.utils import AggregationConfig, TraceViewer
+    from dftracer.utils.index import AggregationConfig
+    from dftracer.utils.trace import TraceViewer
 
     files = [str(tmp_path / f"t{k}.pfw.gz") for k in range(2)]
     for p in files:
         _make_trace(p)
     agg = str(tmp_path / "agg")
-    with dftu_utils.Indexer(
+    with dftu_utils.index.Indexer(
         files=files,
         index_dir=agg,
         aggregation_config=AggregationConfig(time_interval_ms=100000, compute_percentiles=True),
@@ -164,13 +167,14 @@ def test_view_histogram_tier_matches_raw_scan(tmp_path):
     tier (from the persisted DDSketch) and the raw scan produce identical
     buckets, and the bucket counts sum to the event count."""
 
-    from dftracer.utils import AggregationConfig, TraceViewer
+    from dftracer.utils.index import AggregationConfig
+    from dftracer.utils.trace import TraceViewer
 
     files = [str(tmp_path / f"t{k}.pfw.gz") for k in range(2)]
     for p in files:
         _make_trace(p)
     agg = str(tmp_path / "agg")
-    with dftu_utils.Indexer(
+    with dftu_utils.index.Indexer(
         files=files,
         index_dir=agg,
         aggregation_config=AggregationConfig(time_interval_ms=100000, compute_percentiles=True),
@@ -202,7 +206,8 @@ def test_collect_index_records_one_pass_returns_all_record_families(tmp_path):
     keys), and counters (incl. system) from one tier pass."""
     import gzip
 
-    from dftracer.utils import AggregationConfig, TraceViewer
+    from dftracer.utils.index import AggregationConfig
+    from dftracer.utils.trace import TraceViewer
 
     p = str(tmp_path / "t.pfw.gz")
     with gzip.open(p, "wt") as f:
@@ -222,7 +227,7 @@ def test_collect_index_records_one_pass_returns_all_record_families(tmp_path):
                 '"ts":%d,"args":{"user_pct":%d}}\n' % (3000 + i, 40 + i)
             )
     idx = str(tmp_path / "idx")
-    with dftu_utils.Indexer(
+    with dftu_utils.index.Indexer(
         files=[p],
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
@@ -230,7 +235,7 @@ def test_collect_index_records_one_pass_returns_all_record_families(tmp_path):
         ix.ensure()
 
     res = TraceViewer([p], index_dir=idx).group_by("name", "pid", "tid").collect_index_records()
-    assert isinstance(res, dftu_utils.IndexRecords)
+    assert isinstance(res, dftu_utils.trace.IndexRecords)
     regular = res.regular.to_dict()
     aggregated = res.aggregated.to_dict()
     counters = res.counters.to_dict()
@@ -255,7 +260,8 @@ def test_collect_index_records_cat_filter_matches_collect(tmp_path):
     (case-insensitively), and collect_index_records agrees with collect()."""
     import gzip
 
-    from dftracer.utils import AggregationConfig, TraceViewer
+    from dftracer.utils.index import AggregationConfig
+    from dftracer.utils.trace import TraceViewer
 
     p = str(tmp_path / "t.pfw.gz")
     with gzip.open(p, "wt") as f:
@@ -266,7 +272,7 @@ def test_collect_index_records_cat_filter_matches_collect(tmp_path):
                 '"ts":%d,"dur":%d}\n' % (cat, 1000 + i, 10 + i)
             )
     idx = str(tmp_path / "idx")
-    with dftu_utils.Indexer(
+    with dftu_utils.index.Indexer(
         files=[p],
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
@@ -306,13 +312,13 @@ def test_resolved_name_group_keys(tmp_path):
     (a bijective re-key), so metrics are unchanged and file_name is the basename
     of file_path."""
 
-    from dftracer.utils import TraceViewer
+    from dftracer.utils.trace import TraceViewer
 
     files = [str(tmp_path / f"t{p}.pfw.gz") for p in (1, 2)]
     for p, pid in zip(files, (1, 2)):
         _make_trace_with_fh(p, pid)
     idx = str(tmp_path / "idx")
-    with dftu_utils.Indexer(files=files, index_dir=idx) as ix:
+    with dftu_utils.index.Indexer(files=files, index_dir=idx) as ix:
         ix.ensure()
 
     def g(key):
@@ -332,13 +338,14 @@ def test_collect_index_records_resolves_name_group_keys(tmp_path):
     """collect_index_records resolves FileName/HostName group keys to names (not the
     stored hash), matching the generic collect() re-key path."""
 
-    from dftracer.utils import AggregationConfig, TraceViewer
+    from dftracer.utils.index import AggregationConfig
+    from dftracer.utils.trace import TraceViewer
 
     files = [str(tmp_path / f"t{p}.pfw.gz") for p in (1, 2)]
     for p, pid in zip(files, (1, 2)):
         _make_trace_with_fh(p, pid)
     idx = str(tmp_path / "idx")
-    with dftu_utils.Indexer(
+    with dftu_utils.index.Indexer(
         files=files,
         index_dir=idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),
@@ -354,7 +361,7 @@ def test_percentiles_from_view(tmp_path):
     """p50/p90/p99 come back as numeric columns, within DDSketch's ~1% error."""
     import gzip
 
-    from dftracer.utils import TraceViewer
+    from dftracer.utils.trace import TraceViewer
 
     p = str(tmp_path / "t.pfw.gz")
     with gzip.open(p, "wt") as f:
@@ -364,7 +371,7 @@ def test_percentiles_from_view(tmp_path):
                 '"ts":%d,"dur":%d}\n' % (1000 + i, i + 1)
             )
     idx = str(tmp_path / "idx")
-    with dftu_utils.Indexer(files=[p], index_dir=idx) as ix:
+    with dftu_utils.index.Indexer(files=[p], index_dir=idx) as ix:
         ix.ensure()
     df = (
         TraceViewer([p], index_dir=idx)
@@ -385,7 +392,7 @@ def test_skew_kurtosis_from_view(tmp_path):
 
     import numpy as np
 
-    from dftracer.utils import TraceViewer
+    from dftracer.utils.trace import TraceViewer
 
     p = str(tmp_path / "t.pfw.gz")
     vals = [i * i for i in range(1, 501)]  # right-skewed
@@ -396,7 +403,7 @@ def test_skew_kurtosis_from_view(tmp_path):
                 '"ts":%d,"dur":%d}\n' % (1000 + i, v)
             )
     idx = str(tmp_path / "idx")
-    with dftu_utils.Indexer(files=[p], index_dir=idx) as ix:
+    with dftu_utils.index.Indexer(files=[p], index_dir=idx) as ix:
         ix.ensure()
     df = (
         TraceViewer([p], index_dir=idx).group_by("name").agg("skew:dur", "kurt:dur").collect()
@@ -432,7 +439,8 @@ def test_fileless_index_serves_non_file_queries(tmp_path):
     tier must still answer queries that do not group by file; only file-grouped
     ones fall back, since the fold cannot be reversed."""
 
-    from dftracer.utils import AggregationConfig, TraceViewer
+    from dftracer.utils.index import AggregationConfig
+    from dftracer.utils.trace import TraceViewer
 
     paths = [f"/data/shard{i}.npz" for i in range(6)]
     p = str(tmp_path / "t.pfw.gz")
@@ -440,7 +448,7 @@ def test_fileless_index_serves_non_file_queries(tmp_path):
 
     keyed, fileless = str(tmp_path / "keyed"), str(tmp_path / "fileless")
     for idx, by_file in ((keyed, True), (fileless, False)):
-        with dftu_utils.Indexer(
+        with dftu_utils.index.Indexer(
             files=[p],
             index_dir=idx,
             aggregation_config=AggregationConfig(time_interval_ms=100000, group_by_file=by_file),
@@ -462,13 +470,13 @@ def test_group_key_transforms_coarsen_without_losing_totals(tmp_path):
     """A group key may carry a value transform. Each one folds the values
     differently, but every fold is a pure regrouping, so the totals hold."""
 
-    from dftracer.utils import TraceViewer
+    from dftracer.utils.trace import TraceViewer
 
     paths = [f"/data/train/f{i}.npz" for i in range(6)] + [f"/ckpt/s{i}.bin" for i in range(4)]
     p = str(tmp_path / "t.pfw.gz")
     _make_trace_with_paths(p, 1, paths)
     idx = str(tmp_path / "idx")
-    with dftu_utils.Indexer(files=[p], index_dir=idx) as ix:
+    with dftu_utils.index.Indexer(files=[p], index_dir=idx) as ix:
         ix.ensure()
 
     def group(expr):
@@ -500,16 +508,17 @@ def test_group_key_transform_applies_on_both_read_paths(tmp_path):
     serves the query, or the same query answers differently depending on
     whether an aggregation index happens to exist."""
 
-    from dftracer.utils import AggregationConfig, TraceViewer
+    from dftracer.utils.index import AggregationConfig
+    from dftracer.utils.trace import TraceViewer
 
     paths = [f"/data/train/f{i}.npz" for i in range(6)]
     p = str(tmp_path / "t.pfw.gz")
     _make_trace_with_paths(p, 1, paths)
 
     scan_idx, tier_idx = str(tmp_path / "scan"), str(tmp_path / "tier")
-    with dftu_utils.Indexer(files=[p], index_dir=scan_idx) as ix:
+    with dftu_utils.index.Indexer(files=[p], index_dir=scan_idx) as ix:
         ix.ensure()
-    with dftu_utils.Indexer(
+    with dftu_utils.index.Indexer(
         files=[p],
         index_dir=tier_idx,
         aggregation_config=AggregationConfig(time_interval_ms=100000),

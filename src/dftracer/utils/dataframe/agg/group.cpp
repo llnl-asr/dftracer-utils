@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -48,6 +49,12 @@ namespace {
 constexpr std::int64_t AGG_GRAIN = 1 << 16;
 // Groups in a probe of the first rows from which a partitioned driver pays off.
 constexpr std::int64_t MANY_GROUPS = 2048;
+// Rows the by-key driver folds to decide whether the groups are many; in a
+// frame the lanes can hold, the lanes win until the groups reach
+// LANE_MANY_GROUPS, which a probe of LANE_ROUTE_PROBE rows estimates.
+constexpr std::int64_t LANE_MANY_GROUPS = 10000;
+constexpr std::int64_t LANE_ROUTE_PROBE = AGG_GRAIN / 16;
+constexpr std::int64_t ROUTE_PROBE = AGG_GRAIN / 4;
 }  // namespace
 
 namespace {
@@ -63,6 +70,28 @@ Series flat_or_ref(const Series& c, bool key) {
                : c.materialize();
 }
 
+// How many groups n rows hold, from how often a probe of them saw each one
+// (Chao1: the groups seen plus those that singletons suggest).
+std::size_t estimate_groups(const AggState& probe, std::int64_t n) {
+    double f1 = 0, f2 = 0;
+    for (const std::uint64_t c : probe.counts) {
+        f1 += c == 1;
+        f2 += c == 2;
+    }
+    const double seen = static_cast<double>(probe.ngroups());
+    return static_cast<std::size_t>(
+        std::min(static_cast<double>(n), seen + f1 * f1 / (2.0 * (f2 + 1))));
+}
+
+// The groups `rows` of the frame are expected to show when it holds `groups`
+// in all (uniformly drawn, with a margin).
+std::size_t lane_groups(std::size_t groups, std::int64_t rows) {
+    const auto all = std::max(static_cast<double>(groups), 1.0);
+    const double seen =
+        all * (1.0 - std::exp(-static_cast<double>(rows) / all));
+    return static_cast<std::size_t>(seen * 1.05) + 16;
+}
+
 // The first error a parallel pass reports; the rest are dropped.
 struct FirstError {
     std::mutex mutex;
@@ -75,9 +104,10 @@ struct FirstError {
 };
 }  // namespace
 
-dstd::Result<AggStatePtr> group_agg_state(
+static dstd::Result<AggStatePtr> group_agg_lanes(
     dstd::Span<const Series* const> in_keys,
-    dstd::Span<const Series* const> in_values, dstd::Vector<AggSpec> specs) {
+    dstd::Span<const Series* const> in_values, dstd::Vector<AggSpec> specs,
+    std::atomic<bool>* many = nullptr) {
     // The accumulator reads FLAT columns; a view (a filter's selection, a
     // dictionary) is materialized once here, for every caller.
     dstd::Vector<Series> owned;
@@ -113,6 +143,8 @@ dstd::Result<AggStatePtr> group_agg_state(
     // of a float sum is the same on every run and for every thread count.
     // Every lane re-discovers every group, as the per-thread partials did.
     constexpr std::int64_t LANES = 16;
+    constexpr std::int64_t LANE_PROBE = AGG_GRAIN / 8;
+    constexpr std::int64_t LANE_STEP = AGG_GRAIN / 4;
     const std::int64_t chunks = (n + AGG_GRAIN - 1) / AGG_GRAIN;
     const std::int64_t nl = std::min(LANES, chunks);
     dstd::Vector<AggStatePtr> lanes(static_cast<std::size_t>(nl));
@@ -120,25 +152,65 @@ dstd::Result<AggStatePtr> group_agg_state(
     parallel_for(nl, 1, [&](std::int64_t l0, std::int64_t l1) {
         for (std::int64_t l = l0; l < l1; ++l) {
             AggStatePtr st = agg_new(specs);
+            st->rows_hint = AGG_GRAIN;
+            std::int64_t lane_rows = 0;
+            for (std::int64_t c = l; c < chunks; c += nl)
+                lane_rows += std::min(n, (c + 1) * AGG_GRAIN) - c * AGG_GRAIN;
             for (std::int64_t c = l; c < chunks; c += nl) {
-                dstd::Result<void> done =
-                    agg_accumulate(*st, keys, values, c * AGG_GRAIN,
-                                   std::min(n, (c + 1) * AGG_GRAIN));
-                if (!done) {
-                    failed.note(std::move(done));
-                    return;
+                std::int64_t b = c * AGG_GRAIN;
+                const std::int64_t e = std::min(n, (c + 1) * AGG_GRAIN);
+                // The lane's first rows size its tables, so they are
+                // allocated once and not regrown (and freed) as the groups
+                // come in; lane 0's also tell whether the groups are many.
+                const bool first = c == l;
+                const bool decides = first && l == 0 && many != nullptr;
+                const std::int64_t piece = decides ? LANE_ROUTE_PROBE
+                                           : first ? LANE_PROBE
+                                                   : e - b;
+                // A lane that can be dropped folds in pieces and looks.
+                const std::int64_t step = many != nullptr ? LANE_STEP : e - b;
+                while (b < e) {
+                    if (many != nullptr &&
+                        many->load(std::memory_order_relaxed))
+                        return;
+                    const std::int64_t pe = std::min(
+                        e, b + (b == c * AGG_GRAIN && first ? piece : step));
+                    dstd::Result<void> done =
+                        agg_accumulate(*st, keys, values, b, pe);
+                    if (!done) {
+                        failed.note(std::move(done));
+                        return;
+                    }
+                    if (first && b == c * AGG_GRAIN) {
+                        const std::size_t all = estimate_groups(*st, n);
+                        if (decides &&
+                            all >= static_cast<std::size_t>(LANE_MANY_GROUPS)) {
+                            many->store(true, std::memory_order_relaxed);
+                            return;
+                        }
+                        if (all >= static_cast<std::size_t>(MANY_GROUPS))
+                            st->reserve_groups(lane_groups(all, lane_rows));
+                    }
+                    b = pe;
                 }
             }
             lanes[static_cast<std::size_t>(l)] = std::move(st);
         }
     });
     if (failed.error) return *failed.error;
+    if (many != nullptr && many->load()) return AggStatePtr();
     // The merged groups go back into the order the frame first shows them.
     AggStatePtr merged = agg_in_first_seen_order(agg_merge_many(lanes));
     if (!merged) return agg_new(std::move(specs));
     if (dstd::Result<void> checked = agg_check(*merged); !checked)
         return checked.error();
     return merged;
+}
+
+dstd::Result<AggStatePtr> group_agg_state(
+    dstd::Span<const Series* const> in_keys,
+    dstd::Span<const Series* const> in_values, dstd::Vector<AggSpec> specs) {
+    return group_agg_lanes(in_keys, in_values, std::move(specs));
 }
 
 namespace {
@@ -709,6 +781,34 @@ dstd::Optional<DataFrame> group_agg_partitioned(
     return stitch_in_first_seen_order(parts, first, drop_keys);
 }
 
+// Whether the by-key driver can take these keys and aggregates: keys whose
+// equality is the equality of their bytes, and no state that depends on the
+// order of rows (a tie, a bounded counter), which would change with the order
+// the morsels reach a partition.
+bool by_key_eligible(dstd::Span<const Series* const> in_keys,
+                     dstd::Span<const AggSpec> specs) {
+    for (const Series* c : in_keys) {
+        switch (c->type()) {
+            case TypeId::String:
+            case TypeId::Int8:
+            case TypeId::Int16:
+            case TypeId::Int32:
+            case TypeId::Int64:
+            case TypeId::Uint8:
+            case TypeId::Uint16:
+            case TypeId::Uint32:
+            case TypeId::Uint64:
+                break;
+            default:
+                return false;
+        }
+    }
+    AggStatePtr probe =
+        agg_new(dstd::Vector<AggSpec>(specs.begin(), specs.end()));
+    return !(probe->has_arg || probe->has_apos || probe->has_lst ||
+             probe->has_ss);
+}
+
 // Many groups on a key the packed driver cannot hold (a string over 16 bytes,
 // an integer): every row goes to a partition by a hash of its key, a morsel at
 // a time, and is folded into a state of that partition, so the groups are
@@ -726,35 +826,14 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
     using Maybe = dstd::Result<dstd::Optional<DataFrame>>;
     auto none = [] { return Maybe(dstd::Optional<DataFrame>()); };
     // Threshold set from benchmarks/groupby_analyzer_bench.py; below it the
-    // per-thread partials win.
-    constexpr std::int64_t MIN_ROWS = 4 * AGG_GRAIN;
+    // single state wins. Up to 4 * AGG_GRAIN rows the lanes win until the
+    // groups are estimated at LANE_MANY_GROUPS (about 10000); above, until a
+    // probe shows MANY_GROUPS (2048). A group sees its rows in row order, so
+    // the bits do not depend on the frame size or the thread count.
+    constexpr std::int64_t MIN_ROWS = AGG_GRAIN;
     const std::int64_t n = in_keys.empty() ? 0 : in_keys[0]->length();
     if (n <= MIN_ROWS || agg_specs_serial(specs)) return none();
-    for (const Series* c : in_keys) {
-        switch (c->type()) {
-            case TypeId::String:
-            case TypeId::Int8:
-            case TypeId::Int16:
-            case TypeId::Int32:
-            case TypeId::Int64:
-            case TypeId::Uint8:
-            case TypeId::Uint16:
-            case TypeId::Uint32:
-            case TypeId::Uint64:
-                break;
-            default:
-                return none();
-        }
-    }
-    {
-        // Order-dependent state (a tie, a bounded counter) would change with
-        // the order the morsels reach a partition.
-        AggStatePtr probe =
-            agg_new(dstd::Vector<AggSpec>(specs.begin(), specs.end()));
-        if (probe->has_arg || probe->has_apos || probe->has_lst ||
-            probe->has_ss)
-            return none();
-    }
+    if (!by_key_eligible(in_keys, specs)) return none();
     dstd::Vector<Series> owned;
     owned.reserve(in_keys.size() + in_values.size());
     auto flat = [&](dstd::Span<const Series* const> cols, bool key) {
@@ -772,19 +851,15 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
         AggStatePtr probe =
             agg_new(dstd::Vector<AggSpec>(specs.begin(), specs.end()));
         // A rejected layout is reported by the state driver, which runs next.
-        if (!agg_accumulate(*probe, keys, values, 0, AGG_GRAIN / 4))
-            return none();
-        if (probe->ngroups() < MANY_GROUPS) return none();
-        // How many groups the rows hold, from how often the probe saw each
-        // one (Chao1: the groups seen plus those that singletons suggest).
-        double f1 = 0, f2 = 0;
-        for (const std::uint64_t c : probe->counts) {
-            f1 += c == 1;
-            f2 += c == 2;
-        }
-        const double seen = static_cast<double>(probe->ngroups());
-        groups_hint = static_cast<std::size_t>(std::min(
-            static_cast<double>(n), seen + f1 * f1 / (2.0 * (f2 + 1))));
+        const bool lane_range = n <= 4 * AGG_GRAIN;
+        const std::int64_t rows = lane_range ? LANE_ROUTE_PROBE : ROUTE_PROBE;
+        if (!agg_accumulate(*probe, keys, values, 0, rows)) return none();
+        const bool few = lane_range
+                             ? estimate_groups(*probe, n) <
+                                   static_cast<std::size_t>(LANE_MANY_GROUPS)
+                             : probe->ngroups() < MANY_GROUPS;
+        if (few) return none();
+        groups_hint = estimate_groups(*probe, n);
     }
 
     const auto threads = static_cast<std::int64_t>(std::max<std::size_t>(
@@ -937,13 +1012,30 @@ dstd::Result<DataFrame> group_agg_whole(
     if (dstd::Optional<DataFrame> out =
             group_agg_partitioned(keys, values, specs, key_names, drop_keys))
         return std::move(*out);
-    dstd::Result<dstd::Optional<DataFrame>> hashed =
-        group_agg_by_key_hash(keys, values, specs, key_names, drop_keys);
-    if (!hashed) return hashed.error();
-    if (*hashed) return std::move(**hashed);
-    dstd::Result<AggStatePtr> state =
-        group_agg_state(keys, values, std::move(specs));
-    if (!state) return state.error();
+    // A frame the lanes can hold is folded in lanes at once, and lane 0's
+    // first rows decide whether the groups are many: then the lanes are
+    // dropped and the by-key driver runs, else nothing waited.
+    const std::int64_t n = keys.empty() ? 0 : keys[0]->length();
+    std::atomic<bool> many{false};
+    AggStatePtr folded;
+    if (n > AGG_GRAIN && n <= 4 * AGG_GRAIN && !agg_specs_serial(specs) &&
+        by_key_eligible(keys, specs)) {
+        dstd::Result<AggStatePtr> lanes =
+            group_agg_lanes(keys, values, dstd::Vector<AggSpec>(specs), &many);
+        if (!lanes) return lanes.error();
+        folded = std::move(*lanes);
+    }
+    if (!folded) {
+        dstd::Result<dstd::Optional<DataFrame>> hashed =
+            group_agg_by_key_hash(keys, values, specs, key_names, drop_keys);
+        if (!hashed) return hashed.error();
+        if (*hashed) return std::move(**hashed);
+        dstd::Result<AggStatePtr> lanes =
+            group_agg_lanes(keys, values, std::move(specs));
+        if (!lanes) return lanes.error();
+        folded = std::move(*lanes);
+    }
+    dstd::Result<AggStatePtr> state = std::move(folded);
     DataFrame whole = agg_finalize(**state, key_names);
     if (dstd::Result<void> checked = agg_check(**state); !checked)
         return checked.error();

@@ -18,6 +18,7 @@
 #include <dftracer/utils/fileio/file_helpers.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/runtime/fs/fs.h>
+#include <dftracer/utils/runtime/fs/inputs.h>
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/index/build/resolver.h>
 #include <dftracer/utils/trace/index/extensions/extension_registry.h>
@@ -30,6 +31,7 @@
 #include <dftracer/utils/trace/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/index/tables.h>
+#include <dftracer/utils/trace/index/write_feed.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
@@ -47,6 +49,39 @@ struct FormatEntry {
 
 }  // namespace
 
+static build::ChunkIndexerConfig make_bloom_config(
+    const IndexerOptions& options, const store::ExtensionMask& extensions) {
+    const BloomOptions bloom = options.bloom.value_or(BloomOptions{});
+    build::ChunkIndexerConfig c;
+    for (const auto& field : bloom.fields)
+        c.extra_dimensions.push_back(build::extra_dimension_name(field));
+    c.false_positive_rate = bloom.false_positive_rate;
+    c.path_budget = bloom.path_budget;
+    c.stats_share = bloom.stats_share;
+    c.auto_max_distinct = bloom.auto_max_distinct;
+    c.expected_entries_per_chunk = bloom.expected_entries_per_chunk;
+    c.extensions = extensions;
+    for (const SummaryChoice& choice : options.summaries) {
+        build::PathSummaries p;
+        p.path = build::extra_dimension_name(choice.path);
+        p.written = choice.path;
+        for (const dstd::String& name : choice.summaries)
+            if (const auto ext = store::parse_extension(name);
+                ext && store::PRUNING_EXTENSIONS.has(*ext))
+                p.kinds.add(*ext);
+        if (!p.kinds.empty() && !build::is_fixed_dimension(p.path) &&
+            std::find(c.extra_dimensions.begin(), c.extra_dimensions.end(),
+                      p.path) == c.extra_dimensions.end())
+            c.extra_dimensions.push_back(p.path);
+        c.path_summaries.push_back(std::move(p));
+    }
+    std::sort(c.path_summaries.begin(), c.path_summaries.end(),
+              [](const build::PathSummaries& a, const build::PathSummaries& b) {
+                  return a.path < b.path;
+              });
+    return c;
+}
+
 struct Indexer::Impl {
     dstd::Vector<dstd::String> paths;
     /// The scan from open_scanned(), used by the first call that needs sizes
@@ -61,36 +96,7 @@ struct Indexer::Impl {
     }
 
     build::ChunkIndexerConfig bloom_config() const {
-        const BloomOptions bloom = options.bloom.value_or(BloomOptions{});
-        build::ChunkIndexerConfig c;
-        for (const auto& field : bloom.fields)
-            c.extra_dimensions.push_back(build::extra_dimension_name(field));
-        c.false_positive_rate = bloom.false_positive_rate;
-        c.path_budget = bloom.path_budget;
-        c.stats_share = bloom.stats_share;
-        c.auto_max_distinct = bloom.auto_max_distinct;
-        c.expected_entries_per_chunk = bloom.expected_entries_per_chunk;
-        c.extensions = extensions;
-        for (const SummaryChoice& choice : options.summaries) {
-            build::PathSummaries p;
-            p.path = build::extra_dimension_name(choice.path);
-            p.written = choice.path;
-            for (const dstd::String& name : choice.summaries)
-                if (const auto ext = store::parse_extension(name);
-                    ext && store::PRUNING_EXTENSIONS.has(*ext))
-                    p.kinds.add(*ext);
-            if (!p.kinds.empty() && !build::is_fixed_dimension(p.path) &&
-                std::find(c.extra_dimensions.begin(), c.extra_dimensions.end(),
-                          p.path) == c.extra_dimensions.end())
-                c.extra_dimensions.push_back(p.path);
-            c.path_summaries.push_back(std::move(p));
-        }
-        std::sort(
-            c.path_summaries.begin(), c.path_summaries.end(),
-            [](const build::PathSummaries& a, const build::PathSummaries& b) {
-                return a.path < b.path;
-            });
-        return c;
+        return make_bloom_config(options, extensions);
     }
 
     // The traces grouped by index root, in open order within a root.
@@ -454,6 +460,26 @@ dstd::Result<void> Indexer::validate_options(Impl& impl) {
     return {};
 }
 
+dstd::Result<build::ChunkIndexerConfig> index_chunk_config(
+    const IndexerOptions& options) {
+    store::ExtensionMask extensions;
+    for (const auto& name : options.extensions) {
+        auto ext = store::parse_extension(name);
+        if (!ext || !store::PRUNING_EXTENSIONS.has(*ext))
+            return common::make_error<
+                "not a pruning extension: {} (expected zonemap, bloom, counts "
+                "or postings)">(common::ErrorCode::InvalidArgument, name);
+        extensions.add(*ext);
+    }
+    if (auto chosen = validate_summaries(options, extensions); !chosen)
+        return chosen.error();
+    auto config = make_bloom_config(options, extensions);
+    if (options.bloom) {
+        if (auto valid = config.validate(); !valid) return valid.error();
+    }
+    return config;
+}
+
 dstd::Result<Indexer> Indexer::finish_open(dstd::SharedPtr<Impl> impl) {
     for (const auto& [index_path, traces] : impl->by_index())
         if (auto loaded = load_index_schemas(index_path); !loaded)
@@ -474,35 +500,17 @@ dstd::Result<Indexer> Indexer::open(dstd::Vector<dstd::String> paths,
     impl->options = std::move(options);
     const auto valid = validate_options(*impl);
     if (!valid) return valid.error();
-    for (auto& p : paths) {
-        common::InputFileStat self;
-        const bool known = common::stat_input(p, self);
-        const bool is_directory = known && self.is_directory;
-        const bool is_regular_file = known && self.is_regular_file;
-        const auto present = dstd::fs::exists(dstd::PathView(p));
-        if (!is_directory && !is_regular_file &&
-            !(present.has_value() && *present))
-            return common::make_error<"Indexer::open: no such path: {}">(
-                common::ErrorCode::NotFound, p);
-        if (!is_directory) {
-            impl->paths.push_back(std::move(p));
-            continue;
-        }
-        runtime::fs::FindOptions find_options;
-        find_options.patterns = runtime::fs::names_of(
-            common::constants::indexer::INPUT_FILE_PATTERNS);
-        find_options.recursive = false;
-        find_options.with_stat = false;
-        auto found = impl->runtime().block_on(coro::named(
-            "indexer-open", coro::with_scope([&](coro::Scope& scope) {
-                return runtime::fs::find_all(scope, dstd::PathView(p),
-                                             find_options);
-            })));
-        if (!found) return found.error();
-        const auto& matched = *found;
-        for (const auto& e : matched)
-            impl->paths.push_back(dstd::String(e.path.str()));
-    }
+    auto expanded = impl->runtime().block_on(coro::named(
+        "indexer-open", coro::with_scope([&](coro::Scope& scope) {
+            return runtime::fs::expand_inputs(
+                scope,
+                dstd::Span<const dstd::String>(paths.data(), paths.size()));
+        })));
+    if (!expanded) return expanded.error();
+    if (!expanded->missing.empty())
+        return common::make_error<"Indexer::open: no such path: {}">(
+            common::ErrorCode::NotFound, expanded->missing.front());
+    impl->paths = std::move(expanded->files);
     return finish_open(std::move(impl));
 }
 

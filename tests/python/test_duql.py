@@ -90,7 +90,8 @@ def test_flat_dotted_arg_key_resolves_at_runtime(tmp_path):
     """A flat arg key that contains dots resolves through the native query and
     group-by paths, bare or args.-prefixed, identically."""
     pa = pytest.importorskip("pyarrow")
-    from dftracer.utils import AggregationConfig, Indexer, TraceViewer
+    from dftracer.utils.index import AggregationConfig, Indexer
+    from dftracer.utils.trace import TraceViewer
 
     trace = os.path.join(tmp_path, "t.pfw.gz")
     _write_dotted_arg_trace(trace)
@@ -125,7 +126,8 @@ def test_flat_dotted_arg_key_resolves_at_runtime(tmp_path):
 def test_traceviewer_filter_accepts_expr(tmp_path):
     """filter()/query() accept an Expr, producing the same result as its str()."""
     pa = pytest.importorskip("pyarrow")
-    from dftracer.utils import AggregationConfig, Indexer, TraceViewer
+    from dftracer.utils.index import AggregationConfig, Indexer
+    from dftracer.utils.trace import TraceViewer
 
     trace = os.path.join(tmp_path, "t.pfw.gz")
     _write_trace(trace)
@@ -179,7 +181,7 @@ def test_unified_f_value_and_predicate():
     via .to_duql()/str()."""
     pa = pytest.importorskip("pyarrow")
     from dftracer.utils import F
-    from dftracer.utils.dataframe import _dataframe_from_arrow
+    from dftracer.utils._dataframe import _dataframe_from_arrow
 
     df = _dataframe_from_arrow(pa.table({"dur": pa.array([1, 5, 9], pa.int64())}))
     assert (F.dur * 2).apply(df).to_arrow().to_pylist() == [2, 10, 18]
@@ -210,7 +212,7 @@ def test_string_predicates_apply_in_memory():
     filter-only."""
     pa = pytest.importorskip("pyarrow")
     from dftracer.utils import F
-    from dftracer.utils.dataframe import _dataframe_from_arrow
+    from dftracer.utils._dataframe import _dataframe_from_arrow
 
     df = _dataframe_from_arrow(
         pa.table({"cat": pa.array(["io", "cpu", "IO", "Disk io"], pa.string())})
@@ -243,7 +245,7 @@ def test_string_predicates_apply_in_memory():
 def test_string_values_apply_in_memory():
     pa = pytest.importorskip("pyarrow")
     from dftracer.utils import F
-    from dftracer.utils.dataframe import _dataframe_from_arrow
+    from dftracer.utils._dataframe import _dataframe_from_arrow
 
     df = _dataframe_from_arrow(pa.table({"s": pa.array([" Read ", "pread64"], pa.string())}))
 
@@ -268,7 +270,9 @@ def test_traceviewer_filter_unified_predicates(tmp_path):
     """filter() accepts unified-F predicates (comparison, membership, like);
     a non-pushable one filters the plan's rows instead."""
     pa = pytest.importorskip("pyarrow")
-    from dftracer.utils import AggregationConfig, F, Indexer, TraceViewer
+    from dftracer.utils import F
+    from dftracer.utils.index import AggregationConfig, Indexer
+    from dftracer.utils.trace import TraceViewer
 
     trace = os.path.join(tmp_path, "t.pfw.gz")
     _write_trace(trace)
@@ -319,7 +323,7 @@ def test_string_predicates_match_literal_wildcards_in_a_scan(tmp_path):
     path = tmp_path / "names.ndjson.gz"
     lines = [f'{{"name":"{n}","ts":{i}}}' for i, n in enumerate(names)]
     path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
-    tv = dftu.TraceViewer(str(path))
+    tv = dftu.trace.TraceViewer(str(path))
 
     def kept(expr):
         return sorted(tv.filter(expr).collect()["name"].to_list())
@@ -338,7 +342,7 @@ def test_any_renders_and_filters_array_elements(tmp_path):
     assert str(col("tags").any() == "a") == 'any(tags) == "a"'
     assert str(F.sizes.any() > 10) == "any(sizes) > 10"
     assert str(F.tags.any().is_in(["a", "b"])) == 'any(tags) in ["a", "b"]'
-    with pytest.raises(dftu.DFTUtilsValueError, match="any"):
+    with pytest.raises(dftu.errors.DFTUtilsValueError, match="any"):
         (F.tags.any() == "a").apply(dftu.DataFrame.from_dict({"tags": [1]}))
 
     path = tmp_path / "tags.ndjson.gz"
@@ -348,15 +352,16 @@ def test_any_renders_and_filters_array_elements(tmp_path):
         '{"op":"read"}',
     ]
     path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
-    tv = dftu.TraceViewer(str(path))
+    tv = dftu.trace.TraceViewer(str(path))
     assert len(tv.duql('any(tags) == "a"').collect()) == 1
     assert len(tv.filter(F.sizes.any() > 100).collect()) == 1
     assert len(tv.duql('not any(tags) == "a"').collect()) == 1
 
 
 def test_load_path_macros_expand_in_queries(tmp_path):
-    from dftracer.utils import DFTUtilsIOError, TraceViewer
     from dftracer.utils.duql import load_path
+    from dftracer.utils.errors import DFTUtilsIOError
+    from dftracer.utils.trace import TraceViewer
 
     trace = os.path.join(tmp_path, "t.pfw.gz")
     _write_trace(trace)
@@ -378,7 +383,7 @@ def test_traceviewer_group_by_takes_a_list(tmp_path):
         for i, (op, h) in enumerate([("r", "a"), ("w", "a"), ("r", "b"), ("r", "a")])
     ]
     path.write_bytes(gzip.compress(("\n".join(lines) + "\n").encode()))
-    tv = dftu.TraceViewer(str(path))
+    tv = dftu.trace.TraceViewer(str(path))
 
     def counts(view):
         return sorted(view.agg("count").collect().to_pandas().itertuples(index=False, name=None))

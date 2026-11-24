@@ -46,7 +46,8 @@ import tempfile
 import time
 from typing import Dict, List, Tuple
 
-from dftracer.utils import Runtime, jit
+from dftracer.utils import jit
+from dftracer.utils.runtime import Runtime
 from dftracer.utils.jit import Counter as _Counter
 from dftracer.utils.jit import JitPlugin, _emit, _MapDecl
 from dftracer.utils.jit import Sum as _Sum

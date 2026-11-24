@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/trace/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/trace/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/trace/index/plan/chunk_pruner.h>
@@ -171,6 +172,48 @@ TEST_SUITE("index kinds") {
                           .get();
         REQUIRE(result.has_value());
         CHECK(result->candidates == dstd::Vector<std::uint64_t>{1});
+    }
+
+    TEST_CASE(
+        "a builder expression with a large double asks the zone exactly") {
+        auto dir = dftu_utils_test::make_unique_test_path("kinds_big_double");
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        const dstd::String trace = "/fake/big_double.pfw.gz";
+        const dstd::String path((dir / ".dftindex").str());
+        constexpr std::int64_t TWO_53 = std::int64_t{1} << 53;
+        {
+            auto idx = dftu_utils_test::open_test_index(path);
+            auto w = dftu_utils_test::register_test_file(idx, trace, 1);
+            const std::int64_t lows[] = {TWO_53 - 100, TWO_53 + 101};
+            for (std::uint64_t c = 0; c < 2; ++c) {
+                trace::index::put_gzip_member(
+                    w, {c, c * 100, 100, c * 200, 200, c * 2 + 1, c * 2 + 2});
+                auto big = dim("dur", {});
+                big.zone.bounds().add(lows[c]);
+                big.zone.bounds().add(lows[c] + 199);
+                dftu_utils_test::put_dimension_stats(w, c, big, 2);
+            }
+            dftu_utils_test::mark_built(w);
+            dftu_utils_test::commit_test_build(w);
+        }
+        auto keeps = [&](duql::CompareOp op, double literal) {
+            auto q = duql::field_cmp("dur", op, duql::detail::literal(literal))
+                         .build();
+            REQUIRE(q.has_value());
+            const auto pruned = trace::index::plan::prune_file(
+                                    {path, trace, &*q, nullptr, dstd::nullopt})
+                                    .get();
+            REQUIRE(pruned.has_value());
+            dstd::Vector<std::uint64_t> chunks = pruned->candidates;
+            if (pruned->all_chunks) chunks = {0, 1};
+            return chunks;
+        };
+        using Chunks = dstd::Vector<std::uint64_t>;
+        CHECK(keeps(duql::CompareOp::Gt, 9007199254740992.0) == Chunks{0, 1});
+        CHECK(keeps(duql::CompareOp::Ge, 9007199254740992.0) == Chunks{0, 1});
+        CHECK(keeps(duql::CompareOp::Le, 9007199254740992.0) == Chunks{0});
+        CHECK(keeps(duql::CompareOp::Gt, 9007199254741142.0) == Chunks{1});
+        CHECK(keeps(duql::CompareOp::Lt, 9007199254740893.0) == Chunks{0});
     }
 
     TEST_CASE("a zone whose bounds are out of order prunes nothing") {

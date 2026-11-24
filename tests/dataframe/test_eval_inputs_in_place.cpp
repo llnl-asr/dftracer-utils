@@ -287,7 +287,8 @@ TEST_SUITE("eval inputs in place") {
             run(ch.lazy().with_column("c", col(0) + col(1)).collect());
         const dstd::Vector<const Series*> in = {&df.columns[0], &df.columns[1]};
         DataFrame want =
-            df.with_column("c", dftu_utils_test::eval_ok(col(0) + col(1), in));
+            df.with_column("c", dftu_utils_test::eval_ok(col(0) + col(1), in))
+                .value();
         REQUIRE(got.names == want.names);
         for (std::size_t c = 0; c < want.columns.size(); ++c) {
             CAPTURE(c);

@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -200,6 +201,60 @@ LazyFrame rest_scan(bool with_list = false) {
         dstd::make_shared<PartsSource>(parts(), false, with_list));
 }
 
+// One morsel declaring only `a`: `f` (Float64, a NaN in row 1) and `n` (Int64,
+// a null in row 2) are undeclared, and the declared column holds no null or
+// NaN.
+class FloatCursor : public dataframe::Cursor {
+   public:
+    dftracer::utils::coro::CoroTask<dataframe::MorselResult> next(
+        std::int64_t) override {
+        if (done_) co_return dataframe::MorselResult(dstd::nullopt);
+        done_ = true;
+        const double f[4] = {1.0, std::numeric_limits<double>::quiet_NaN(), 3.0,
+                             4.0};
+        dataframe::Morsel m;
+        m.rows = 4;
+        auto& d = m.dyn_state();
+        d.intern = intern_;
+        d.name_ids.push_back(intern_->get_or_insert("a"));
+        m.columns.push_back(ints({1, 2, 3, 4}));
+        d.name_ids.push_back(intern_->get_or_insert("f"));
+        m.columns.push_back(Series::flat_f64(f, 4));
+        d.name_ids.push_back(intern_->get_or_insert("n"));
+        m.columns.push_back(ints({5, 6, NUL, 8}));
+        co_return dataframe::MorselResult(std::move(m));
+    }
+
+   private:
+    dstd::SharedPtr<dstd::StringIntern> intern_ =
+        dstd::make_shared<dstd::StringIntern>();
+    bool done_ = false;
+};
+
+class FloatSource : public dataframe::Source {
+   public:
+    dataframe::Schema schema() const override {
+        dataframe::Schema s;
+        s.fields.push_back(
+            dataframe::Field{"a", dataframe::scalar(TypeId::Int64), true});
+        return s;
+    }
+
+    bool undeclared_columns() const override { return true; }
+
+    dstd::Result<dataframe::ScanResult> scan(
+        const dataframe::ScanRequest& req) const override {
+        dataframe::ScanResult r;
+        r.cursor = dstd::make_unique<FloatCursor>();
+        r.filters.assign(req.filters.size(), dataframe::Pushed::No);
+        return r;
+    }
+};
+
+LazyFrame float_rest_scan() {
+    return LazyFrame::scan(dstd::make_shared<FloatSource>());
+}
+
 LazyFrame declared_scan(bool with_list = false) {
     return LazyFrame::scan(
         dstd::make_shared<PartsSource>(parts(), true, with_list));
@@ -340,12 +395,26 @@ TEST_SUITE("rest column") {
                    run(declared_scan(true).explode("l")));
     }
 
-    TEST_CASE("drop_nulls counts only the plan's columns") {
+    TEST_CASE("drop_nulls drops a row with a null in an undeclared column") {
         DataFrame out = run(rest_scan().drop_nulls());
         CHECK(dstd::to_strings(out.names) == Names{"a", "b", "x", "y"});
-        CHECK(out.num_rows() == 9);
-        CHECK(column(out, "x")[2] == "null");
-        CHECK(column(out, "y")[4] == "1001");
+        CHECK(out.num_rows() == 8);
+        CHECK(column(out, "x") ==
+              dstd::Vector<dstd::String>{"100", "101", "103", "201", "202",
+                                         "null", "null", "null"});
+
+        DataFrame floats = run(float_rest_scan());
+        DataFrame lazy = run(float_rest_scan().drop_nulls());
+        REQUIRE(lazy.num_rows() == 3);
+        check_same(lazy, floats.drop_nulls());
+    }
+
+    TEST_CASE("drop_nans drops a row with a NaN in an undeclared column") {
+        DataFrame floats = run(float_rest_scan());
+        DataFrame lazy = run(float_rest_scan().drop_nans());
+        REQUIRE(lazy.num_rows() == 3);
+        check_same(lazy, dftu_utils_test::ok(floats.drop_nans()));
+        CHECK(column(lazy, "a") == dstd::Vector<dstd::String>{"1", "3", "4"});
     }
 
     TEST_CASE("fill_null fills the undeclared values a batch carries") {

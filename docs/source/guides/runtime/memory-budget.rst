@@ -63,7 +63,7 @@ unset to rely on the always-on scan-decode default.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          tv = TraceViewer("./traces")
 
@@ -148,7 +148,7 @@ would spread that peak under the available limit.
 
 .. code-block:: python
 
-   from dftracer.utils import memory_budget_advice
+   from dftracer.utils.runtime import memory_budget_advice
 
    advice = memory_budget_advice(required_bytes=40 * 1024**3)
    if not advice.fits:

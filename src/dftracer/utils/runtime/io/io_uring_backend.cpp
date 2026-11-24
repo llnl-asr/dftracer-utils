@@ -858,6 +858,8 @@ struct IoUringBackend::WorkerRing {
     IoOp* backlog_head = nullptr;
     IoOp* backlog_tail = nullptr;
     bool ring_failed = false;
+    // Set while this thread holds `reaping` and runs completions.
+    bool owner_holds = false;
 
     std::uint64_t wake_value = 0;
     dstd::ScopedFd wake_fd;
@@ -885,6 +887,9 @@ struct AttachedRing {
 };
 
 thread_local AttachedRing t_attached;
+// Set while this thread drains another thread's ring. A completion there must
+// not wait for its own ring, whose owner may be draining this thread's ring.
+thread_local bool t_drains_other_ring = false;
 
 }  // namespace
 
@@ -1179,12 +1184,33 @@ std::size_t IoUringBackend::reap_worker(WorkerRing& worker) noexcept {
     // A completion that submits and flushes lands here on its own ring, and the
     // drain further up takes what that added.
     if (!worker.try_lock()) return 0;
+    worker.owner_holds = true;
     const std::size_t reaped = drain_worker(worker);
+    worker.owner_holds = false;
     worker.unlock();
     return reaped;
 }
 
 void IoUringBackend::flush_worker(WorkerRing& worker) noexcept {
+    // Held from the fill to the drain, so an op the enter ends inline, such as
+    // a cached read, completes here and not on a thief or the sysmon. A thief
+    // already inside finishes first. A completion that flushes again leaves
+    // what it added to the drain further up.
+    if (worker.backlog_head == nullptr && worker.ring.pending() == 0) {
+        worker.ring.flush_completions();
+        reap_worker(worker);
+        return;
+    }
+    bool held = false;
+    if (!worker.owner_holds) {
+        if (t_drains_other_ring) {
+            held = worker.try_lock();
+        } else {
+            worker.lock();
+            held = true;
+        }
+        worker.owner_holds = held;
+    }
     fill_worker(worker);
     if (worker.ring.pending() != 0) {
         const int entered = worker.ring.enter(false);
@@ -1196,7 +1222,10 @@ void IoUringBackend::flush_worker(WorkerRing& worker) noexcept {
         }
     }
     worker.ring.flush_completions();
-    reap_worker(worker);
+    if (!held) return;
+    if (worker.ring.has_cqe()) drain_worker(worker);
+    worker.owner_holds = false;
+    worker.unlock();
 }
 
 // Thieves stay out from here on. One already inside finishes first.
@@ -1369,7 +1398,10 @@ std::size_t IoUringBackend::poll(int timeout_ms) {
         // Held across the drain: a retiring worker destroys its ring under it.
         if (worker->live.load(std::memory_order_acquire) &&
             !worker->parked.load(std::memory_order_seq_cst)) {
+            const bool outer = t_drains_other_ring;
+            t_drains_other_ring = true;
             reaped += drain_worker(*worker);
+            t_drains_other_ring = outer;
         }
         worker->unlock();
     }

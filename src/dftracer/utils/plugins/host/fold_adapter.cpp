@@ -15,6 +15,7 @@
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hex.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -836,8 +837,10 @@ void append_json_escaped(dstd::String& out, dstd::StringView s) {
                 out += "\\t";
                 break;
             default:
-                if (static_cast<unsigned char>(c) < 0x20) {
-                    out += dstd::fmt<"\\u{:04x}">(static_cast<unsigned>(c));
+                if (const auto u = static_cast<unsigned char>(c); u < 0x20) {
+                    out += "\\u00";
+                    out += dstd::HEX_LOWER[u >> 4];
+                    out += dstd::HEX_LOWER[u & 15];
                 } else {
                     out += c;
                 }
@@ -860,7 +863,7 @@ struct DynCols {
             const char* name = dftu_dataframe_column_name(df, i);
             if (!name) continue;
             dstd::StringView nv{name};
-            if (nv.substr(0, ARGS_PREFIX.size()) != ARGS_PREFIX) continue;
+            if (!nv.starts_with(ARGS_PREFIX)) continue;
             cols.emplace_back(nv.substr(ARGS_PREFIX.size()),
                               dftu_dataframe_column(df, name));
         }

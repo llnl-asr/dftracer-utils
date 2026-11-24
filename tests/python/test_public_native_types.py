@@ -13,7 +13,7 @@ import pytest
 
 import dftracer.utils as d
 from dftracer.utils import dftracer_utils_ext as _ext
-from dftracer.utils.series import Series
+from dftracer.utils._series import Series
 
 
 def test_series_subclasses_the_native_series_with_no_instance_dict():
@@ -50,14 +50,14 @@ def test_the_native_type_has_no_constructor_and_no_public_underscore_name():
 def test_constructor_forms():
     assert Series([1, 2, 3]).to_list() == [1, 2, 3]
     assert Series(["a", None]).to_list() == ["a", None]
-    assert Series([], dtype=d.enums.DType.INT64).dtype == d.enums.DType.INT64
+    assert Series([], dtype=d.DType.INT64).dtype == d.DType.INT64
     named = Series(name="n", data=[1, 2])
     assert named.name == "n"
     s = Series([1, 2])
     shared = Series(s, name="other")
     assert shared.name == "other" and s.name is None
     assert Series(s).to_list() == [1, 2]
-    assert Series([1, 2], dtype=d.enums.DType.FLOAT64).to_list() == [1.0, 2.0]
+    assert Series([1, 2], dtype=d.DType.FLOAT64).to_list() == [1.0, 2.0]
 
 
 def test_name_is_set_in_place_and_only_on_that_object():

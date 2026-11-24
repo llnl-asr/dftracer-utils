@@ -27,10 +27,12 @@
 #include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
+#include <dftracer/utils/trace/writer/trace_writer.h>
 
 #include <cstdint>
 #include <cstdio>
 #include <random>
+#include <utility>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace;
@@ -47,7 +49,7 @@ using domains::workload::trace_gen::emit_metadata;
 using domains::workload::trace_gen::EventArgs;
 using domains::workload::trace_gen::jitter;
 using domains::workload::trace_gen::make_hash;
-using domains::workload::trace_gen::TraceWriter;
+using trace::writer::TraceWriter;
 
 // ---------------------------------------------------------------------------
 // Verify: build bloom indices and run queries to prove chunk-skipping works
@@ -508,11 +510,11 @@ struct RankTrace {
     std::uint64_t ts = 1000000000ULL;  // 1 second in us
 
     RankTrace(const GenOptions& options, const TraceNames& trace_names,
-              int rank_index, dstd::StringView path)
+              int rank_index, TraceWriter trace_writer)
         : opts(options),
           names(trace_names),
           rank(rank_index),
-          writer(path),
+          writer(std::move(trace_writer)),
           sref(trace_names.script_hash),
           ckref(trace_names.ckpt_file_hash),
           rng(options.base_seed +
@@ -522,7 +524,7 @@ struct RankTrace {
           pid(1000 + static_cast<std::uint64_t>(rank_index)),
           tid_main(pid * 10),
           tid_io(pid * 10 + 1) {
-        writer.write("[\n");
+        writer.write_raw("[\n").discard();
     }
 
     // Fills the common fields and assigns the next id.
@@ -584,7 +586,7 @@ struct RankTrace {
         {
             auto a = make_event("open", "POSIX", tid_io, ts, jitter(rng, 5), 2);
             a.fhash = data_fhash;
-            a.extra = R"("ret":3)";
+            a.extra = {{"ret", 3}};
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -598,10 +600,8 @@ struct RankTrace {
                                 jitter(rng, 20), 2);
             a.fhash = data_fhash;
             std::uint64_t offset = static_cast<std::uint64_t>(r) * io_size;
-            a.extra = dstd::fmt<R"("ret":{},"count":{},"offset":{})">(
-                static_cast<unsigned long long>(io_size),
-                static_cast<unsigned long long>(io_size),
-                static_cast<unsigned long long>(offset));
+            a.extra = {
+                {"ret", io_size}, {"count", io_size}, {"offset", offset}};
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -612,7 +612,7 @@ struct RankTrace {
             auto a =
                 make_event("close", "POSIX", tid_io, ts, jitter(rng, 3), 2);
             a.fhash = data_fhash;
-            a.extra = R"("ret":0)";
+            a.extra = {{"ret", 0}};
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -623,7 +623,7 @@ struct RankTrace {
         {
             auto a = make_event("data_loading", "IO", tid_io, io_start,
                                 ts - io_start, 1);
-            a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, step);
+            a.extra = {{"epoch", epoch}, {"step", step}};
             emit_event(writer, a);
             ++rank_events;
         }
@@ -636,7 +636,7 @@ struct RankTrace {
         for (int f = 0; f < 5; ++f) {
             auto a = make_event(fwd_ops[f], "APP", tid_main, ts,
                                 jitter(rng, opts.step_dur_us / 5), 2);
-            a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, step);
+            a.extra = {{"epoch", epoch}, {"step", step}};
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -646,7 +646,7 @@ struct RankTrace {
         {
             auto a = make_event("forward", "APP", tid_main, fwd_start,
                                 ts - fwd_start, 1);
-            a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, step);
+            a.extra = {{"epoch", epoch}, {"step", step}};
             emit_event(writer, a);
             ++rank_events;
         }
@@ -657,7 +657,7 @@ struct RankTrace {
         for (int b = 0; b < 3; ++b) {
             auto a = make_event(back_ops[b], "APP", tid_main, ts,
                                 jitter(rng, opts.step_dur_us / 4), 2);
-            a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, step);
+            a.extra = {{"epoch", epoch}, {"step", step}};
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -667,7 +667,7 @@ struct RankTrace {
         {
             auto a = make_event("backward_pass", "APP", tid_main, back_start,
                                 ts - back_start, 1);
-            a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, step);
+            a.extra = {{"epoch", epoch}, {"step", step}};
             emit_event(writer, a);
             ++rank_events;
         }
@@ -676,7 +676,7 @@ struct RankTrace {
         {
             auto a = make_event("optimizer_step", "APP", tid_main, ts,
                                 jitter(rng, opts.step_dur_us / 8), 1);
-            a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, step);
+            a.extra = {{"epoch", epoch}, {"step", step}};
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -687,7 +687,7 @@ struct RankTrace {
         {
             auto a = make_event("train_step", "APP", tid_main, step_start,
                                 ts - step_start, 0);
-            a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, step);
+            a.extra = {{"epoch", epoch}, {"step", step}};
             emit_event(writer, a);
             ++rank_events;
         }
@@ -707,7 +707,7 @@ struct RankTrace {
                 auto a =
                     make_event("open", "POSIX", tid_io, ts, jitter(rng, 5), 2);
                 a.fhash = vf_hash;
-                a.extra = R"("ret":4)";
+                a.extra = {{"ret", 4}};
                 emit_event(writer, a);
                 ts += a.dur;
                 ++rank_events;
@@ -720,11 +720,10 @@ struct RankTrace {
                 auto a = make_event(read_ops[r % 3], "POSIX", tid_io, ts,
                                     jitter(rng, 20), 2);
                 a.fhash = vf_hash;
-                a.extra = dstd::fmt<R"("ret":{},"count":{},"offset":{})">(
-                    static_cast<unsigned long long>(vio_size),
-                    static_cast<unsigned long long>(vio_size),
-                    static_cast<unsigned long long>(
-                        static_cast<std::uint64_t>(r) * vio_size));
+                a.extra = {
+                    {"ret", vio_size},
+                    {"count", vio_size},
+                    {"offset", static_cast<std::uint64_t>(r) * vio_size}};
                 emit_event(writer, a);
                 ts += a.dur;
                 ++rank_events;
@@ -735,7 +734,7 @@ struct RankTrace {
                 auto a =
                     make_event("close", "POSIX", tid_io, ts, jitter(rng, 3), 2);
                 a.fhash = vf_hash;
-                a.extra = R"("ret":0)";
+                a.extra = {{"ret", 0}};
                 emit_event(writer, a);
                 ts += a.dur;
                 ++rank_events;
@@ -745,7 +744,7 @@ struct RankTrace {
             {
                 auto a = make_event("val_forward", "APP", tid_main, ts,
                                     jitter(rng, opts.step_dur_us / 3), 2);
-                a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, vs);
+                a.extra = {{"epoch", epoch}, {"step", vs}};
                 emit_event(writer, a);
                 ts += a.dur;
                 ++rank_events;
@@ -755,7 +754,7 @@ struct RankTrace {
             {
                 auto a = make_event("val_loss", "APP", tid_main, ts,
                                     jitter(rng, opts.step_dur_us / 6), 2);
-                a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, vs);
+                a.extra = {{"epoch", epoch}, {"step", vs}};
                 emit_event(writer, a);
                 ts += a.dur;
                 ++rank_events;
@@ -765,7 +764,7 @@ struct RankTrace {
             {
                 auto a = make_event("val_step", "APP", tid_main, val_step_start,
                                     ts - val_step_start, 1);
-                a.extra = dstd::fmt<R"("epoch":{},"step":{})">(epoch, vs);
+                a.extra = {{"epoch", epoch}, {"step", vs}};
                 emit_event(writer, a);
                 ++rank_events;
             }
@@ -775,7 +774,7 @@ struct RankTrace {
         {
             auto a = make_event("validation", "APP", tid_main, val_phase_start,
                                 ts - val_phase_start, 0);
-            a.extra = dstd::fmt<R"("epoch":{})">(epoch);
+            a.extra = {{"epoch", epoch}};
             emit_event(writer, a);
             ++rank_events;
         }
@@ -789,7 +788,7 @@ struct RankTrace {
             auto a =
                 make_event("open", "POSIX", tid_io, ts, jitter(rng, 10), 1);
             a.fhash = ckref;
-            a.extra = R"("ret":5)";
+            a.extra = {{"ret", 5}};
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -802,11 +801,9 @@ struct RankTrace {
                                 tid_io, ts, jitter(rng, 50), 1);
             a.fhash = ckref;
             std::uint64_t wr_size = jitter(rng, 1048576);  // ~1 MB
-            a.extra = dstd::fmt<R"("ret":{},"count":{},"offset":{})">(
-                static_cast<unsigned long long>(wr_size),
-                static_cast<unsigned long long>(wr_size),
-                static_cast<unsigned long long>(static_cast<std::uint64_t>(wr) *
-                                                wr_size));
+            a.extra = {{"ret", wr_size},
+                       {"count", wr_size},
+                       {"offset", static_cast<std::uint64_t>(wr) * wr_size}};
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -817,7 +814,7 @@ struct RankTrace {
             auto a =
                 make_event("fsync", "POSIX", tid_io, ts, jitter(rng, 200), 1);
             a.fhash = ckref;
-            a.extra = R"("ret":0)";
+            a.extra = {{"ret", 0}};
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -828,7 +825,7 @@ struct RankTrace {
             auto a =
                 make_event("close", "POSIX", tid_io, ts, jitter(rng, 3), 1);
             a.fhash = ckref;
-            a.extra = R"("ret":0)";
+            a.extra = {{"ret", 0}};
             emit_event(writer, a);
             ts += a.dur;
             ++rank_events;
@@ -838,7 +835,7 @@ struct RankTrace {
         {
             auto a = make_event("checkpoint", "IO", tid_io, ckpt_start,
                                 ts - ckpt_start, 0);
-            a.extra = dstd::fmt<R"("epoch":{})">(epoch);
+            a.extra = {{"epoch", epoch}};
             emit_event(writer, a);
             ++rank_events;
         }
@@ -859,7 +856,7 @@ struct RankTrace {
                 emit_checkpoint(epoch);
             }
         }
-        writer.write("]\n");
+        writer.write_raw("]\n").discard();
         return writer.close();
     }
 };
@@ -870,7 +867,9 @@ coro::CoroTask<dstd::Result<void>> generate_rank(const GenOptions* opts,
                                                  int rank,
                                                  const dstd::String* file,
                                                  std::size_t* event_count) {
-    RankTrace trace(*opts, *names, rank, *file);
+    auto opened = TraceWriter::open(*file);
+    if (!opened) co_return opened.error();
+    RankTrace trace(*opts, *names, rank, std::move(*opened));
     auto ran = trace.run();
     *event_count = trace.rank_events;
     co_return ran;

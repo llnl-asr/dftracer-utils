@@ -1739,6 +1739,40 @@ TEST_CASE("pipeline - plugin calls lower to plugin stages") {
     }
 }
 
+TEST_CASE("pipeline - sink trace and sink table name a path and ends") {
+    struct Case {
+        dstd::StringView text;
+        duql::syntax::Sink::Kind kind;
+    };
+    for (const Case& c :
+         {Case{R"re(from data | sink trace "out" mode "overwrite")re",
+               duql::syntax::Sink::Kind::Trace},
+          Case{R"re(from data | sink table "t.pfw.gz" partition_by "a,b")re",
+               duql::syntax::Sink::Kind::Table}}) {
+        CAPTURE(dstd::String(c.text));
+        const auto q = parsed(dstd::String(c.text));
+        REQUIRE(q.pipeline->stages.size() == 1);
+        const auto* snk =
+            std::get_if<duql::syntax::Sink>(&q.pipeline->stages[0].node);
+        REQUIRE(snk);
+        CHECK(snk->kind == c.kind);
+        CHECK(snk->options.size() == 1);
+        CHECK(has(duql::syntax::to_text(*q.pipeline),
+                  dstd::String(c.text).substr(10)));
+    }
+    for (const auto& bad : {R"re(sink trace)re", R"re(sink table out)re",
+                            R"re(from data | sink trace "o" | take 1)re"}) {
+        CAPTURE(dstd::String(bad));
+        CHECK_FALSE(duql::syntax::parse(bad).has_value());
+    }
+    auto lowered =
+        compile_pipeline(R"re(sink table "o" mode "error")re", {}, nullptr);
+    REQUIRE(lowered.has_value());
+    const auto& stage = std::get<duql::PipelineSink>(lowered->stages.back());
+    CHECK(stage.kind == duql::PipelineSink::Kind::Table);
+    CHECK(stage.name == "o");
+}
+
 TEST_CASE("pipeline - sink names a sink and its options, and ends") {
     const dstd::String text =
         R"re(from data | sink "toy_sink.out" path "out.csv" mode "a")re";

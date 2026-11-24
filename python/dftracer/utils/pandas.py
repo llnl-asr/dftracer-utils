@@ -10,14 +10,20 @@ the native SIMD engine), with the pandas names and argument spellings on them:
 ``s.rolling(n).mean()``, ``s.var(ddof=)``, ``s.isin([...])``, ``s.isna()``.
 The module functions below are the pandas top-level ones that map onto engine
 ops. Anything not listed here is not part of the drop-in surface.
+
+This is a compatibility namespace: it re-exports the engine classes that the
+top level of ``dftracer.utils`` also exports, so ``import dftracer.utils.pandas as pd``
+reads like pandas. The one-import-path rule exempts it.
 """
 
 from __future__ import annotations
 
 from typing import Literal, Sequence
 
-from .dataframe import DataFrame, JoinHow
-from .series import Series
+from ._dataframe import DataFrame
+from ._dataframe import JoinHow as _JoinHow
+from ._label_join import Suffixes
+from ._series import Series
 
 __all__ = [
     "DataFrame",
@@ -54,16 +60,19 @@ def concat(
 def merge(
     left: DataFrame,
     right: DataFrame,
-    how: JoinHow = "inner",
+    how: _JoinHow = "inner",
     on: str | Sequence[str] | None = None,
     left_on: str | Sequence[str] | None = None,
     right_on: str | Sequence[str] | None = None,
-    suffixes: tuple[str, str] = ("_x", "_y"),
+    suffixes: Suffixes = ("_x", "_y"),
     nulls_equal: bool = False,
+    left_index: bool = False,
+    right_index: bool = False,
 ) -> DataFrame:
     """Join two frames (:meth:`DataFrame.merge`): with no key, on the columns
     both share; colliding non-key columns are suffixed on both sides. A null key
-    matches another null key only with ``nulls_equal=True`` (the pandas rule)."""
+    matches another null key only with ``nulls_equal=True`` (the pandas rule).
+    ``left_index`` / ``right_index`` use the row labels of that frame as keys."""
     return left.merge(
         right,
         how=how,
@@ -72,6 +81,8 @@ def merge(
         right_on=right_on,
         suffixes=suffixes,
         nulls_equal=nulls_equal,
+        left_index=left_index,
+        right_index=right_index,
     )
 
 

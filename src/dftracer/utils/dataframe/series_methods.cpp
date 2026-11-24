@@ -243,6 +243,9 @@ Series Series::round() const { return derived(dftu_series_round(handle_)); }
 Series Series::fillna(Scalar fill) const {
     return derived(dftu_series_fillna(handle_, fill));
 }
+Series Series::fill_nan(Scalar fill) const {
+    return derived(dftu_series_fill_nan(handle_, fill));
+}
 Series Series::cumsum() const { return derived(dftu_series_cumsum(handle_)); }
 Series Series::cummax() const { return derived(dftu_series_cummax(handle_)); }
 Series Series::cummin() const { return derived(dftu_series_cummin(handle_)); }
@@ -312,6 +315,10 @@ Series Series::null_mask() const {
 }
 Series Series::valid_mask() const {
     return derived(dftu_series_valid_mask(handle_));
+}
+Series Series::na_mask() const { return derived(dftu_series_na_mask(handle_)); }
+Series Series::notna_mask() const {
+    return derived(dftu_series_notna_mask(handle_));
 }
 Series Series::is_nan() const { return derived(dftu_series_is_nan(handle_)); }
 Series Series::is_finite() const {

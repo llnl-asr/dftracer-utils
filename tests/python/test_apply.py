@@ -12,7 +12,7 @@ import pytest
 pa = pytest.importorskip("pyarrow")
 
 from dftracer.utils import DataFrame, Series, col, jit  # noqa: E402
-from dftracer.utils.jit_op import op  # noqa: E402
+from dftracer.utils._jit_op import op  # noqa: E402
 
 
 def _lst(s):
@@ -195,7 +195,7 @@ def test_apply_lowers_is_none_to_the_null_mask(caplog):
 
 
 def test_select_expressions():
-    from dftracer.utils.expr import if_else, when
+    from dftracer.utils._expr import if_else, when
 
     df = DataFrame({"a": [1, 5, None, 9], "s": ["x", "y", "z", "w"]})
     assert _lst(df.apply(when(col("a") > 2).then(col("a")).otherwise(0))) == [0, 5, 0, 9]

@@ -36,9 +36,8 @@ dstd::String write_small_trace(dstd::CStringView dir, int n) {
             "f{}\"}}\n">(out, i, 1000 + i * 10, n);
     }
     out += "]\n";
-    char name[32];
-    std::snprintf(name, sizeof(name), "/t%04d.pfw.gz", n);
-    return dftu_utils_test::write_gz_trace(dstd::String(dir) + name, out);
+    return dftu_utils_test::write_gz_trace(
+        dstd::String(dir) + dstd::fmt<"/t{:04}.pfw.gz">(n), out);
 }
 
 trace::index::build::IndexBuildBatchResult build_with(

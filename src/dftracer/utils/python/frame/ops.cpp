@@ -124,7 +124,7 @@ PyObject* op_run(PyObject*, PyObject* args) {
                 break;
             }
             case DFTU_TOK_SCALAR:
-                if (!py_to_scalar(a, &slot.scalar)) return nullptr;
+                if (!py_to_op_scalar(name, a, &slot.scalar)) return nullptr;
                 break;
             case DFTU_TOK_F64: {
                 double d = PyFloat_AsDouble(a);

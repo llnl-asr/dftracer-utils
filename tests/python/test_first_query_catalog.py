@@ -35,17 +35,17 @@ def path(tmp_path):
 
 
 def test_columns_after_collect_list_undeclared_paths(path):
-    first = dftu.TraceViewer(path)
+    first = dftu.trace.TraceViewer(path)
     assert len(first.collect()) == N
-    columns = set(dftu.TraceViewer(path).columns)
+    columns = set(dftu.trace.TraceViewer(path).columns)
     assert {"args.counters.a.p50", "args.counters.b.p50", "args.size"} <= columns
 
 
 def test_wildcard_after_collect_matches_spelled_out_paths(path):
-    dftu.TraceViewer(path).collect()
-    wild = dftu.TraceViewer(path).duql("select args.counters.*.p50 | take 20").collect()
+    dftu.trace.TraceViewer(path).collect()
+    wild = dftu.trace.TraceViewer(path).duql("select args.counters.*.p50 | take 20").collect()
     spelled = (
-        dftu.TraceViewer(path)
+        dftu.trace.TraceViewer(path)
         .duql("select args.counters.a.p50, args.counters.b.p50 | take 20")
         .collect()
     )
@@ -54,5 +54,5 @@ def test_wildcard_after_collect_matches_spelled_out_paths(path):
 
 
 def test_columns_before_any_collect_list_undeclared_paths(path):
-    columns = set(dftu.TraceViewer(path).columns)
+    columns = set(dftu.trace.TraceViewer(path).columns)
     assert {"args.counters.a.p50", "args.counters.b.p50", "args.size"} <= columns

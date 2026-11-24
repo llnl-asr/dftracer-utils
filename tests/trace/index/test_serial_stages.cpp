@@ -59,9 +59,8 @@ dstd::String write_small_trace(dstd::CStringView dir, int n) {
             "f{}\"}}\n">(out, i, 1000 + i * 10, n);
     }
     out += "]\n";
-    char name[32];
-    std::snprintf(name, sizeof(name), "/t%04d.pfw.gz", n);
-    return dftu_utils_test::write_gz_trace(dstd::String(dir) + name, out);
+    return dftu_utils_test::write_gz_trace(
+        dstd::String(dir) + dstd::fmt<"/t{:04}.pfw.gz">(n), out);
 }
 
 runtime::fs::FindOptions input_options(bool with_stat) {
@@ -109,9 +108,7 @@ dstd::Vector<dstd::String> write_view_traces(dstd::CStringView dir, int count) {
 }
 
 dstd::String write_corrupt_trace(dstd::CStringView dir, int n) {
-    char name[32];
-    std::snprintf(name, sizeof(name), "/t%04d.pfw.gz", n);
-    const auto path = dstd::String(dir) + name;
+    const auto path = dstd::String(dir) + dstd::fmt<"/t{:04}.pfw.gz">(n);
     dstd::fs::write_file(dstd::PathView(path), dstd::String(4096, 'x'))
         .discard();
     return path;

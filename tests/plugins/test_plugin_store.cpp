@@ -5,6 +5,8 @@
 // outside the plugin, a copy pinned to a file signature refuses a batch that
 // reports a changed file, and a host with no trace folder answers NULL.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/pair.h>
@@ -64,9 +66,11 @@ struct StoreRun {
     static void expect(const char* what, int ok) { CHECK_MESSAGE(ok, what); }
     static inline dftu_test_harness harness{
         nullptr, expect, [](dftu_ctx*, char* msg, std::uint64_t cap) {
+            if (cap == 0) return;
             const dstd::String text = g_ctx->message();
-            std::snprintf(msg, static_cast<std::size_t>(cap), "%s",
-                          text.c_str());
+            const dstd::FmtResult written = dstd::fmt_to<"{}">(
+                msg, static_cast<std::size_t>(cap) - 1, text);
+            msg[written.size] = '\0';
         }};
 
     StoreRun(dstd::StringView plugin_name, dstd::StringView index_path)
@@ -207,12 +211,12 @@ struct StoreRun {
 // inherited from the process under test. It prints VALUE=<bytes> on stderr.
 TEST_CASE("store: probes a namespace in a fresh process" * doctest::skip()) {
     fresh_process::announce();
-    const char* root = std::getenv("DFTRACER_UTILS_STORE_PROBE_ROOT");
-    const char* trace = std::getenv("DFTRACER_UTILS_STORE_PROBE_TRACE");
-    REQUIRE(root != nullptr);
-    REQUIRE(trace != nullptr);
-    const dstd::String dir = trace::index::store_of(root);
-    const dstd::String path(trace);
+    const auto root = common::Env::get("DFTRACER_UTILS_STORE_PROBE_ROOT");
+    const auto trace = common::Env::get("DFTRACER_UTILS_STORE_PROBE_TRACE");
+    REQUIRE(root.has_value());
+    REQUIRE(trace.has_value());
+    const dstd::String dir = trace::index::store_of(*root);
+    const dstd::String path(*trace);
     const char* paths[1] = {path.c_str()};
     dftu_store_scope scope = {DFTU_STORE_SCOPE_FILE, paths, 1};
     dftu_error err = DFTU_ERROR_INIT;

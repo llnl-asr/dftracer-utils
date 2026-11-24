@@ -1216,7 +1216,7 @@ inline Batch::Batch(const dftu_dataframe* df) noexcept
         const char* n = dftu_dataframe_column_name(df_, i);
         if (!n) continue;
         dstd::StringView nv{n};
-        if (nv.substr(0, ARGS_PREFIX.size()) != ARGS_PREFIX) continue;
+        if (!nv.starts_with(ARGS_PREFIX)) continue;
         dstd::String bare(nv.substr(ARGS_PREFIX.size()));
         dyn_.emplace_back(std::move(bare), resolve(df_, n));
     }

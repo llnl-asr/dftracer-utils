@@ -45,11 +45,11 @@ PAGE_CLASSES = {
 
 # Which module files back each page's classes.
 PAGE_MODULE = {
-    "columnar": ("expr", "_eval", "groupby"),
-    "dataframe": ("dataframe",),
-    "series": ("series",),
-    "trace_viewer": ("viewer",),
-    "duql": ("col", "pipe"),
+    "columnar": ("_expr", "_eval", "_groupby"),
+    "dataframe": ("_dataframe",),
+    "series": ("_series",),
+    "trace_viewer": ("_viewer",),
+    "duql": ("_col", "_pipe"),
     "runtime": ("runtime",),
     "indexer": ("index",),
 }

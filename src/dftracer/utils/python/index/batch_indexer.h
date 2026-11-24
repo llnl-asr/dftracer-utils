@@ -11,7 +11,6 @@ struct IndexerObject {
     PyObject_HEAD
 
         PyObject* runtime_obj;
-    PyObject* directory;
     PyObject* files;  // Python list of file paths or None
     PyObject* index_dir;
 

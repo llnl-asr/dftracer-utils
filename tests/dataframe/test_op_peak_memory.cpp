@@ -70,14 +70,14 @@ constexpr std::int64_t DEFAULT_ROWS = 1'000'000;
 constexpr std::uint64_t DEFAULT_BUDGET_MB = 8;
 #endif
 std::int64_t rows_count() {
-    const char* v = std::getenv("DFTU_OP_PEAK_ROWS");
-    return v ? std::strtoll(v, nullptr, 10) : DEFAULT_ROWS;
+    const auto rows = common::Env::get<int>("DFTU_OP_PEAK_ROWS");
+    return rows ? static_cast<std::int64_t>(*rows) : DEFAULT_ROWS;
 }
 const std::int64_t ROWS = rows_count();
 // DFTU_OP_PEAK_BUDGET_MB overrides the budget (child and parent both read it).
 std::uint64_t budget_bytes() {
-    const char* v = std::getenv("DFTU_OP_PEAK_BUDGET_MB");
-    return (v ? std::strtoull(v, nullptr, 10) : DEFAULT_BUDGET_MB) << 20;
+    const auto mb = common::Env::get<std::uint64_t>("DFTU_OP_PEAK_BUDGET_MB");
+    return (mb ? *mb : DEFAULT_BUDGET_MB) << 20;
 }
 const std::uint64_t BUDGET = budget_bytes();
 constexpr std::int64_t BATCH_SIZE = 8192;
@@ -263,6 +263,9 @@ const dstd::Map<dstd::String, Recipe>& recipes() {
         // k rows far past the budget: cut from the spilling sort.
         {"topk_wide", [](const LazyFrame& b) { return b.topk("v", ROWS / 2); }},
         {"drop_nulls", [](const LazyFrame& b) { return b.drop_nulls(); }},
+        {"drop_nans", [](const LazyFrame& b) { return b.drop_nans(); }},
+        {"fill_nan",
+         [](const LazyFrame& b) { return b.fill_nan(std::int64_t{0}); }},
         {"with_row_index",
          [](const LazyFrame& b) { return b.with_row_index("i"); }},
         {"null_count", [](const LazyFrame& b) { return b.null_count(); }},
@@ -598,6 +601,8 @@ const dstd::Map<dstd::String, Expect>& expectations() {
         {"memory_budget", {Kind::NotMeasured, "plan only"}},
         {"describe", {Kind::Streaming, ""}},
         {"drop_nulls", {Kind::Streaming, ""}},
+        {"drop_nans", {Kind::Streaming, ""}},
+        {"fill_nan", {Kind::Streaming, ""}},
         {"null_count", {Kind::Streaming, ""}},
         {"with_row_index", {Kind::Streaming, ""}},
         {"head", {Kind::Streaming, ""}},
@@ -835,7 +840,7 @@ TEST_CASE("every lazy op is in the expectation table") {
 
 TEST_CASE("each op stays within its bound at a small budget" *
           doctest::skip(instrumentation::active())) {
-    const bool report = std::getenv("DFTU_OP_PEAK_REPORT") != nullptr;
+    const bool report = common::Env::get("DFTU_OP_PEAK_REPORT").has_value();
     const ChildResult base = run_child("input_only");
     REQUIRE(base.piped);
     REQUIRE(base.forked);

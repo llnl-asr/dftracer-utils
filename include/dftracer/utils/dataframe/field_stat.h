@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_FIELD_STAT_H
 #define DFTRACER_UTILS_DATAFRAME_FIELD_STAT_H
 
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/int128.h>
 
 #include <bit>
@@ -233,12 +234,12 @@ struct FieldStat {
     }
 
     void add_i64(std::int64_t x) {
-        if (__builtin_add_overflow(esum, x, &esum)) [[unlikely]]
+        if (dstd::bits::add_overflow(esum, x, &esum)) [[unlikely]]
             ecarry += x < 0 ? -1 : 1;
     }
     void add_u64(std::uint64_t x) {
         std::uint64_t s = std::bit_cast<std::uint64_t>(esum);
-        if (__builtin_add_overflow(s, x, &s)) [[unlikely]]
+        if (dstd::bits::add_overflow(s, x, &s)) [[unlikely]]
             ++ecarry;
         esum = std::bit_cast<std::int64_t>(s);
     }

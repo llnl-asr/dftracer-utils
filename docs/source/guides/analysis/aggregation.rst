@@ -55,7 +55,7 @@ Pick group keys, pick aggregates, collect.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          df = (TraceViewer("traces/")
                .group_by("cat")
@@ -92,7 +92,8 @@ top-level and ``args.*`` alike (``F("args.level").mean()``).
 
       .. code-block:: python
 
-         from dftracer.utils import F, TraceViewer
+         from dftracer.utils import F
+         from dftracer.utils.trace import TraceViewer
 
          df = (TraceViewer("trace.pfw.gz")
                .group_by("cat")
@@ -311,7 +312,8 @@ the number of concurrent ``pread`` calls per file is a ``concurrency`` (or
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer, AggOp
+         from dftracer.utils import AggOp
+         from dftracer.utils.trace import TraceViewer
 
          df = (TraceViewer("trace.pfw.gz")
                .group_by("name")
@@ -390,7 +392,7 @@ the rollup as a re-indexable ``ph=2`` counter trace instead of collecting it:
           .group_by("cat")
           .time_bucket(1000)
           .agg("count"))
-         # collect() for a DataFrame, or export_trace(path) for a counter trace.
+         # collect() for a DataFrame, or sink(path) to write the rows.
 
 Counters without naming the fields
 ----------------------------------
@@ -458,12 +460,12 @@ above.
 Sharing one scan across branches
 --------------------------------
 
-Each ``collect``/``sink_json``/``materialize`` above runs its own scan of the
+Each ``collect``/``sink``/``materialize`` above runs its own scan of the
 trace. When several reads of the same files should share a single pass - a few
 unrelated aggregations at once, or an aggregate alongside an export - open a
 session with ``TraceViewer.session()``. ``s.collect(plan)`` registers any
 ``LazyFrame`` or ``LazyResult`` built from the viewer and returns a ``Handle``;
-``s.sink_json(view, path)`` and ``s.materialize(view)`` register those
+``s.sink_trace(view, path)`` and ``s.materialize(view)`` register those
 terminals. ``execute()`` (or leaving the ``with`` block, or the first
 ``Handle.result()``) runs every registered plan, and plans over the same trace
 share one decompression:
@@ -473,7 +475,7 @@ share one decompression:
    with tv.session() as s:
        by_cat  = s.collect(tv.group_by("cat").agg("count", "mean:dur"))
        by_rank = s.collect(tv.group_by("rank").agg("count"))
-       s.sink_json(tv.filter('cat == "POSIX"'), "posix.pfw")
+       s.sink_trace(tv.filter('cat == "POSIX"'), "posix.pfw.gz")
 
    cat_df  = by_cat.result()    # DataFrame, resolved after the shared scan
    rank_df = by_rank.result()

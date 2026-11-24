@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Example dftracer-utils plugin: counts events matching a predicate built with
 // the ergonomic F/Field builder, e.g. `F("dur") > 300`. The plugin includes
-// only plugin.h and links nothing; the host parses the rendered DSL string.
+// only plugin.h and dstd/fmt.h and links nothing; the host parses the rendered
+// DSL string.
 //
 // Build: c++ -std=c++20 -shared -fPIC -I<repo>/include -o query_filter.so
 // query_filter.cpp Run:   dftracer_run ./traces --plugin ./query_filter.so
 
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/plugins/plugin.h>
 
 #include <cstdint>
@@ -36,13 +38,12 @@ struct QueryFilter {
 
     void finalize(Host h) {
         char line[128];
-        int n = std::snprintf(line, sizeof line,
-                              "query_filter: matched=%llu total=%llu",
-                              static_cast<unsigned long long>(matched),
-                              static_cast<unsigned long long>(total));
-        if (n > 0)
-            h.log(LogLevel::Info, dftracer::utils::dstd::StringView(
-                                      line, static_cast<std::size_t>(n)));
+        const dftracer::utils::dstd::FmtResult written =
+            dftracer::utils::dstd::fmt_to<"query_filter: matched={} total={}">(
+                line, sizeof line, matched, total);
+        if (written.size > 0)
+            h.log(LogLevel::Info,
+                  dftracer::utils::dstd::StringView(line, written.size));
     }
 };
 

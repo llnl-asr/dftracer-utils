@@ -130,7 +130,7 @@ class TestDirectoryIndexerWithDask:
                 gz_files.append(gz_file)
 
             # Use directory-level Indexer
-            indexer = dftu_utils.Indexer(env.temp_dir)
+            indexer = dftu_utils.index.Indexer(env.temp_dir)
 
             # Check status before build
             before = indexer.status()
@@ -152,7 +152,7 @@ class TestDirectoryIndexerWithDask:
         with Environment(lines=50) as env:
             env.create_test_gzip_file()
 
-            indexer = dftu_utils.Indexer(env.temp_dir)
+            indexer = dftu_utils.index.Indexer(env.temp_dir)
 
             # First call builds the index
             status1 = indexer.ensure()
@@ -170,7 +170,7 @@ class TestDistributedIndex:
 
     def _query(self, files, index_dir):
         table = (
-            dftu_utils.TraceViewer(files, index_dir=index_dir)
+            dftu_utils.trace.TraceViewer(files, index_dir=index_dir)
             .group_by("cat")
             .agg("count", "sum:dur")
             .collect()
@@ -192,7 +192,7 @@ class TestDistributedIndex:
             assert not os.path.exists(os.path.join(index_path, "shards.json"))
 
             local = determine_index_path(files[0], os.path.join(env.temp_dir, "local"))
-            with dftu_utils.Indexer(files=files, index_dir=os.path.dirname(local)) as ix:
+            with dftu_utils.index.Indexer(files=files, index_dir=os.path.dirname(local)) as ix:
                 ix.ensure()
             assert self._query(files, index_path) == self._query(files, os.path.dirname(local))
 
@@ -222,10 +222,10 @@ class TestDistributedIndex:
             assert not os.path.exists(os.path.join(index_path, "shards.json"))
 
             local = determine_index_path(files[0], os.path.join(env.temp_dir, "local"))
-            with dftu_utils.Indexer(files=files, index_dir=os.path.dirname(local)) as ix:
+            with dftu_utils.index.Indexer(files=files, index_dir=os.path.dirname(local)) as ix:
                 ix.ensure()
 
-            with dftu_utils.Indexer(files=files, index_dir=env.temp_dir) as ix:
+            with dftu_utils.index.Indexer(files=files, index_dir=env.temp_dir) as ix:
                 status = ix.status()
             assert sorted(status.ready) == sorted(files)
             assert status.needs_work == []
@@ -244,7 +244,7 @@ class TestDistributedWriteTrace:
 
         with Environment(lines=200) as env:
             files = [env.create_test_gzip_file(f"f{k}/t{k}.pfw.gz") for k in range(3)]
-            with dftu_utils.Indexer(files=files, index_dir=env.temp_dir) as ix:
+            with dftu_utils.index.Indexer(files=files, index_dir=env.temp_dir) as ix:
                 ix.ensure()
 
             cluster = LocalCluster(processes=False, n_workers=2, threads_per_worker=2)
@@ -257,10 +257,10 @@ class TestDistributedWriteTrace:
                 assert len(res["files"]) == 3
                 # Each shard is a re-indexable .pfw.gz trace.
                 reidx = os.path.join(env.temp_dir, "reidx")
-                with dftu_utils.Indexer(files=res["files"], index_dir=reidx) as ix2:
+                with dftu_utils.index.Indexer(files=res["files"], index_dir=reidx) as ix2:
                     ix2.ensure()
                 total = sum(
-                    dftu_utils.TraceViewer(f, index_dir=reidx).statistics()["duration_count"]
+                    dftu_utils.trace.TraceViewer(f, index_dir=reidx).statistics()["duration_count"]
                     for f in res["files"]
                 )
                 assert total > 0
@@ -275,7 +275,7 @@ class TestDaskTraceViewer:
 
     def _cluster_files(self, env):
         files = [env.create_test_gzip_file(f"f{k}/t{k}.pfw.gz") for k in range(4)]
-        with dftu_utils.Indexer(files=files, index_dir=env.temp_dir) as ix:
+        with dftu_utils.index.Indexer(files=files, index_dir=env.temp_dir) as ix:
             ix.ensure()
         return files
 
@@ -283,8 +283,8 @@ class TestDaskTraceViewer:
         import pyarrow as pa
         from dask.distributed import Client, LocalCluster
 
-        from dftracer.utils import TraceViewer
         from dftracer.utils.dask import DaskTraceViewer
+        from dftracer.utils.trace import TraceViewer
 
         with Environment(lines=200) as env:
             files = self._cluster_files(env)
@@ -335,8 +335,8 @@ class TestDaskTraceViewer:
 
         from dask.distributed import Client, LocalCluster
 
-        from dftracer.utils import TraceViewer
         from dftracer.utils.dask import DaskTraceViewer
+        from dftracer.utils.trace import TraceViewer
 
         # One file per pid so each (pid,tid) lane lives entirely on one shard.
         files = []
@@ -349,7 +349,7 @@ class TestDaskTraceViewer:
             with gzip.open(p, "wt") as f:
                 f.write("\n".join(json.dumps(r) for r in rows) + "\n")
             files.append(p)
-        with dftu_utils.Indexer(files=files, index_dir=str(tmp_path)) as ix:
+        with dftu_utils.index.Indexer(files=files, index_dir=str(tmp_path)) as ix:
             ix.ensure()
 
         cluster = LocalCluster(processes=False, n_workers=2, threads_per_worker=2)
@@ -383,8 +383,8 @@ class TestDaskTraceViewer:
         import pyarrow as pa
         from dask.distributed import Client, LocalCluster
 
-        from dftracer.utils import TraceViewer
         from dftracer.utils.dask import DaskTraceViewer
+        from dftracer.utils.trace import TraceViewer
 
         with Environment(lines=200) as env:
             files = self._cluster_files(env)
@@ -425,8 +425,8 @@ class TestDaskTraceViewer:
         import pyarrow as pa
         from dask.distributed import Client, LocalCluster
 
-        from dftracer.utils import TraceViewer
         from dftracer.utils.dask import DaskTraceViewer
+        from dftracer.utils.trace import TraceViewer
 
         with Environment(lines=200) as env:
             files = self._cluster_files(env)
@@ -494,7 +494,7 @@ class TestDaskTraceViewer:
                         '"ts":%d,"dur":%d,"args":{}}\n' % (1000 + k * 1000 + i, 10 + i)
                     )
             files.append(p)
-        with dftu_utils.Indexer(files=files, index_dir=str(tmp_path)) as ix:
+        with dftu_utils.index.Indexer(files=files, index_dir=str(tmp_path)) as ix:
             ix.ensure()
 
         cluster = LocalCluster(processes=False, n_workers=2, threads_per_worker=2)
@@ -585,14 +585,14 @@ class TestIndexRecordFutures:
 
         with Environment(lines=300) as env:
             files = [env.create_test_gzip_file(f"f{k}/t{k}.pfw.gz") for k in range(3)]
-            with dftu_utils.Indexer(
+            with dftu_utils.index.Indexer(
                 files=files,
                 index_dir=env.temp_dir,
-                aggregation_config=dftu_utils.AggregationConfig(time_interval_ms=1000),
+                aggregation_config=dftu_utils.index.AggregationConfig(time_interval_ms=1000),
             ) as ix:
                 ix.ensure()
             local = pa.table(
-                dftu_utils.TraceViewer(files, index_dir=env.temp_dir)
+                dftu_utils.trace.TraceViewer(files, index_dir=env.temp_dir)
                 .group_by("name", "pid")
                 .agg("count")
                 .collect_index_records()

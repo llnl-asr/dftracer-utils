@@ -159,10 +159,10 @@ ignore = ["E501"]
 # decorator-attached name; the getattr/setattr form keeps the type checkers off
 # attributes that do not exist on the declared type.
 "python/dftracer/utils/_expr_ops.py" = ["B010"]
-"python/dftracer/utils/expr.py" = ["B010"]
+"python/dftracer/utils/_expr.py" = ["B010"]
 "python/dftracer/utils/_pandas_series.py" = ["B009"]
 "python/dftracer/utils/jit/*.py" = ["B009", "B010"]
-"python/dftracer/utils/store/codec.py" = ["B009"]
+"python/dftracer/utils/store/_codec.py" = ["B009"]
 # Class-level annotations that typing.get_type_hints reads on Python 3.8, where
 # `list[str]` and `X | None` fail when evaluated: the typing forms stay there.
 "python/dftracer/utils/_build.py" = ["UP006", "UP007", "UP045"]
@@ -170,15 +170,15 @@ ignore = ["E501"]
 "python/dftracer/utils/_jit_errors.py" = ["UP006", "UP007", "UP045"]
 "python/dftracer/utils/_pandas_frame.py" = ["UP006", "UP007", "UP045"]
 "python/dftracer/utils/_polars_frame.py" = ["UP006", "UP007", "UP045"]
-"python/dftracer/utils/dask/index.py" = ["UP006", "UP007", "UP045"]
-"python/dftracer/utils/dask/viewer.py" = ["UP006", "UP007", "UP045"]
-"python/dftracer/utils/groupby.py" = ["UP006", "UP007", "UP045"]
-"python/dftracer/utils/jit/compiler.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/dask/_index.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/dask/_viewer.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/_groupby.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/jit/_compiler.py" = ["UP006", "UP007", "UP045"]
 "python/dftracer/utils/plugins.py" = ["UP006", "UP007", "UP045"]
 "python/dftracer/utils/runtime.py" = ["UP006", "UP007", "UP045"]
 "python/dftracer/utils/schemas.py" = ["UP006", "UP007", "UP045"]
-"python/dftracer/utils/series.py" = ["UP006", "UP007", "UP045"]
-"python/dftracer/utils/store/store.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/_series.py" = ["UP006", "UP007", "UP045"]
+"python/dftracer/utils/store/_store.py" = ["UP006", "UP007", "UP045"]
 # Annotations are required for the shipped package only. Tests build trace text
 # with percent formats, probe lazy errors with bare expressions and loop for
 # side effects, and assert on the broad Exception class where the native error
@@ -197,19 +197,27 @@ allowed-unresolved-imports = [
   "distributed", "distributed.**",
 ]
 
+# Its Future[...] ignores fire only with distributed 2024.8 (Python 3.9), which
+# has no generic Future.
+[[tool.ty.overrides]]
+include = ["python/dftracer/utils/dask/_viewer.py"]
+
+[tool.ty.overrides.rules]
+unused-ignore-comment = "ignore"
+
 # The public classes override native methods whose engine form takes codes
 # (cast, compare, rolling, ...) with the user-shaped spelling, until those
 # methods take the user-shaped arguments natively.
 [[tool.ty.overrides]]
 include = [
   "python/dftracer/utils/_pandas_frame.py",
-  "python/dftracer/utils/trace/lazy.py",
-  "python/dftracer/utils/dataframe.py",
-  "python/dftracer/utils/expr.py",
-  "python/dftracer/utils/groupby.py",
-  "python/dftracer/utils/lazyframe.py",
-  "python/dftracer/utils/series.py",
-  "python/dftracer/utils/trace/viewer.py",
+  "python/dftracer/utils/trace/_lazy.py",
+  "python/dftracer/utils/_dataframe.py",
+  "python/dftracer/utils/_expr.py",
+  "python/dftracer/utils/_groupby.py",
+  "python/dftracer/utils/_lazyframe.py",
+  "python/dftracer/utils/_series.py",
+  "python/dftracer/utils/trace/_viewer.py",
 ]
 
 [tool.ty.overrides.rules]
@@ -222,8 +230,8 @@ lost-keyword-for-regular-parameter = "ignore"
 [[tool.ty.overrides]]
 include = [
   "python/dftracer/utils/dftracer_utils_ext.pyi",
-  "python/dftracer/utils/duql/col.py",
-  "python/dftracer/utils/jit/maps.py",
+  "python/dftracer/utils/duql/_col.py",
+  "python/dftracer/utils/jit/_maps.py",
 ]
 
 [tool.ty.overrides.rules]
@@ -233,7 +241,7 @@ incompatible-method-override = "ignore"
 [[tool.ty.overrides]]
 include = [
   "python/dftracer/utils/dftracer_utils_ext.pyi",
-  "python/dftracer/utils/series.py",
+  "python/dftracer/utils/_series.py",
 ]
 
 [tool.ty.overrides.rules]
@@ -242,7 +250,7 @@ invalid-generic-class = "ignore"
 # distributed is not installed in the checker's environment, so the worker
 # plugin base class is unknown.
 [[tool.ty.overrides]]
-include = ["python/dftracer/utils/dask/worker.py"]
+include = ["python/dftracer/utils/dask/_worker.py"]
 
 [tool.ty.overrides.rules]
 unsupported-base = "ignore"
@@ -269,7 +277,7 @@ ignore_missing_imports = true
 # distributed is not installed in the checker's environment, so the plugin base
 # class is untyped here.
 [[tool.mypy.overrides]]
-module = "dftracer.utils.dask.worker"
+module = "dftracer.utils.dask._worker"
 disallow_subclassing_any = false
 
 # The distributed Client methods (submit, gather, scatter, nthreads) are
@@ -285,15 +293,15 @@ disallow_untyped_calls = false
 [[tool.mypy.overrides]]
 module = [
   "dftracer.utils._pandas_frame",
-  "dftracer.utils.trace.lazy",
-  "dftracer.utils.dataframe",
-  "dftracer.utils.groupby",
-  "dftracer.utils.lazyframe",
-  "dftracer.utils.series",
-  "dftracer.utils.trace.viewer",
-  "dftracer.utils.expr",
-  "dftracer.utils.enums",
-  "dftracer.utils.duql.col",
+  "dftracer.utils.trace._lazy",
+  "dftracer.utils._dataframe",
+  "dftracer.utils._groupby",
+  "dftracer.utils._lazyframe",
+  "dftracer.utils._series",
+  "dftracer.utils.trace._viewer",
+  "dftracer.utils._expr",
+  "dftracer.utils._enums",
+  "dftracer.utils.duql._col",
 ]
 disable_error_code = ["override"]
 
@@ -301,7 +309,7 @@ disable_error_code = ["override"]
 # overloads a Literal key before str; a native frame indexes by a name or by
 # names, and a Series is also a sequence of names.
 [[tool.mypy.overrides]]
-module = ["dftracer.utils.jit.maps", "dftracer.utils.dftracer_utils_ext"]
+module = ["dftracer.utils.jit._maps", "dftracer.utils.dftracer_utils_ext"]
 disable_error_code = ["override", "overload-overlap"]
 
 [tool.setuptools_scm]

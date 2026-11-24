@@ -300,29 +300,41 @@ dstd::Result<Series> running(const Layout& lay, const Series& column,
         case WindowFunc::RunningProd: {
             if (auto ok = numeric(v, "running aggregate"); !ok)
                 return ok.error();
-            Column<double> out(lay.n);
-            for (const auto& [p, q] : lay.parts) {
-                if (v.kind() == Kind::Float) {
-                    steps::Prod prod;
-                    for (std::int64_t r = p; r < q; ++r) {
-                        const std::int64_t g = lay.row(r);
-                        if (!v.is_null(g)) prod.mul(v.get_double(g));
-                        out.set(r, prod.acc);
-                    }
-                } else if (v.kind() == Kind::Unsigned) {
+            if (column.type() == TypeId::Uint64) {
+                Column<std::uint64_t> out(lay.n);
+                for (const auto& [p, q] : lay.parts) {
                     steps::ProdU64 prod;
                     for (std::int64_t r = p; r < q; ++r) {
                         const std::int64_t g = lay.row(r);
                         if (!v.is_null(g)) prod.mul(v.get_uint(g));
-                        out.set(r, prod.value());
+                        out.set(r, prod.acc);
                     }
-                } else {
+                }
+                return out.series(TypeId::Uint64);
+            }
+            if (v.kind() != Kind::Float) {
+                Column<std::int64_t> out(lay.n);
+                for (const auto& [p, q] : lay.parts) {
                     steps::ProdI64 prod;
                     for (std::int64_t r = p; r < q; ++r) {
                         const std::int64_t g = lay.row(r);
-                        if (!v.is_null(g)) prod.mul(v.get_int(g));
-                        out.set(r, prod.value());
+                        if (!v.is_null(g))
+                            prod.mul(
+                                v.kind() == Kind::Unsigned
+                                    ? static_cast<std::int64_t>(v.get_uint(g))
+                                    : v.get_int(g));
+                        out.set(r, prod.acc);
                     }
+                }
+                return out.series(TypeId::Int64);
+            }
+            Column<double> out(lay.n);
+            for (const auto& [p, q] : lay.parts) {
+                steps::Prod prod;
+                for (std::int64_t r = p; r < q; ++r) {
+                    const std::int64_t g = lay.row(r);
+                    if (!v.is_null(g)) prod.mul(v.get_double(g));
+                    out.set(r, prod.acc);
                 }
             }
             return out.series(TypeId::Float64);

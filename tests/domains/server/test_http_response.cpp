@@ -85,7 +85,7 @@ TEST_CASE("HttpResponse - serialize_headers adds Content-Length") {
     CHECK(headers.find("Content-Length: 2\r\n") != dstd::String::npos);
     // Ends with blank line
     CHECK(headers.size() >= 4);
-    CHECK(headers.substr(headers.size() - 2) == "\r\n");
+    CHECK(headers.ends_with("\r\n"));
 }
 
 TEST_CASE(

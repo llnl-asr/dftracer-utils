@@ -93,7 +93,7 @@ def test_string_holding_the_separator_is_refused():
 def test_view_and_dataframe_engines_agree(tmp_path):
     pytest.importorskip("pyarrow")
     import dftracer.utils as dft
-    from dftracer.utils import TraceViewer
+    from dftracer.utils.trace import TraceViewer
 
     values = [0.1234567891, 0.5, 0.5]
     names = ["x", "y", "x"]
@@ -115,7 +115,7 @@ def test_view_and_dataframe_engines_agree(tmp_path):
                 )
                 + "\n"
             )
-    with dft.Indexer(files=[str(path)]) as ix:
+    with dft.index.Indexer(files=[str(path)]) as ix:
         ix.ensure()
     view = TraceViewer(str(path)).agg("set_union:args.v", "set_union:args.n").collect().to_pandas()
     frame = DataFrame.from_dict({"g": ["a"] * 3, "v": values, "n": names})

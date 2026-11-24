@@ -2,7 +2,7 @@
 """where and mask default to null, and None is an all-null String constant column."""
 
 from dftracer.utils import DataFrame, lit
-from dftracer.utils.enums import DType
+from dftracer.utils._enums import DType
 
 
 def test_where_without_a_replacement_is_null_where_false():

@@ -14,6 +14,9 @@ inline int clz_u64(std::uint64_t x) { return x == 0 ? 64 : __builtin_clzll(x); }
 /// Count trailing zero bits of `x`; 64 when `x` is 0.
 inline int ctz_u64(std::uint64_t x) { return x == 0 ? 64 : __builtin_ctzll(x); }
 
+/// Count trailing zero bits of `x`; 32 when `x` is 0.
+inline int ctz_u32(std::uint32_t x) { return x == 0 ? 32 : __builtin_ctz(x); }
+
 /// Number of set bits in `x`.
 inline int popcount_u64(std::uint64_t x) {
 #if (defined(__x86_64__) || defined(__i386__)) && !defined(__POPCNT__)
@@ -59,6 +62,26 @@ constexpr std::common_type_t<T, U> div_ceil(T n, U d) {
     using R = std::common_type_t<T, U>;
     return (static_cast<R>(n) + static_cast<R>(d) - 1) / static_cast<R>(d);
 }
+
+/// Stores `a + b` in `*out` and returns true when the sum does not fit in `T`;
+/// the stored value is then the wrapped sum.
+template <typename T>
+inline bool add_overflow(T a, T b, T* out) {
+    return __builtin_add_overflow(a, b, out);
+}
+
+/// Stores `a * b` in `*out` and returns true when the product does not fit in
+/// `T`; the stored value is then the wrapped product.
+template <typename T>
+inline bool mul_overflow(T a, T b, T* out) {
+    return __builtin_mul_overflow(a, b, out);
+}
+
+/// Hints that the cache line at `p` will be read soon.
+inline void prefetch_read(const void* p) { __builtin_prefetch(p, 0); }
+
+/// Hints that the cache line at `p` will be written soon.
+inline void prefetch_write(const void* p) { __builtin_prefetch(p, 1); }
 
 }  // namespace dftracer::utils::dstd::bits
 

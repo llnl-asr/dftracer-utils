@@ -91,6 +91,12 @@ class LazyOps {
     LazyFrame fill_null(T value) const {
         return lf().fill_null(value);
     }
+    LazyFrame drop_nans() const { return lf().drop_nans(); }
+    LazyFrame fill_nan(Scalar value) const { return lf().fill_nan(value); }
+    template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
+    LazyFrame fill_nan(T value) const {
+        return lf().fill_nan(value);
+    }
     LazyFrame take(dstd::Vector<std::int64_t> indices) const {
         return lf().take(std::move(indices));
     }

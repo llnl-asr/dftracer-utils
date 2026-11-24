@@ -12,6 +12,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Sequence, cast
 
 from . import dftracer_utils_ext as _ext
+from ._enums import DType
+from ._expr import Agg, Col
+from ._series import Series
+from ._series_index import (
+    column_series as _column,
+)
 from ._series_index import (
     default_name,
     drop_levels,
@@ -21,22 +27,15 @@ from ._series_index import (
     public_name,
     with_levels,
 )
-from .enums import DType
-from .expr import Agg, Col
-from .series import Series
 
 if TYPE_CHECKING:
-    from .dataframe import DataFrame
-    from .groupby import GroupBy
+    from ._dataframe import DataFrame
+    from ._groupby import GroupBy
 
 ROW = "__dftu_group_row__"
 FIRST = "__dftu_group_first__"
 ORD = "__dftu_group_ord__"
 VALUE = "__dftu_group_value__"
-
-
-def _column(frame: DataFrame, name: str) -> Series:
-    return _ext.DataFrame.__getitem__(frame, name)
 
 
 def pandas_named(g: GroupBy) -> bool:
@@ -96,7 +95,7 @@ def attach(frame: DataFrame, names: Sequence[str], levels: Sequence[Series]) -> 
 def first_appearance(g: GroupBy, indexed: DataFrame) -> DataFrame:
     """``indexed`` (the grouped frame with the row column ``ROW``) with the
     column ``FIRST``: the first row of each row's group."""
-    from .groupby import GroupBy as _GroupBy
+    from ._groupby import GroupBy as _GroupBy
 
     firsts = _GroupBy(indexed, g._keys).agg(Agg("min", Col(ROW), FIRST))
     return indexed.join(firsts, on=g._keys)
@@ -151,7 +150,7 @@ def take(g: GroupBy, indices: Sequence[int]) -> DataFrame:
     """``GroupBy.take``: the rows at ``indices`` within each group, in group
     order and the order of ``indices``, under the keys and the row labels, the
     key columns left out. ``IndexError`` when a group is too small."""
-    from .groupby import GroupBy as _GroupBy
+    from ._groupby import GroupBy as _GroupBy
 
     frame = g._frame()
     rest = [c for c in frame._names() if c not in g._keys]
@@ -180,7 +179,7 @@ def top(g: GroupBy, value: str, n: int, largest: bool) -> Series:
     (or smallest) present values of ``value`` as a Series named ``value``, each
     group in order, under the keys (when ``g`` indexes by them) and the row
     labels."""
-    from .groupby import GroupBy as _GroupBy
+    from ._groupby import GroupBy as _GroupBy
 
     frame = g._frame()
     indexed = frame.with_row_index(ROW)
@@ -211,7 +210,7 @@ def apply_pieces(g: GroupBy, results: list[tuple[object, object]]) -> DataFrame 
     labels has the positions ``0 .. n-1``, as a pandas ``RangeIndex``). Series
     that all have the same labels become the rows of one frame, one column for
     each label, as pandas."""
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     keys = list(g._keys) if with_keys(g) else []
     frame = g._frame()
@@ -223,15 +222,17 @@ def apply_pieces(g: GroupBy, results: list[tuple[object, object]]) -> DataFrame 
     pieces: list[DataFrame] = []
     names: list[str] = []
     for label, result in results:
+        body: dict[str, Series]
         if isinstance(result, Series):
             level_names, levels = names_of(result), levels_of(result)
             body = {VALUE: drop_levels(result)}
+            length = len(result)
         else:
             assert isinstance(result, DataFrame)
             level_names = list(_ext.DataFrame.index_names(result))
             levels = [_column(result, n) for n in level_names]
             body = {c: _column(result, c) for c in result.columns}
-        length = len(result)
+            length = len(result)
         if not level_names:
             level_names, levels = [default_name(0)], [positions(length)]
         parts = label if isinstance(label, tuple) else (label,)
@@ -258,7 +259,7 @@ def apply_pieces(g: GroupBy, results: list[tuple[object, object]]) -> DataFrame 
 def _wide(g: GroupBy, results: list[tuple[object, object]]) -> DataFrame | None:
     """One row per group when every result is a Series with the same labels:
     the labels are the columns, the group keys the index."""
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     series = [r for _, r in results]
     if not all(isinstance(s, Series) and names_of(s) for s in series):

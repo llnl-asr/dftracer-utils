@@ -21,6 +21,9 @@ struct FileMetadataResult {
     bool has_open_line = false;
     /// A chunk of the file starts inside a line.
     bool has_mid_line_chunk = false;
+    /// The file is a dftu.table whose rows all read clean when it was indexed.
+    /// An index built before this fact existed has none.
+    bool table_rows_complete = false;
     /// The index the next appended member takes. 0 means the record cannot be
     /// appended to.
     std::uint64_t next_member_idx = 0;

@@ -69,7 +69,7 @@ registered branch sees every matching event from the same traversal.
    .. tab-item:: Python
 
       ``TraceViewer.session()`` registers lazy plans: ``collect`` takes any
-      ``LazyFrame`` or ``LazyResult`` over the trace, and ``sink_json``,
+      ``LazyFrame`` or ``LazyResult`` over the trace, and ``sink``,
       ``materialize``, and ``attach`` (a compiled plugin set) are branches
       too. Each returns a ``Handle``. Leaving the ``with`` block (or the first
       ``Handle.result()``) runs the one scan.
@@ -82,7 +82,7 @@ registered branch sees every matching event from the same traversal.
              counts = s.collect(base_view.group_by("cat").agg("count"))
              stats  = s.collect(base_view.statistics(lazy=True))
              hist   = s.attach(Plugins(["dur_histogram.so"]))   # plugin/JIT fold
-             s.sink_json(base_view.filter('cat == "POSIX"'), "posix.pfw")
+             s.sink_trace(base_view.filter('cat == "POSIX"'), "posix.pfw.gz")
 
          counts_df = counts.result()   # resolved from the shared scan
          stats_dict = stats.result()

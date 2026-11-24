@@ -409,6 +409,37 @@ TEST_SUITE("output morsels") {
         CHECK(whole_sum.num_rows() == 6000);
     }
 
+    TEST_CASE("the NaN column ops hand on a morsel before the input is read") {
+        constexpr std::int64_t MORSELS = 50;
+        dftu_scalar fill{};
+        fill.kind = DFTU_SCALAR_TAG_F64;
+        fill.value.d = -1.0;
+        dftu_scalar zero{};
+        zero.kind = DFTU_SCALAR_TAG_I64;
+        for (const char* op :
+             {"dftu.series.fill_nan", "dftu.series.fillna",
+              "dftu.series.na_mask", "dftu.series.notna_mask"}) {
+            OpArgs args;
+            args.str(1, "v")
+                .str(2, op)
+                .str(3, "")
+                .scalar(4, fill)
+                .scalar(5, zero)
+                .str(6, "");
+            auto pulled = dstd::make_shared<std::int64_t>(0);
+            const LazyFrame plan =
+                LazyFrame::scan(
+                    dstd::make_shared<CountedTimes>(MORSELS, 1000, pulled))
+                    .frame_op("dftu.frame.column_op", args, {},
+                              dstd::Vector<dstd::String>{"t", "v"});
+            const std::int64_t at =
+                dftu_utils_test::ok(dftracer::utils::default_runtime()
+                                        .submit(pulled_at_first(plan, pulled))
+                                        .get());
+            CHECK_MESSAGE(at < MORSELS / 2, op);
+        }
+    }
+
     TEST_CASE("every elementwise column op is a registered column op") {
         for (const dstd::StringView name :
              lazy_internal::ELEMENTWISE_COLUMN_OPS) {
@@ -643,7 +674,7 @@ TEST_SUITE("output morsels") {
             CHECK(cut.size() >= 6);
             CHECK(most_rows(cut) <= 1000);
             expect_same_rows(joined(cut),
-                             df.with_column(name, extra.columns[0]));
+                             df.with_column(name, extra.columns[0]).value());
         }
     }
 

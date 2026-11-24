@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING, Literal, cast
 if TYPE_CHECKING:
     from typing_extensions import Self
 
-    from .dataframe import DataFrame
-    from .series import Series
+    from ._dataframe import DataFrame
+    from ._series import Series
 
 
 class LabelAlignMixin:

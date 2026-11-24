@@ -6,6 +6,8 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any, Callable
 
+from ._public import set_home_of
+
 
 def lazy_names(
     package: str, namespace: dict[str, Any], submodules: dict[str, str]
@@ -19,6 +21,7 @@ def lazy_names(
         if submodule is None:
             raise AttributeError(f"module {package!r} has no attribute {name!r}")
         value = getattr(import_module(f".{submodule}", package), name)
+        set_home_of(package, value)
         namespace[name] = value
         return value
 

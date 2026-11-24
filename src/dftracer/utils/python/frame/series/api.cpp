@@ -204,11 +204,13 @@ PyObject* run_op_noargs(std::size_t id, PyObject* self) {
     Held held_a(self);
     Series* a = held_a.get();
     if (!a) return nullptr;
-    // The two row-selecting ops move the labels with the rows.
+    // The row-selecting ops move the labels with the rows.
     if (a->has_index()) {
         const dstd::StringView name = ROWS[id].name;
         if (name == "drop_nulls")
             return make_series(kernel(*a, [&] { return a->drop_nulls(); }));
+        if (name == "drop_nans")
+            return make_series(kernel(*a, [&] { return a->drop_nans(); }));
         if (name == "reverse")
             return make_series(kernel(*a, [&] { return a->reverse(); }));
     }
@@ -237,7 +239,7 @@ PyObject* run_op(std::size_t id, PyObject* self, PyObject* args, PyObject* kw) {
             else if (!parse_kw_for<"O">(row.name, args, kw, names, &value))
                 return nullptr;
             dftu_scalar s{};
-            if (!py_to_scalar(value, &s)) return nullptr;
+            if (!py_to_op_scalar(row.op, value, &s)) return nullptr;
             auto fn = reinterpret_cast<dftu_series* (*)(const dftu_series*,
                                                         dftu_scalar)>(op);
             return finish(

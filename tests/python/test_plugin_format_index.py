@@ -47,7 +47,7 @@ def test_scan_file_with_an_index_dir_skips_chunks(tmp_path, monkeypatch):
 
     plugins = Plugins([_PLUGIN])
     try:
-        with dft.Indexer([str(rows)], index_dir=str(index_dir)) as indexer:
+        with dft.index.Indexer([str(rows)], index_dir=str(index_dir)) as indexer:
             indexer.build()
         log.unlink(missing_ok=True)
 

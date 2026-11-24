@@ -60,7 +60,7 @@ struct ClassTimed {
 
 TEST_SUITE("SchemaClass") {
     TEST_CASE("a class and the equal YAML spec are one definition") {
-        const auto& s = dftu_utils_test::ok_ref(
+        const auto& s = *dftu_utils_test::ok(
             trace::index::register_schema<ClassNginx>("test_schema_class"));
         CHECK(s.id == "class_nginx");
         CHECK(s.require ==
@@ -84,7 +84,7 @@ TEST_SUITE("SchemaClass") {
     }
 
     TEST_CASE("a class extends another schema") {
-        const auto& s = dftu_utils_test::ok_ref(
+        const auto& s = *dftu_utils_test::ok(
             trace::index::register_schema<ClassStep>("test_schema_class"));
         CHECK(s.decoder == trace::index::Decoder::Dftracer);
         CHECK(s.require ==
@@ -108,7 +108,7 @@ TEST_SUITE("SchemaClass") {
     TEST_CASE("a class declares its source") {
         CHECK(trace::index::schema_spec<ClassWeb>().source ==
               "errors = where status >= 500; def slow(t) = latency > t");
-        const auto& s = dftu_utils_test::ok_ref(
+        const auto& s = *dftu_utils_test::ok(
             trace::index::register_schema<ClassWeb>("test_schema_class"));
         CHECK(s.source ==
               "errors = where status >= 500;\ndef slow(t) = latency > t");

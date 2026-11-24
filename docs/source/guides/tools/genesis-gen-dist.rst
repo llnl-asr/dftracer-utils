@@ -176,7 +176,7 @@ Query the output
 
 .. code-block:: python
 
-   from dftracer.utils import Indexer
+   from dftracer.utils.index import Indexer
    from dftracer.utils.trace import TraceViewer
 
    # Build the index once: it stores the runs row set.

@@ -446,7 +446,7 @@ static PyGetSetDef CheckpointIndexer_getsetters[] = {
 
 PyTypeObject CheckpointIndexerType = {
     .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-        "dftracer_utils_ext.CheckpointIndexer",
+        "dftracer.utils.dftracer_utils_ext.CheckpointIndexer",
     .tp_basicsize = sizeof(CheckpointIndexerObject),
     .tp_dealloc = (destructor)CheckpointIndexer_dealloc,
     .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,

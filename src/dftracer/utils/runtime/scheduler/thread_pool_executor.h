@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_RUNTIME_SCHEDULER_THREAD_POOL_EXECUTOR_H
 
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/detail/parked.h>
@@ -98,6 +99,10 @@ class ThreadPoolExecutor final : public TaskExecutor {
         // idle. Touched only by this worker's own thread, so unsynced.
         bool holds_permit{false};
 
+        // When this worker first parked after its last task or last trimmed,
+        // 0 while it runs tasks. Touched only by its own thread.
+        std::uint64_t idle_since_ns{0};
+
         // Lazy handoff state (BLK_*). Worker and sysmon race a CAS out of
         // SYSCALL: exactly one of keep-on-exit and reclaim wins.
         std::atomic<int> blk_state{0};
@@ -158,6 +163,15 @@ class ThreadPoolExecutor final : public TaskExecutor {
         std::atomic<std::ptrdiff_t> permits_{0};
     // Workers currently parked inside block_on.
     std::atomic<std::size_t> blocked_workers_{0};
+    // Blocked workers whose permit the sysmon took. Only these justify a
+    // replacement thread: a worker that is still inside its handoff window
+    // gets its permit back on its own.
+    std::atomic<std::size_t> handed_off_workers_{0};
+#if DFTRACER_UTILS_TEST_PROBES
+    std::atomic<std::size_t> blocking_regions_{0};
+    std::atomic<std::size_t> handoffs_{0};
+    std::atomic<std::size_t> replacement_spawns_{0};
+#endif
     // Workers parked in acquire_permit waiting for a slot.
     std::atomic<std::size_t> permit_waiters_{0};
     // Reclaims permits from long blocks; parks on sysmon_cv_ when none
@@ -345,6 +359,19 @@ class ThreadPoolExecutor final : public TaskExecutor {
     std::ptrdiff_t available_permits() const {
         return permits_.load(std::memory_order_acquire);
     }
+#if DFTRACER_UTILS_TEST_PROBES
+    /// For tests: blocking regions entered, blocked workers whose permit the
+    /// sysmon took, and replacement threads started for them.
+    std::size_t blocking_regions() const {
+        return blocking_regions_.load(std::memory_order_acquire);
+    }
+    std::size_t handoffs() const {
+        return handoffs_.load(std::memory_order_acquire);
+    }
+    std::size_t replacement_spawns() const {
+        return replacement_spawns_.load(std::memory_order_acquire);
+    }
+#endif
     std::size_t blocked_workers() const {
         return blocked_workers_.load(std::memory_order_acquire);
     }

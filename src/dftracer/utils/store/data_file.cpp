@@ -500,8 +500,7 @@ dstd::Expected<std::size_t, dstd::Error> move_data_files(dstd::StringView from,
         if (kind != dstd::fs::FileKind::File) continue;
         const dstd::StringView name = entry.name;
         if (name.size() <= DATA_FILE_SUFFIX.size()) continue;
-        if (name.compare(name.size() - DATA_FILE_SUFFIX.size(),
-                         DATA_FILE_SUFFIX.size(), DATA_FILE_SUFFIX) != 0) {
+        if (!name.ends_with(DATA_FILE_SUFFIX)) {
             continue;
         }
         names.emplace_back(name);

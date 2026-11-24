@@ -662,6 +662,16 @@ class Series {
     Series fillna(T fill) const {
         return fillna(as_scalar(fill));
     }
+    /// Replace each NaN of a float column with `fill`, converted to the
+    /// column's type; a null scalar turns the NaN into a null. A null row stays
+    /// null. A column of another type is shared unchanged; a string `fill` on a
+    /// float column gives an invalid Series.
+    Series fill_nan(Scalar fill) const;
+    /// Replace each NaN with a natural C++ value (fill_nan(0.0)).
+    template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
+    Series fill_nan(T fill) const {
+        return fill_nan(as_scalar(fill));
+    }
     Series cumsum() const;
     Series cummax() const;
     Series cummin() const;
@@ -721,8 +731,12 @@ class Series {
     Series unique(bool maintain_order = false) const;
     Series dictionary_encode() const;
 
-    Series null_mask() const;      ///< Bool mask: row is null.
-    Series valid_mask() const;     ///< Bool mask: row is present.
+    Series null_mask() const;   ///< Bool mask: row is null.
+    Series valid_mask() const;  ///< Bool mask: row is present.
+    /// Bool mask: row is null or, in a float column, NaN (pandas isna).
+    Series na_mask() const;
+    /// Bool mask: row is present and not NaN (pandas notna).
+    Series notna_mask() const;
     Series is_nan() const;         ///< Bool mask: value is NaN (floats).
     Series is_finite() const;      ///< Bool mask: value is finite.
     Series is_infinite() const;    ///< Bool mask: value is +/-Inf (floats).
@@ -734,6 +748,9 @@ class Series {
     /// Whether the column is sorted ascending (or descending); single scan.
     bool is_sorted(bool descending = false) const;
     Series drop_nulls() const;  ///< Selection over the non-null rows.
+    /// The rows that are not NaN, nulls kept; a column that is not a float is
+    /// shared unchanged. An invalid Series when a float column cannot be read.
+    Series drop_nans() const;
     /// Bool mask, true where the value is present in `values`.
     Series is_in(const Series& values) const;
     /// Rows sorted ascending (or descending): take(argsort(v, descending,

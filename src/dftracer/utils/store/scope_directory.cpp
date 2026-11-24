@@ -212,6 +212,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
     dstd::stable_sort(copy_ids.begin(), copy_ids.end(), by_id);
 
     dstd::Vector<Draft> drafts;
+    drafts.reserve(copies.size() + drops.size() + erases.size());
     for (const CopyItem& copy : copies) {
         const NamespaceItem* namespace_item =
             find_local(namespace_ids, copy.namespace_id);
@@ -252,6 +253,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
                           return compare_drafts(a, b) < 0;
                       });
     dstd::Vector<Draft> entries;
+    entries.reserve(drafts.size());
     for (Draft& draft : drafts) {
         if (!entries.empty() && compare_drafts(entries.back(), draft) == 0) {
             Draft& into = entries.back();

@@ -2398,7 +2398,7 @@ A sink name is the plugin's own name, such as ``toy`` from plugin ``toy``, or
 
 .. code-block:: python
 
-   summary = lf.sink("csv.write", path="out.csv")   # SinkSummary(rows, batches)
+   summary = lf.sink("out.csv", format="csv.write")   # SinkSummary(root, rows, kind, part_count)
 
 .. code-block:: text
 
@@ -2655,14 +2655,14 @@ load them once, at the first call that reads a trace, and keep them until the
 process ends. A path that does not load is an error that names the path, an
 empty item is skipped and a path named twice loads once.
 
-From Python, ``dft.load_plugin(path)`` loads one plugin and returns a handle
+From Python, ``dft.plugins.load_plugin(path)`` loads one plugin and returns a handle
 that works as a context manager:
 
 .. code-block:: python
 
    import dftracer.utils as dft
 
-   with dft.load_plugin("./csv_reader.so"):
+   with dft.plugins.load_plugin("./csv_reader.so"):
        frame = dft.scan_file("data.csv").collect()
    # the format is gone here
 

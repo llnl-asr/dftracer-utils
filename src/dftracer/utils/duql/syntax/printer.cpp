@@ -949,6 +949,8 @@ class Printer {
 
     void print_stage(const Sink& s) {
         out += "sink ";
+        if (s.kind == Sink::Kind::Trace) out += "trace ";
+        if (s.kind == Sink::Kind::Table) out += "table ";
         put_string(out, s.name);
         for (const auto& [key, value] : s.options) {
             out += ' ';

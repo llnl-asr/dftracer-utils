@@ -3,7 +3,7 @@ import dataclasses
 
 import pytest
 
-from dftracer.utils import MemoryBudgetAdvice, memory_budget_advice
+from dftracer.utils.runtime import MemoryBudgetAdvice, memory_budget_advice
 
 GIB = 1024**3
 

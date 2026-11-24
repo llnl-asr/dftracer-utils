@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/span.h>
@@ -166,13 +167,13 @@ dstd::StringView call_name(CallKind kind) noexcept {
 
 std::uint64_t split_child_id(std::uint64_t parent, std::uint64_t seq,
                              std::uint32_t ordinal) noexcept {
-    std::uint64_t x = parent * 0x9E3779B97F4A7C15ull;
-    x ^= (seq + 1) * 0xC2B2AE3D27D4EB4Full;
-    x ^= (std::uint64_t{ordinal} + 1) * 0x165667B19E3779F9ull;
+    std::uint64_t x = parent * dstd::hash::GOLDEN_RATIO;
+    x ^= (seq + 1) * dstd::hash::XXH64_PRIME2;
+    x ^= (std::uint64_t{ordinal} + 1) * dstd::hash::XXH64_PRIME3;
     x ^= x >> 30;
-    x *= 0xBF58476D1CE4E5B9ull;
+    x *= dstd::hash::SPLITMIX64_MUL1;
     x ^= x >> 27;
-    x *= 0x94D049BB133111EBull;
+    x *= dstd::hash::SPLITMIX64_MUL2;
     x ^= x >> 31;
     return x | (std::uint64_t{1} << 63);
 }

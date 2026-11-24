@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/hash/constants.h>
@@ -62,9 +63,9 @@ std::int64_t floor_mod(std::int64_t a, std::int64_t b) {
 bool to_micros(std::int64_t v, dataframe::TimeUnit unit, std::int64_t& out) {
     switch (unit) {
         case dataframe::TimeUnit::Second:
-            return !__builtin_mul_overflow(v, std::int64_t{1'000'000}, &out);
+            return !dstd::bits::mul_overflow(v, std::int64_t{1'000'000}, &out);
         case dataframe::TimeUnit::Milli:
-            return !__builtin_mul_overflow(v, std::int64_t{1'000}, &out);
+            return !dstd::bits::mul_overflow(v, std::int64_t{1'000}, &out);
         case dataframe::TimeUnit::Micro:
             out = v;
             return true;
@@ -638,7 +639,7 @@ void for_each_null(const std::uint8_t* valid, std::int64_t n, Fn set) {
     for (std::int64_t k = 0; k < bytes; ++k) {
         auto m = static_cast<unsigned>(~valid[k] & 0xFFU);
         while (m) {
-            const std::int64_t i = 8 * k + __builtin_ctz(m);
+            const std::int64_t i = 8 * k + dstd::bits::ctz_u32(m);
             if (i < n) set(i);
             m &= m - 1;
         }

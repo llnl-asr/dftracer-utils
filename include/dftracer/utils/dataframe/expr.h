@@ -95,8 +95,9 @@ Expr expr_prim(PrimOp prim, const Expr& a);
 Expr expr_unary(UnaryOp op, const Expr& a);
 /// Clamp each value to [lo, hi].
 Expr expr_clip(const Expr& a, Scalar lo, Scalar hi);
-/// Replace nulls (validity bitmap) with a fill value.
-Expr expr_fillna(const Expr& a, Scalar fill);
+/// Replace nulls (validity bitmap) with a fill value; with `nan`, the NaN of a
+/// float operand as well (pandas fillna).
+Expr expr_fillna(const Expr& a, Scalar fill, bool nan = false);
 /// A string predicate: `a <op> pattern` (Series::str_contains /
 /// str_starts_with / str_ends_with / str_like / str_matches), Bool. The node
 /// owns a copy of `pattern`. @ref eval and @ref infer_type fail if the operand
@@ -181,6 +182,11 @@ Expr expr_select(const Expr& cond, const Expr& a, const Expr& b);
 /// The Bool mask of the rows where `a` is null (`null` true) or present
 /// (`null` false): the null_mask / valid_mask kernels as an expression node.
 Expr expr_is_null(const Expr& a, bool null = true);
+
+/// The Bool mask of the rows where `a` is missing in the pandas sense (`na`
+/// true: null or, in a float operand, NaN) or present (`na` false): the
+/// na_mask / notna_mask kernels as an expression node.
+Expr expr_is_na(const Expr& a, bool na = true);
 
 /// If `e` is `col <str pred> pattern`, fill the parts and return true. Lets a
 /// source push a string predicate down as a query.

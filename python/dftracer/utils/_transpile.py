@@ -20,22 +20,24 @@ from __future__ import annotations
 import ast
 import io
 import math
+import operator
+import sys
 import textwrap
 import tokenize
 from typing import Any, Callable, Sequence, cast
 
 from ._eval import COMPARE_NAME, ENGINE_ARITH_SYMBOL
-from .expr import Expr, Select, col, lit
+from ._expr import Expr, Select, col, lit
 
 # Python 3.8 wraps a subscript's slice in ast.Index; 3.9+ stores the value
 # directly.
 _AST_INDEX = getattr(ast, "Index", None)
 
 
-def _unwrap_index(node: ast.expr) -> ast.expr:
+def _unwrap_index(node: ast.AST) -> ast.expr:
     if _AST_INDEX is not None and isinstance(node, _AST_INDEX):
-        return cast("ast.expr", getattr(node, "value", node))
-    return node
+        node = getattr(node, "value", node)
+    return cast("ast.expr", node)
 
 
 class TranspileError(Exception):
@@ -52,7 +54,7 @@ NULL_COLUMN = "__eval_null__"
 
 _FLIP = {"lt": "gt", "le": "ge", "gt": "lt", "ge": "le", "eq": "eq", "ne": "ne"}
 _MATH = {"sqrt": "sqrt", "log": "log", "exp": "exp", "floor": "floor", "ceil": "ceil"}
-_NULL_TESTS = {"isna": True, "isnull": True, "notna": False, "notnull": False}  # True: is null
+_NULL_TESTS = {"isna": True, "isnull": True, "notna": False, "notnull": False}  # True: is missing
 _STR_MAP = {
     "lower": "lower",
     "upper": "upper",
@@ -250,10 +252,10 @@ class _Lowering:
             return cast(
                 "Expr",
                 {
-                    "+": lambda a, b: a + b,
-                    "-": lambda a, b: a - b,
-                    "*": lambda a, b: a * b,
-                    "/": lambda a, b: a / b,
+                    "+": operator.add,
+                    "-": operator.sub,
+                    "*": operator.mul,
+                    "/": operator.truediv,
                 }[op](left, right),
             )
         both_int = self.is_int(n.left) and self.is_int(n.right)
@@ -502,7 +504,7 @@ class _Lowering:
                 self._bind(method, n, ("value",)).get("value") or _missing("fillna")
             )
             if isinstance(v, Expr):
-                return Select(target.is_null(), v, target)
+                return Select(target.isna(), v, target)
             return target.fillna(cast("int | float", v))
         if method == "clip":
             a = self._bind(method, n, ("lower", "upper"))
@@ -613,7 +615,7 @@ class _Lowering:
                     return target.regex(pat if case else "(?i)" + pat)
                 return target.contains(pat, case=case)
             if method in _NULL_TESTS and not n.args and not n.keywords:
-                return target.is_null() if _NULL_TESTS[method] else target.is_not_null()
+                return target.isna() if _NULL_TESTS[method] else target.notna()
             lowered = self.method(target, method, n)
             if lowered is not None:
                 return lowered
@@ -661,11 +663,16 @@ class _Columns(ast.NodeTransformer):
     def visit_Name(self, node: ast.Name) -> ast.AST:
         if node.id not in self.columns:
             raise KeyError(f"no column named {node.id!r}")
-        field = ast.Subscript(
-            value=ast.Name(id=_ROW, ctx=ast.Load()),
-            slice=ast.Constant(value=node.id),
-            ctx=ast.Load(),
-        )
+        key = ast.Constant(value=node.id)
+        if sys.version_info >= (3, 9):
+            field = ast.Subscript(
+                value=ast.Name(id=_ROW, ctx=ast.Load()), slice=key, ctx=ast.Load()
+            )
+        else:
+            assert _AST_INDEX is not None
+            field = ast.Subscript(
+                value=ast.Name(id=_ROW, ctx=ast.Load()), slice=_AST_INDEX(value=key), ctx=ast.Load()
+            )
         return ast.copy_location(field, node)
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -706,7 +713,7 @@ def _boolean_precedence(source: str) -> str:
                 tokens.append((tok.type, tok.string))
     except tokenize.TokenError as e:
         raise SyntaxError(str(e.args[0])) from None
-    return tokenize.untokenize(tokens)
+    return str(tokenize.untokenize(tokens))
 
 
 def _reject_at(source: str) -> None:

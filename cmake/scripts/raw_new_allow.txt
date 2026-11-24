@@ -50,3 +50,8 @@ include/dftracer/utils/dstd/vendor/* | vendored upstream text
 # Immortal on purpose.
 src/dftracer/utils/runtime/runtime.cpp | Vector | holds the runtime a fork child inherited and is never destroyed
 src/dftracer/utils/plugins/host/fold_adapter/store.cpp | Owned | derives dstd::HeapObject
+
+# simdjson owns the tape and the string bytes of a document in std::unique_ptr
+# arrays, which only a plain new[] can fill.
+src/dftracer/utils/json/dom_value.cpp | uint64_t | simdjson document tape
+src/dftracer/utils/json/dom_value.cpp | uint8_t | simdjson document string bytes

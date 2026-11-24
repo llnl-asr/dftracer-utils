@@ -494,10 +494,12 @@ void ManagerAccess::exit_check() noexcept {
         int len = std::snprintf(
             line, sizeof(line),
             "dftracer-utils memory: peak=%zu live=%zu measured=%zu "
-            "limit=%zu heap_peak=%zu used_peak=%zu\n",
+            "limit=%zu heap_peak=%zu used_peak=%zu idle_backed=%zu heaps=%zu\n",
             st.peak, st.live, st.measured, st.limit,
             active_backend() == Backend::PageHeap ? page_reserved_peak() : 0,
-            active_backend() == Backend::PageHeap ? page_used_peak() : 0);
+            active_backend() == Backend::PageHeap ? page_used_peak() : 0,
+            active_backend() == Backend::PageHeap ? page_idle_backed() : 0,
+            active_backend() == Backend::PageHeap ? page_heap_count() : 0);
         report({line, std::min<std::size_t>(static_cast<std::size_t>(len),
                                             sizeof(line) - 1)});
     }

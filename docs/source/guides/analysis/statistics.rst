@@ -40,7 +40,7 @@ field from a DDSketch; a histogram aggregate emits the raw sketch bins.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          df = (TraceViewer("traces/")
                .group_by("cat")

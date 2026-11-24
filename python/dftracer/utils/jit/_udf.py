@@ -4,7 +4,7 @@
 ``@dft.udf`` on ``def f(x: float, n: int) -> float`` is lowered here: the body is
 checked against a small per-row subset, emitted as C (in a C++ file that the
 plugin build compiles), built to a cached shared library that exports one
-``dftu_udf_desc``, and registered by ``dftracer.utils.expr``. The compiled
+``dftu_udf_desc``, and registered by ``dftracer.utils._expr``. The compiled
 UDF runs on the engine's workers and never takes the GIL.
 
 Nulls: the host nulls the result of every row with a null argument, and the

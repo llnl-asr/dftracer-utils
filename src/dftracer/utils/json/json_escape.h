@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_JSON_JSON_ESCAPE_H
 #define DFTRACER_UTILS_JSON_JSON_ESCAPE_H
 
+#include <dftracer/utils/dstd/hex.h>
 #include <dftracer/utils/dstd/string.h>
 
 #include <array>
@@ -17,7 +18,6 @@ namespace dftracer::utils::json {
 /// temporary allocation, so callers building a JSON line in a loop don't
 /// churn a string per field.
 inline void append_json_escaped(dstd::String& out, dstd::StringView s) {
-    static constexpr char HEX[] = "0123456789abcdef";
     for (char c : s) {
         switch (c) {
             case '"':
@@ -44,8 +44,12 @@ inline void append_json_escaped(dstd::String& out, dstd::StringView s) {
             default: {
                 const unsigned char u = static_cast<unsigned char>(c);
                 if (u < 0x20) {
-                    const char escaped[6] = {'\\', 'u',         '0',
-                                             '0',  HEX[u >> 4], HEX[u & 15]};
+                    const char escaped[6] = {'\\',
+                                             'u',
+                                             '0',
+                                             '0',
+                                             dstd::HEX_LOWER[u >> 4],
+                                             dstd::HEX_LOWER[u & 15]};
                     out.append(escaped, sizeof(escaped));
                 } else {
                     out += c;
@@ -109,7 +113,6 @@ inline std::size_t escaped_json_size(dstd::StringView s) {
 /// (at most 6 * s.size() bytes). Copies each run of plain bytes at once.
 /// Returns the end of the written bytes.
 inline char* escape_json_to(char* dst, dstd::StringView s) {
-    static constexpr char HEX[] = "0123456789abcdef";
     const char* const end = s.data() + s.size();
     const char* run = s.data();
     for (const char* p = run; p != end; ++p) {
@@ -128,8 +131,8 @@ inline char* escape_json_to(char* dst, dstd::StringView s) {
             *dst++ = 'u';
             *dst++ = '0';
             *dst++ = '0';
-            *dst++ = HEX[u >> 4];
-            *dst++ = HEX[u & 15];
+            *dst++ = dstd::HEX_LOWER[u >> 4];
+            *dst++ = dstd::HEX_LOWER[u & 15];
         }
     }
     const std::size_t clean = static_cast<std::size_t>(end - run);

@@ -302,12 +302,8 @@ TEST_CASE(
     dstd::String big;
     big.reserve(200 * 1024);
     for (int i = 0; i < 2000; ++i) {
-        char line[128];
-        std::snprintf(line, sizeof(line),
-                      R"({"id":%d,"name":"evt_%d"} )"
-                      "\n",
-                      i, i);
-        big += line;
+        dstd::fmt_append<R"({"id":{},"name":"evt_{}"} )"
+                         "\n">(big, i, i);
     }
     auto mem = gzip_member(big);
     REQUIRE(mem.size() + 25 < STRIPE);  // fits in one stripe with padding

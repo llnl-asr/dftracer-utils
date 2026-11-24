@@ -57,8 +57,9 @@ class TempFile {
    public:
     TempFile() : TempFile(dstd::fs::temp_directory().str()) {}
     explicit TempFile(dstd::StringView folder) {
-        std::snprintf(path_, sizeof(path_), "%.*s/dftu_io_op_XXXXXX",
-                      static_cast<int>(folder.size()), folder.data());
+        const dstd::FmtResult written = dstd::fmt_to<"{}/dftu_io_op_XXXXXX">(
+            path_, sizeof(path_) - 1, folder);
+        path_[written.size] = '\0';
         fd_ = ::mkstemp(path_);
         REQUIRE(fd_ >= 0);
     }
@@ -77,8 +78,9 @@ class TempDir {
    public:
     TempDir() : TempDir(dstd::fs::temp_directory().str()) {}
     explicit TempDir(dstd::StringView folder) {
-        std::snprintf(path_, sizeof(path_), "%.*s/dftu_io_dir_XXXXXX",
-                      static_cast<int>(folder.size()), folder.data());
+        const dstd::FmtResult written = dstd::fmt_to<"{}/dftu_io_dir_XXXXXX">(
+            path_, sizeof(path_) - 1, folder);
+        path_[written.size] = '\0';
         REQUIRE(::mkdtemp(path_) != nullptr);
     }
     ~TempDir() { dstd::fs::remove_all(dstd::PathView(path_)).discard(); }

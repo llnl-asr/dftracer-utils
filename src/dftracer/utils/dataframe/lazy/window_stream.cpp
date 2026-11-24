@@ -985,7 +985,9 @@ class WindowStreamCursor : public Cursor {
                 n.acc_cols.push_back(w.value);
                 break;
             case DFTU_WINDOW_RUNNING_PROD:
-                if (vt != TypeId::Float64) return false;
+                if (vt != TypeId::Float64 && vt != TypeId::Int64 &&
+                    vt != TypeId::Uint64)
+                    return false;
                 s.acc = Acc::Seed;
                 n.acc = true;
                 n.acc_cols.push_back(w.value);

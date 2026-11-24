@@ -41,10 +41,35 @@ jobs:
             echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # One web UI build, embedded in every wheel and package.
+  web:
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    name: Web UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build web UI
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Upload web bundle
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: web-dist
+          path: web/dist/*.html
+          retention-days: 7
+
   # The wheels build with Release dependencies, restored from the R2 bucket
   # that the CI wheel jobs fill.
   wheel-linux:
-    needs: check
+    needs: [check, web]
     if: needs.check.outputs.publish == 'true'
     permissions:
       contents: read
@@ -55,7 +80,7 @@ jobs:
       publish: true
 
   wheel-linux-arm:
-    needs: check
+    needs: [check, web]
     if: needs.check.outputs.publish == 'true'
     permissions:
       contents: read
@@ -66,7 +91,7 @@ jobs:
       publish: true
 
   wheel-macos:
-    needs: check
+    needs: [check, web]
     if: needs.check.outputs.publish == 'true'
     permissions:
       contents: read
@@ -78,7 +103,7 @@ jobs:
 
   # The C and C++ install layout per platform, for the GitHub pre-release.
   package-linux:
-    needs: check
+    needs: [check, web]
     if: needs.check.outputs.publish == 'true'
     permissions:
       contents: read
@@ -89,7 +114,7 @@ jobs:
       name: linux-x86_64
 
   package-linux-arm:
-    needs: check
+    needs: [check, web]
     if: needs.check.outputs.publish == 'true'
     permissions:
       contents: read
@@ -100,7 +125,7 @@ jobs:
       name: linux-aarch64
 
   package-macos:
-    needs: check
+    needs: [check, web]
     if: needs.check.outputs.publish == 'true'
     permissions:
       contents: read

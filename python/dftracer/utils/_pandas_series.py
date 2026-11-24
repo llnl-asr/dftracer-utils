@@ -21,6 +21,7 @@ from typing import (
     cast,
 )
 
+from ._enums import DType
 from ._label_align import LabelAlignMixin
 from ._levels import (
     LevelArg,
@@ -47,19 +48,19 @@ from ._series_index import (
     with_levels,
 )
 from ._time_index import TimeIndexMixin
-from .enums import DType
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
     import pyarrow as pa
     from numpy import generic
     from pandas._libs.missing import NAType
     from typing_extensions import Concatenate, ParamSpec
 
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
+    from ._groupby import GroupBy
+    from ._series import Series
     from .dftracer_utils_ext import Scalar
-    from .groupby import GroupBy
-    from .series import Series
 
     # A value of ``replace`` as the caller writes it, and as the engine takes it.
     PlainScalar = Union[int, float, str, None, NAType]
@@ -108,7 +109,6 @@ def _kernel_operand(s: Series) -> Series:
 
 
 _TEMPORAL = frozenset([DType.TIME32, DType.TIME64, DType.TIMESTAMP, DType.DURATION])
-_FLOATS = frozenset([DType.FLOAT32, DType.FLOAT64])
 _BYTES = frozenset([DType.STRING, DType.LARGE_STRING, DType.BINARY, DType.LARGE_BINARY])
 
 
@@ -125,7 +125,7 @@ def _scaled_differs(a: Series, b: Series) -> Series[bool]:
     factor = 1000 ** (b.time_unit - a.time_unit)
     fine, coarse = b.astype("int64"), a.astype("int64")
     same = ((fine % factor) == 0) & ((fine // factor) == coarse)
-    ne = (~same).fillna(False)
+    ne = (~same).fill_null(False)
     nulls = _kernel_operand(a.is_null()).compare_series(_kernel_operand(b.is_null()), _CMP_NE)
     return cast("Series[bool]", ne | nulls)
 
@@ -151,7 +151,7 @@ def differs(a: Series, b: Series) -> Series[bool]:
         else:
             a, b = a.dt.epoch("ns"), b.dt.epoch("ns")
     if by_value:
-        from .series import Series
+        from ._series import Series
 
         return cast(
             "Series[bool]",
@@ -163,9 +163,9 @@ def differs(a: Series, b: Series) -> Series[bool]:
                 DType.BOOL,
             ),
         )
-    ne = _kernel_operand(a).compare_series(_kernel_operand(b), _CMP_NE).fillna(False)
-    if da in _FLOATS and db in _FLOATS:
-        ne = ne & ~(a.is_nan().fillna(False) & b.is_nan().fillna(False))
+    ne = _kernel_operand(a).compare_series(_kernel_operand(b), _CMP_NE).fill_null(False)
+    if da.is_float and db.is_float:
+        ne = ne & ~(a.is_nan().fill_null(False) & b.is_nan().fill_null(False))
     if a.null_count == 0 and b.null_count == 0:
         return ne
     nulls = _kernel_operand(a.is_null()).compare_series(_kernel_operand(b.is_null()), _CMP_NE)
@@ -181,6 +181,91 @@ def valid_edge(mask: Series, first: bool) -> int | None:
     if first:
         return flags.arg_max()
     return len(flags) - 1 - flags.reverse().arg_max()
+
+
+def present_edge(s: Series, first: bool) -> int | None:
+    """The position of the first (or last) present value of ``s``, ``None``
+    when it has none; a column with no nulls answers without a scan."""
+    nulls = s.null_count
+    if nulls == len(s):
+        return None
+    if nulls == 0:
+        return 0 if first else len(s) - 1
+    return valid_edge(s.is_not_null(), first)
+
+
+def edge_label(labels: object, pos: int | None) -> object | None:
+    """The row label at ``pos`` of an index as ``.index`` gives it: a Series
+    of labels, a frame of levels (a tuple, as pandas), or positions when there
+    is none."""
+    from ._dataframe import DataFrame
+    from ._series import Series
+    from ._series_index import column_series
+
+    if pos is None:
+        return None
+    if isinstance(labels, Series):
+        return labels.iloc[pos]
+    if isinstance(labels, DataFrame):
+        return tuple(column_series(labels, n).iloc[pos] for n in labels.columns)
+    return pos
+
+
+def present_or(s: Series, other: Series, kept: DType | None = None) -> Series:
+    """``s`` where it has a value, else ``other``, for two Series on the same
+    labels, as pandas ``combine_first``: two number types meet as Float64, and
+    an all-null side of another kind takes the other's type. The result goes
+    back to ``kept`` (the type both had before align) when it has no nulls."""
+    if s.dtype != other.dtype:
+        if s.dtype.is_numeric and other.dtype.is_numeric:
+            s = s.cast("Float64")
+            other = other.cast("Float64")
+        elif other.null_count == len(other):
+            other = other.cast(s.dtype)
+        elif s.null_count == len(s):
+            s = s.cast(other.dtype)
+    out = s.where(s.is_not_null(), other)
+    if kept is not None and out.dtype != kept and out.null_count == 0:
+        out = out.cast(kept)
+    return out
+
+
+def realigned(aligned: Series, before: Series) -> Series:
+    """A column one side alone has, on the aligned rows: back in its own type
+    when align added no null, as pandas."""
+    if aligned.dtype != before.dtype and aligned.null_count == before.null_count:
+        return aligned.cast(before.dtype)
+    return aligned
+
+
+def kept_by_update(out: Series, kept: DType) -> Series:
+    """``out`` in ``kept``, the type of the frame or Series that ``update``
+    writes into, as pandas, which refuses a value that type cannot hold."""
+    if out.dtype == kept:
+        return out
+    back = out.cast(kept)
+    if (back.cast(out.dtype) != out).fill_null(False).any():
+        raise TypeError(f"Invalid value for dtype '{kept.name.lower()}'")
+    return back
+
+
+def has_duplicate_labels(obj: object) -> bool:
+    """Whether the row labels of a Series or a frame repeat (positions never
+    do)."""
+    from ._dataframe import DataFrame
+    from ._series import Series
+
+    labels = getattr(obj, "index", None)
+    if isinstance(labels, (Series, DataFrame)):
+        return bool(labels.duplicated().any())
+    return False
+
+
+def kept_type(a: Series | None, b: Series | None) -> DType | None:
+    """The type to give a combined column back: the one both sides had."""
+    if a is None or b is None or a.dtype != b.dtype:
+        return None
+    return a.dtype
 
 
 class Omitted:
@@ -243,8 +328,8 @@ def replace_in(
 ) -> Series:
     """``s`` with every pair applied together. ``column`` names a frame column in
     errors; ``strict`` False leaves a column of an unsupported type alone."""
-    from .enums import DType
-    from .series import Series
+    from ._enums import DType
+    from ._series import Series
 
     dtype = s.dtype
     if dtype == DType.STRING:
@@ -262,7 +347,7 @@ def replace_in(
         old_kind, new_kind = _kind(old), _kind(new)
         hit: Series[bool] | None
         if old_kind == "null":
-            hit = s.isna()
+            hit = s.is_null()
         elif old_kind == "nan":
             hit = (s != s) if floats else None
         elif is_str == (old_kind == "str"):
@@ -292,7 +377,7 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
     __slots__ = ()
 
     def _s(self) -> Series:
-        from .series import Series
+        from ._series import Series
 
         assert isinstance(self, Series)
         return self
@@ -341,7 +426,8 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
 
     @property
     def hasnans(self) -> bool:
-        return self._s().null_count > 0
+        s = self._s()
+        return s.null_count > 0 or (s.dtype.is_float and bool(s.is_nan().any()))
 
     @property
     def empty(self) -> bool:
@@ -352,7 +438,7 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         return 1
 
     @property
-    def values(self) -> np.ndarray:
+    def values(self) -> npt.NDArray[np.generic]:
         return self._s().to_numpy()
 
     @property
@@ -438,9 +524,9 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         it, -1 for a null (pandas numbers uniques by first occurrence)."""
         s = self._s()
         uniques = s.drop_nulls().unique()
-        codes = cast("Series", uniques.search_sorted(s.fillna(0) if s.null_count else s))
+        codes = cast("Series", uniques.search_sorted(s.fill_null(0) if s.null_count else s))
         if s.null_count:
-            codes = codes.mask(s.isna(), -1)
+            codes = codes.mask(s.is_null(), -1)
         return codes, uniques
 
     def repeat(self, repeats: int) -> Series:
@@ -589,7 +675,7 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         that came from ``df[col]`` are the frame's row index; they follow the
         rows through ``sort_values``, ``filter``, ``head`` and the like, and
         two labelled Series align on them in arithmetic."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         s = self._s()
         names = names_of(s)
@@ -638,11 +724,15 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
     def _rows_where(self, mask: Series) -> Series:
         return self._s().filter(mask)
 
-    def first_valid_index(self) -> int | None:
-        return valid_edge(self._s().notna(), first=True)
+    def first_valid_index(self) -> object | None:
+        """The label of the first present value (``None`` when there is
+        none)."""
+        s = self._s()
+        return edge_label(s.index, present_edge(s, first=True))
 
-    def last_valid_index(self) -> int | None:
-        return valid_edge(self._s().notna(), first=False)
+    def last_valid_index(self) -> object | None:
+        s = self._s()
+        return edge_label(s.index, present_edge(s, first=False))
 
     def asof(self, where: int) -> object:
         """The last present value at or before position ``where`` (pandas
@@ -657,19 +747,27 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         ``autocorr``); the shifted-in nulls drop from the pair."""
         s = self._s()
         shifted = s.shift(lag)
-        keep = shifted.notna()
+        keep = shifted.is_not_null()
         return s.filter(keep).corr(shifted.filter(keep))
 
     def combine_first(self, other: Series) -> Series:
-        """This Series with nulls filled from ``other`` (positional)."""
-        s = self._s()
-        return s.where(s.notna(), other)
+        """The pandas ``combine_first``: both on the union of their labels, with
+        this Series' value where it has one and ``other``'s elsewhere."""
+        mine = self._s()
+        if has_duplicate_labels(mine) or has_duplicate_labels(other):
+            raise ValueError("cannot reindex on an axis with duplicate labels")
+        s, o = mine.align(other, join="outer")
+        return present_or(s, cast("Series", o), kept_type(mine, other))
 
     def update(self, other: Series) -> Series:
-        """``other``'s present values over this Series (positional; pandas
-        ``update`` mutates, this returns the new Series)."""
-        s = self._s()
-        return other.where(other.notna(), s)
+        """``other`` on this Series' labels, and its present values over this
+        Series' (pandas ``update`` mutates, this returns the new Series)."""
+        mine = self._s()
+        if has_duplicate_labels(other):
+            raise ValueError("cannot reindex on an axis with duplicate labels")
+        s, o = mine.align(other, join="left")
+        out = kept_by_update(present_or(cast("Series", o), s), mine.dtype)
+        return out.rename(mine.name)
 
     def drop(self, positions: int | Sequence[int]) -> Series:
         """Every element except those at ``positions`` (the positional index),
@@ -679,14 +777,14 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         for p in gone:
             if p < 0 or p >= len(s):
                 raise KeyError(p)
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         index = DataFrame.from_dict({"v": s}).with_row_index("_i")["_i"]
         return s.filter(~index.is_in(sorted(gone)))
 
     def equals(self, other: object) -> bool:
         """Same type, length and values, null for null (pandas ``equals``)."""
-        from .series import Series
+        from ._series import Series
 
         s = self._s()
         if not isinstance(other, Series) or s.dtype != other.dtype or len(s) != len(other):
@@ -823,13 +921,13 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         return self._pair(other, "covar_samp")
 
     def _pair(self, other: Series, agg: str) -> float:
-        from .dataframe import DataFrame
-        from .expr import Agg, Col
-        from .groupby import GroupBy
+        from ._dataframe import DataFrame
+        from ._expr import Agg, Col
+        from ._groupby import GroupBy
 
         s = self._s()
         # pandas gives NaN below two complete pairs; the engine's readout 0.
-        pairs = s.notna().logical(0, other.notna())
+        pairs = s.is_not_null().logical(0, other.is_not_null())
         if int(pairs.astype("int64").sum()) < 2:
             return float("nan")
         frame = DataFrame.from_dict({"x": s, "y": other})
@@ -847,7 +945,7 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         """count / mean / std / min / 25% / 50% / 75% / max as a two-column
         frame (``statistic``, ``value``); the quantiles are the engine's
         sketch."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         s = self._s()
         rows = [
@@ -870,7 +968,7 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
         s = self._s()
         if isinstance(func, str):
             return cast("Scalar", getattr(s, func)())
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         names = list(func)
         return DataFrame({"statistic": names, "value": [getattr(s, n)() for n in names]})
@@ -910,14 +1008,14 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
     def groupby(self, by: Series) -> GroupBy:
         """Group this Series' values by ``by`` (positional): a frame
         ``GroupBy`` over columns ``key`` and ``value``."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         frame = DataFrame.from_dict({"key": by, "value": self._s()})
         return frame.group_by("key")
 
     def explode(self) -> Series:
         """A List Series flattened to one row per element."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         return DataFrame.from_dict({"v": self._s()}).explode("v")["v"]
 
@@ -956,7 +1054,7 @@ class _SeriesILoc:
 
     def __getitem__(self, key: object) -> object:
         from ._loc import rows_by_position
-        from .series import Series
+        from ._series import Series
 
         s = self._s
         if isinstance(key, bool):

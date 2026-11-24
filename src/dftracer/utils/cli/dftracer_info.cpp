@@ -62,10 +62,6 @@ class InfoArgParse : public cli::ArgParse {
     }
 };
 
-static dstd::String format_size(std::uint64_t bytes) {
-    return common::human_bytes(static_cast<double>(bytes), "", 2);
-}
-
 struct RootInfoSummary {
     std::size_t file_count = 0;
     std::uint64_t total_events = 0;
@@ -261,12 +257,16 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
     std::printf("\nFile Size:\n");
     if (info.compressed_size > 0) {
         std::printf("  Compressed:   %12s (%llu bytes)\n",
-                    format_size(info.compressed_size).c_str(),
+                    common::human_bytes(
+                        static_cast<double>(info.compressed_size), "", 2)
+                        .c_str(),
                     (unsigned long long)info.compressed_size);
     }
-    std::printf("  Uncompressed: %12s (%llu bytes)\n",
-                format_size(info.uncompressed_size).c_str(),
-                (unsigned long long)info.uncompressed_size);
+    std::printf(
+        "  Uncompressed: %12s (%llu bytes)\n",
+        common::human_bytes(static_cast<double>(info.uncompressed_size), "", 2)
+            .c_str(),
+        (unsigned long long)info.uncompressed_size);
 
     if (info.compressed_size > 0 && info.uncompressed_size > 0 &&
         info.compressed_size != info.uncompressed_size) {
@@ -284,7 +284,9 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
         std::printf("\nIndex Information:\n");
         std::printf("  Index Store: %s\n", info.index_path.c_str());
         std::printf("  Checkpoint Size: %s\n",
-                    format_size(info.checkpoint_size).c_str());
+                    common::human_bytes(
+                        static_cast<double>(info.checkpoint_size), "", 2)
+                        .c_str());
         std::printf("  Checkpoints: %zu\n", info.checkpoint_count);
         print_extensions(info, snapshot);
     }
@@ -432,7 +434,11 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
                                 (unsigned long long)root_result->total_events);
                     std::printf(
                         "  Total Uncompressed: %s (%llu bytes)\n",
-                        format_size(root_result->total_uncompressed).c_str(),
+                        common::human_bytes(
+                            static_cast<double>(
+                                root_result->total_uncompressed),
+                            "", 2)
+                            .c_str(),
                         (unsigned long long)root_result->total_uncompressed);
                     if (root_result->total_events > 0) {
                         std::printf(
@@ -600,9 +606,11 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
                     (unsigned long long)total_lines);
         std::printf("  Valid Events:       %llu\n",
                     (unsigned long long)total_events);
-        std::printf("  Total Uncompressed: %s (%llu bytes)\n",
-                    format_size(total_uncompressed).c_str(),
-                    (unsigned long long)total_uncompressed);
+        std::printf(
+            "  Total Uncompressed: %s (%llu bytes)\n",
+            common::human_bytes(static_cast<double>(total_uncompressed), "", 2)
+                .c_str(),
+            (unsigned long long)total_uncompressed);
 
         if (total_events > 0) {
             std::printf("  Avg Bytes/Event:    %.2f bytes\n",
@@ -648,8 +656,10 @@ static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
         std::printf("Successful: %zu\n", ok);
         std::printf("Failed: %zu\n", files.size() - ok);
         std::printf("Total Lines: %llu\n", (unsigned long long)total_lines);
-        std::printf("Total Uncompressed: %s\n",
-                    format_size(total_uncompressed).c_str());
+        std::printf(
+            "Total Uncompressed: %s\n",
+            common::human_bytes(static_cast<double>(total_uncompressed), "", 2)
+                .c_str());
         std::printf("Processing Time: %.2f ms\n",
                     static_cast<double>(overall.elapsed()) / 1e6);
     }

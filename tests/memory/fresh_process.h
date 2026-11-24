@@ -60,6 +60,8 @@ struct Result {
 /// Called first by a test case that run() starts. doctest exits with 0 when no
 /// test case matches the name, and this tells run() that the case really ran.
 inline void announce() {
+    // Raw read: the memory tests link no common, and this runs before the
+    // exact counters of a fresh process, where an allocation would show.
     const char* fd = std::getenv("DFTRACER_UTILS_FRESH_PROCESS_FD");
     if (fd == nullptr) return;
     char byte = 'x';

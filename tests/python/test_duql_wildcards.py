@@ -35,13 +35,13 @@ def path(tmp_path_factory):
     with gzip.open(p, "wt") as f:
         for i in range(N):
             f.write(json.dumps(_record(i)) + "\n")
-    with dftu.Indexer(files=[p]) as indexer:
+    with dftu.index.Indexer(files=[p]) as indexer:
         indexer.ensure()
     return p
 
 
 def _table(path, q):
-    return dftu.TraceViewer(path).duql(q).collect().to_dict()
+    return dftu.trace.TraceViewer(path).duql(q).collect().to_dict()
 
 
 def test_select_expands_to_one_column_per_match(path):

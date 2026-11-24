@@ -66,6 +66,11 @@ Expected<bool, Error> remove(PathView path);
 /// Children are removed by name relative to the held directory.
 Expected<std::uint64_t, Error> remove_all(PathView path);
 Expected<void, Error> rename(PathView from, PathView to);
+/// Renames from to to only when to does not exist, in one step, so a file
+/// that appears at to meanwhile is never replaced. True when renamed, false
+/// when to exists. A kernel or file system that cannot do it is an error with
+/// Condition::Unsupported; there is no fallback.
+Expected<bool, Error> rename_no_replace(PathView from, PathView to);
 Expected<void, Error> copy_file(PathView from, PathView to, CopyMode mode);
 /// Copies a directory tree, a symlink as a symlink and a file with copy_file.
 /// from may also be a single file or symlink. With FailIfExists every entry
@@ -219,6 +224,18 @@ class Dir {
 /// `?` is one character, every other character is itself. Neither wildcard
 /// matches `/`, and `**` is the same as `*`.
 bool match_name(StringView pattern, StringView name) noexcept;
+
+/// Whether a path pattern has a character that @ref glob_match_name reads as a
+/// wildcard: `*`, `?` or `[`.
+bool has_glob_chars(StringView pattern) noexcept;
+
+/// Whether one path component matches a pattern. @ref match_name plus the
+/// class `[...]`: one character of the listed characters and `a-z` ranges, or
+/// any other with a leading `!` or `^`. A `]` first in the class and a `-`
+/// first or last are themselves. A `[` with no closing `]` is itself. There is
+/// no escape character, so a backslash is itself. A name that starts with `.`
+/// is a name like any other.
+bool glob_match_name(StringView pattern, StringView name) noexcept;
 
 /// Depth-first, pre-order walk of the tree at root. fn is called for root
 /// itself first, then for each descendant before its children. A symlinked

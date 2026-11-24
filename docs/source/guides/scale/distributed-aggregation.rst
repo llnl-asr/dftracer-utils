@@ -91,7 +91,7 @@ No rank rescans the trace files to produce the combined result.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          # Each rank: aggregate its own file slice, get back combinable bytes.
          shard = TraceViewer(my_rank_files).group_by("name").agg("count", "sum:dur")
@@ -195,7 +195,7 @@ that the workers publish their progress under, for a ``ProgressAggregator``.
 
 .. code-block:: python
 
-   from dftracer.utils import discover_trace_files
+   from dftracer.utils.trace import discover_trace_files
    from dftracer.utils.dask import DaskTraceViewer, ProgressAggregator
 
    def row_counts(records):  # runs on the worker

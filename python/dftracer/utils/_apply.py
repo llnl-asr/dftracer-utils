@@ -28,14 +28,15 @@ from typing import TYPE_CHECKING, Callable, Iterator, Mapping, Sequence, cast
 
 from . import dftracer_utils_ext as _ext
 from ._eval import Columnar
-from .expr import Expr, col, collect_columns, has_column_op
-from .series import Series
+from ._expr import Expr, col, collect_columns, has_column_op
+from ._series import Series
+from ._series_index import column_series as _column
 
 if TYPE_CHECKING:
     from typing_extensions import TypeGuard
 
-    from .dataframe import DataFrame
-    from .jit_op import Op
+    from ._dataframe import DataFrame
+    from ._jit_op import Op
 
 _TRACE_INPUT = "__x0__"
 
@@ -51,7 +52,7 @@ def _is_jit_series(func: object) -> bool:
 
 
 def _is_jit_op(func: object) -> TypeGuard[Op]:
-    from .jit_op import Op
+    from ._jit_op import Op
 
     return isinstance(func, Op)
 
@@ -78,11 +79,6 @@ def _eval_expr(expr: Expr, source: Mapping[str, Series]) -> Series:
 
 def _from_python(values: Sequence[object]) -> Series:
     return Series.from_list(list(values))
-
-
-def _column(frame: DataFrame, name: str) -> Series:
-
-    return frame[name]
 
 
 def apply_series(series: Series, func: Callable[..., object], what: str) -> Series:
@@ -117,7 +113,7 @@ def _null_where_input_is(out: Series, series: Series) -> Series:
     missing value into a present one."""
     if series.null_count == 0:
         return out
-    return out.where(series.notna())
+    return out.where(series.is_not_null())
 
 
 def _trace(
@@ -188,7 +184,7 @@ def _check_columns(expr: Expr, source: Mapping[str, Series]) -> None:
 
 
 def _apply_jit_op(series: Series, op_obj: Op, what: str) -> Series:
-    from .jit_op import lower_to_expr, run_op
+    from ._jit_op import lower_to_expr, run_op
 
     tokens = lower_to_expr(op_obj)
     if tokens is not None:

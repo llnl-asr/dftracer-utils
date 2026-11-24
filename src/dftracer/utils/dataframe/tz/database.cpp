@@ -95,7 +95,7 @@ bool in_list(dstd::StringView name, const dstd::StringView* first,
 // "+05:30", "-0800" and the same after "UTC", as pandas reads them. Hours and
 // minutes are two digits each, and the offset is within a day.
 bool parse_fixed_offset(dstd::StringView name, std::int32_t& offset) {
-    if (name.substr(0, 3) == "UTC") name.remove_prefix(3);
+    if (name.starts_with("UTC")) name.remove_prefix(3);
     if (name.size() < 5 || (name[0] != '+' && name[0] != '-')) return false;
     const std::int32_t sign = name[0] == '-' ? -1 : 1;
     name.remove_prefix(1);

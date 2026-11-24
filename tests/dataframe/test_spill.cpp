@@ -65,6 +65,47 @@ dstd::Result<void> drain_run(dstd::CStringView path) {
 }  // namespace
 
 TEST_SUITE("spill") {
+    TEST_CASE("a string slice is zero copy and spills only its own bytes") {
+        constexpr std::int64_t ROWS = 10000;
+        dstd::Vector<dstd::String> values;
+        for (std::int64_t i = 0; i < ROWS; ++i)
+            values.push_back(
+                dstd::String(200, static_cast<char>('a' + i % 26)) +
+                dstd::fmt<"{}">(i));
+        const Series parent = Series::strings(values);
+        const Series part = parent.slice(5000, 10);
+        REQUIRE(part.length() == 10);
+        const std::int32_t* offs = dftu_series_offsets(part.handle());
+        CHECK(offs[0] != 0);
+        for (std::int64_t i = 0; i < 10; ++i)
+            CHECK(part.string_at(i) == values[5000 + i]);
+
+        dstd::String parent_bytes, part_bytes;
+        dftu_utils_test::ok(spill::put_series(parent_bytes, parent));
+        dftu_utils_test::ok(spill::put_series(part_bytes, part));
+        CHECK(part_bytes.size() < 3000);
+        CHECK(part_bytes.size() < parent_bytes.size() / 100);
+        dstd::Vector<Series> cols;
+        cols.push_back(part.share());
+        CHECK(spill::columns_bytes(cols) < 3000);
+
+        const auto* p =
+            reinterpret_cast<const std::uint8_t*>(part_bytes.data());
+        auto back =
+            dftu_utils_test::ok(spill::get_series(p, p + part_bytes.size()));
+        REQUIRE(back.length() == 10);
+        CHECK(dftu_series_offsets(back.handle())[0] == 0);
+        for (std::int64_t i = 0; i < 10; ++i)
+            CHECK(back.string_at(i) == values[5000 + i]);
+
+        auto file = dftu_utils_test::ok(spill::PartFile::create());
+        auto mapped = dftu_utils_test::ok(file->append(cols));
+        REQUIRE(mapped.size() == 1);
+        CHECK(dftu_series_offsets(mapped[0].handle())[0] == 0);
+        for (std::int64_t i = 0; i < 10; ++i)
+            CHECK(mapped[0].string_at(i) == values[5000 + i]);
+    }
+
     TEST_CASE("round-trip mixed-type morsels through a run file") {
         dstd::Vector<std::int64_t> a{1, 2, 3, 4};
         std::uint8_t bm = 0b1011;  // row 2 null

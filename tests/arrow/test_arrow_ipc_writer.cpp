@@ -8,12 +8,14 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -85,6 +87,46 @@ TEST_CASE("ipc: a file writer round trips") {
     auto end = reader->next();
     REQUIRE(end.has_value());
     CHECK(!end->has_value());
+}
+
+TEST_CASE("ipc: a string slice inside a struct is written with its own bytes") {
+    constexpr std::int64_t ROWS = 10000;
+    dstd::Vector<dstd::String> values;
+    for (std::int64_t i = 0; i < ROWS; ++i)
+        values.push_back(dstd::String(200, 'a') +
+                         dstd::String{dstd::to_string(i).c_str()});
+    const Series big = Series::strings(values);
+    dstd::Vector<std::int64_t> k;
+    for (std::int64_t i = 0; i < 10; ++i) k.push_back(i);
+    dstd::Vector<Series> fields;
+    fields.push_back(big.slice(9990, 10));
+    fields.push_back(Series::flat_i64(k.data(), 10));
+    REQUIRE(dftu_series_offsets(fields[0].handle())[0] != 0);
+    DataFrame frame;
+    frame.names.push_back(dstd::SharedString{"st"});
+    frame.columns.push_back(Series::structs({"s", "k"}, std::move(fields)));
+
+    for (Compression compression : {Compression::None, Compression::Zstd}) {
+        WriterOptions options;
+        options.compression = compression;
+        Writer writer = Writer::to_buffer(options);
+        REQUIRE(writer.write(frame));
+        REQUIRE(writer.finish());
+        auto bytes = writer.take_bytes();
+        CHECK(bytes.size() < 6000);
+
+        auto reader = Reader::from_bytes(
+            dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()));
+        REQUIRE(reader.has_value());
+        auto next = reader->next();
+        REQUIRE(next.has_value());
+        REQUIRE(next->has_value());
+        const Series st = (*next)->columns[0].share();
+        const Series s = st.child(0);
+        REQUIRE(s.length() == 10);
+        for (std::int64_t i = 0; i < 10; ++i)
+            CHECK(s.string_at(i) == values[9990 + i]);
+    }
 }
 
 TEST_CASE("ipc: a writer with no frame is an error") {

@@ -37,6 +37,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -3545,7 +3546,11 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey both = file_scope("/traces/both.pfw");
         const ScopeKey late = file_scope("/traces/late.pfw");
         {
-            auto writer = make_writer(dir);
+            // One record must hold both batches of the second flush, so no
+            // timer may commit the first before the second arrives.
+            engine::WriterOptions options = small_extents();
+            options.commit_interval = std::chrono::hours(1);
+            auto writer = make_writer(dir, options);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             const auto put = [&](const ScopeKey& scope, dstd::StringView tag) {
@@ -3578,6 +3583,9 @@ TEST_SUITE("index store snapshot") {
                                              });
         REQUIRE(oldest->sequence < newest->sequence);
         const store::engine::ExtentRefItem newer = newest->ref;
+        REQUIRE(std::count_if(refs.begin(), refs.end(), [&](const auto& r) {
+                    return r.sequence == newest->sequence;
+                }) == 2);
 
         dstd::Vector<std::uint8_t> bytes = read_file(path);
         REQUIRE(newer.offset + newer.length <= bytes.size());

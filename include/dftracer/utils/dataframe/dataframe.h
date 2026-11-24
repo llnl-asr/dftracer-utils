@@ -243,6 +243,18 @@ struct DataFrame {
     DataFrame fill_null(T value) const {
         return fill_null(to_scalar(value));
     }
+    /// Drop every row that is NaN in any float column (a null is not a NaN).
+    /// An error when a float column cannot be read.
+    dstd::Result<DataFrame> drop_nans() const;
+    /// Replace the NaN of every float column with `value` (a null scalar makes
+    /// it null); other columns are left unchanged. A text or error `value` is
+    /// an InvalidArgument error.
+    dstd::Result<DataFrame> fill_nan(Scalar value) const;
+    /// Replace NaN with a natural C++ value (fill_nan(0.0)).
+    template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
+    dstd::Result<DataFrame> fill_nan(T value) const {
+        return fill_nan(to_scalar(value));
+    }
     /// Distinct rows, keeping the first occurrence, keyed on every column or
     /// on `subset` (empty = all); the errors of `dataframe::unique`.
     dstd::Result<DataFrame> unique(
@@ -292,7 +304,9 @@ struct DataFrame {
     /// Rename columns positionally; the errors of `dataframe::rename`.
     dstd::Result<DataFrame> rename(
         dstd::Span<const dstd::String> new_names) const;
-    DataFrame with_column(dstd::StringView name, const Series& col) const;
+    /// Add or replace a column; the errors of `dataframe::with_column`.
+    dstd::Result<DataFrame> with_column(dstd::StringView name,
+                                        const Series& col) const;
 
     /// Group rows by column `key` (first-seen order) and compute each
     /// aggregate. The errors of `dataframe::group_by` (a NotFound error for

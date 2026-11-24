@@ -9,7 +9,6 @@
 #include <doctest/doctest.h>
 #include <task_result.h>
 
-#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -18,6 +17,7 @@
 
 using namespace dftracer::utils;
 
+#if DFTRACER_UTILS_TEST_PROBES
 namespace {
 
 constexpr std::size_t POOL_THREADS = 4;
@@ -30,25 +30,40 @@ coro::CoroTask<void> fork_join_task(Runtime* rt, std::atomic<int>* done) {
     co_return;
 }
 
-}  // namespace
+dftracer::utils::ThreadPoolExecutor& pool_of(Runtime& rt) {
+    return static_cast<ThreadPoolExecutor&>(*rt.executor());
+}
 
-TEST_CASE("fork-join from workers does not grow the pool") {
-    Runtime rt(ExecutorConfig{.thread_count = POOL_THREADS}, false);
-    auto& pool = static_cast<ThreadPoolExecutor&>(*rt.executor());
-    constexpr int TASKS = 200;
+void run_fork_joins(Runtime& rt, int tasks) {
     std::atomic<int> done{0};
     dstd::Vector<TaskHandle> handles;
-    for (int i = 0; i < TASKS; ++i)
+    for (int i = 0; i < tasks; ++i)
         handles.push_back(rt.submit(fork_join_task(&rt, &done), "fork-join"));
-    std::size_t peak = pool.live_workers();
-    while (done.load() < TASKS) {
-        peak = std::max(peak, pool.live_workers());
-        std::this_thread::sleep_for(std::chrono::microseconds(200));
-    }
     for (auto& h : handles) dftu_utils_test::ok(h.wait());
-    CHECK(peak <= POOL_THREADS + 2);
+    CHECK(done.load() == tasks);
+}
+
+}  // namespace
+
+TEST_CASE("fork-join from workers starts a thread only for a handoff") {
+    Runtime rt(ExecutorConfig{.thread_count = POOL_THREADS}, false);
+    run_fork_joins(rt, 200);
+    auto& pool = pool_of(rt);
+    // A worker that waits for a helper keeps its permit until the sysmon takes
+    // it after the handoff window; only a taken permit justifies a new thread.
+    CHECK(pool.replacement_spawns() <= pool.handoffs());
     rt.shutdown();
 }
+
+TEST_CASE("fork-join with no helper never enters a blocking region") {
+    Runtime rt(ExecutorConfig{.thread_count = 1}, false);
+    run_fork_joins(rt, 200);
+    auto& pool = pool_of(rt);
+    CHECK(pool.blocking_regions() == 0);
+    CHECK(pool.live_workers() == 1);
+    rt.shutdown();
+}
+#endif
 
 TEST_CASE("parallel_for covers every index once under contention") {
     Runtime rt(4);

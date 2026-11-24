@@ -182,6 +182,10 @@ PY_ALIASES = {
     "Series": {
         "dt_tz_localize": "tz_localize",
         "is_not_null": "valid_mask",
+        "isna": "na_mask",
+        "isnull": "na_mask",
+        "notna": "notna_mask",
+        "notnull": "notna_mask",
         "fill_null": "fillna",
         "is_null": "null_mask",
         "forward_fill": "ffill",
@@ -311,8 +315,8 @@ PY_ALIASES = {
         "shift": "shift",
         "rank": "rank",
         "interpolate": "interpolate",
-        "isna": "null_mask",
-        "notna": "valid_mask",
+        "isna": "na_mask",
+        "notna": "notna_mask",
         "where": "where",
         "replace": "where",
         "applymap": "with_column",
@@ -396,8 +400,6 @@ PY_ALIASES = {
         "to_series": "select",
         "is_empty": "select",
         "n_unique": "unique",
-        "fill_nan": "where",
-        "drop_nans": "filter",
     },
     "LazyFrame": {
         "with_columns": "with_column",
@@ -535,6 +537,11 @@ PY_ALLOWLIST = {
         "map",
     },
     "DataFrame": {
+        # Write the frame as DFTracer files through the sink writer; write is
+        # the generic plugin-format verb.
+        "write",
+        "write_table",
+        "write_trace",
         "share",
         "index_names",
         "with_index",
@@ -651,6 +658,8 @@ PY_ALLOWLIST = {
         "index_names",
         "with_index",
         "sink",
+        "sink_table",
+        "sink_trace",
         "stream",
     },
 }

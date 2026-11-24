@@ -703,6 +703,7 @@ dstd::Expected<Writer::SegmentBytes, dstd::Error> Writer::build_segment(
     }
 
     dstd::Vector<KeyGroup> groups;
+    groups.reserve(order.size());
     for (std::size_t i = 0; i < order.size();) {
         std::size_t end = i + 1U;
         while (end < order.size() &&

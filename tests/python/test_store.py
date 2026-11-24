@@ -19,7 +19,7 @@ from dftracer.utils.store import (
     decode,
     encode,
 )
-from dftracer.utils.store import codec as store_codec
+from dftracer.utils.store import _codec as store_codec
 
 FILE_A = "/traces/a.pfw"
 FILE_B = "/traces/b.pfw"
@@ -120,7 +120,7 @@ class TestRoundTrip:
         ns = store.namespace("dftu.test.foldput", fold="sum_i64")
         batch = store.batch(ns, None)
         batch.put(b"n", b"x")
-        with pytest.raises(dftu_utils.DFTUtilsValueError):
+        with pytest.raises(dftu_utils.errors.DFTUtilsValueError):
             batch.commit()
 
 
@@ -221,9 +221,9 @@ class TestBatch:
         ns = store.namespace("dftu.test.closed")
         batch = store.batch(ns, FILE_A)
         batch.commit()
-        with pytest.raises(dftu_utils.DFTUtilsError):
+        with pytest.raises(dftu_utils.errors.DFTUtilsError):
             batch.put(b"k", b"v")
-        with pytest.raises(dftu_utils.DFTUtilsError):
+        with pytest.raises(dftu_utils.errors.DFTUtilsError):
             batch.commit()
         batch.discard()
 
@@ -327,6 +327,10 @@ class TestPack:
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
 class TestFork:
+    # The test forks a threaded process on purpose to check fork safety.
+    @pytest.mark.filterwarnings(
+        "ignore:This process .* is multi-threaded, use of fork:DeprecationWarning"
+    )
     def test_child_refuses_inherited_handle_and_opens_its_own(self, tmp_path):
         directory = str(tmp_path / "store")
         store = Store.open(directory)
@@ -341,7 +345,7 @@ class TestFork:
                 try:
                     store.namespace("dftu.test.fork")
                     code = 10
-                except dftu_utils.DFTUtilsError as err:
+                except dftu_utils.errors.DFTUtilsError as err:
                     if "fork" not in str(err):
                         code = 11
                     else:

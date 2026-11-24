@@ -147,3 +147,14 @@ def test_arrow_dictionary_with_repeats_or_nulls_gives_categorical(dictionary, wa
     ):
         assert isinstance(out.dtype, pd.CategoricalDtype)
         assert out.astype(object).where(out.notna(), None).tolist() == want
+
+
+def test_pyarrow_strings_import_with_values_and_nulls():
+    pytest.importorskip("pyarrow")
+    values = ["x", None, "a string longer than twelve bytes", "", "x"]
+    df = DataFrame.from_pandas(pd.DataFrame({"s": pd.array(values, dtype="string[pyarrow]")}))
+    back = df["s"].to_pandas()
+    assert back.isna().tolist() == [v is None for v in values]
+    assert [v for v in back if isinstance(v, str)] == [v for v in values if v is not None]
+    # A string kernel takes the column, which it does not for 64-bit offsets.
+    assert df.eval("s.str.contains('x')").to_pandas().tolist()[0] is True

@@ -238,6 +238,10 @@ from data | sink "toy_sink.out" path "out.csv" mode "a"
 ---
 from data | where x > 1 | sink "csv"
 ---
+from data | sink trace "out.pfw.gz"
+---
+from data | where x > 1 | sink table "out" mode "overwrite" partition_by "a,b" part_size "1000"
+---
 explain from data | where x > 1
 ---
 explain analyze from data | where x > 1 | take 5
@@ -251,6 +255,12 @@ explain where x > 1
 ---
 `explain` == 1 and y < 2
 ### invalid
+from data | sink trace
+---
+from data | sink table out
+---
+from data | sink trace "out" | take 1
+---
 explain analyze analyze from data
 ---
 explain explain from data

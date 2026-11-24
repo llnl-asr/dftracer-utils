@@ -39,15 +39,9 @@ class Cursor {
 
     std::uint8_t u8() { return static_cast<std::uint8_t>(take(1)[0]); }
 
-    std::uint32_t u32() {
-        return dstd::read_u32_be(
-            reinterpret_cast<const std::uint8_t*>(take(4).data()));
-    }
+    std::uint32_t u32() { return dstd::read_u32_be(take(4)); }
 
-    std::uint64_t u64() {
-        return dstd::read_u64_be(
-            reinterpret_cast<const std::uint8_t*>(take(8).data()));
-    }
+    std::uint64_t u64() { return dstd::read_u64_be(take(8)); }
 
     std::int64_t i64() { return static_cast<std::int64_t>(u64()); }
 

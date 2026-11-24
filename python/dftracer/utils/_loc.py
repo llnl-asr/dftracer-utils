@@ -16,22 +16,23 @@ from __future__ import annotations
 import builtins
 import datetime
 import sys
-from typing import TYPE_CHECKING, Sequence, cast
+from typing import TYPE_CHECKING, Any, Sequence, cast
 
 from . import dftracer_utils_ext as _ext
+from ._agg import AggForm, AggKeyword, reduce_specs
 from ._apply import Row
-from .agg import AggForm, AggKeyword, reduce_specs
-from .enums import DType
-from .expr import Expr, col, collect_columns, lit, when
-from .series import Series
+from ._enums import DType
+from ._expr import Expr, col, collect_columns, lit, when
+from ._series import Series
 
 if TYPE_CHECKING:
     import numpy as np
+    import numpy.typing as npt
     import pyarrow as pa
 
-    from .dataframe import DataFrame
-    from .expr import Expr
-    from .lazyframe import LazyFrame
+    from ._dataframe import DataFrame
+    from ._expr import Expr
+    from ._lazyframe import LazyFrame
 
 _ROW = "__dftu_loc_row__"
 # A plan has no length until it runs; an open slice end / a position bound.
@@ -384,7 +385,7 @@ def rows_by_label(labels: Labels, key: object) -> Rows:
     if isinstance(key, builtins.slice):
         return _label_slice(labels, key)
     if _is_integer_array(key):
-        return rows_by_label(labels, Series.from_numpy(cast("np.ndarray", key)))
+        return rows_by_label(labels, Series.from_numpy(cast("npt.NDArray[np.generic]", key)))
     if _is_labels_list(key):
         values = list(cast("Sequence[object]", key))
         if _bool_list(values):
@@ -476,8 +477,10 @@ def columns_by_name(names: list[str], key: object, new_ok: bool = False) -> tupl
             raise KeyError(f"loc: no column named {key!r}")
         return [key], True
     if isinstance(key, builtins.slice):
-        lo = 0 if key.start is None else names.index(key.start)
-        hi = len(names) - 1 if key.stop is None else names.index(key.stop)
+        start: Any = key.start
+        stop: Any = key.stop
+        lo = 0 if start is None else names.index(start)
+        hi = len(names) - 1 if stop is None else names.index(stop)
         return list(names[lo : hi + 1]), False
     if isinstance(key, (list, tuple)):
         out = [str(k) for k in key]
@@ -614,7 +617,7 @@ def _scatter(value: object, mask: Series, n: int) -> object:
 def _per_column(value: object) -> list[Series] | None:
     """The columns of a frame, or the Series of a non-empty list or tuple of
     Series: one per target column, by position. None for any other value."""
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     if isinstance(value, DataFrame):
         return [value[c] for c in value.columns]
@@ -631,7 +634,7 @@ def _check_per_column(
         raise ValueError(
             f"assign: {len(columns)} target columns but the value has {len(series)} columns"
         )
-    selected = n if mask is None else int(mask.fillna(False).astype("int64").sum())
+    selected = n if mask is None else int(mask.fill_null(False).astype("int64").sum())
     for name, s in zip(columns, series):
         if len(s) != n and len(s) != selected:
             what = "the frame has" if mask is None else "the selection has"
@@ -656,7 +659,7 @@ def assign_rows(df: DataFrame, rows: Rows, columns: list[str], value: object) ->
             for name, series in zip(columns, per_column):
                 assign_rows(df, rows, [name], series)
         except BaseException:
-            _ext.DataFrame._replace(df, before)
+            rebind(df, before)
             raise
         return
     if mask is not None:
@@ -680,7 +683,15 @@ def assign_rows(df: DataFrame, rows: Rows, columns: list[str], value: object) ->
                     new = new.astype(existing.dtype)
                 new = existing.mask(mask, new)
         native = _ext.DataFrame.with_column(native, name, new)
-    _ext.DataFrame._replace(df, native)
+    rebind(df, native)
+
+
+def rebind(df: DataFrame, new: _ext.DataFrame) -> None:
+    """Point the handle ``df`` at the frame ``new``. The frame changed, so the
+    table header a read gave it no longer describes it."""
+    _ext.DataFrame._replace(df, new)
+    if hasattr(df, "_table_header"):
+        del df._table_header
 
 
 class ILoc:
@@ -822,7 +833,7 @@ def enlarge(df: DataFrame, label: object, columns: list[str], value: object) -> 
     index columns, ``value`` in ``columns`` and null in the rest. A frame with
     no index is labelled by its positions first, so the label must fit an
     Int64. The handle is rebound to the new frame."""
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
     base = df._labelled()
     names = _ext.DataFrame.index_names(base)
@@ -844,7 +855,7 @@ def enlarge(df: DataFrame, label: object, columns: list[str], value: object) -> 
             cells[name] = _broadcast(given.get(name), 1, existing)
     row = _ext.DataFrame.with_index(DataFrame.from_dict(cells), names)
     joined = _ext.DataFrame.concat(base, row)
-    _ext.DataFrame._replace(df, joined)
+    rebind(df, joined)
 
 
 _IMMUTABLE = "a Series is immutable; assign through df.loc[rows, column] = value"
@@ -1206,7 +1217,7 @@ class Resampler:
         )
 
     def agg(self, *specs: AggForm, **named: AggKeyword) -> DataFrame | LazyFrame:
-        from .lazyframe import agg_spec_strings
+        from ._lazyframe import agg_spec_strings
 
         return self._run(agg_spec_strings(self._frame, [self._time], specs, named))
 

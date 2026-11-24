@@ -205,19 +205,19 @@ class GroupTransformCore {
             case GroupwiseOp::CumProd: {
                 if (!ok) {
                     out_ok = 0;
-                    return NumClass::Float;
+                    return cls;
                 }
                 if (cls == NumClass::Signed) {
                     s.prod_i.mul(static_cast<std::int64_t>(b));
-                    out = dstd::double_bits(s.prod_i.value());
+                    out = static_cast<std::uint64_t>(s.prod_i.acc);
                 } else if (cls == NumClass::Unsigned) {
                     s.prod_u.mul(b);
-                    out = dstd::double_bits(s.prod_u.value());
+                    out = s.prod_u.acc;
                 } else {
                     s.prod.mul(x);
                     out = dstd::double_bits(s.prod.acc + (x - x));
                 }
-                return NumClass::Float;
+                return cls;
             }
             case GroupwiseOp::CumMax:
             case GroupwiseOp::CumMin: {

@@ -207,9 +207,10 @@ dstd::Result<Indexer> open_scanned(dstd::Vector<runtime::fs::FoundFile> files,
 /// compression error, naming the trace, from build.
 class Indexer {
    public:
-    /// `paths` holds trace files and directories; a directory contributes the
-    /// gzip trace files (*.gz) directly
-    /// inside it. A file that a registered plugin file format claims (the
+    /// `paths` holds trace files, directories and globs, as
+    /// @ref views::View::from_inputs takes them: a directory contributes the
+    /// gzip trace files (*.gz) below it, recursively, and each file is indexed
+    /// once. A file that a registered plugin file format claims (the
     /// probe @ref dataframe::LazyFrame::scan_file uses, or the format named by
     /// IndexerOptions::format) is read by that format,
     /// one summary granule per chunk of the format, so name such a file itself,

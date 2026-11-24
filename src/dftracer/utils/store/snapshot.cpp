@@ -100,8 +100,7 @@ void warn_skipped(dstd::StringView dir, dstd::StringView name,
 
 bool has_data_file_suffix(dstd::StringView name) {
     return name.size() > DATA_FILE_SUFFIX.size() &&
-           name.compare(name.size() - DATA_FILE_SUFFIX.size(),
-                        DATA_FILE_SUFFIX.size(), DATA_FILE_SUFFIX) == 0;
+           name.ends_with(DATA_FILE_SUFFIX);
 }
 
 double ms_since(std::chrono::steady_clock::time_point start) {
@@ -1566,6 +1565,7 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
             copy.state = listed.state;
             copy.local_id = listed.local_id;
             copy.sources = listed.sources;
+            copy.erases.reserve(listed.erases.size());
             for (const DirectoryErase& erase : listed.erases) {
                 copy.erases.push_back({erase.ordinal, erase.begin, erase.end});
             }

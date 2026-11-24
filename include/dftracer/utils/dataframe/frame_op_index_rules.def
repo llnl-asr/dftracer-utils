@@ -74,5 +74,7 @@ DFTU_FRAME_INDEX_RULE(window, Keep)
 DFTU_FRAME_INDEX_RULE(gap_fill, Drop)
 DFTU_FRAME_INDEX_RULE(asof, Keep)
 DFTU_FRAME_INDEX_RULE(interval, Keep)
+DFTU_FRAME_INDEX_RULE(drop_nans, Keep)
+DFTU_FRAME_INDEX_RULE(fill_nan, Keep)
 
 #undef DFTU_FRAME_INDEX_RULE

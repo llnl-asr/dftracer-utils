@@ -16,6 +16,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -482,12 +483,21 @@ TEST_SUITE("CommGroup") {
         auto warm = loop();
         CHECK_FALSE(warm[0].has_value());
         CHECK_FALSE(warm[1].has_value());
-        const std::size_t before = memory::detail::Manager::get().stats().live;
-        auto errors = loop();
-        CHECK_FALSE(errors[0].has_value());
-        CHECK_FALSE(errors[1].has_value());
-        const std::size_t after = memory::detail::Manager::get().stats().live;
-        const std::size_t kept = after > before ? after - before : 0;
+        // Every finished call leaves its timer entry pending, and the timer
+        // heap and the allocator grow in steps of tens of KiB at times that
+        // depend on scheduling. A leak shows in every loop, a step in one, so
+        // the least of three loops is what each call keeps.
+        std::size_t kept = SIZE_MAX;
+        for (int i = 0; i < 3; ++i) {
+            const std::size_t before =
+                memory::detail::Manager::get().stats().live;
+            auto errors = loop();
+            CHECK_FALSE(errors[0].has_value());
+            CHECK_FALSE(errors[1].has_value());
+            const std::size_t after =
+                memory::detail::Manager::get().stats().live;
+            kept = std::min(kept, after > before ? after - before : 0);
+        }
         MESSAGE("kept " << kept << " bytes for " << 2 * ROUNDS
                         << " finished calls");
         // A call that ended keeps nothing but one timer entry and its token:

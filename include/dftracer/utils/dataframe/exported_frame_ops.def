@@ -116,4 +116,8 @@ DFTU_FRAME_OP(sort_by, dftu_dataframe_sort_by_nulls, FRAME, FRAME, STR, I32, I32
 DFTU_FRAME_OP(sort_by_multi, dftu_dataframe_sort_by_multi_nulls, FRAME, FRAME, STRLIST, I32, I32, NONE, NONE, NONE)
 DFTU_FRAME_OP(sort_by_multi_per_col, dftu_dataframe_sort_by_multi_per_col_nulls, FRAME, FRAME, STRLIST, I32LIST, I32LIST, NONE, NONE, NONE)
 
+/* NaN of the float columns: dropped rows, filled values. */
+DFTU_FRAME_OP(drop_nans, dftu_dataframe_drop_nans, FRAME, FRAME, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(fill_nan, dftu_dataframe_fill_nan, FRAME, FRAME, SCALAR, NONE, NONE, NONE, NONE, NONE)
+
 #undef DFTU_FRAME_OP

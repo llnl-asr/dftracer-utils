@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/detail/coro.h>
 #include <dftracer/utils/coro/scope.h>
@@ -43,9 +44,9 @@ dstd::String trace_text(int n) {
 
 TEST_CASE("member cache: fills from a read then returns" * doctest::skip()) {
     fresh_process::announce();
-    const char* dir = std::getenv(TEST_DIR_ENV);
-    REQUIRE(dir != nullptr);
-    const dstd::String root(dir);
+    const auto dir = common::Env::get(TEST_DIR_ENV);
+    REQUIRE(dir.has_value());
+    const dstd::String root(*dir);
     const dstd::String plain = root + "/plain.pfw";
     const dstd::String gz = root + "/trace.pfw.gz";
     const dstd::String index_dir = root + "/idx";

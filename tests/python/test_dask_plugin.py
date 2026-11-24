@@ -44,7 +44,7 @@ class TestDaskWorkerPlugin:
         worker = MockWorker()
         plugin.setup(worker)
         assert hasattr(worker, "dftracer_utils_runtime")
-        assert isinstance(worker.dftracer_utils_runtime, dftu_utils.Runtime)
+        assert isinstance(worker.dftracer_utils_runtime, dftu_utils.runtime.Runtime)
         assert worker.dftracer_utils_runtime.threads == 2
 
     def test_teardown_is_idempotent(self):
@@ -70,7 +70,7 @@ class TestDaskWorkerPlugin:
 
         worker = MockWorker()
         plugin.setup(worker)
-        default = dftu_utils.get_default_runtime()
+        default = dftu_utils.runtime.get_default_runtime()
         assert default.threads == 2
 
 
@@ -103,9 +103,9 @@ class TestDaskWorkerPluginIntegration:
                     import dftracer.utils as dft
 
                     idx = os.path.dirname(path)
-                    with dft.Indexer(files=[path], index_dir=idx) as ix:
+                    with dft.index.Indexer(files=[path], index_dir=idx) as ix:
                         ix.ensure()
-                    tv = dft.TraceViewer(path, index_dir=idx)
+                    tv = dft.trace.TraceViewer(path, index_dir=idx)
                     return tv.statistics()["duration_count"]
 
                 future = client.submit(count_events, gz_file)
@@ -136,9 +136,9 @@ class TestDaskWorkerPluginIntegration:
                     import dftracer.utils as dft
 
                     idx = os.path.dirname(path)
-                    with dft.Indexer(files=[path], index_dir=idx) as ix:
+                    with dft.index.Indexer(files=[path], index_dir=idx) as ix:
                         ix.ensure()
-                    tv = dft.TraceViewer(path, index_dir=idx)
+                    tv = dft.trace.TraceViewer(path, index_dir=idx)
                     return tv.statistics()["duration_count"]
 
                 futures = client.map(count_events, files)
@@ -165,7 +165,7 @@ class TestRuntimeThreadSizing:
     node - never the whole node, or several workers on one node contend."""
 
     def test_uses_the_workers_own_thread_count(self):
-        from dftracer.utils.dask.worker import runtime_threads
+        from dftracer.utils.dask._threads import runtime_threads
 
         w = _FakeWorker("tcp://10.0.0.1:1", nthreads=16)
         assert runtime_threads(w, {"10.0.0.1": 4}, 64) == 16
@@ -173,7 +173,7 @@ class TestRuntimeThreadSizing:
     def test_host_missing_from_the_snapshot_still_takes_a_share(self):
         # Workers that start after registration, or whose address spells the
         # host differently, are absent from the client-side counts.
-        from dftracer.utils.dask.worker import runtime_threads
+        from dftracer.utils.dask._threads import runtime_threads
 
         w = _FakeWorker("tcp://node07:2", nthreads=16)
         assert runtime_threads(w, {"10.0.0.1": 4}, 64) == 16
@@ -182,12 +182,12 @@ class TestRuntimeThreadSizing:
         assert runtime_threads(no_threads, {"10.0.0.1": 4}, 64) == 16
 
     def test_never_exceeds_the_cores_available(self):
-        from dftracer.utils.dask.worker import runtime_threads
+        from dftracer.utils.dask._threads import runtime_threads
 
         w = _FakeWorker("tcp://10.0.0.1:4", nthreads=999)
         assert runtime_threads(w, {"10.0.0.1": 1}, 64) == 64
 
     def test_falls_back_to_all_cores_when_nothing_is_known(self):
-        from dftracer.utils.dask.worker import runtime_threads
+        from dftracer.utils.dask._threads import runtime_threads
 
         assert runtime_threads(_FakeWorker("tcp://node07:5"), {}, 64) == 64

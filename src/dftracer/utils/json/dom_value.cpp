@@ -14,8 +14,9 @@ namespace dftracer::utils::json {
 namespace detail {
 
 struct DomState {
-    simdjson::dom::parser parser;
+    simdjson::dom::document document;
     simdjson::dom::element root;
+    std::size_t bytes = 0;
 
     static DomValue wrap(simdjson::dom::element element) {
         DomValue value;
@@ -37,6 +38,9 @@ static_assert(sizeof(simdjson::dom::element) <= 16);
 static_assert(alignof(simdjson::dom::element) <= 8);
 
 constexpr int MAX_DEPTH = 1000;
+
+// What the allocator adds to each block: its header and the round up.
+constexpr std::size_t MALLOC_OVERHEAD = 16;
 
 // What the first syntax error of a JSON text is, found only after the reader
 // refused the text: the reader does not say where.
@@ -362,6 +366,15 @@ dstd::StringView DomValue::as_string() const {
     return dstd::StringView(text.data(), text.size());
 }
 
+namespace detail {
+
+struct DomParserState {
+    simdjson::dom::parser parser;
+    simdjson::dom::document scratch;
+};
+
+}  // namespace detail
+
 DomDocument::DomDocument(dstd::UniquePtr<detail::DomState> state)
     : state_(std::move(state)) {}
 DomDocument::DomDocument(DomDocument&&) noexcept = default;
@@ -369,14 +382,65 @@ DomDocument& DomDocument::operator=(DomDocument&&) noexcept = default;
 DomDocument::~DomDocument() = default;
 
 dstd::Result<DomDocument> DomDocument::parse(dstd::StringView text) {
+    simdjson::dom::parser parser;
     auto state = dstd::make_unique<detail::DomState>();
-    auto parsed = state->parser.parse(text.data(), text.size());
+    auto parsed = parser.parse_into_document(state->document, text.data(),
+                                             text.size(), true);
     if (parsed.error()) return refused(text, parsed.error());
     state->root = parsed.value_unsafe();
     if (!state->root.is_object() && !state->root.is_array())
         return refused(text, simdjson::SUCCESS);
+    state->bytes = sizeof(detail::DomState) +
+                   text.size() * (sizeof(std::uint64_t) + 2) + 64;
     return DomDocument(std::move(state));
 }
+
+DomParser::DomParser() : state_(dstd::make_unique<detail::DomParserState>()) {}
+DomParser::DomParser(DomParser&&) noexcept = default;
+DomParser& DomParser::operator=(DomParser&&) noexcept = default;
+DomParser::~DomParser() = default;
+
+dstd::Result<DomDocument> DomParser::parse(dstd::StringView text) {
+    auto parsed = state_->parser.parse_into_document(
+        state_->scratch, text.data(), text.size(), true);
+    if (parsed.error()) return refused(text, parsed.error());
+    if (!parsed.value_unsafe().is_object() && !parsed.value_unsafe().is_array())
+        return refused(text, simdjson::SUCCESS);
+    // The parser sizes a document by the text it was given, about ten times
+    // its length; the copy holds only the words and string bytes the record
+    // uses.
+    const simdjson::dom::document& scratch = state_->scratch;
+    const std::size_t tape_words =
+        static_cast<std::size_t>(scratch.tape[0] & 0x00FFFFFFFFFFFFFFULL);
+    std::size_t string_bytes = 0;
+    for (std::size_t i = 0; i < tape_words; ++i) {
+        const std::uint64_t word = scratch.tape[i];
+        const char tag = static_cast<char>(word >> 56);
+        if (tag == '"') {
+            const std::size_t offset = word & 0x00FFFFFFFFFFFFFFULL;
+            std::uint32_t length = 0;
+            std::memcpy(&length, scratch.string_buf.get() + offset,
+                        sizeof(length));
+            string_bytes = offset + sizeof(length) + length + 1;
+        } else if (tag == 'l' || tag == 'u' || tag == 'd') {
+            ++i;
+        }
+    }
+    auto state = dstd::make_unique<detail::DomState>();
+    state->document.tape.reset(new std::uint64_t[tape_words]);
+    std::memcpy(state->document.tape.get(), scratch.tape.get(),
+                tape_words * sizeof(std::uint64_t));
+    state->document.string_buf.reset(new std::uint8_t[string_bytes + 1]);
+    std::memcpy(state->document.string_buf.get(), scratch.string_buf.get(),
+                string_bytes);
+    state->root = state->document.root();
+    state->bytes = sizeof(detail::DomState) +
+                   tape_words * sizeof(std::uint64_t) + string_bytes + 1 +
+                   2 * MALLOC_OVERHEAD;
+    return DomDocument(std::move(state));
+}
+
+std::size_t DomDocument::bytes() const { return state_->bytes; }
 
 DomValue DomDocument::root() const {
     return detail::DomState::wrap(state_->root);

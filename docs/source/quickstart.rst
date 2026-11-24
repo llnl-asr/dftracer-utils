@@ -11,14 +11,14 @@ Python Quick Start
 Querying with TraceViewer
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-:class:`~dftracer.utils.TraceViewer` is the primary way to query a trace. It is
+:class:`~dftracer.utils.trace.TraceViewer` is the primary way to query a trace. It is
 a lazy :class:`~dftracer.utils.LazyFrame` over the trace: builder methods
 compose a query and ``collect()`` runs it in one pass, served from the index
 when one exists.
 
 .. code-block:: python
 
-   from dftracer.utils import TraceViewer
+   from dftracer.utils.trace import TraceViewer
 
    view = TraceViewer("traces/")           # a directory (scanned recursively), a file, or a list of files
 
@@ -97,7 +97,7 @@ Async Task Submission
 
 .. code-block:: python
 
-   from dftracer.utils import Runtime
+   from dftracer.utils.runtime import Runtime
 
    with Runtime(threads=8, python_threads=4) as rt:
        # Submit Python callables -- runs on Python thread pool
@@ -193,7 +193,7 @@ For distributed processing with ``dask.distributed``:
    client.register_plugin(DFTracerUtilsDaskWorkerPlugin(threads=48))
 
    def count_events(path):
-       from dftracer.utils import TraceViewer
+       from dftracer.utils.trace import TraceViewer
        return TraceViewer([path]).agg("count").collect().to_pandas()["count"].sum()
 
    futures = client.map(count_events, file_paths)
@@ -209,7 +209,7 @@ Create and use indexes for faster access:
 
 .. code-block:: python
 
-   from dftracer.utils import Indexer
+   from dftracer.utils.index import Indexer
 
    # Create an indexer over a directory of traces (or pass a file or a list)
    indexer = Indexer("/path/to/traces")
@@ -236,14 +236,14 @@ exception derives ``DFTUtilsError``, which derives the built-in ``RuntimeError``
 
 .. code-block:: python
 
-   from dftracer.utils import (
-       TraceViewer,
-       DFTUtilsError,        # base of all library exceptions
-       DFTUtilsIOError,      # bad I/O / missing file
+   from dftracer.utils.errors import (
+       DFTUtilsError,
+       DFTUtilsIOError,
        DFTUtilsNotFoundError,
        DFTUtilsParseError,
        DFTUtilsDuqlError,
    )
+   from dftracer.utils.trace import TraceViewer
 
    try:
        TraceViewer(["missing.pfw.gz"]).agg("count").collect()
@@ -276,9 +276,9 @@ environment variable before running (see :doc:`getting-started/installation`):
 
    import dftracer.utils as du
 
-   du.set_log_level("debug")   # trace, debug, info (default), warn, error, off
-   print(du.get_log_level())   # -> "debug"
-   du.set_log_color("never")   # auto (default), always, never
+   du.runtime.set_log_level("debug")   # trace, debug, info (default), warn, error, off
+   print(du.runtime.get_log_level())   # -> "debug"
+   du.runtime.set_log_color("never")   # auto (default), always, never
 
 The levels and color modes mirror the CLI ``--log-level`` flag and the
 ``DFTRACER_UTILS_LOG_*`` environment variables. An unknown level or color name
@@ -471,5 +471,5 @@ Key Resources:
 
 - **Concurrency patterns**: :doc:`guides/pipelines/patterns` covers scopes, channels and fan-out/fan-in
 - **CLI tools**: :doc:`cli` lists all available command-line utilities
-- **Python bindings**: Use ``from dftracer.utils import TraceViewer, Indexer`` for Python scripts
+- **Python bindings**: Use ``from dftracer.utils.trace import TraceViewer`` and ``from dftracer.utils.index import Indexer`` for Python scripts
 - **C++ integration**: Link ``dftracer-utils`` library and include headers from ``include/dftracer/utils/``

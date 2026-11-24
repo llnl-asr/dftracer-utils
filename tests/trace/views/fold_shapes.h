@@ -559,7 +559,7 @@ inline const char* const PATH_LINES[] = {
 /// once.
 inline const dftracer::utils::trace::index::RecordSchema& path_schema() {
     static const dftracer::utils::trace::index::RecordSchema& schema =
-        dftu_utils_test::ok_ref(
+        *dftu_utils_test::ok(
             dftracer::utils::trace::index::register_schema(R"(
 id: fold_shapes_path
 fields:

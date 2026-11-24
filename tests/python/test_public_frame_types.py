@@ -12,8 +12,9 @@ import weakref
 import pytest
 
 import dftracer.utils as d
-from dftracer.utils import DataFrame, LazyFrame, Series, TraceViewer, col
+from dftracer.utils import DataFrame, LazyFrame, Series, col
 from dftracer.utils import dftracer_utils_ext as _ext
+from dftracer.utils.trace import TraceViewer
 
 
 @pytest.fixture
@@ -83,7 +84,7 @@ def test_trace_viewer_is_not_a_lazyframe_and_hands_out_its_plan(trace):
 
 
 def test_trace_viewer_keeps_its_runtime_through_builders(trace):
-    rt = d.Runtime(threads=2)
+    rt = d.runtime.Runtime(threads=2)
     tv = TraceViewer(trace, runtime=rt)
     assert tv._runtime is rt
     assert tv.head(2)._runtime is rt
@@ -146,7 +147,7 @@ def test_constructors_return_the_public_classes():
     df = _frame()
     assert DataFrame(df) is df
     assert type(DataFrame({"a": [1]})) is DataFrame
-    lf = LazyFrame(df.lazy(), d.Runtime(threads=1))
+    lf = LazyFrame(df.lazy(), d.runtime.Runtime(threads=1))
     assert type(lf) is LazyFrame and lf._runtime is not None
 
 
@@ -221,7 +222,7 @@ def test_copy_and_deepcopy_of_frames(trace):
     for dup in (copy.copy(df), copy.deepcopy(df)):
         assert type(dup) is DataFrame and dup is not df
         assert dup.to_dict() == df.to_dict() and dup.index_names() == ["a"]
-    rt = d.Runtime(threads=1)
+    rt = d.runtime.Runtime(threads=1)
     lf = LazyFrame(_frame().lazy(), rt).set_index("a")
     for dup in (copy.copy(lf), copy.deepcopy(lf)):
         assert type(dup) is LazyFrame and dup is not lf

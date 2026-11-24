@@ -21,7 +21,7 @@ Compare two views
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          baseline = TraceViewer("baseline.pfw.gz").group_by("cat").agg("count", "mean:dur")
          cmp = baseline.compare(TraceViewer("variant.pfw.gz")).collect()

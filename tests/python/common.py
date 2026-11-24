@@ -25,6 +25,14 @@ _NATIVE_MAGIC = (
 )
 
 
+def skip_below_pandas3() -> None:
+    """Skip a test that compares our results with pandas when pandas is older
+    than 3. The engine follows pandas 3, and Python 3.8 to 3.10 only get pandas 2."""
+    pd = pytest.importorskip("pandas")
+    if int(pd.__version__.split(".")[0]) < 3:
+        pytest.skip(f"compares with pandas 3, the engine's reference; pandas {pd.__version__} here")
+
+
 def _is_native_library(path) -> bool:
     """Whether ``path`` is a shared library of this platform. A build tree made in
     a Linux container sits in the same checkout and would never load here."""
@@ -399,7 +407,7 @@ class Environment:
 
         Returns the temp directory path (pass it to Indexer).
         """
-        from dftracer.utils import AggregationConfig, Indexer
+        from dftracer.utils.index import AggregationConfig, Indexer
 
         if pids is None:
             pids = [1]

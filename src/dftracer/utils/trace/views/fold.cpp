@@ -21,6 +21,7 @@
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/json/value_access.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/trace/index/event_cost.h>
 #include <dftracer/utils/trace/index/store/file.h>
 #include <dftracer/utils/trace/internal/parse_walks.h>
@@ -3106,10 +3107,7 @@ coro::CoroTask<dstd::Result<void>> fuse_worker(FuseWorkerCtx ctx,
             continue;
         }
 
-        const std::uint64_t reserve =
-            ctx.units[i].end_byte > ctx.units[i].start_byte
-                ? ctx.units[i].end_byte - ctx.units[i].start_byte
-                : 0;
+        const std::uint64_t reserve = unit_reserve_bytes(ctx.units[i]);
         co_await ctx.budget_sem.acquire(reserve);
         ScanPermit permit{ctx.budget_sem, reserve};
         // A narrow() may land while this unit waits for the budget, and with
@@ -3287,8 +3285,10 @@ coro::CoroTask<dstd::Result<ExportStats>> fuse(
     // Bound bytes decoded concurrently so a scan cannot OOM the box. Always on:
     // an explicit memory_budget() or a RAM-fraction default. Workers park when
     // full, so a generous budget never throttles.
-    coro::AsyncSemaphore budget_sem(
-        common::compute_memory_budget(plan.memory_budget));
+    const std::size_t scan_budget =
+        common::compute_memory_budget(plan.memory_budget);
+    const memory::JobBudgetScope idle_budget(scan_budget);
+    coro::AsyncSemaphore budget_sem(scan_budget);
     std::atomic<std::size_t> next_unit{0};
     dstd::Vector<ScanCounts> counts_v(nworkers);
     dstd::Vector<CoverageSet> covered_v(nworkers);

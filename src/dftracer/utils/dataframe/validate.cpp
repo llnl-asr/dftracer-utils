@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/internal/validate.h>
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -190,30 +191,28 @@ dstd::Result<void> check_views(const dftu_series& c, StringView label) {
         if ((c.validity.data() != nullptr) && own_null(c, i)) continue;
         const std::uint8_t* view =
             views + static_cast<std::size_t>(i) * VIEW_BYTES;
-        std::int32_t size = 0;
-        std::memcpy(&size, view, sizeof(size));
-        if (size < 0)
-            return broken(
-                label, dstd::fmt<"the view of row {} has length {}">(i, size));
-        if (size <= VIEW_INLINE_MAX) continue;
-        std::int32_t index = 0;
-        std::int32_t offset = 0;
-        std::memcpy(&index, view + 8, sizeof(index));
-        std::memcpy(&offset, view + 12, sizeof(offset));
-        if (index < 0 || static_cast<std::size_t>(index) >= buffers)
+        const auto decoded = decode_view(view);
+        if (decoded.size < 0)
+            return broken(label, dstd::fmt<"the view of row {} has length {}">(
+                                     i, decoded.size));
+        if (decoded.size <= VIEW_INLINE_MAX) continue;
+        if (decoded.buffer_index < 0 ||
+            static_cast<std::size_t>(decoded.buffer_index) >= buffers)
             return broken(
                 label,
                 dstd::fmt<"the view of row {} names buffer {}, and it has "
-                          "{}">(i, index, buffers));
+                          "{}">(i, decoded.buffer_index, buffers));
         const std::size_t have =
-            (*c.blobs)[static_cast<std::size_t>(index)].size();
-        if (offset < 0 || static_cast<std::size_t>(offset) > have ||
-            static_cast<std::size_t>(size) >
-                have - static_cast<std::size_t>(offset))
+            (*c.blobs)[static_cast<std::size_t>(decoded.buffer_index)].size();
+        if (decoded.offset < 0 ||
+            static_cast<std::size_t>(decoded.offset) > have ||
+            static_cast<std::size_t>(decoded.size) >
+                have - static_cast<std::size_t>(decoded.offset))
             return broken(
                 label,
                 dstd::fmt<"the view of row {} reads {} bytes at {} of a {} "
-                          "byte buffer">(i, size, offset, have));
+                          "byte buffer">(i, decoded.size, decoded.offset,
+                                         have));
     }
     return {};
 }

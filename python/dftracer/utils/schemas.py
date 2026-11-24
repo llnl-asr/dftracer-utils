@@ -43,8 +43,9 @@ from typing import (
 )
 
 from . import dftracer_utils_ext as _ext
-from .enums import UNIT_CODES
-from .errors import DFTUtilsValueError
+from ._enums import UNIT_CODES as _UNIT_CODES
+from ._public import set_home as _set_home
+from .errors import DFTUtilsValueError as _DFTUtilsValueError
 
 if TYPE_CHECKING:
     from typing_extensions import TypeAlias
@@ -60,6 +61,7 @@ __all__ = [
     "DFTracer",
     "Generic",
     "Json",
+    "JsonValue",
     "RecordSchema",
     "detect",
     "explain",
@@ -76,7 +78,7 @@ JSON text (no whitespace, keys sorted); filters compare it as that text."""
 
 _TYPES: dict[Any, str] = {bool: "bool", int: "int", float: "float", str: "string", Json: "json"}
 _ROLES = ("time", "duration", "entity", "lane", "name")
-_UNITS = tuple(reversed(UNIT_CODES))
+_UNITS = tuple(reversed(_UNIT_CODES))
 
 
 class _Field:
@@ -129,7 +131,7 @@ def _field_type(cls: type, name: str, hint: object) -> tuple[str, bool]:
             return _TYPES[args[0]], True
     elif hint in _TYPES:
         return _TYPES[hint], False
-    raise DFTUtilsValueError(
+    raise _DFTUtilsValueError(
         f"{cls.__qualname__}.{name}: {hint!r} is not a field type; use bool, int, "
         "float, str, Json or Optional of one"
     )
@@ -155,13 +157,13 @@ def _spec(cls: type[RecordSchema], schema_id_: str) -> dict[str, Any]:
                 entry["path"] = default.path
             if default.role is not None:
                 if default.role not in _ROLES:
-                    raise DFTUtilsValueError(
+                    raise _DFTUtilsValueError(
                         f"{cls.__qualname__}.{name}: role {default.role!r} is not one of {_ROLES}"
                     )
                 entry["role"] = default.role
             if default.unit is not None:
                 if default.unit not in _UNITS:
-                    raise DFTUtilsValueError(
+                    raise _DFTUtilsValueError(
                         f"{cls.__qualname__}.{name}: unit {default.unit!r} is not one of {_UNITS}"
                     )
                 entry["unit"] = default.unit
@@ -169,7 +171,7 @@ def _spec(cls: type[RecordSchema], schema_id_: str) -> dict[str, Any]:
                 entry["always_index"] = True
             delattr(cls, name)
         elif default is not None:
-            raise DFTUtilsValueError(
+            raise _DFTUtilsValueError(
                 f"{cls.__qualname__}.{name}: a field's default must be field(...), got {default!r}"
             )
         fields[name] = entry
@@ -233,7 +235,7 @@ class RecordSchema:
     ) -> None:
         super().__init_subclass__(**kwargs)
         if not id:
-            raise DFTUtilsValueError(
+            raise _DFTUtilsValueError(
                 f"{cls.__qualname__} needs an id: class {cls.__name__}(RecordSchema, id=...)"
             )
         cls.id = id
@@ -297,3 +299,6 @@ def explain(path: str | os.PathLike[str]) -> dict[str, JsonValue]:
     ``share`` (of the objects the schema judges, those its ``data`` keeps,
     that match it)."""
     return cast("dict[str, JsonValue]", json.loads(_ext._schema_explain(os.fspath(path))))
+
+
+_set_home(__name__, globals(), __all__)

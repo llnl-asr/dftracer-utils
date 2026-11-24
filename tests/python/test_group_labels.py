@@ -11,9 +11,10 @@ pd = pytest.importorskip("pandas")
 
 from dftracer.utils import DataFrame, Series  # noqa: E402
 
+from .common import skip_below_pandas3  # noqa: E402
+
 pytestmark = pytest.mark.filterwarnings("ignore::FutureWarning", "ignore::DeprecationWarning")
 
-PANDAS3 = int(pd.__version__.split(".")[0]) >= 3
 PANDAS31 = tuple(int(p) for p in pd.__version__.split(".")[:2]) >= (3, 1)
 
 BASE = pd.DataFrame(
@@ -56,6 +57,7 @@ def _outcome(fn, obj):
 
 
 def _same(x, y, ordered=True):
+    skip_below_pandas3()
     if isinstance(y, Exception):
         assert isinstance(x, Exception), f"ours returned, pandas raised {y!r}"
         assert _kind(x) == _kind(y), f"{x!r} vs {y!r}"
@@ -82,6 +84,7 @@ def _same(x, y, ordered=True):
 
 
 def _check(fn, name, ordered=True):
+    skip_below_pandas3()
     pandas_frame = FRAMES[name]
     _same(
         _outcome(fn, DataFrame.from_pandas(pandas_frame)),
@@ -142,8 +145,6 @@ def test_apply_with_sort_false_goes_in_order_of_first_appearance(name, form):
 @pytest.mark.parametrize("name", ["plain", "one"])
 @pytest.mark.parametrize("form", ["head", "series", "sorted series", "identity"])
 def test_apply_without_the_keys_as_index_keeps_the_row_labels(name, form):
-    if not PANDAS3:
-        pytest.skip("pandas 2 labels as_index=False apply results differently")
     run = _apply(APPLY[form], as_index=False)
     _check(lambda f: run(f, "g"), name)
 
@@ -175,8 +176,6 @@ def test_top_of_an_integer_column(name, method):
 @pytest.mark.parametrize("keys", KEYS)
 @pytest.mark.parametrize("form", ["take", "top", "value_counts"])
 def test_without_the_keys_as_index(name, keys, form):
-    if not PANDAS3:
-        pytest.skip("pandas 2 labels as_index=False results differently")
     if form == "top" and not PANDAS31:
         pytest.skip("pandas before 3.1 gives as_index=False nlargest a frame")
     forms = {

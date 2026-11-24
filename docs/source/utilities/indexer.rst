@@ -69,8 +69,10 @@ Python API
 
 **Indexer:**
 
-``Indexer`` takes ``files``: a file, a directory (scanned for trace files)
-or a list of paths, as ``TraceViewer`` does. ``ensure()`` finds
+``Indexer`` takes ``files``: one path or a list of paths, each a file, a
+directory (scanned recursively for trace files) or a glob (``*``, ``?``,
+``[...]``, ``**``), as ``TraceViewer`` does. Several folders may share one
+``index_dir``; building or forcing one of them leaves the data of the others. ``ensure()`` finds
 which files need work and builds them (checkpoint + bloom tiers by default).
 ``extensions`` picks the pruning extensions and ``schema`` names the record
 schema. ``manifest()`` and ``explain(duql)`` inspect the index,
@@ -79,7 +81,7 @@ and ``rowset(name)`` returns a stored row set as a DataFrame.
 
 .. code-block:: python
 
-   from dftracer.utils import Indexer
+   from dftracer.utils.index import Indexer
 
    # Checkpoint + bloom build over an explicit file list
    with Indexer(files=["trace.pfw.gz"]) as indexer:
@@ -91,7 +93,7 @@ and ``rowset(name)`` returns a stored row set as a DataFrame.
        print(status.ready, status.needs_work)
 
    # Every flat args key is indexed by default; name nested ones too
-   from dftracer.utils import BloomConfig
+   from dftracer.utils.index import BloomConfig
 
    with Indexer(files=["trace.pfw.gz"], require_bloom=BloomConfig(fields=["io.off"])) as indexer:
        indexer.ensure()
@@ -103,7 +105,7 @@ and ``rowset(name)`` returns a stored row set as a DataFrame.
        print(f"Lines: {ckpt.get_num_lines()}")
 
    # With explicit Runtime for thread pool control
-   from dftracer.utils import Runtime
+   from dftracer.utils.runtime import Runtime
 
    with Runtime(threads=8) as rt:
        with Indexer(files=["trace.pfw.gz"], build_bloom=True, runtime=rt) as indexer:
@@ -116,9 +118,10 @@ builder over the index.
 
 .. code-block:: python
 
-   from dftracer.utils import TraceViewer
+   from dftracer.utils.trace import TraceViewer
 
-   # files is a path, list of paths, or a directory (scanned recursively)
+   # files is a path or a list of files, directories and globs
+   # ("runs/**/*.pfw.gz"); a directory is scanned recursively
    tv = TraceViewer(["trace.pfw.gz"])
    df = tv.filter("name == 'read'").collect()  # runs the scan, returns a DataFrame
 

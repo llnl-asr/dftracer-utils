@@ -309,4 +309,11 @@ DFTU_SERIES_OP(dftu.series.erf, dftu_series_erf, SERIES, SERIES, NONE, NONE)
 DFTU_SERIES_OP(dftu.series.erfc, dftu_series_erfc, SERIES, SERIES, NONE, NONE)
 DFTU_SERIES_OP(dftu.series.tz_localize, dftu_series_tz_localize_opts, SERIES, SERIES, STR, I64)
 
+/* NaN as a value (fill_nan, drop_nans) and as missing data (na_mask,
+ * notna_mask: null or NaN on a float column). */
+DFTU_SERIES_OP(dftu.series.fill_nan, dftu_series_fill_nan, SERIES, SERIES, SCALAR, NONE)
+DFTU_SERIES_OP(dftu.series.drop_nans, dftu_series_drop_nans, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.na_mask, dftu_series_na_mask, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.notna_mask, dftu_series_notna_mask, SERIES, SERIES, NONE, NONE)
+
 #undef DFTU_SERIES_OP

@@ -4,6 +4,8 @@
 #include <dftracer/utils/arrow/ipc.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dataframe/internal/buffers.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -31,6 +33,63 @@ namespace {
 using dataframe::DataFrame;
 using dataframe::Series;
 
+/// A flat string or binary column whose offsets start above 0 (a slice) is
+/// written with offsets that start at 0 and only its own bytes, also when it
+/// is a child of a Struct, List or Map. `h` is a private copy of the handle,
+/// so its buffers may be replaced; true when one was.
+template <class Off>
+void rebase_text(dftu_series& h) {
+    const Off* src = reinterpret_cast<const Off*>(h.offsets.data());
+    const std::int64_t n = h.length;
+    const Off base = src[0];
+    auto offsets =
+        dataframe::new_buffer(static_cast<std::size_t>(n + 1) * sizeof(Off));
+    Off* dst = reinterpret_cast<Off*>(dataframe::writable(offsets));
+    for (std::int64_t i = 0; i <= n; ++i) dst[i] = src[i] - base;
+    h.data = h.data.block()
+                 ? h.data.slice(static_cast<std::size_t>(base),
+                                static_cast<std::size_t>(src[n] - base))
+                 : dataframe::BufferView{};
+    h.offsets = std::move(offsets);
+}
+
+bool normalize_text(dftu_series& h) {
+    bool changed = false;
+    for (auto& n : h.nested) {
+        auto* kid = new dftu_series(*n.series);
+        if (normalize_text(*kid)) {
+            n.series = adopt_series(kid);
+            changed = true;
+        } else {
+            delete kid;
+        }
+    }
+    const dataframe::TypeId t = h.type;
+    if (h.length == 0 || h.encoding != dataframe::Encoding::Flat ||
+        !h.offsets.block() ||
+        (t != dataframe::TypeId::String && t != dataframe::TypeId::Binary &&
+         t != dataframe::TypeId::LargeString &&
+         t != dataframe::TypeId::LargeBinary))
+        return changed;
+    if (h.wide_offsets()) {
+        if (*reinterpret_cast<const std::int64_t*>(h.offsets.data()) == 0)
+            return changed;
+        rebase_text<std::int64_t>(h);
+    } else {
+        if (*reinterpret_cast<const std::int32_t*>(h.offsets.data()) == 0)
+            return changed;
+        rebase_text<std::int32_t>(h);
+    }
+    return true;
+}
+
+Series normalized_text(Series col) {
+    auto* copy = new dftu_series(*col.handle());
+    if (normalize_text(*copy)) return Series(copy);
+    delete copy;
+    return col;
+}
+
 /// nanoarrow's IPC encoder has no schema form for the view and dictionary
 /// encodings, so a frame with one is written as its plain values.
 DataFrame as_written(const DataFrame& frame) {
@@ -41,7 +100,8 @@ DataFrame as_written(const DataFrame& frame) {
             dstd::make_unique<dataframe::RowIndex>(*frame.row_index);
     out.columns.reserve(frame.columns.size());
     for (const Series& col : frame.columns)
-        out.columns.push_back(col.is_flat() ? col.share() : col.materialize());
+        out.columns.push_back(
+            normalized_text(col.is_flat() ? col.share() : col.materialize()));
     return out;
 }
 

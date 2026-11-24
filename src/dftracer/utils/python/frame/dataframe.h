@@ -25,6 +25,11 @@ TypeBinding dataframe_binding();
 // to_arrow()/to_pandas().
 PyObject* wrap_dataframe(dftracer::utils::dataframe::DataFrame&& batch);
 
+// The frame behind a native DataFrame object, sharing its buffers. False with
+// a TypeError set when `obj` is not one.
+bool unwrap_dataframe(PyObject* obj,
+                      dftracer::utils::dataframe::DataFrame& out);
+
 }  // namespace dftracer::utils::python::frame
 
 #endif  // DFTRACER_UTILS_PYTHON_FRAME_DATAFRAME_H

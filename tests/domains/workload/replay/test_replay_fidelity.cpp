@@ -131,8 +131,8 @@ bool is_ci_env() {
 #ifdef DFTRACER_UTILS_VALGRIND_MODE
     return true;
 #else
-    return std::getenv("CI") != nullptr ||
-           std::getenv("GITHUB_ACTIONS") != nullptr;
+    return common::Env::get("CI").has_value() ||
+           common::Env::get("GITHUB_ACTIONS").has_value();
 #endif
 }
 

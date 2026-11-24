@@ -8,24 +8,24 @@ subclasses, so ``except DFTUtilsError`` catches them all. ``DFTUtilsError``
 derives from ``RuntimeError``. A task handle re-raises the original typed error
 (see :doc:`runtime`).
 
-.. autoexception:: dftracer.utils.DFTUtilsError
+.. autoexception:: dftracer.utils.errors.DFTUtilsError
 
-.. autoexception:: dftracer.utils.DFTUtilsValueError
+.. autoexception:: dftracer.utils.errors.DFTUtilsValueError
 
-.. autoexception:: dftracer.utils.DFTUtilsNotFoundError
+.. autoexception:: dftracer.utils.errors.DFTUtilsNotFoundError
 
-.. autoexception:: dftracer.utils.DFTUtilsIOError
+.. autoexception:: dftracer.utils.errors.DFTUtilsIOError
 
-.. autoexception:: dftracer.utils.DFTUtilsParseError
+.. autoexception:: dftracer.utils.errors.DFTUtilsParseError
 
-.. autoexception:: dftracer.utils.DFTUtilsCompressionError
+.. autoexception:: dftracer.utils.errors.DFTUtilsCompressionError
 
-.. autoexception:: dftracer.utils.DFTUtilsDuqlError
+.. autoexception:: dftracer.utils.errors.DFTUtilsDuqlError
 
-.. autoexception:: dftracer.utils.DFTUtilsReaderError
+.. autoexception:: dftracer.utils.errors.DFTUtilsReaderError
 
-.. autoexception:: dftracer.utils.DFTUtilsIndexerError
+.. autoexception:: dftracer.utils.errors.DFTUtilsIndexerError
 
-.. autoexception:: dftracer.utils.DFTUtilsPipelineError
+.. autoexception:: dftracer.utils.errors.DFTUtilsPipelineError
 
-.. autoexception:: dftracer.utils.DFTUtilsAggregationError
+.. autoexception:: dftracer.utils.errors.DFTUtilsAggregationError

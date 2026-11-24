@@ -4,6 +4,7 @@
 // stops the tool with an error that names it.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string.h>
@@ -32,9 +33,9 @@ dstd::String index_binary() {
 }
 
 dstd::String chunked_plugin() {
-    const char* path = std::getenv("DFTRACER_UTILS_CHUNKED_FORMAT_PLUGIN");
-    REQUIRE(path != nullptr);
-    return path;
+    const auto path = common::Env::get("DFTRACER_UTILS_CHUNKED_FORMAT_PLUGIN");
+    REQUIRE(path.has_value());
+    return dstd::String(*path);
 }
 
 // A folder with one `rows.pfw.gz` that only the chunked format claims: it is

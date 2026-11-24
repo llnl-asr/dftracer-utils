@@ -56,11 +56,11 @@ def trace(tmp_path):
 
 def test_a_path_keeps_only_the_summaries_it_is_given(trace):
     path, idx = trace
-    indexer = dft.Indexer(
+    indexer = dft.index.Indexer(
         path, index_dir=idx, summaries={"args.size": ["zonemap"], "m": ["bloom", "zonemap"]}
     )
     status = indexer.ensure()
-    frame = dft.Index(status.index_dir).summaries(path)
+    frame = dft.index.Index(status.index_dir).summaries(path)
 
     assert list(frame.to_dict()) == ["path", "chunk", "summary", "bytes", "hash_version"]
     assert kinds(frame, "size") == {"zonemap"}
@@ -81,18 +81,19 @@ def test_a_path_keeps_only_the_summaries_it_is_given(trace):
 
 def test_indexer_summaries_is_the_index_summaries(trace):
     path, idx = trace
-    indexer = dft.Indexer(path, index_dir=idx, summaries={"size": ["bloom"]})
+    indexer = dft.index.Indexer(path, index_dir=idx, summaries={"size": ["bloom"]})
     status = indexer.ensure()
     assert (
-        indexer.summaries(path).to_dict() == dft.Index(status.index_dir).summaries(path).to_dict()
+        indexer.summaries(path).to_dict()
+        == dft.index.Index(status.index_dir).summaries(path).to_dict()
     )
 
 
 def test_a_missing_file_is_not_found(trace):
     path, idx = trace
-    status = dft.Indexer(path, index_dir=idx).ensure()
-    with pytest.raises(dft.DFTUtilsNotFoundError):
-        dft.Index(status.index_dir).summaries(path + ".other")
+    status = dft.index.Indexer(path, index_dir=idx).ensure()
+    with pytest.raises(dft.errors.DFTUtilsNotFoundError):
+        dft.index.Index(status.index_dir).summaries(path + ".other")
 
 
 @pytest.mark.parametrize(
@@ -108,35 +109,35 @@ def test_a_missing_file_is_not_found(trace):
 )
 def test_a_bad_summary_choice_is_an_error_that_names_it(trace, summaries, named):
     path, idx = trace
-    indexer = dft.Indexer(path, index_dir=idx, summaries=summaries)
-    with pytest.raises(dft.DFTUtilsValueError, match=named):
+    indexer = dft.index.Indexer(path, index_dir=idx, summaries=summaries)
+    with pytest.raises(dft.errors.DFTUtilsValueError, match=named):
         indexer.status()
 
 
 def test_a_summary_outside_extensions_is_an_error(trace):
     path, idx = trace
-    indexer = dft.Indexer(
+    indexer = dft.index.Indexer(
         path, index_dir=idx, summaries={"size": ["bloom"]}, extensions=["zonemap"]
     )
-    with pytest.raises(dft.DFTUtilsValueError, match="bloom"):
+    with pytest.raises(dft.errors.DFTUtilsValueError, match="bloom"):
         indexer.status()
 
 
 def test_summaries_are_shaped_as_a_mapping_of_lists(trace):
     path, idx = trace
     with pytest.raises(TypeError):
-        dft.Indexer(path, index_dir=idx, summaries={"size": "bloom"}).status()  # type: ignore[dict-item]
+        dft.index.Indexer(path, index_dir=idx, summaries={"size": "bloom"}).status()  # type: ignore[dict-item]
     with pytest.raises(TypeError):
-        dft.Indexer(path, index_dir=idx, summaries=["size"]).status()  # type: ignore[arg-type]
+        dft.index.Indexer(path, index_dir=idx, summaries=["size"]).status()  # type: ignore[arg-type]
     with pytest.raises(TypeError):
-        dft.Indexer(path, index_dir=idx, summaries={1: ["bloom"]}).status()  # type: ignore[dict-item]
+        dft.index.Indexer(path, index_dir=idx, summaries={1: ["bloom"]}).status()  # type: ignore[dict-item]
 
 
 def test_a_changed_choice_rebuilds_and_the_same_one_does_not(trace):
     path, idx = trace
 
     def indexer(summaries):
-        return dft.Indexer(path, index_dir=idx, summaries=summaries)
+        return dft.index.Indexer(path, index_dir=idx, summaries=summaries)
 
     a = {"size": ["zonemap"]}
     b = {"size": ["bloom"]}
@@ -151,7 +152,9 @@ def test_a_changed_choice_rebuilds_and_the_same_one_does_not(trace):
 
 def test_explain_counts_the_chunks_each_summary_skips(trace):
     path, idx = trace
-    indexer = dft.Indexer(path, index_dir=idx, summaries={"size": ["zonemap"], "m": ["bloom"]})
+    indexer = dft.index.Indexer(
+        path, index_dir=idx, summaries={"size": ["zonemap"], "m": ["bloom"]}
+    )
     indexer.ensure()
 
     (rng,) = indexer.explain("size >= 2000")
@@ -196,11 +199,11 @@ def _value(kind: str, arg: str):
 
 @pytest.mark.parametrize(("kind", "arg", "digest"), list(_vectors()))
 def test_hash_value_equals_the_cpp_value(kind, arg, digest):
-    assert dft.hash_value(_value(kind, arg)) == digest
+    assert dft.index.hash_value(_value(kind, arg)) == digest
 
 
 def test_hash_value_canonical_rules():
-    h = dft.hash_value
+    h = dft.index.hash_value
     assert h(42.0) == h(42)
     assert h(1) == h(True) and h(0) == h(False)
     assert h(-0.0) == h(0.0) == h(0)
@@ -215,8 +218,8 @@ def test_hash_value_canonical_rules():
 
 def test_hash_value_rejects_other_types():
     with pytest.raises(TypeError):
-        dft.hash_value([1])  # type: ignore[call-overload]
+        dft.index.hash_value([1])  # type: ignore[call-overload]
     with pytest.raises(OverflowError):
-        dft.hash_value(2**64)
+        dft.index.hash_value(2**64)
     with pytest.raises(OverflowError):
-        dft.hash_value(-(2**63) - 1)
+        dft.index.hash_value(-(2**63) - 1)

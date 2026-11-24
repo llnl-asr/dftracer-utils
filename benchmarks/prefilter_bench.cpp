@@ -9,6 +9,7 @@
 //   prefilter_bench [lines] [rounds]
 
 #include <bench_ok.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/span.h>
@@ -71,7 +72,8 @@ void run(dftracer::utils::dstd::CStringView label,
     const Prefilter p(std::move(*parsed));
     std::size_t needles = 0;
     for (const auto& c : p.clauses()) needles += c.size();
-    const bool per_needle = std::getenv("PREFILTER_PER_NEEDLE") != nullptr;
+    const bool per_needle =
+        dftracer::utils::common::Env::get("PREFILTER_PER_NEEDLE").has_value();
     dftracer::utils::dstd::Vector<double> ns;
     std::size_t passed = 0;
     for (int r = 0; r < rounds; ++r) {

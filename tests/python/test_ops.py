@@ -9,8 +9,8 @@ the redundant `dftu.` since `ops` is already that namespace."""
 import numpy as np
 import pytest
 
+from dftracer.utils._series import Series
 from dftracer.utils.jit import ops
-from dftracer.utils.series import Series
 
 
 def _col(vals):

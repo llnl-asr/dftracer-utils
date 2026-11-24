@@ -260,8 +260,10 @@ dstd::Vector<AggCase> agg_cases() {
 
 dstd::String format_double(double v) {
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "%.12g", v);
-    return buf;
+    const char* const end =
+        dstd::to_chars_general(buf, buf + sizeof(buf), v, 12);
+    return dstd::String(
+        buf, end != nullptr ? static_cast<std::size_t>(end - buf) : 0);
 }
 
 const dataframe::Series* column_of(const dataframe::DataFrame& f,

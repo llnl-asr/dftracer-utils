@@ -169,6 +169,11 @@ struct ScanRequest {
     /// can and reports the rest No.
     dstd::Vector<Expr> filters;
     std::int64_t limit = -1;  ///< Slice pushdown hint; -1 means no limit.
+    /// The scan feeds a collect with no operator in between, so morsel size
+    /// only adds overhead: a source that already holds the rows decoded may
+    /// hand them out in few large morsels. False when an operator runs per
+    /// morsel or the plan streams.
+    bool whole = false;
     /// The resolved @ref LazyFrame budget (bytes); a streaming source may use
     /// it to bound its own in-flight buffering. Most sources ignore it.
     std::uint64_t memory_budget = 0;
@@ -475,6 +480,11 @@ class LazyFrame {
     LazyFrame tail(std::int64_t n) const;
     LazyFrame drop_nulls() const;
     LazyFrame fill_null(Scalar value) const;
+    /// Drops the rows with a NaN in any float column (a null is not a NaN).
+    LazyFrame drop_nans() const;
+    /// Replaces the NaN of every float column with `value` (a null scalar
+    /// makes it null); other columns pass through.
+    LazyFrame fill_nan(Scalar value) const;
     /// Keeps the rows at `indices` (arbitrary order, repeats allowed), as
     /// DataFrame::take. Not streaming: the whole frame must be resident before
     /// the indices can be applied.
@@ -491,6 +501,12 @@ class LazyFrame {
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
     LazyFrame fill_null(T value) const {
         return fill_null(to_scalar(value));
+    }
+    /// Fill NaN with a natural C++ value; converts to each float column's
+    /// type.
+    template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
+    LazyFrame fill_nan(T value) const {
+        return fill_nan(to_scalar(value));
     }
     LazyFrame with_row_index(dstd::String name) const;
     /// A one-row frame of each column's null count.
@@ -696,6 +712,8 @@ class LazyFrame {
     /// 0 (the default) means "auto": ~1/3 of available memory. Pass
     /// memory::NO_SPILL_BUDGET to disable spilling.
     LazyFrame memory_budget(std::uint64_t bytes) const;
+    /// The budget set by @ref memory_budget; 0 is auto.
+    std::uint64_t memory_budget() const noexcept { return memory_budget_; }
     /// Explicitly set the budget to ~1/3 of available memory (same as the
     /// default); sugar for readers who want spilling stated at the call site.
     LazyFrame auto_spill() const;
@@ -887,21 +905,22 @@ class LazyGroupBy {
     /// value per input row, rows in input order. Each is the window kernel
     /// (`dftu.frame.window`, registered by the utilities library) PARTITION
     /// BY the keys ORDER BY a row index the plan prepends, then the sort back
-    /// and the projection. CumSum / CumProd (Float64) / CumMax / CumMin /
-    /// Diff / PctChange / Rank take every numeric non-key column, Shift every
-    /// non-key column, each under its own name; CumCount / NGroup are one Int64
-    /// column of that name; Head / Tail / Nth keep the input columns of the
-    /// selected rows; FFill / BFill fill each non-key column's nulls from the
-    /// nearest present value before / after it within the group; RollingSum /
-    /// Mean / Min / Max reduce the trailing `n` rows of each numeric non-key
-    /// column within the group, null until the window holds `n` present values
-    /// (the pandas default `min_periods`). A null value stays null. `n` is the
-    /// Shift periods (negative looks ahead), the Head / Tail count, the Nth
-    /// position (0-based, negative from the end) or the rolling window;
-    /// `method` / `ascending` apply to Rank (Float64, as pandas; Ordinal is
-    /// pandas' `first`). An InvalidArgument error when
-    /// no column is eligible, NGroup has no keys, the window is under 1 or the
-    /// window op is not registered, and a NotFound error for an absent key.
+    /// and the projection. CumSum / CumProd (Int64 or UInt64 over an integer
+    /// column; a product wraps) / CumMax / CumMin / Diff / PctChange / Rank
+    /// take every numeric non-key column, Shift every non-key column, each
+    /// under its own name; CumCount / NGroup are one Int64 column of that name;
+    /// Head / Tail / Nth keep the input columns of the selected rows; FFill /
+    /// BFill fill each non-key column's nulls from the nearest present value
+    /// before / after it within the group; RollingSum / Mean / Min / Max reduce
+    /// the trailing `n` rows of each numeric non-key column within the group,
+    /// null until the window holds `n` present values (the pandas default
+    /// `min_periods`). A null value stays null. `n` is the Shift periods
+    /// (negative looks ahead), the Head / Tail count, the Nth position
+    /// (0-based, negative from the end) or the rolling window; `method` /
+    /// `ascending` apply to Rank (Float64, as pandas; Ordinal is pandas'
+    /// `first`). An InvalidArgument error when no column is eligible, NGroup
+    /// has no keys, the window is under 1 or the window op is not registered,
+    /// and a NotFound error for an absent key.
     dstd::Result<LazyFrame> transform(GroupwiseOp kind, std::int64_t n = 0,
                                       RankMethod method = RankMethod::Average,
                                       bool ascending = true) const;

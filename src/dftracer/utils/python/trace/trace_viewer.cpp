@@ -34,11 +34,11 @@
 #include <dftracer/utils/python/frame/dataframe.h>
 #include <dftracer/utils/python/frame/lazyframe.h>
 #include <dftracer/utils/python/plugins/plugin_host.h>
-#include <dftracer/utils/python/trace/gzip_sink.h>
 #include <dftracer/utils/python/trace/trace_viewer.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/record_schema.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/table/table_source.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/views/live_view.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -166,18 +166,6 @@ trace::views::ProgressFn progress_from(PyObject* obj) {
         PyGILState_Release(g);
     };
 }
-
-class FileSink : public trace::views::ExportSink {
-   public:
-    explicit FileSink(FILE* f) : f_(f) {}
-    void write(dftracer::utils::dstd::StringView data) override {
-        std::fwrite(data.data(), 1, data.size(), f_.get());
-    }
-    void flush() override { std::fflush(f_.get()); }
-
-   private:
-    dftracer::utils::dstd::ScopedFile f_;
-};
 
 // "fn(key)" or "fn(key, 'a', 'b')" -> transform + inner key text; false when
 // `t` is not a call, leaving `t` to parse as a plain key.
@@ -413,36 +401,17 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
         index_dir = s;
     }
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> paths;
-    dftracer::utils::dstd::Optional<dftracer::utils::dstd::String> dir;
-    if (!python::core::parse_trace_files(files, paths, dir)) return -1;
+    if (!python::core::parse_trace_files(files, paths)) return -1;
     View tv;
-    if (dir) {
-        if (!run_blocking([&] {
-                tv = dftracer::utils::python::core::py_unwrap(
-                    python::runtime::get_default_runtime()
-                        ->submit(View::from_directory(*dir, DS(index_dir),
-                                                      DS(format)))
-                        .get());
-                dftracer::utils::python::core::py_unwrap(tv.status());
-            }))
-            return -1;
-    } else {
-        dftracer::utils::dstd::Vector<trace::views::ViewFile> vfiles;
-        vfiles.reserve(paths.size());
-        for (const dftracer::utils::dstd::String& p : paths) {
-            const auto index_path =
-                dftracer::utils::trace::internal::determine_index_path(
-                    p, index_dir);
-            trace::views::ViewFile vf{DS(p), index_path};
-            vf.format = format;
-            vfiles.push_back(std::move(vf));
-        }
-        if (!run_blocking([&] {
-                tv = View::from_files(std::move(vfiles));
-                dftracer::utils::python::core::py_unwrap(tv.status());
-            }))
-            return -1;
-    }
+    if (!run_blocking([&] {
+            tv = dftracer::utils::python::core::py_unwrap(
+                python::runtime::get_default_runtime()
+                    ->submit(View::from_inputs(std::move(paths), DS(index_dir),
+                                               DS(format)))
+                    .get());
+            dftracer::utils::python::core::py_unwrap(tv.status());
+        }))
+        return -1;
     dftracer::utils::dstd::UniquePtr<View>(self->tv).reset();
     self->tv =
         dftracer::utils::dstd::make_unique<View>(std::move(tv)).release();
@@ -453,6 +422,32 @@ PyObject* tv_lazy(PyObject* self, PyObject*) {
     return guard([&] {
         return python::frame::wrap_lazyframe(LazyFrame(tv_of(self).lazy()));
     });
+}
+
+// _collect_counted(runtime=None) -> (DataFrame, {events_scanned,
+// chunks_scanned, chunks_skipped}): the plan's rows and what its scans did.
+PyObject* tv_collect_counted(PyObject* self, PyObject* args, PyObject* kwds) {
+    PyObject* runtime_arg = nullptr;
+    if (!parse_kw<"|O">(args, kwds, {"runtime"}, &runtime_arg)) return nullptr;
+    auto counter = dstd::make_shared<trace::views::ScanCounter>();
+    const LazyFrame plan = LazyFrame(tv_of(self).count_scans(counter).lazy());
+    DataFrame out;
+    if (!run_on(runtime_arg, [&] { return plan.collect(0); }, out))
+        return nullptr;
+    PyObject* frame = python::frame::wrap_dataframe(std::move(out));
+    if (!frame) return nullptr;
+    PyObject* counts = Py_BuildValue(
+        "{s:K,s:K,s:K}", "events_scanned",
+        static_cast<unsigned long long>(counter->events_scanned.load()),
+        "chunks_scanned",
+        static_cast<unsigned long long>(counter->chunks_scanned.load()),
+        "chunks_skipped",
+        static_cast<unsigned long long>(counter->chunks_skipped.load()));
+    if (!counts) {
+        Py_DECREF(frame);
+        return nullptr;
+    }
+    return Py_BuildValue("(NN)", frame, counts);
 }
 
 PyObject* tv_with_lazy(PyObject* self, PyObject* arg) {
@@ -819,6 +814,33 @@ PyObject* tv_filters_events(PyObject* self, PyObject*) {
     return PyBool_FromLong(tv_of(self).filters_events());
 }
 
+PyObject* tv_is_table(PyObject* self, PyObject*) {
+    return PyBool_FromLong(tv_of(self).is_table());
+}
+
+// (headers, paths): the header args JSON and the path of each table file, in
+// read order.
+PyObject* tv_table_files(PyObject* self, PyObject*) {
+    const auto source = tv_of(self).table_source();
+    if (!source) {
+        PyErr_SetString(PyExc_ValueError, "the viewer does not read tables");
+        return nullptr;
+    }
+    const auto headers = trace::table::table_headers(*source);
+    const auto paths = trace::table::table_paths(*source);
+    PyObject* h = str_list_dstd(headers);
+    if (!h) return nullptr;
+    PyObject* p = str_list_dstd(paths);
+    if (!p) {
+        Py_DECREF(h);
+        return nullptr;
+    }
+    PyObject* pair = PyTuple_Pack(2, h, p);
+    Py_DECREF(h);
+    Py_DECREF(p);
+    return pair;
+}
+
 PyObject* tv_call_tree(PyObject* self, PyObject* args, PyObject* kwds) {
     trace::views::ContainmentArgs a;
     if (!parse_containment(args, kwds, false, a)) return nullptr;
@@ -873,21 +895,6 @@ PyObject* tv_aggregate_partial(PyObject* self, PyObject*) {
     return guard([&] {
         return python::frame::wrap_lazyframe(checked(
             LazyFrame(tv_of(self).aggregate_partial().plans().front())));
-    });
-}
-
-PyObject* tv_sink_json(PyObject* self, PyObject* arg) {
-    const char* path = as_utf8(arg);
-    if (!path) return nullptr;
-    FILE* f = std::fopen(path, "wb");
-    if (!f) {
-        PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-        return nullptr;
-    }
-    auto sink = dftracer::utils::dstd::make_shared<FileSink>(f);
-    return guard([&] {
-        return python::frame::wrap_lazyframe(checked(LazyFrame(
-            tv_of(self).sink_json(sink, trace::views::LAZY).plans().front())));
     });
 }
 
@@ -954,63 +961,6 @@ PyObject* tv_materialize(PyObject* self, PyObject* args, PyObject* kwds) {
             stats))
         return nullptr;
     return stats_dict(stats);
-}
-
-// A trace of the aggregation (counter events) when the viewer aggregates, else
-// of the selected events.
-PyObject* tv_export_trace(PyObject* self, PyObject* args, PyObject* kwds) {
-    const char* path = nullptr;
-    int compress = 1;
-    int index = 0;
-    long long member_size = 0;
-    int level = 6;
-    long long part_size = 0;
-    PyObject* runtime_arg = nullptr;
-    if (!parse_kw<"s|ppLiLO">(args, kwds,
-                              {"path", "compress", "index", "member_size",
-                               "level", "part_size", "runtime"},
-                              &path, &compress, &index, &member_size, &level,
-                              &part_size, &runtime_arg))
-        return nullptr;
-    return guard([&]() -> PyObject* {
-        const View& t = tv_of(self);
-        ExportStats stats;
-        if (t.aggregates()) {
-            dftracer::utils::dstd::UniquePtr<trace::views::ExportSink> sink;
-            dftracer::utils::python::trace::GzipSink* gzip = nullptr;
-            if (compress) {
-                auto made = dftracer::utils::dstd::make_unique<
-                    dftracer::utils::python::trace::GzipSink>(path, level);
-                gzip = made.get();
-                sink = std::move(made);
-            } else {
-                FILE* f = std::fopen(path, "wb");
-                if (!f) {
-                    PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
-                    return nullptr;
-                }
-                sink = dftracer::utils::dstd::make_unique<FileSink>(f);
-            }
-            const bool ok = run_on(
-                runtime_arg, [&] { return t.sink_counters(*sink); }, stats);
-            if (ok && gzip != nullptr) gzip->close();
-            sink.reset();
-            if (!ok) return nullptr;
-            return stats_dict(stats);
-        }
-        trace::views::TraceWriteOptions opts;
-        opts.output_path = path;
-        opts.member_size = static_cast<std::size_t>(member_size);
-        opts.compress = compress != 0;
-        opts.level = level;
-        opts.build_index = index != 0;
-        opts.part_size = static_cast<std::size_t>(part_size);
-        if (!run_on(
-                runtime_arg, [&] { return t.sink_trace(std::move(opts)); },
-                stats))
-            return nullptr;
-        return stats_dict(stats);
-    });
 }
 
 PyObject* tv_merge_partials(PyObject* self, PyObject* arg) {
@@ -1167,6 +1117,9 @@ PyObject* plugin_results_py(PyObject*, PyObject* host) {
 
 PyMethodDef tv_methods[] = {
     {"lazy", tv_lazy, METH_NOARGS, "The plan as a LazyFrame."},
+    {"_collect_counted", DFTU_PYCFUNCTION(tv_collect_counted),
+     METH_VARARGS | METH_KEYWORDS,
+     "The plan's rows and the counts of its scans (runs now)."},
     {"with_lazy", tv_with_lazy, METH_O,
      "This scan with `plan` (a LazyFrame over it) as its plan."},
     {"filter", tv_filter, METH_O, "Keep events matching a duql predicate."},
@@ -1209,6 +1162,10 @@ PyMethodDef tv_methods[] = {
      "True when the plan absorbs into an aggregating scan."},
     {"filters_events", tv_filters_events, METH_NOARGS,
      "True while a filter still selects raw events (reads no index)."},
+    {"is_table", tv_is_table, METH_NOARGS,
+     "True when the files are dftu.table files."},
+    {"table_files", tv_table_files, METH_NOARGS,
+     "(headers, paths) of the table files, in read order."},
     {"call_tree", DFTU_PYCFUNCTION(tv_call_tree), METH_VARARGS | METH_KEYWORDS,
      "Plan of the events plus level/parent_id."},
     {"flamegraph", DFTU_PYCFUNCTION(tv_flamegraph),
@@ -1220,15 +1177,11 @@ PyMethodDef tv_methods[] = {
      METH_VARARGS | METH_KEYWORDS, "Plan of a one-row 'partial' frame."},
     {"aggregate_partial", tv_aggregate_partial, METH_NOARGS,
      "Plan of a one-row 'partial' frame."},
-    {"sink_json", tv_sink_json, METH_O,
-     "Plan writing the selected events to `path`; yields one stats row."},
     {"_index_records", DFTU_PYCFUNCTION(tv_index_records),
      METH_VARARGS | METH_KEYWORDS,
      "The aggregation index's record families as a tuple (runs now)."},
     {"materialize", DFTU_PYCFUNCTION(tv_materialize),
      METH_VARARGS | METH_KEYWORDS, "Persist this query (runs now)."},
-    {"export_trace", DFTU_PYCFUNCTION(tv_export_trace),
-     METH_VARARGS | METH_KEYWORDS, "Write a trace file (runs now)."},
     {"merge_partials", tv_merge_partials, METH_O,
      "Merge aggregate partials with this aggregation."},
     {"materialize_partials", DFTU_PYCFUNCTION(tv_materialize_partials),
@@ -1401,7 +1354,7 @@ PyMethodDef ltv_methods[] = {
 
 PyTypeObject LiveTraceViewerType = [] {
     PyTypeObject t{.ob_base = PyVarObject_HEAD_INIT(nullptr, 0)};
-    t.tp_name = "dftracer_utils_ext._LiveTraceViewer";
+    t.tp_name = "dftracer.utils.dftracer_utils_ext._LiveTraceViewer";
     t.tp_basicsize = sizeof(LiveTraceViewerObject);
     t.tp_dealloc = reinterpret_cast<destructor>(ltv_dealloc);
     t.tp_flags = Py_TPFLAGS_DEFAULT;
@@ -1414,7 +1367,7 @@ PyTypeObject LiveTraceViewerType = [] {
 
 PyTypeObject TraceViewerType = [] {
     PyTypeObject t{.ob_base = PyVarObject_HEAD_INIT(nullptr, 0)};
-    t.tp_name = "dftracer_utils_ext.TraceViewer";
+    t.tp_name = "dftracer.utils.dftracer_utils_ext.TraceViewer";
     t.tp_basicsize = sizeof(TraceViewerObject);
     t.tp_weaklistoffset = WEAKLIST_OFFSET;
     t.tp_dealloc = reinterpret_cast<destructor>(tv_dealloc);

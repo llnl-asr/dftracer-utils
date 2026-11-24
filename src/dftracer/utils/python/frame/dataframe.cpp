@@ -795,6 +795,25 @@ PyObject* DataFrame_fill_null(PyObject* self, PyObject* value) {
     });
 }
 
+PyObject* DataFrame_drop_nans(PyObject* self, PyObject*) {
+    DataFrameObject* b = as_native<DataFrameObject>(self);
+    if (!b) return nullptr;
+    return run_batch_op(
+        b, [&](const DataFrame& frame) { return dataframe::drop_nans(frame); });
+}
+
+PyObject* DataFrame_fill_nan(PyObject* self, PyObject* args, PyObject* kwds) {
+    DataFrameObject* b = as_native<DataFrameObject>(self);
+    if (!b) return nullptr;
+    PyObject* value = nullptr;
+    if (!parse_kw<"O">(args, kwds, {"value"}, &value)) return nullptr;
+    dftu_scalar s{};
+    if (!py_to_fill_scalar(value, &s)) return nullptr;
+    return run_batch_op(b, [&](const DataFrame& frame) {
+        return dataframe::fill_nan(frame, s);
+    });
+}
+
 // Read a sequence (or single str) of column names into `out`. Returns false and
 // sets a Python error on a non-string element.
 bool names_from_obj(
@@ -1240,7 +1259,7 @@ PyObject* DataFrame_group_agg_expr(PyObject* self, PyObject* args) {
 // each spec and calls _group_agg_expr. `args[0:nk]` are the key names (a tuple,
 // even for one key); `args[nk:]` are the specs.
 PyObject* delegate_groupby(PyObject* self, PyObject* args, Py_ssize_t nk) {
-    PyObject* mod = PyImport_ImportModule("dftracer.utils.groupby");
+    PyObject* mod = PyImport_ImportModule("dftracer.utils._groupby");
     if (!mod) return nullptr;
     PyObject* gb_type = PyObject_GetAttrString(mod, "GroupBy");
     Py_DECREF(mod);
@@ -1876,6 +1895,12 @@ PyMethodDef DataFrame_methods[] = {
      "drop_nulls() -> DataFrame dropping rows null in any column."},
     {"fill_null", DataFrame_fill_null, METH_O,
      "fill_null(value) -> DataFrame with nulls filled in every column."},
+    {"drop_nans", DataFrame_drop_nans, METH_NOARGS,
+     "drop_nans() -> DataFrame dropping rows with a NaN in any float column."},
+    {"fill_nan", DFTU_PYCFUNCTION(DataFrame_fill_nan),
+     METH_VARARGS | METH_KEYWORDS,
+     "fill_nan(value) -> DataFrame with the NaN of every float column "
+     "replaced (null for None)."},
     {"unique", DFTU_PYCFUNCTION(DataFrame_unique), METH_VARARGS | METH_KEYWORDS,
      "unique(subset=None) -> DataFrame with duplicate rows removed (keep "
      "first), keyed on every column or on the subset names."},
@@ -2156,12 +2181,21 @@ PyObject* wrap_dataframe(dftracer::utils::dataframe::DataFrame&& batch) {
     return make_dataframe(std::move(batch));
 }
 
+bool unwrap_dataframe(PyObject* obj,
+                      dftracer::utils::dataframe::DataFrame& out) {
+    const DataFrameObject* self =
+        dftracer::utils::python::core::as_native<DataFrameObject>(obj);
+    if (!self) return false;
+    out = to_dataframe(self);
+    return true;
+}
+
 int init_dataframe(PyObject* m) {
     DataFrame_as_mapping.mp_subscript = DataFrame_subscript;
     DataFrame_as_sequence.sq_contains = DataFrame_contains;
     DataFrameType = {};
     DataFrameType.ob_base = {PyObject_HEAD_INIT(nullptr) 0};
-    DataFrameType.tp_name = "dftracer_utils_ext.DataFrame";
+    DataFrameType.tp_name = "dftracer.utils.dftracer_utils_ext.DataFrame";
     DataFrameType.tp_basicsize = sizeof(DataFrameObject);
     DataFrameType.tp_weaklistoffset = WEAKLIST_OFFSET;
     DataFrameType.tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE;

@@ -11,6 +11,7 @@ no behavior.
 
 from __future__ import annotations
 
+import enum
 import sys
 import types
 from typing import Generic, Protocol, Tuple, TypedDict, TypeVar, overload
@@ -27,6 +28,9 @@ INPUT_FILE_PATTERNS: tuple[str, ...] = ()
 
 
 PLUGIN_ABI_VERSION: int = 0
+
+
+TABLE_FORMAT_VERSION: str = ""
 
 
 NUM_SHARDS: int = 0
@@ -99,12 +103,12 @@ class Indexer:
     """Indexer with status/ensure/build pattern for tiered indexing.
 
     ``files`` follows the same rule as ``TraceViewer``: a path (``str`` or
-    ``os.PathLike``) or a sequence of paths; one directory is scanned
-    recursively, a directory inside a sequence raises ``ValueError``, a
-    repeated path counts once, a glob is a missing path
-    (``DFTUtilsNotFoundError``, on the first ``status``, ``ensure`` or
-    ``build``) and an empty sequence raises ``ValueError`` (``TraceViewer``
-    takes it as a view of no rows). A file that is not a trace raises ``DFTUtilsIOError`` when it is indexed
+    ``os.PathLike``) or a sequence of paths, each a file, a directory
+    (scanned recursively) or a glob (``*``, ``?``, ``[...]``, ``**``); a
+    repeated file counts once, a missing path with no wildcard raises
+    ``DFTUtilsNotFoundError`` on the first ``status``, ``ensure`` or
+    ``build``, a glob with no match adds no file and an empty sequence raises
+    ``ValueError`` (``TraceViewer`` takes it as a view of no rows). A file that is not a trace raises ``DFTUtilsIOError`` when it is indexed
     (``ensure``, ``build``); ``status`` reads no content."""
     def __init__(
         self,
@@ -384,7 +388,7 @@ class TaskHandle(Generic[_T]):
 class Runtime:
     """Lightweight coroutine runtime wrapping Executor + Watchdog.
 
-    Note: For user-facing API, use dftracer.utils.Runtime (Python wrapper)
+    Note: For user-facing API, use dftracer.utils.runtime.Runtime (Python wrapper)
     which adds submit(), Python callable support, and error handling.
     """
     def __init__(self, threads: int = 0, io_threads: int = 0) -> None: ...
@@ -406,8 +410,441 @@ class Runtime:
     ) -> None: ...
 
 
+class TraceWriter:
+    """Writes DFTracer records, one JSON line each, to a gzip file of members of
+    about ``member_size`` bytes, or to a plain file when ``compress`` is False.
+
+    ``ph`` is written as its integer. A NaN is written as the string ``"NaN"``,
+    and infinities as ``"Infinity"`` and ``"-Infinity"``. The first write error
+    is kept and raised by ``close``. Not thread-safe: a call made while another
+    thread is inside a write raises ``RuntimeError``.
+    """
+    def __init__(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        level: int = 6,
+        threads: int = 0,
+        member_size: int = 4194304,
+        compress: bool = True,
+    ) -> None: ...
+    def write_event(
+        self,
+        name: str,
+        cat: str,
+        ts: int,
+        dur: int,
+        pid: int = 0,
+        tid: int = 0,
+        args: dict[str, TraceArg] | None = None,
+    ) -> None:
+        """Write one complete event (``ph`` 1)."""
+        ...
+    def write_counter(
+        self,
+        name: str,
+        cat: str,
+        ts: int,
+        args: dict[str, TraceArg] | None = None,
+        pid: int = 0,
+        tid: int = 0,
+    ) -> None:
+        """Write one counter (``ph`` 2)."""
+        ...
+    def write_aggregated(
+        self,
+        name: str,
+        cat: str,
+        ts: int,
+        args: dict[str, TraceArg] | None = None,
+        pid: int = 0,
+        tid: int = 0,
+    ) -> None:
+        """Write one aggregated row (``ph`` 3)."""
+        ...
+    def write_metadata(
+        self,
+        name: str,
+        args: dict[str, TraceArg] | None = None,
+        pid: int = 0,
+        tid: int = 0,
+    ) -> None:
+        """Write one metadata record (``ph`` 4, ``ts`` 0)."""
+        ...
+    def write_raw(self, data: bytes | bytearray | memoryview | str) -> None:
+        """Append whole lines as they are; ``data`` must end with a newline."""
+        ...
+    def close(self) -> None:
+        """Finish the file and raise the first write error. Safe to call twice."""
+        ...
+    def discard(self) -> None:
+        """Close the writer and remove its output."""
+        ...
+    def __enter__(self) -> Self: ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None: ...
+
+
+class JsonKind(enum.Enum):
+    """The kind of a ``json`` value."""
+    OBJECT = 0
+    ARRAY = 1
+    STRING = 2
+    INT = 3
+    FLOAT = 4
+    BOOL = 5
+    NULL = 6
+
+
+class JsonValue:
+    """A parsed JSON value: a view with no copy that keeps its document or
+    record batch alive. It never changes; ``mutable()`` gives an overlay of
+    changes. A call of the wrong kind raises ``TypeError``."""
+    @property
+    def kind(self) -> JsonKind: ...
+    @property
+    def raw(self) -> str:
+        """The text of the value. The root of a record, or of ``parse`` or ``read``,
+        gives the exact source text (a record is its line without the newline, a
+        document is the text without the white space around it), and a writer
+        writes an unchanged root as those bytes. A value below the root is the
+        compact JSON that its parsed form writes."""
+        ...
+    def __getitem__(self, key: str | int) -> JsonValue: ...
+    def __contains__(self, key: str) -> bool: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[JsonValue]: ...
+    def __bool__(self) -> bool: ...
+    def get(self, key: str) -> JsonValue | None:
+        """The member of an object, or ``None`` when it has none."""
+        ...
+    def items(self) -> Iterator[tuple[str, JsonValue]]: ...
+    def as_int(self) -> int: ...
+    def as_float(self) -> float: ...
+    def as_bool(self) -> bool: ...
+    def as_str(self) -> str:
+        """The text of a string."""
+        ...
+    def to_python(self) -> Data:
+        """The plain dict, list, str, int, float, bool or ``None`` under the value."""
+        ...
+    def mutable(self) -> JsonMutableValue:
+        """An overlay of changes on this value; the value does not change."""
+        ...
+
+
+class JsonMutableValue:
+    """The changes made to a value, kept apart from it. The parts left alone are
+    written as they are."""
+    def __getitem__(self, key: str | int) -> JsonMutableValue: ...
+    def __setitem__(self, key: str | int, value: Input) -> None: ...
+    def __delitem__(self, key: str | int) -> None: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[JsonMutableValue]: ...
+    def __bool__(self) -> bool: ...
+    def append(self, value: Input) -> None:
+        """Add an element at the end of an array."""
+        ...
+    def get(self, key: str) -> JsonMutableValue | None: ...
+    def items(self) -> Iterator[tuple[str, JsonMutableValue]]: ...
+    def as_int(self) -> int: ...
+    def as_float(self) -> float: ...
+    def as_bool(self) -> bool: ...
+    def as_str(self) -> str: ...
+    def to_python(self) -> Data:
+        """The plain data with the changes applied."""
+        ...
+
+
+class JsonRecordBatch:
+    """The records of one batch of a file. A record keeps its whole batch alive,
+    so keep only what you need."""
+    def __len__(self) -> int: ...
+    def __getitem__(self, index: int) -> JsonValue: ...
+    def __iter__(self) -> Iterator[JsonValue]: ...
+
+
+class JsonRecordIterator:
+    """The record batches of a file, read as they are asked. A call made while
+    another thread is inside ``next`` raises ``RuntimeError``."""
+    def __iter__(self) -> Self: ...
+    def __next__(self) -> JsonRecordBatch: ...
+    def close(self) -> None:
+        """Stop reading; the iterator then gives nothing."""
+        ...
+
+
+class JsonObjectBuilder:
+    """A record or a member that is an object, built member by member. Use it in a
+    ``with`` block; it ends the object on exit and drops the record when the block
+    raised. A call while an inner builder is open raises ``RuntimeError``."""
+    def member(self, key: str, value: Input) -> None: ...
+    def object(self, key: str) -> JsonObjectBuilder: ...
+    def array(self, key: str) -> JsonArrayBuilder: ...
+    def __enter__(self) -> Self: ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None: ...
+
+
+class JsonArrayBuilder:
+    """A member or an element that is an array, built element by element."""
+    def value(self, value: Input) -> None: ...
+    def object(self) -> JsonObjectBuilder: ...
+    def array(self) -> JsonArrayBuilder: ...
+    def __enter__(self) -> Self: ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None: ...
+
+
+class JsonWriter:
+    """Writes records, one JSON line each, to a file of gzip members of about
+    ``member_size`` bytes. ``compress=None`` picks gzip from a ``.gz`` suffix. A
+    writer dropped without ``close()`` removes its output, as ``TraceWriter``
+    does. Not thread-safe: a call made while another thread is inside a write
+    raises ``RuntimeError``."""
+    def __init__(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        compress: bool | None = None,
+        level: int = 6,
+        member_size: int = 4194304,
+    ) -> None: ...
+    def write(self, value: Input) -> None:
+        """Write one record."""
+        ...
+    def record(self) -> JsonObjectBuilder:
+        """Start one record that is built member by member."""
+        ...
+    def close(self) -> None:
+        """Finish the file. Safe to call twice."""
+        ...
+    def __enter__(self) -> Self: ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None: ...
+
+
+def json_parse(text: str) -> JsonValue:
+    """Parse one whole text."""
+    ...
+
+
+def json_loads(text: str) -> Data:
+    """Parse one whole text to plain data."""
+    ...
+
+
+def json_read(path: str | os.PathLike[str]) -> JsonValue:
+    """Parse one whole file, plain or gzip."""
+    ...
+
+
+def json_load(path: str | os.PathLike[str]) -> Data:
+    """Parse one whole file to plain data."""
+    ...
+
+
+def json_read_records(
+    path: str | os.PathLike[str], *, batch_bytes: int = 67108864
+) -> JsonRecordIterator:
+    """Stream the records of a file a batch at a time."""
+    ...
+
+
+class YamlKind(enum.Enum):
+    """The kind of a ``yaml`` value."""
+    OBJECT = 0
+    ARRAY = 1
+    SCALAR = 2
+    NULL = 3
+
+
+class YamlValue:
+    """A parsed YAML value: a view with no copy that keeps its document or
+    record batch alive. It never changes; ``mutable()`` gives an overlay of
+    changes. A scalar is text, so ``as_*`` raises ``ValueError`` when the text does not parse as that type."""
+    @property
+    def kind(self) -> YamlKind: ...
+    @property
+    def raw(self) -> str:
+        """The text of the value. The root of a record gives the exact source text of
+        the record: an element of a block sequence from its ``-`` line, or a
+        document of a ``---`` stream from its ``---`` line, without the final
+        newline; the root of ``parse`` or ``read`` gives the whole text. A writer
+        writes an unchanged record as those bytes when its layout is the one the
+        record was read in. A value below the root is a scalar's text or the
+        block YAML that its parsed form writes."""
+        ...
+    def __getitem__(self, key: str | int) -> YamlValue: ...
+    def __contains__(self, key: str) -> bool: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[YamlValue]: ...
+    def __bool__(self) -> bool: ...
+    def get(self, key: str) -> YamlValue | None:
+        """The member of an object, or ``None`` when it has none."""
+        ...
+    def items(self) -> Iterator[tuple[str, YamlValue]]: ...
+    def as_int(self) -> int: ...
+    def as_float(self) -> float: ...
+    def as_bool(self) -> bool: ...
+    def as_str(self) -> str:
+        """The text of a scalar. A scalar is text: ``as_int``, ``as_float`` and ``as_bool`` raise ``ValueError`` when the text is not one."""
+        ...
+    def to_python(self) -> Data:
+        """The plain dict, list, str, int, float, bool or ``None`` under the value."""
+        ...
+    def mutable(self) -> YamlMutableValue:
+        """An overlay of changes on this value; the value does not change."""
+        ...
+
+
+class YamlMutableValue:
+    """The changes made to a value, kept apart from it. The parts left alone are
+    written as they are."""
+    def __getitem__(self, key: str | int) -> YamlMutableValue: ...
+    def __setitem__(self, key: str | int, value: Input) -> None: ...
+    def __delitem__(self, key: str | int) -> None: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[YamlMutableValue]: ...
+    def __bool__(self) -> bool: ...
+    def append(self, value: Input) -> None:
+        """Add an element at the end of an array."""
+        ...
+    def get(self, key: str) -> YamlMutableValue | None: ...
+    def items(self) -> Iterator[tuple[str, YamlMutableValue]]: ...
+    def as_int(self) -> int: ...
+    def as_float(self) -> float: ...
+    def as_bool(self) -> bool: ...
+    def as_str(self) -> str: ...
+    def to_python(self) -> Data:
+        """The plain data with the changes applied."""
+        ...
+
+
+class YamlRecordBatch:
+    """The records of one batch of a file. A record keeps its whole batch alive,
+    so keep only what you need."""
+    def __len__(self) -> int: ...
+    def __getitem__(self, index: int) -> YamlValue: ...
+    def __iter__(self) -> Iterator[YamlValue]: ...
+
+
+class YamlRecordIterator:
+    """The record batches of a file, read as they are asked. A call made while
+    another thread is inside ``next`` raises ``RuntimeError``."""
+    def __iter__(self) -> Self: ...
+    def __next__(self) -> YamlRecordBatch: ...
+    def close(self) -> None:
+        """Stop reading; the iterator then gives nothing."""
+        ...
+
+
+class YamlObjectBuilder:
+    """A record or a member that is an object, built member by member. Use it in a
+    ``with`` block; it ends the object on exit and drops the record when the block
+    raised. A call while an inner builder is open raises ``RuntimeError``."""
+    def member(self, key: str, value: Input) -> None: ...
+    def object(self, key: str) -> YamlObjectBuilder: ...
+    def array(self, key: str) -> YamlArrayBuilder: ...
+    def __enter__(self) -> Self: ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None: ...
+
+
+class YamlArrayBuilder:
+    """A member or an element that is an array, built element by element."""
+    def value(self, value: Input) -> None: ...
+    def object(self) -> YamlObjectBuilder: ...
+    def array(self) -> YamlArrayBuilder: ...
+    def __enter__(self) -> Self: ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None: ...
+
+
+class YamlWriter:
+    """Writes records to a YAML file, as the elements of one block sequence or as
+    the documents of a ``---`` stream. ``compress=None`` picks gzip from a
+    ``.gz`` suffix. A writer dropped without ``close()`` removes its output.
+    Not thread-safe."""
+    def __init__(
+        self,
+        path: str | os.PathLike[str],
+        *,
+        records: Literal["sequence", "documents"] = "sequence",
+        compress: bool | None = None,
+        indent: int = 2,
+    ) -> None: ...
+    def write(self, value: Input) -> None:
+        """Write one record."""
+        ...
+    def record(self) -> YamlObjectBuilder:
+        """Start one record that is built member by member."""
+        ...
+    def close(self) -> None:
+        """Finish the file. Safe to call twice."""
+        ...
+    def __enter__(self) -> Self: ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None: ...
+
+
+def yaml_parse(text: str) -> YamlValue:
+    """Parse one whole text."""
+    ...
+
+
+def yaml_loads(text: str) -> Data:
+    """Parse one whole text to plain data."""
+    ...
+
+
+def yaml_read(path: str | os.PathLike[str]) -> YamlValue:
+    """Parse one whole file, plain or gzip."""
+    ...
+
+
+def yaml_load(path: str | os.PathLike[str]) -> Data:
+    """Parse one whole file to plain data."""
+    ...
+
+
+def yaml_read_records(
+    path: str | os.PathLike[str], *, batch_bytes: int = 67108864
+) -> YamlRecordIterator:
+    """Stream the records of a file a batch at a time."""
+    ...
+
+
 class _RuntimeHolder(Protocol):
-    """An object that owns a native ``Runtime``, as ``dftracer.utils.Runtime`` does."""
+    """An object that owns a native ``Runtime``, as ``dftracer.utils.runtime.Runtime`` does."""
     @property
     def _native(self) -> Runtime: ...
 
@@ -542,7 +979,7 @@ def plan_lpt_partition(
 
 class StrAccessor:
     """The string methods of a Series, the base of ``Series.str``. The methods
-    that are exactly one kernel come from api.def; ``dftracer.utils.series``
+    that are exactly one kernel come from api.def; ``dftracer.utils.Series``
     adds the rest."""
     def __new__(cls, series: PublicSeries[Scalar]) -> Self: ...
     @property
@@ -580,7 +1017,7 @@ class StrAccessor:
 
 class DtAccessor:
     """The temporal methods of a Series, the base of ``Series.dt``;
-    ``dftracer.utils.series`` adds the methods."""
+    ``dftracer.utils.Series`` adds the methods."""
     def __new__(cls, series: PublicSeries[Scalar]) -> Self: ...
     @property
     def _s(self) -> PublicSeries[Scalar]: ...
@@ -588,7 +1025,7 @@ class DtAccessor:
 
 class ListAccessor:
     """The list methods of a Series, the base of ``Series.list``. The methods
-    that are exactly one kernel come from api.def; ``dftracer.utils.series``
+    that are exactly one kernel come from api.def; ``dftracer.utils.Series``
     adds the rest."""
     def __new__(cls, series: PublicSeries[Scalar]) -> Self: ...
     @property
@@ -772,10 +1209,14 @@ class Series(Generic[T_co]):
     def is_infinite(self) -> PublicSeries[bool]: ...
     def is_unique(self) -> PublicSeries[bool]: ...
     def is_duplicated(self) -> PublicSeries[bool]: ...
+    def isna(self) -> PublicSeries[bool]: ...
+    def notna(self) -> PublicSeries[bool]: ...
     def drop_nulls(self) -> Self: ...
+    def drop_nans(self) -> Self: ...
     def reverse(self) -> Self: ...
     def interpolate(self) -> PublicSeries[float]: ...
     def fill_null(self, value: bool | int | float | str) -> Self: ...
+    def fill_nan(self, value: int | float | None) -> Self: ...
     def clip(self, lower: int | float, upper: int | float) -> Self: ...
     def is_between(self, lower: int | float, upper: int | float) -> PublicSeries[bool]: ...
     def logical_not(self) -> PublicSeries[bool]: ...
@@ -931,7 +1372,7 @@ class Series(Generic[T_co]):
     def arg_sort(self, descending: bool = False, nulls_last: bool = False) -> PublicSeries[int]: ...
     def dictionary_encode(self) -> Self: ...
     def materialize(self) -> Self: ...
-    def _str_into(self, out: np.ndarray, na: NAType | None = None) -> None: ...
+    def _str_into(self, out: npt.NDArray[np.generic], na: NAType | None = None) -> None: ...
     def _np_parts(
         self, nullable: bool = False, na: NAType | None = None
     ) -> tuple[bytearray, bytearray | None, str]: ...
@@ -1036,6 +1477,8 @@ class LazyFrame:
     def tail(self, n: int) -> Self: ...
     def drop_nulls(self) -> Self: ...
     def fill_null(self, value: int | float) -> Self: ...
+    def drop_nans(self) -> Self: ...
+    def fill_nan(self, value: int | float | None) -> Self: ...
     def with_row_index(self, name: str) -> Self: ...
     def null_count(self) -> Self: ...
     def reduce(self, agg: str) -> Self: ...
@@ -1160,7 +1603,7 @@ class LazyFrame:
         really took and the counters the plugins added."""
         ...
     def collect(self, batch_size: int = 0, runtime: RuntimeArg = None) -> PublicDataFrame: ...
-    def sink(
+    def _sink_plugin(
         self,
         name: str,
         options: Mapping[str, str] | None = None,
@@ -1231,7 +1674,9 @@ class DataFrame:
     def tail(self, n: int) -> Self: ...
     def reverse(self) -> Self: ...
     def drop_nulls(self) -> Self: ...
-    def fill_null(self, value: int | float) -> Self: ...
+    def fill_null(self, value: bool | int | float | str) -> Self: ...
+    def drop_nans(self) -> Self: ...
+    def fill_nan(self, value: int | float | None) -> Self: ...
     def unique(self, subset: str | Sequence[str] | None = None) -> Self: ...
     def drop_duplicates(self, subset: str | Sequence[str] | None = None) -> Self: ...
     def lazy(self) -> PublicLazyFrame: ...
@@ -1459,6 +1904,38 @@ def _dataframe_from_columns(
     ...
 
 
+def _sink_output(
+    plan: PublicLazyFrame,
+    path: str,
+    kind: str,
+    mode: str,
+    compress: bool,
+    level: int,
+    member_size: int,
+    part_size: int,
+    partition_by: Sequence[str],
+    max_open_files: int,
+    max_partitions: int,
+    build_index: bool,
+    header_args: str | None,
+    raw_columns: Sequence[str],
+    known_rows: int,
+    runtime: RuntimeArg = None,
+) -> tuple[str, int, list[str]]:
+    """Run ``plan`` into ``path`` as ``kind`` ("events" or "records"): stage,
+    write, rename into place and index. Returns the root, the row count and the
+    written files. ``header_args`` is the args object of a records header
+    without its row count; ``known_rows`` is the row count when it is known
+    before the run, else -1."""
+    ...
+
+
+def _table_read_counters(reset: bool) -> dict[str, int]:
+    """What the table reads of this process did: chunks read and skipped by an
+    index, and files read indexed, streamed or whole; ``reset`` zeroes them."""
+    ...
+
+
 def collect_all(
     plans: Sequence[PublicLazyFrame], runtime: RuntimeArg = None
 ) -> list[PublicDataFrame]:
@@ -1555,19 +2032,24 @@ class TraceViewer:
         format: str | None = ...,
     ) -> None:
         """``files`` is a path (``str`` or ``os.PathLike``) or a sequence of
-        paths. One path that names a directory is scanned recursively for
-        traces; a directory inside a sequence raises ``ValueError``. A repeated
-        path counts once. A glob is not expanded, so it is a missing path,
-        and a missing path or a file that is not a trace raises a
+        paths, each a file, a directory (scanned recursively for traces) or a
+        glob (``*``, ``?``, ``[...]``, ``**``). A repeated file counts once.
+        A missing path with no wildcard or a file that is not a trace raises a
         ``DFTUtilsError`` when the plan runs (``collect()``), since nothing is
-        read before that. An empty sequence and an empty directory are views
-        of no rows."""
+        read before that. An empty sequence, an empty directory and a glob
+        with no match are views of no rows."""
         ...
     def lazy(self) -> PublicLazyFrame:
         """The plan as a LazyFrame."""
         ...
     def with_lazy(self, plan: PublicLazyFrame) -> Self:
         """This scan with ``plan`` (a LazyFrame over it) as its plan."""
+        ...
+    def _collect_counted(
+        self, runtime: RuntimeArg = None
+    ) -> tuple[PublicDataFrame, dict[str, int]]:
+        """The plan's rows and the counts of its scans (``events_scanned``,
+        ``chunks_scanned``, ``chunks_skipped``). Runs now."""
         ...
     def filter(self, dsl: object) -> Self:
         """Keep events matching a duql predicate (``str(dsl)``)."""
@@ -1631,6 +2113,12 @@ class TraceViewer:
     def filters_events(self) -> bool:
         """True while a filter still selects raw events. Reads no index."""
         ...
+    def is_table(self) -> bool:
+        """True when the files are dftu.table files."""
+        ...
+    def table_files(self) -> tuple[list[str], list[str]]:
+        """The header args (JSON text) and the path of each table file, in read order."""
+        ...
     def call_tree(
         self,
         partition: Sequence[str] | None = ...,
@@ -1675,9 +2163,6 @@ class TraceViewer:
         """Plan of a one-row frame whose ``partial`` column holds the
         serialized aggregation partial."""
         ...
-    def sink_json(self, path: str, /) -> PublicLazyFrame:
-        """Plan writing the selected events to ``path``; yields one stats row."""
-        ...
     def _index_records(
         self,
         shard_begin: int = 0,
@@ -1697,18 +2182,6 @@ class TraceViewer:
     ) -> dict[str, object]:
         """Persist this query as a materialized view. Runs now; returns the
         scan stats."""
-        ...
-    def export_trace(
-        self,
-        path: str,
-        compress: bool = True,
-        index: bool = False,
-        member_size: int = 0,
-        level: int = 6,
-        part_size: int = 0,
-        runtime: RuntimeArg = None,
-    ) -> dict[str, object]:
-        """Write a trace file now; returns the scan stats."""
         ...
     def merge_partials(self, partials: Sequence[bytes], /) -> PublicDataFrame:
         """Merge aggregate partials with this aggregation. No scan."""
@@ -1896,6 +2369,13 @@ def udf_lane_shutdown() -> None:
     ...
 
 
+def udf_lane_close_at_exit() -> None:
+    """udf_lane_shutdown for the exit handler. A thread other than this one
+    whose batch it cancels gets a bare SystemExit, which ends a daemon thread
+    without a traceback."""
+    ...
+
+
 class _UdafHandle:
     """A registered user-defined aggregate held for aggregates that call it.
     Opaque."""
@@ -1997,7 +2477,7 @@ def _memory_budget_advice(
     required_bytes: int, available_bytes: int = ...
 ) -> tuple[bool, int, int, int, int, str]:
     """(fits, required_bytes, peak_bytes, available_bytes, suggested_nodes,
-    warning); `dftracer.utils.memory_budget_advice` wraps it."""
+    warning); `dftracer.utils.runtime.memory_budget_advice` wraps it."""
     ...
 
 
@@ -2022,6 +2502,7 @@ _EXPORTS = (
     "T_co",
     "INPUT_FILE_PATTERNS",
     "PLUGIN_ABI_VERSION",
+    "TABLE_FORMAT_VERSION",
     "NUM_SHARDS",
     "IndexStatusDict",
     "DFTUtilsError",
@@ -2042,6 +2523,33 @@ _EXPORTS = (
     "_close_task_callbacks",
     "TaskHandle",
     "Runtime",
+    "TraceWriter",
+    "JsonKind",
+    "JsonValue",
+    "JsonMutableValue",
+    "JsonRecordBatch",
+    "JsonRecordIterator",
+    "JsonObjectBuilder",
+    "JsonArrayBuilder",
+    "JsonWriter",
+    "json_parse",
+    "json_loads",
+    "json_read",
+    "json_load",
+    "json_read_records",
+    "YamlKind",
+    "YamlValue",
+    "YamlMutableValue",
+    "YamlRecordBatch",
+    "YamlRecordIterator",
+    "YamlObjectBuilder",
+    "YamlArrayBuilder",
+    "YamlWriter",
+    "yaml_parse",
+    "yaml_loads",
+    "yaml_read",
+    "yaml_load",
+    "yaml_read_records",
     "_RuntimeHolder",
     "get_default_runtime",
     "peek_default_runtime",
@@ -2076,6 +2584,8 @@ _EXPORTS = (
     "_dataframe_from_bytes",
     "_dataframe_from_arrow",
     "_dataframe_from_columns",
+    "_sink_output",
+    "_table_read_counters",
     "collect_all",
     "merge_flamegraph_partials",
     "duql_canonical",
@@ -2107,6 +2617,7 @@ _EXPORTS = (
     "udf_unregister",
     "udf_lane_stats",
     "udf_lane_shutdown",
+    "udf_lane_close_at_exit",
     "_UdafHandle",
     "udaf_lookup",
     "udaf_names",

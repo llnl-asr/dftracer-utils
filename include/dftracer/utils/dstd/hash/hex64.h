@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DSTD_HASH_HEX64_H
 
 #include <dftracer/utils/dstd/ascii.h>
+#include <dftracer/utils/dstd/hex.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 
@@ -36,9 +37,8 @@ inline Optional<std::uint64_t> parse_hex64(StringView sv) {
 
 /// Writes HEX64_DIGITS digits into `out`, which must have room.
 inline void format_hex64(std::uint64_t v, char* out) {
-    static constexpr char DIGITS[] = "0123456789abcdef";
     for (std::size_t i = 0; i < HEX64_DIGITS; ++i) {
-        out[HEX64_DIGITS - 1 - i] = DIGITS[v & 0xF];
+        out[HEX64_DIGITS - 1 - i] = HEX_LOWER[v & 0xF];
         v >>= 4;
     }
 }

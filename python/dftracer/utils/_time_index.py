@@ -18,16 +18,26 @@ from typing import TYPE_CHECKING, Callable, Literal, Optional, Sequence, Tuple, 
 
 from . import dftracer_utils_ext as _ext
 from ._convert import _like
+from ._enums import UNIT_CODES, UNIT_NS, DType, rule_to_units
 from ._levels import pick_levels
-from ._series_index import drop_levels, levels_of, names_of, positions, public_name, with_levels
-from .enums import UNIT_CODES, UNIT_NS, DType, rule_to_units
+from ._series_index import (
+    column_series as _column,
+)
+from ._series_index import (
+    drop_levels,
+    levels_of,
+    names_of,
+    positions,
+    public_name,
+    with_levels,
+)
 
 if TYPE_CHECKING:
     from typing_extensions import Self
 
-    from .dataframe import DataFrame
-    from .expr import Agg
-    from .series import Series
+    from ._dataframe import DataFrame
+    from ._expr import Agg
+    from ._series import Series
 
 Frameish = Union["Series", "DataFrame"]
 _Spec = Tuple[str, Optional[str], str]
@@ -64,7 +74,7 @@ _ORIGINS = ("epoch", "start", "start_day", "end", "end_day")
 
 
 def _series() -> type[Series]:
-    from .series import Series
+    from ._series import Series
 
     return Series
 
@@ -133,7 +143,7 @@ def _kind_error(shape: str) -> TypeError:
 
 
 def _levels(obj: Frameish) -> tuple[list[str], list[Series]]:
-    from .series import Series
+    from ._series import Series
 
     if isinstance(obj, Series):
         return names_of(obj), levels_of(obj)
@@ -556,7 +566,7 @@ _OHLC = (("open", "first"), ("high", "max"), ("low", "min"), ("close", "last"))
 
 
 def _spec(func: str, column: str | None, out: str) -> Agg:
-    from .expr import Agg, Col
+    from ._expr import Agg, Col
 
     if func == "size":
         return Agg("count", None, out)
@@ -601,21 +611,21 @@ class TimeResampler:
     def _frame(self, ordered: bool) -> DataFrame:
         """The rows with their bin; ``ordered`` puts them in time order (a stable
         sort), which ``first`` and ``last`` read."""
-        from .dataframe import DataFrame
+        from ._dataframe import DataFrame
 
         ids = self._bins.ids
         frame = DataFrame.from_dict({**self._data, _BIN: ids})
         ticks = self._bins.ticks
         if ordered and not ticks.is_sorted():
             frame = frame.with_column(_TICK, ticks)
-        keep = ids.notna() if ids.null_count else None
+        keep = ids.is_not_null() if ids.null_count else None
         frame = frame if keep is None else frame.filter(keep)
         return frame.sort_by(_TICK) if _TICK in frame else frame
 
     def _run(self, specs: list[_Spec], as_series: bool = False) -> Series | DataFrame:
         """The aggregates ``(out, column, func)`` per bin, empty bins listed."""
-        from .dataframe import DataFrame
-        from .groupby import GroupBy
+        from ._dataframe import DataFrame
+        from ._groupby import GroupBy
 
         frame = self._frame(any(f in ("first", "last") for _, _, f in specs))
         plain = [_spec(f, c, o) for o, c, f in specs if f != "nunique"]
@@ -640,7 +650,7 @@ class TimeResampler:
         full = grid.join(counted, on=_BIN, how="left")
         for out, _, func in specs:
             if func in _ZERO or func == "prod":
-                filled = _ext.DataFrame.__getitem__(full, out).fillna(1 if func == "prod" else 0)
+                filled = _ext.DataFrame.__getitem__(full, out).fill_null(1 if func == "prod" else 0)
                 full = full.with_column(out, filled)
         outs = [o for o, _, _ in specs]
         out_frame = full.with_column(self._name, self._bins.labels).select(*outs, self._name)
@@ -767,10 +777,6 @@ def _func_name(func: object) -> str:
     return func
 
 
-def _column(frame: DataFrame, name: str) -> Series:
-    return _ext.DataFrame.__getitem__(frame, name)
-
-
 def resample(
     obj: Frameish,
     rule: object,
@@ -783,7 +789,7 @@ def resample(
 ) -> TimeResampler:
     """The resampler of ``obj`` by its Timestamp index level, or by the column
     ``on`` of a frame."""
-    from .series import Series
+    from ._series import Series
 
     series = obj if isinstance(obj, Series) else None
     parse_rule(rule, "ns", False)
@@ -889,7 +895,7 @@ def between_time_mask(
     lo, hi = _time_us(start_time, True), _time_us(end_time, True)
     tod = _time_of_day_us(key)
     if key.null_count:
-        tod = tod.fillna(-1)  # pandas reads a missing instant as the time -1
+        tod = tod.fill_null(-1)  # pandas reads a missing instant as the time -1
     after = tod.ge(lo) if inclusive in ("both", "left") else tod.gt(lo)
     before = tod.le(hi) if inclusive in ("both", "right") else tod.lt(hi)
     return after.logical(0, before) if lo <= hi else after.logical(1, before)
@@ -904,7 +910,7 @@ def retime(obj: Frameish, level: LevelArg, convert: Callable[[Series], Series]) 
     at = _level_of(names, level)
     if not names or not is_timestamp(levels[at]):
         raise TypeError("index is not a valid DatetimeIndex or PeriodIndex")
-    from .series import Series
+    from ._series import Series
 
     out = convert(levels[at])
     if isinstance(obj, Series):
@@ -1088,8 +1094,8 @@ def _is_grid(key: Series, freq: object) -> bool:
 def _gather(obj: Frameish, name: str, rows: Series, grid: Series) -> Frameish:
     """``obj`` with the row ``rows[i]`` at grid instant ``i`` (a null row for -1)
     under the Timestamp index ``grid`` named ``name``."""
-    from .dataframe import DataFrame
-    from .series import Series
+    from ._dataframe import DataFrame
+    from ._series import Series
 
     if isinstance(obj, Series):
         return with_levels(drop_levels(obj).gather(rows), [name], [grid])
@@ -1152,7 +1158,7 @@ class TimeIndexMixin:
         return cast("Frameish", self)
 
     def _kind(self) -> str:
-        from .series import Series
+        from ._series import Series
 
         return "Series" if isinstance(self, Series) else "DataFrame"
 

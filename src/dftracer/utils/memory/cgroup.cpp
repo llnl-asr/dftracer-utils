@@ -16,7 +16,7 @@ CgroupPaths parse_cgroup_paths(std::string_view listing,
         std::string_view line = listing.substr(pos, eol - pos);
         pos = eol + 1;
         while (!line.empty() && line.back() == '\r') line.remove_suffix(1);
-        if (line.size() >= 3 && line.substr(0, 3) == "0::") {
+        if (line.size() >= 3 && line.starts_with("0::")) {
             out.v2 = std::string(line.substr(3));
             continue;
         }

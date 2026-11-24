@@ -9,8 +9,9 @@ import shutil
 
 import pytest
 
-from dftracer.utils import Runtime, jit
+from dftracer.utils import jit
 from dftracer.utils.plugins import Plugins
+from dftracer.utils.runtime import Runtime
 
 from .jit_common import assert_located, compile_error
 

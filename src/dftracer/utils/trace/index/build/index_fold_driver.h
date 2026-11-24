@@ -25,6 +25,7 @@
 #include <dftracer/utils/memory/detail/pool_access.h>
 #include <dftracer/utils/trace/index/build/index_visitor.h>
 #include <dftracer/utils/trace/index/build/parse_gate.h>
+#include <dftracer/utils/trace/index/build/table_rows.h>
 #include <dftracer/utils/trace/index/extensions/bloom_fold.h>
 #include <dftracer/utils/trace/index/extensions/extension_registry.h>
 #include <dftracer/utils/trace/index/record_schema.h>
@@ -239,6 +240,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
         dstd::StringView chunk, std::size_t checkpoint_idx) override {
         const std::size_t chunk_begin = plain_offset_;
         plain_offset_ += chunk.size();
+        if (!table_probed_) probe_table_header(chunk);
         // A line straddling this chunk's end is carried into the next chunk, so
         // it is parsed once and attributed to the chunk where it completes.
         const std::size_t cut = chunk.rfind('\n');
@@ -307,6 +309,23 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
         co_return dstd::Result<void>{};
     }
 
+    /// Reads line 1 of the file once it is whole, to learn whether the file is
+    /// a dftu.table. The first chunk of a file starts at its first line.
+    void probe_table_header(dstd::StringView chunk) {
+        static constexpr std::size_t MAX_HEADER_LINE = std::size_t{16} << 20;
+        const std::size_t nl = chunk.find('\n');
+        if (nl == dstd::StringView::npos) {
+            if (partial_.size() + chunk.size() > MAX_HEADER_LINE)
+                table_probed_ = true;
+            return;
+        }
+        table_probed_ = true;
+        if (decoder_ != trace::index::Decoder::Dftracer) return;
+        dstd::String line = partial_;
+        line.append(chunk.substr(0, nl));
+        table_ = TableShape::from_header_line(line);
+    }
+
     /// Steps the folds with every chunk still being parsed, in chunk order.
     /// The first error a fold step gave, once every task in flight is done.
     coro::CoroTask<dstd::Result<void>> flush() override {
@@ -323,6 +342,23 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
     /// Lines the DOM parser refused and the on-demand read could not keep, such
     /// as a cropped line. Complete once flush() has stepped every piece.
     std::size_t dropped_lines() const { return dropped_lines_; }
+
+    /// Whether the file is a dftu.table whose rows are all whole: every line
+    /// after the header, `total_lines - 1` of them, is valid JSON that names
+    /// every declared field, and they are as many as the header says. Complete
+    /// once flush() has stepped every piece.
+    bool table_rows_complete(std::uint64_t total_lines) const {
+        return table_ && table_rows_complete(total_lines, table_->nrows());
+    }
+
+    /// The same for a header that holds `header_rows` as its row count, for a
+    /// writer that patches the header after the rows.
+    bool table_rows_complete(std::uint64_t total_lines,
+                             std::int64_t header_rows) const {
+        return table_ && dropped_lines_ == 0 && header_rows >= 0 &&
+               table_rows_ == static_cast<std::uint64_t>(header_rows) &&
+               total_lines == table_rows_ + 1;
+    }
 
     void seal() {
         trace::views::detail::ScanUnit unit;
@@ -348,6 +384,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
         bool skip_never_indexed;
         bool keep_lines;
         dstd::Vector<dstd::String> extra_fields;
+        dstd::SharedPtr<const TableShape> table;
 #if DFTRACER_UTILS_TEST_PROBES
         mutable std::atomic<std::uint64_t> parsing{0};
 #endif
@@ -374,6 +411,8 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
         dstd::Vector<dstd::StringView> lines;
         // Lines the DOM parser refused and the on-demand read could not keep.
         std::size_t dropped = 0;
+        // Table rows of the piece that hold every declared field.
+        std::size_t table_rows = 0;
         // The strings of a piece parsed ahead, interned here with ids of their
         // own, and given the file's ids in piece order when the folds see it.
         dstd::UniquePtr<dftracer::utils::dstd::StringIntern> local;
@@ -420,7 +459,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
             config_ = dstd::make_shared<const ParseConfig>(
                 intern_, decoder_, record_schema_, needs_args_, capture_schema_,
                 skip_never_indexed_, builders_ && builders_->takes_lines(),
-                extra_fields_);
+                extra_fields_, table_);
         return config_;
     }
 
@@ -576,9 +615,12 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
                 });
         } else {
             trace::views::detail::DecodeHints refused_hints;
+            dstd::Optional<TableRowCheck> table;
+            if (cfg.table) table.emplace(*cfg.table);
             trace::parse_lines(
                 parser, dstd::StringView(c.buf->data(), total),
                 [&](simdjson::dom::element root, dstd::StringView line) {
+                    if (table) table->row(root);
                     if (!trace::views::detail::append_dftracer_record(
                             *c.batch, root, intern, cfg.needs_args,
                             cfg.capture_schema, hints, &cache))
@@ -594,6 +636,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
                         ++c.dropped;
                         return;
                     }
+                    if (table) table->row(*parsed);
                     if (!trace::views::detail::append_dftracer_record(
                             *c.batch, *parsed, intern, cfg.needs_args,
                             cfg.capture_schema, refused_hints, &cache,
@@ -604,6 +647,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
                     }
                     if (cfg.keep_lines) c.lines.push_back(line);
                 });
+            if (table) c.table_rows = table->complete_rows();
         }
     }
 
@@ -634,6 +678,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
 
     dstd::Result<void> step(Parsed& c) {
         dropped_lines_ += c.dropped;
+        table_rows_ += c.table_rows;
         const auto unit = unit_of(c);
         trace::views::detail::FoldBatch fb{c.batch->events(), unit};
         for (auto* f : folds_) {
@@ -668,6 +713,7 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
     // order while the folds and this thread run at once.
     coro::CoroTask<void> step_ahead(dstd::UniquePtr<Parsed> done) {
         dropped_lines_ += done->dropped;
+        table_rows_ += done->table_rows;
         if (builders_)
             builders_->step(done->checkpoint_idx, done->lines,
                             done->batch->events(), *intern_);
@@ -890,6 +936,11 @@ class IndexFoldDriver : public trace::index::build::IndexVisitor {
     std::size_t plain_offset_ = 0;
     dstd::String file_path_;
     std::size_t dropped_lines_ = 0;
+    // Set when line 1 of the file is a dftu.table header; its rows are then
+    // checked as they are parsed.
+    dstd::SharedPtr<const TableShape> table_;
+    bool table_probed_ = false;
+    std::size_t table_rows_ = 0;
     dstd::String index_path_;
     dstd::Vector<dstd::String> extra_fields_;
     trace::index::extensions::ExtensionBuilders* builders_ = nullptr;

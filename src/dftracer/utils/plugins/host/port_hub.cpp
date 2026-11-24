@@ -136,7 +136,7 @@ dstd::Result<dstd::String> qualify_port_name(dstd::StringView plugin,
                 common::ErrorCode::InvalidArgument, name);
         }
     }
-    if (name.substr(0, 5) == "dftu.") {
+    if (name.starts_with("dftu.")) {
         return common::make_error<
             "port name '{}' is in the 'dftu.' namespace, which belongs to the "
             "host">(common::ErrorCode::InvalidArgument, name);
@@ -147,8 +147,8 @@ dstd::Result<dstd::String> qualify_port_name(dstd::StringView plugin,
             common::ErrorCode::InvalidArgument, name);
     }
     const dstd::String prefix = dstd::fmt<"plugin.{}.">(plugin);
-    if (name.substr(0, 7) == "plugin.") {
-        *is_own = name.substr(0, prefix.size()) == prefix;
+    if (name.starts_with("plugin.")) {
+        *is_own = name.starts_with(prefix);
         return dstd::String(name);
     }
     *is_own = true;

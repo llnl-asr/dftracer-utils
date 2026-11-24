@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/ascii.h>
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/string.h>
@@ -72,13 +73,12 @@ dstd::String create_ns_pfw_gz(dstd::String dir) {
             5000000000ULL + static_cast<unsigned long long>(i) * 100000ULL;
         unsigned long long dur =
             50000ULL * static_cast<unsigned long long>(1 + (i % 5));
-        char buf[256];
-        std::snprintf(
-            buf, sizeof(buf),
-            "{\"id\":%d,\"name\":\"read\",\"cat\":\"posix\",\"pid\":1,"
-            "\"tid\":%d,\"ts\":%llu,\"dur\":%llu,\"ph\":1}\n",
-            i, 1000 + i % 3, ts, dur);
-        gzputs(f, buf);
+        dstd::String line;
+        dstd::fmt_append<
+            "{\"id\":{},\"name\":\"read\",\"cat\":\"posix\","
+            "\"pid\":1,\"tid\":{},\"ts\":{},\"dur\":{},\"ph\":1}\n">(
+            line, i, 1000 + i % 3, ts, dur);
+        gzputs(f, line.c_str());
     }
     gzclose(f);
     return path;

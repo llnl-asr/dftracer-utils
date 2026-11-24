@@ -48,6 +48,13 @@ void set_typed_py_error(const std::exception &e);
 // py_error_type_for chooses for it.
 void set_py_error(const dftracer::utils::dstd::Error &error);
 
+/// Marks that an exit handler on this thread is about to cancel work that
+/// other threads wait for. From then on, both setters above raise a cancelled
+/// error as a bare SystemExit on any other thread: those threads are daemon
+/// threads, and threading ends a thread on exactly SystemExit without writing
+/// to stderr, which the interpreter flushes as it exits.
+void mark_exit_cancel() noexcept;
+
 }  // namespace dftracer::utils::python::core
 
 #endif  // DFTRACER_UTILS_PYTHON_CORE_ERRORS_H

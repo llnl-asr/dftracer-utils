@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DSTD_BIG_ENDIAN_H
 #define DFTRACER_UTILS_DSTD_BIG_ENDIAN_H
 
+#include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/varint.h>
 
@@ -45,6 +46,17 @@ inline std::uint32_t read_u32_be(const std::uint8_t* p) {
 }
 inline std::uint64_t read_u64_be(const std::uint8_t* p) {
     return read_be<std::uint64_t>(p);
+}
+/// The view forms read the first bytes of a view that holds at least that
+/// many; they do not check the size.
+inline std::uint16_t read_u16_be(ByteView v) {
+    return read_be<std::uint16_t>(v.as<std::uint8_t>());
+}
+inline std::uint32_t read_u32_be(ByteView v) {
+    return read_be<std::uint32_t>(v.as<std::uint8_t>());
+}
+inline std::uint64_t read_u64_be(ByteView v) {
+    return read_be<std::uint64_t>(v.as<std::uint8_t>());
 }
 /// Reads the bit pattern of a double, NaN payloads included.
 inline double read_f64_be(const std::uint8_t* p) {

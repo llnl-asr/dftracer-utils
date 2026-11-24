@@ -58,12 +58,12 @@ bool is_accpat_field(dstd::StringView f) { return f == "acc_pat"; }
 // to the underlying field name and `arg_only` (append_arg vs append_value).
 bool is_agg_key_field(dstd::StringView sel, dstd::StringView& field,
                       bool& arg_only) {
-    if (sel.substr(0, AGG_KEY_ARG_PREFIX.size()) == AGG_KEY_ARG_PREFIX) {
+    if (sel.starts_with(AGG_KEY_ARG_PREFIX)) {
         field = sel.substr(AGG_KEY_ARG_PREFIX.size());
         arg_only = true;
         return true;
     }
-    if (sel.substr(0, AGG_KEY_FIELD_PREFIX.size()) == AGG_KEY_FIELD_PREFIX) {
+    if (sel.starts_with(AGG_KEY_FIELD_PREFIX)) {
         field = sel.substr(AGG_KEY_FIELD_PREFIX.size());
         arg_only = false;
         return true;
@@ -79,8 +79,7 @@ bool is_agg_key_field(dstd::StringView sel, dstd::StringView& field,
 // An agg-engine numeric-arg value-column request (see native_row_fold.h). Sets
 // `name` to the arg name (or the "size" pseudo-field).
 bool is_num_arg_field(dstd::StringView sel, dstd::StringView& name) {
-    if (sel.substr(0, AGG_NUM_ARG_PREFIX.size()) != AGG_NUM_ARG_PREFIX)
-        return false;
+    if (!sel.starts_with(AGG_NUM_ARG_PREFIX)) return false;
     name = sel.substr(AGG_NUM_ARG_PREFIX.size());
     return true;
 }
@@ -88,8 +87,7 @@ bool is_num_arg_field(dstd::StringView sel, dstd::StringView& name) {
 // An agg-engine fold-derived value-column request (see native_row_fold.h). Sets
 // `name` to the derived field ("size" or "te").
 bool is_derived_agg_field(dstd::StringView sel, dstd::StringView& name) {
-    if (sel.substr(0, AGG_DERIVED_PREFIX.size()) != AGG_DERIVED_PREFIX)
-        return false;
+    if (!sel.starts_with(AGG_DERIVED_PREFIX)) return false;
     name = sel.substr(AGG_DERIVED_PREFIX.size());
     return true;
 }
@@ -119,7 +117,7 @@ struct WindowSel {
 // "<prefix><lo>:<hi>:<rest>", as window_token and clip_token write it.
 bool parse_window_sel(dstd::StringView sel, dstd::StringView prefix,
                       WindowSel& w) {
-    if (sel.substr(0, prefix.size()) != prefix) return false;
+    if (!sel.starts_with(prefix)) return false;
     const dstd::StringView s = sel.substr(prefix.size());
     const std::size_t a = s.find(':');
     if (a == dstd::StringView::npos) return false;
@@ -1113,7 +1111,7 @@ dstd::StringView window_inner(dstd::StringView sel) {
 }
 
 bool is_clip_token(dstd::StringView sel) {
-    return sel.substr(0, CLIP_PREFIX.size()) == CLIP_PREFIX;
+    return sel.starts_with(CLIP_PREFIX);
 }
 
 dstd::Vector<dstd::String> row_fold_extra_captures(
@@ -1176,8 +1174,7 @@ bool query_field_is_arg_free(dstd::StringView f) {
 }
 
 dstd::String canonical_row_column_name(dstd::StringView sel, bool by_path) {
-    if (sel.substr(0, WINDOW_PREFIX.size()) == WINDOW_PREFIX ||
-        is_clip_token(sel))
+    if (sel.starts_with(WINDOW_PREFIX) || is_clip_token(sel))
         return dstd::String(sel);
     dstd::StringView spec;
     dstd::StringView path;

@@ -65,7 +65,7 @@ class TestPlugins:
                 plugins.run(empty)
 
     def test_bad_config_json_raises_value_error(self):
-        from dftracer.utils import DFTUtilsValueError
+        from dftracer.utils.errors import DFTUtilsValueError
         from dftracer.utils.plugins import _NativePlugins
 
         with pytest.raises(DFTUtilsValueError, match="failed to parse plugin config"):

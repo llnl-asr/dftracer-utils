@@ -60,7 +60,7 @@ another registered record schema instead of the one detected from them.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          view = TraceViewer("traces/")                 # directory, file, or list of files
          filtered = view.filter('cat == "POSIX" and dur >= 1000')
@@ -180,7 +180,8 @@ while a bare envelope field such as ``dur`` keeps the event's own value:
 
 .. code-block:: python
 
-   from dftracer.utils import TraceViewer, col
+   from dftracer.utils import col
+   from dftracer.utils.trace import TraceViewer
 
    slow = (
        TraceViewer("dist.pfw.gz")
@@ -196,8 +197,12 @@ Export
 
 ``sink_json`` streams matching events verbatim as newline-delimited JSON to
 an ``ExportSink`` (a re-indexable dftracer trace if the sink is a file/gzip
-writer). ``sink_trace`` writes a new multi-member, re-indexable trace
-through the parallel writer - the engine behind ``dftracer_view --merge``.
+writer). ``sink_trace`` writes the matching event lines as they are (projected
+when the view selects fields) as a new multi-member trace, the engine behind
+``dftracer_view --merge``. The output is staged beside the target and renamed
+over it when complete. With ``build_index`` the index is built while the files
+are written, without the aggregation tier; with ``part_size`` the path is a
+folder of ``part-NNNNN.pfw.gz`` files.
 ``sink_counters`` runs the view's ``group_by`` +
 ``agg`` and emits each result row as a ``ph=2`` counter event, which with a
 ``time_bucket`` set produces the aggregator's counter-trace format:
@@ -218,9 +223,9 @@ through the parallel writer - the engine behind ``dftracer_view --merge``.
        .sink_counters(sink)
        .get();
 
-In Python, ``TraceViewer.sink_json(path)`` streams the selected events as
-NDJSON and ``TraceViewer.export_trace(path)`` writes a trace file (counter
-events when the viewer aggregates); both return the scan stats dict. See
+In Python, ``TraceViewer.sink_trace(path)`` writes the selected events as an
+indexed trace file, each line as the trace holds it, and ``TraceViewer.sink_table(path)`` writes any plan, such
+as an aggregation, as typed records; both return a ``SinkSummary``. See
 :doc:`../../api/trace_viewer`.
 
 Custom folds: map_batches
@@ -318,7 +323,7 @@ two branches after the shared scan, goes through the lower-level
 path. From Python the same fused scan is ``TraceViewer.session()``:
 ``s.collect(plan)`` registers any lazy plan over the view (an aggregation, a
 row filter, a ``call_tree`` / ``flamegraph`` plan, the ``containment()``
-result), and ``s.sink_json(viewer, path)``, ``s.materialize(viewer)`` and
+result), and ``s.sink_trace(viewer, path)``, ``s.materialize(viewer)`` and
 ``s.attach(plugins)`` register the other branches, each returning a ``Handle``
 resolved on ``execute()``. :func:`~dftracer.utils.collect_all` shares the scan
 the same way without a session. See :doc:`sessions` and
@@ -376,7 +381,7 @@ coordinator publishing the result:
    coordinator.register_materialized(mv_dir);
 
 In Python the same steps are ``TraceViewer.materialize_dir()``,
-``TraceViewer.export_trace(path, index=True)`` and
+``TraceViewer.sink_trace(path)`` and
 ``TraceViewer.register_materialized(dir)``. Either way it is a building block
 for a caller-driven distributed materialize (the caller owns rank coordination
 and the barrier between steps 2 and 3, same as the distributed patterns in

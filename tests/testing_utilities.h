@@ -33,7 +33,7 @@
 extern "C" {
 #endif
 
-// `n`, or under Valgrind `n / d` but at least `floor`.
+// `n`, or under Valgrind `n / d` but at least `floor`. C++ tests only.
 #ifdef __cplusplus
 #ifdef DFTRACER_UTILS_VALGRIND_MODE
 #define DFTRACER_UTILS_VALGRIND_SCALE_MIN(n, d, floor)             \
@@ -42,16 +42,9 @@ extern "C" {
 #else
 #define DFTRACER_UTILS_VALGRIND_SCALE_MIN(n, d, floor) ((size_t)(n))
 #endif
-#else
-#define DFTRACER_UTILS_VALGRIND_SCALE_MIN(n, d, floor)  \
-    (getenv("DFTRACER_UTILS_VALGRIND")                  \
-         ? ((size_t)(n) / (size_t)(d) < (size_t)(floor) \
-                ? (size_t)(floor)                       \
-                : (size_t)(n) / (size_t)(d))            \
-         : (size_t)(n))
-#endif
 #define DFTRACER_UTILS_VALGRIND_SCALE(n, d) \
     DFTRACER_UTILS_VALGRIND_SCALE_MIN(n, d, 10)
+#endif
 
 // C API for testing utilities
 typedef struct test_environment* test_environment_handle_t;
@@ -302,8 +295,11 @@ inline int run_process(
 inline dftracer::utils::dstd::String find_binary_by_name(
     dftracer::utils::dstd::CStringView env_name,
     dftracer::utils::dstd::StringView name) {
-    const char* env_path = std::getenv(env_name.c_str());
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
+    const auto env_path = dftracer::utils::common::Env::get(env_name);
+    if (env_path.has_value()) {
+        const dftracer::utils::dstd::String path(*env_path);
+        if (::access(path.c_str(), X_OK) == 0) return path;
+    }
     for (const dftracer::utils::dstd::String prefix :
          {"./", "../", "../../", "../bin/", "../../bin/"}) {
         dftracer::utils::dstd::String path = prefix;
@@ -359,9 +355,10 @@ void append_text(dftracer::utils::dstd::String& out, const T& value) {
         out += dftracer::utils::dstd::to_string(value);
     } else if constexpr (std::is_floating_point_v<T>) {
         char text[32];
-        const int n =
-            std::snprintf(text, sizeof(text), "%g", static_cast<double>(value));
-        out.append(text, static_cast<std::size_t>(n));
+        const char* const end = dftracer::utils::dstd::to_chars_general(
+            text, text + sizeof(text), static_cast<double>(value), 6);
+        out.append(text,
+                   end != nullptr ? static_cast<std::size_t>(end - text) : 0);
     } else {
         out.append(dftracer::utils::dstd::StringView(value));
     }

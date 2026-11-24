@@ -14,6 +14,12 @@ Command-line tools and building blocks for preparing, replaying and generating t
 
       Write multi-member gzip or split a trace into chunks.
 
+   .. grid-item-card:: Read and write JSON and YAML
+      :link: io/formats
+      :link-type: doc
+
+      Stream large files in batches, edit records and write them back.
+
    .. grid-item-card:: Replay a trace
       :link: tools/replay
       :link-type: doc
@@ -48,6 +54,7 @@ Command-line tools and building blocks for preparing, replaying and generating t
    :hidden:
 
    io/compression
+   io/formats
    tools/replay
    tools/dlio-config
    tools/genesis-gen-dist

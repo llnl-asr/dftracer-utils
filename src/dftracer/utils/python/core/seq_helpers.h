@@ -94,12 +94,11 @@ inline bool parse_string_seq(
 
 // Append one path of the `files` argument to `paths` unless it is there
 // already; `known` holds the paths added so far. `item` is a str or an
-// os.PathLike that gives a str; bytes and any other type set a TypeError. A
-// directory sets a ValueError when `reject_directory` is set.
+// os.PathLike that gives a str; bytes and any other type set a TypeError.
 inline bool add_trace_path(
     PyObject* item,
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& paths,
-    dftracer::utils::dstd::StringViewSet& known, bool reject_directory) {
+    dftracer::utils::dstd::StringViewSet& known) {
     if (PyBytes_Check(item)) {
         PyErr_SetString(PyExc_TypeError,
                         "a path must be a str or an os.PathLike of str");
@@ -121,18 +120,6 @@ inline bool add_trace_path(
     }
     const dftracer::utils::dstd::StringView path(s,
                                                  static_cast<std::size_t>(len));
-    if (reject_directory) {
-        const auto is_dir = dftracer::utils::dstd::fs::is_directory(
-            dftracer::utils::dstd::PathView(path));
-        if (is_dir.has_value() && *is_dir) {
-            PyErr_Format(PyExc_ValueError,
-                         "a directory must be the only path, not an item of "
-                         "a list: %U",
-                         fs);
-            Py_DECREF(fs);
-            return false;
-        }
-    }
     if (known.find(path) == known.end()) {
         paths.emplace_back(path);
         known.emplace(path);
@@ -141,26 +128,16 @@ inline bool add_trace_path(
     return true;
 }
 
-// Read the `files` argument of TraceViewer and Indexer: one path, a folder,
-// or a sequence of paths. A path is a str or an os.PathLike. One path that
-// names a directory sets `dir`; any other single path is one entry of `paths`.
-// A sequence fills `paths` in order and keeps the first of equal paths; a
-// directory in it sets a ValueError. Any other type sets a TypeError.
+// Read the `files` argument of TraceViewer and Indexer: one path or a sequence
+// of paths, each a str or an os.PathLike. A path is a file, a directory or a
+// glob; the C++ input expansion tells them apart. A sequence fills `paths` in
+// order and keeps the first of equal paths. Any other type sets a TypeError.
 inline bool parse_trace_files(
     PyObject* files,
-    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& paths,
-    dftracer::utils::dstd::Optional<dftracer::utils::dstd::String>& dir) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String>& paths) {
     dftracer::utils::dstd::StringViewSet known;
-    if (PyUnicode_Check(files) || PyObject_HasAttrString(files, "__fspath__")) {
-        if (!add_trace_path(files, paths, known, false)) return false;
-        const auto is_dir = dftracer::utils::dstd::fs::is_directory(
-            dftracer::utils::dstd::PathView(paths.back()));
-        if (is_dir.has_value() && *is_dir) {
-            dir = std::move(paths.back());
-            paths.pop_back();
-        }
-        return true;
-    }
+    if (PyUnicode_Check(files) || PyObject_HasAttrString(files, "__fspath__"))
+        return add_trace_path(files, paths, known);
     // A tuple copy: a user __fspath__ may change the caller's list.
     if (!PySequence_Check(files)) {
         PyErr_SetString(PyExc_TypeError,
@@ -171,7 +148,7 @@ inline bool parse_trace_files(
     if (!seq) return false;
     const Py_ssize_t n = PyTuple_GET_SIZE(seq);
     for (Py_ssize_t i = 0; i < n; ++i) {
-        if (!add_trace_path(PyTuple_GET_ITEM(seq, i), paths, known, true)) {
+        if (!add_trace_path(PyTuple_GET_ITEM(seq, i), paths, known)) {
             Py_DECREF(seq);
             return false;
         }

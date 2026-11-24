@@ -10,7 +10,7 @@ import pytest
 pa = pytest.importorskip("pyarrow")
 
 from dftracer.utils import DataFrame, Series, col  # noqa: E402
-from dftracer.utils.enums import DType  # noqa: E402
+from dftracer.utils._enums import DType  # noqa: E402
 
 
 def _expr_frame():

@@ -15,7 +15,8 @@ namespace dftracer::utils::json {
 
 namespace detail {
 struct DomState;
-}
+struct DomParserState;
+}  // namespace detail
 
 /// A value of a @ref DomDocument: a small handle that holds no copy. It and
 /// every view it gives stay valid until the next parse by its document or the
@@ -88,10 +89,36 @@ class DomDocument {
 
     DomValue root() const;
 
+    /// The bytes the document holds in memory: the tape, the string bytes and
+    /// its own bookkeeping. For a document made by @ref DomParser this is what
+    /// the text of the record needs, not what the parser sized it to.
+    std::size_t bytes() const;
+
    private:
+    friend class DomParser;
+
     explicit DomDocument(dstd::UniquePtr<detail::DomState> state);
 
     dstd::UniquePtr<detail::DomState> state_;
+};
+
+/// Parses many texts with one parser, each into a @ref DomDocument of its own
+/// that holds only the bytes its text needs, so a document can be kept after
+/// the next parse. Use it for the lines of a file. Move only. Not thread safe.
+class DomParser {
+   public:
+    DomParser();
+    DomParser(DomParser&&) noexcept;
+    DomParser& operator=(DomParser&&) noexcept;
+    ~DomParser();
+    DomParser(const DomParser&) = delete;
+    DomParser& operator=(const DomParser&) = delete;
+
+    /// As @ref DomDocument::parse.
+    dstd::Result<DomDocument> parse(dstd::StringView text);
+
+   private:
+    dstd::UniquePtr<detail::DomParserState> state_;
 };
 
 }  // namespace dftracer::utils::json

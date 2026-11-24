@@ -30,7 +30,7 @@ an index reads gzip only (see :doc:`troubleshooting`).
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          view = TraceViewer("traces/")
 
@@ -61,7 +61,7 @@ last indexed, so explicit indexing only warms it.
 
       .. code-block:: python
 
-         from dftracer.utils import Indexer
+         from dftracer.utils.index import Indexer
 
          with Indexer("traces/") as ix:
              ix.ensure()   # no-op if already built
@@ -136,7 +136,7 @@ existing ones without leaving the SIMD engine.
       .. code-block:: cpp
 
          Series bytes_per_us = df.column("sum_dur") / df.column("count");
-         df = df.with_column("bytes_per_us", bytes_per_us);
+         df = df.with_column("bytes_per_us", bytes_per_us).value();
 
 Full detail: :doc:`core/columnar-ops`, :doc:`data/dataframe`, :doc:`data/series`.
 

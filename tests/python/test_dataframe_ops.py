@@ -17,8 +17,9 @@ import pytest
 
 pa = pytest.importorskip("pyarrow")
 
-from dftracer.utils import DataFrame, DFTUtilsNotFoundError  # noqa: E402
+from dftracer.utils import DataFrame  # noqa: E402
 from dftracer.utils import dftracer_utils_ext as _ext  # noqa: E402
+from dftracer.utils.errors import DFTUtilsNotFoundError  # noqa: E402
 
 # The analytical kernels only exist when the extension was built with Arrow.
 _HAS_ARROW = hasattr(_ext.DataFrame, "window")

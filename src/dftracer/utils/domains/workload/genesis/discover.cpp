@@ -28,7 +28,7 @@ namespace {
 
 dstd::Optional<std::int64_t> suffix_number(dstd::StringView name,
                                            dstd::StringView prefix) {
-    if (name.substr(0, prefix.size()) != prefix) return dstd::nullopt;
+    if (!name.starts_with(prefix)) return dstd::nullopt;
     return dstd::from_chars<std::int64_t>(name.substr(prefix.size()));
 }
 

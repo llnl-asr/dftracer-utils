@@ -106,11 +106,12 @@ void make_type(PyTypeObject& t, const char* name, const char* doc,
 }  // namespace
 
 int init_accessors(PyObject* m) {
-    make_type(StrAccessorType, "dftracer_utils_ext.StrAccessor",
+    make_type(StrAccessorType, "dftracer.utils.dftracer_utils_ext.StrAccessor",
               "The string methods of a Series: Series.str.", Str_methods);
-    make_type(DtAccessorType, "dftracer_utils_ext.DtAccessor",
+    make_type(DtAccessorType, "dftracer.utils.dftracer_utils_ext.DtAccessor",
               "The temporal methods of a Series: Series.dt.", Dt_methods);
-    make_type(ListAccessorType, "dftracer_utils_ext.ListAccessor",
+    make_type(ListAccessorType,
+              "dftracer.utils.dftracer_utils_ext.ListAccessor",
               "The list methods of a Series: Series.list.", List_methods);
     if (register_type(m, &StrAccessorType, "StrAccessor") < 0) return -1;
     if (register_type(m, &DtAccessorType, "DtAccessor") < 0) return -1;

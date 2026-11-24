@@ -108,7 +108,12 @@ bool exited_cleanly(int status) {
 }  // namespace
 
 TEST_CASE("live and reserved counters are exact in a fresh process") {
-    CHECK(fresh_process::run("counters scenario").ok());
+    // Exact reserved counts need no idle page purged, and a loaded machine can
+    // pause longer than the file's decay time, so the child gets a day.
+    ::setenv(constants::DECAY_MS_ENV, "86400000", 1);
+    fresh_process::Result result = fresh_process::run("counters scenario");
+    ::setenv(constants::DECAY_MS_ENV, "1000", 1);
+    CHECK(result.ok());
 }
 
 TEST_CASE("counters scenario" * doctest::skip()) {

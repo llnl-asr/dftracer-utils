@@ -25,7 +25,7 @@ From a query, via :doc:`TraceViewer <../../trace-viewer>`:
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          df = TraceViewer("traces/").group_by("cat").agg("count", "sum:dur").collect()
 
@@ -106,7 +106,7 @@ Pick, rename, or add columns without touching rows.
          // A derived column, name-based, via the unified F (resolves names ->
          // columns and runs on the SIMD engine):
          Series avg_dur = (F("sum_dur") / F("count")).apply(df);
-         DataFrame extended = df.with_column("avg_dur", avg_dur);
+         DataFrame extended = df.with_column("avg_dur", avg_dur).value();
          // Or eager per-column arithmetic when you already hold the Series:
          Series avg2 = df.column("sum_dur") / df.column("count");
 

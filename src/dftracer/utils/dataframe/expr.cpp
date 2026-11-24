@@ -438,8 +438,16 @@ Expr expr_clip(const Expr& a, Scalar lo, Scalar hi) {
     n->a = a.node();
     return Expr{std::move(n)};
 }
-Expr expr_fillna(const Expr& a, Scalar fill) {
-    return make(ExprKind::Fillna, 0, fill, a.node(), nullptr);
+Expr expr_fillna(const Expr& a, Scalar fill, bool nan) {
+    Expr e = make(ExprKind::Fillna, nan ? 1 : 0, fill, a.node(), nullptr);
+    const dftu_scalar raw = fill;
+    if (raw.kind == DFTU_SCALAR_TAG_STR) {
+        auto* n = const_cast<ExprNode*>(e.node().get());
+        n->text.assign(raw.value.s != nullptr ? raw.value.s : "", raw.len);
+        n->scalar.value.s = n->text.data();
+        n->scalar.len = static_cast<std::uint32_t>(n->text.size());
+    }
+    return e;
 }
 Expr expr_cmp(CmpOp cmp, const Expr& a, Scalar rhs) {
     Expr e = make(ExprKind::Cmp, static_cast<std::int32_t>(cmp), rhs, a.node(),
@@ -562,6 +570,9 @@ Expr expr_is_in(const Expr& a, Series values) {
 }
 Expr expr_is_null(const Expr& a, bool null) {
     return make(ExprKind::IsNull, null ? 1 : 0, {}, a.node(), nullptr);
+}
+Expr expr_is_na(const Expr& a, bool na) {
+    return make(ExprKind::IsNull, na ? 2 : 3, {}, a.node(), nullptr);
 }
 Expr expr_select(const Expr& cond, const Expr& a, const Expr& b) {
     Expr e = make(ExprKind::Select, 0, {}, cond.node(), a.node());
@@ -796,7 +807,7 @@ bool expr_as_col_is_in(const Expr& e, std::int32_t* col, Series* values) {
 
 bool expr_as_col_is_null(const Expr& e, std::int32_t* col, bool* null) {
     const auto& n = e.node();
-    if (!n || n->kind != ExprKind::IsNull || !n->a ||
+    if (!n || n->kind != ExprKind::IsNull || n->i > 1 || !n->a ||
         n->a->kind != ExprKind::Col)
         return false;
     *col = n->a->i;
@@ -900,7 +911,7 @@ enum {
     OpUdf,     // the bound UDF over the columns in `udf_args`
     OpConst,   // a column of `param` type filled with `scalar`
     OpSelect,  // c ? a : b, with the mask in slot `c`
-    OpIsNull,  // the null mask of slot `a` (param 1) or the valid mask (0)
+    OpIsNull,  // the null (1), valid (0), na (2) or notna (3) mask of slot `a`
     OpConstNull,
     OpToI64,   // Uint64 -> Int64, null past int64
     OpArith,
@@ -1130,8 +1141,16 @@ class Compiler {
                 Val a0 = compile(n->a.get());
                 if (is_unknown(a0)) return unknown_val();
                 Val a = as_col(a0, "fillna");
+                const dftu_scalar fill = n->scalar;
+                if (is_text_type(a.type) ? fill.kind != DFTU_SCALAR_TAG_STR &&
+                                               fill.kind != DFTU_SCALAR_TAG_NULL
+                                         : fill.kind == DFTU_SCALAR_TAG_STR)
+                    return fail(dstd::fmt<"expr: fillna of {} takes {}">(
+                        type_name(a.type), is_text_type(a.type)
+                                               ? "a string fill"
+                                               : "a number fill"));
                 return {false,
-                        emit(OpFillna, a.slot, -1, 0, n->scalar),
+                        emit(OpFillna, a.slot, -1, n->i, n->scalar),
                         a.type,
                         {},
                         scalar(a.type)};
@@ -1895,9 +1914,10 @@ class Compiler {
     }
 
     // cond ? a : b. The arms promote as arithmetic does: either float makes
-    // both Float64, two different integer types meet at Int64; a scalar arm
-    // broadcasts into a column of the promoted type. A string arm needs a
-    // string on the other side too.
+    // both Float64 (Float32 stays Float32 against scalars and Float32), two
+    // different integer types meet at Int64; a scalar arm broadcasts into a
+    // column of the promoted type. A string arm needs a string on the other
+    // side too.
     Val compile_select(const ExprNode* n) {
         Val c0 = compile(n->a.get());
         Val a = compile(n->b.get());
@@ -1928,10 +1948,21 @@ class Compiler {
                         "expr: select needs two String columns for a "
                         "String arm");
             } else if (is_float(a) || is_float(b)) {
-                promote_float(a);
-                promote_float(b);
-                if (a.is_scalar) a = broadcast(a.scalar, TypeId::Float64);
-                if (b.is_scalar) b = broadcast(b.scalar, TypeId::Float64);
+                const bool a32 = !a.is_scalar && a.type == TypeId::Float32;
+                const bool b32 = !b.is_scalar && b.type == TypeId::Float32;
+                const bool narrow = (a32 || b32) && (a.is_scalar || a32) &&
+                                    (b.is_scalar || b32);
+                const TypeId ft = narrow ? TypeId::Float32 : TypeId::Float64;
+                if (a.is_scalar) {
+                    a = broadcast(to_f64_scalar(a.scalar), ft);
+                } else if (a.type != ft) {
+                    a = cast(a, ft);
+                }
+                if (b.is_scalar) {
+                    b = broadcast(to_f64_scalar(b.scalar), ft);
+                } else if (b.type != ft) {
+                    b = cast(b, ft);
+                }
             } else {
                 const TypeId t = a.is_scalar        ? b.type
                                  : b.is_scalar      ? a.type
@@ -3627,7 +3658,15 @@ dstd::Vector<Series> eval_chunk(dstd::Span<const SlotOp> prog,
                 s[k] = Series{dftu_series_clip(A(), op.scalar, op.scalar2)};
                 break;
             case OpFillna:
-                s[k] = Series{dftu_series_fillna(A(), op.scalar)};
+                if (op.param) {
+                    const Series nan_free{dftu_series_fill_nan(A(), op.scalar)};
+                    s[k] = nan_free.handle()
+                               ? Series{dftu_series_fillna(nan_free.handle(),
+                                                           op.scalar)}
+                               : Series{};
+                } else {
+                    s[k] = Series{dftu_series_fillna(A(), op.scalar)};
+                }
                 break;
             case OpCmp:
                 s[k] = Series{dftu_series_compare(
@@ -3729,8 +3768,20 @@ dstd::Vector<Series> eval_chunk(dstd::Span<const SlotOp> prog,
                 s[k] = Series{dftu_series_is_in(A(), op.values)};
                 break;
             case OpIsNull:
-                s[k] = Series{op.param ? dftu_series_null_mask(A())
-                                       : dftu_series_valid_mask(A())};
+                switch (op.param) {
+                    case 0:
+                        s[k] = Series{dftu_series_valid_mask(A())};
+                        break;
+                    case 1:
+                        s[k] = Series{dftu_series_null_mask(A())};
+                        break;
+                    case 2:
+                        s[k] = Series{dftu_series_na_mask(A())};
+                        break;
+                    default:
+                        s[k] = Series{dftu_series_notna_mask(A())};
+                        break;
+                }
                 break;
             case OpConst:
                 s[k] = const_column(static_cast<TypeId>(op.param), op.scalar,
@@ -4253,6 +4304,11 @@ dftu_expr* dftu_expr_select(const dftu_expr* cond, const dftu_expr* a,
     if (!cond || !a || !b) return nullptr;
     return wrap(dataframe::expr_select(unwrap(cond), unwrap(a), unwrap(b)));
 }
+dftu_expr* dftu_expr_is_na(const dftu_expr* a, std::int32_t na) {
+    if (!a) return nullptr;
+    return wrap(dataframe::expr_is_na(unwrap(a), na != 0));
+}
+
 dftu_expr* dftu_expr_is_null(const dftu_expr* a, std::int32_t null) {
     if (!a) return nullptr;
     return wrap(dataframe::expr_is_null(unwrap(a), null != 0));

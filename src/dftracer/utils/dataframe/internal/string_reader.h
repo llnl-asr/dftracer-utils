@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_STRING_READER_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_STRING_READER_H
 
+#include <dftracer/utils/common/export.h>
 #include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/parallel.h>
@@ -16,6 +17,28 @@
 #include <numeric>
 
 namespace dftracer::utils::dataframe {
+
+struct DecodedView {
+    std::int32_t size;
+    const std::uint8_t* inline_data;
+    std::int32_t buffer_index;
+    std::int32_t offset;
+};
+
+template <bool LoadOffset = true>
+DFTRACER_UTILS_ALWAYS_INLINE inline DecodedView decode_view(
+    const std::uint8_t* view) noexcept {
+    DecodedView decoded{};
+    std::memcpy(&decoded.size, view, sizeof(decoded.size));
+    decoded.inline_data = view + 4;
+    if (decoded.size > 12) {
+        std::memcpy(&decoded.buffer_index, view + 8,
+                    sizeof(decoded.buffer_index));
+        if constexpr (LoadOffset)
+            std::memcpy(&decoded.offset, view + 12, sizeof(decoded.offset));
+    }
+    return decoded;
+}
 
 inline bool is_string_column(const dftu_series& v) {
     const TypeId n = narrow_varwidth_type(v.type);
@@ -56,22 +79,20 @@ inline bool str_at(const dftu_series* c, std::int64_t i,
             }
             case Encoding::View: {
                 const std::uint8_t* view = c->data.data() + i * 16;
-                std::int32_t size;
-                std::memcpy(&size, view, sizeof(size));
-                if (size <= 12) {
+                const DecodedView decoded = decode_view(view);
+                if (decoded.size <= 12) {
                     out = dstd::StringView(
-                        reinterpret_cast<const char*>(view + 4),
-                        static_cast<std::size_t>(size));
+                        reinterpret_cast<const char*>(decoded.inline_data),
+                        static_cast<std::size_t>(decoded.size));
                     return true;
                 }
-                std::int32_t index, offset;
-                std::memcpy(&index, view + 8, sizeof(index));
-                std::memcpy(&offset, view + 12, sizeof(offset));
-                out = dstd::StringView(
-                    reinterpret_cast<const char*>(
-                        (*c->blobs)[static_cast<std::size_t>(index)].data() +
-                        offset),
-                    static_cast<std::size_t>(size));
+                out =
+                    dstd::StringView(reinterpret_cast<const char*>(
+                                         (*c->blobs)[static_cast<std::size_t>(
+                                                         decoded.buffer_index)]
+                                             .data() +
+                                         decoded.offset),
+                                     static_cast<std::size_t>(decoded.size));
                 return true;
             }
             case Encoding::Dictionary:

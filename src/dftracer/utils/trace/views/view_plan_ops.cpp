@@ -25,6 +25,7 @@
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/fs/fs.h>
+#include <dftracer/utils/runtime/fs/inputs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/build/resolve_and_build.h>
 #include <dftracer/utils/trace/index/cache/mv_store.h>
@@ -36,6 +37,7 @@
 #include <dftracer/utils/trace/index/store/root_layout.h>
 #include <dftracer/utils/trace/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/table/table_source.h>
 #include <dftracer/utils/trace/time_metric_event.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
@@ -441,6 +443,23 @@ ScanPlan from_files(dstd::Vector<ViewFile> files) {
     for (auto& f : files)
         if (f.index_path.empty())
             f.index_path = internal::determine_index_path(f.file_path, "");
+    {
+        dstd::Vector<table::TableInput> inputs;
+        inputs.reserve(files.size());
+        for (const auto& f : files)
+            inputs.push_back(table::TableInput{f.file_path, f.index_path});
+        auto tables = table::open_table_inputs(
+            dstd::Span<const table::TableInput>(inputs.data(), inputs.size()));
+        if (!tables)
+            return failed_plan(dstd::make_shared<detail::ViewPlan>(),
+                               tables.error());
+        if (*tables) {
+            auto plan = dstd::make_shared<detail::ViewPlan>();
+            plan->files = std::move(files);
+            plan->table = std::move(**tables);
+            return plan;
+        }
+    }
     if (auto checked = check_readers(
             dstd::Span<const ViewFile>(files.data(), files.size()));
         !checked)
@@ -459,40 +478,71 @@ ScanPlan from_file(dstd::String file_path, dstd::String index_path) {
     return from_files(std::move(files));
 }
 
-coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
-                                        dstd::String index_dir,
-                                        dstd::String format) {
-    runtime::fs::FindOptions options;
-    options.patterns =
-        runtime::fs::names_of(common::constants::indexer::INPUT_FILE_PATTERNS);
-    options.skip_dirs =
-        runtime::fs::names_of(common::constants::indexer::SCAN_SKIP_DIRS);
-    options.with_stat = false;
-    options.skip_unreadable = true;
-
+coro::CoroTask<ScanPlan> from_inputs(dstd::Vector<dstd::String> inputs,
+                                     dstd::String index_dir,
+                                     dstd::String format) {
     auto scoped = coro::with_scope([&](coro::Scope& scope) {
-        return runtime::fs::find_all(scope, dstd::PathView(dir), options);
+        return runtime::fs::expand_inputs(
+            scope,
+            dstd::Span<const dstd::String>(inputs.data(), inputs.size()));
     });
-    auto found = co_await std::move(scoped);
-    if (!found)
+    auto expanded = co_await std::move(scoped);
+    if (!expanded)
         co_return failed_plan(dstd::make_shared<detail::ViewPlan>(),
-                              found.error());
+                              expanded.error());
+
+    // A folder input holds one index at its root for the files below it,
+    // such as the parts of a partitioned output; a nearer folder with its own
+    // index store keeps its files.
+    dstd::Vector<dstd::String> folders;
+    if (index_dir.empty()) {
+        for (const auto& in : inputs) {
+            dstd::StringView trimmed(in);
+            while (trimmed.size() > 1 && trimmed.back() == '/')
+                trimmed.remove_suffix(1);
+            common::InputFileStat st;
+            if (common::stat_input(dstd::Path(dstd::String(trimmed)), st) &&
+                !st.is_regular_file)
+                folders.emplace_back(trimmed);
+        }
+    }
+    const auto index_root = [&](dstd::StringView path) -> dstd::String {
+        for (const dstd::String& folder : folders) {
+            if (!path.starts_with(folder) || path.size() <= folder.size() ||
+                path[folder.size()] != '/')
+                continue;
+            dstd::StringView at = path.substr(0, path.rfind('/'));
+            while (at.size() >= folder.size()) {
+                if (common::input_exists(
+                        trace::index::store_of(dstd::String(at))))
+                    return dstd::String(at);
+                const std::size_t slash = at.rfind('/');
+                if (slash == dstd::StringView::npos) break;
+                at = at.substr(0, slash);
+            }
+        }
+        return internal::determine_index_path(dstd::String(path), index_dir);
+    };
 
     dstd::Vector<ViewFile> files;
-    files.reserve(found->size());
-    for (auto& e : *found) {
-        dstd::String fp(e.path.str());
-        const dstd::String index =
-            internal::determine_index_path(fp, index_dir);
-        ViewFile vf{fp, dstd::String(index.data(), index.size())};
+    files.reserve(expanded->files.size());
+    for (auto& path : expanded->files) {
+        const dstd::String index = index_root(path);
+        ViewFile vf{std::move(path), dstd::String(index.data(), index.size())};
         vf.format = format;
         files.push_back(std::move(vf));
     }
-    std::sort(files.begin(), files.end(),
-              [](const ViewFile& a, const ViewFile& b) {
-                  return a.file_path < b.file_path;
-              });
     co_return from_files(std::move(files));
+}
+
+coro::CoroTask<ScanPlan> from_directory(dstd::String dir,
+                                        dstd::String index_dir,
+                                        dstd::String format) {
+    dstd::Vector<dstd::String> inputs;
+    inputs.push_back(std::move(dir));
+    auto planning =
+        from_inputs(std::move(inputs), std::move(index_dir), std::move(format));
+    co_return co_await std::move(planning);
 }
 
 dstd::Result<dstd::Vector<TraceConfig>> config(const ScanPlan& plan) {
@@ -1335,6 +1385,34 @@ coro::CoroTask<dstd::Result<ExportStats>> export_trace(ScanPlan plan,
     if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
         co_return resolved.error();
     co_return co_await detail::run_export_trace(*plan, opts);
+}
+
+dstd::Optional<ScanPlan> line_export_plan(const dataframe::LazyFrame& plan) {
+    if (!plan.status()) return {};
+    const dataframe::LazyFrame planned = dataframe::detail::optimize_plan(plan);
+    if (dataframe::detail::first_op(planned)) return {};
+    const auto* src = dynamic_cast<const ViewSource*>(
+        dataframe::detail::plan_source(planned).get());
+    if (src == nullptr || src->output() != TraceOutput::Events) return {};
+    const ScanPlan& v = src->scan_plan();
+    if (!detail::is_row_query(*v) || !v->select.empty() || v->offset != 0 ||
+        v->limit != 0)
+        return {};
+    return v;
+}
+
+coro::CoroTask<dstd::Result<trace::writer::OutputSummary>> export_lines(
+    ScanPlan plan, trace::writer::OutputOptions options) {
+    if (auto resolved = detail::resolve_record_schema(*plan); !resolved)
+        co_return resolved.error();
+    if (options.memory_budget != 0 &&
+        (plan->memory_budget == 0 ||
+         options.memory_budget < plan->memory_budget))
+        plan = memory_budget(plan, options.memory_budget);
+    auto exporting = detail::run_export_lines(*plan, std::move(options));
+    auto exported = co_await std::move(exporting);
+    if (!exported) co_return exported.error();
+    co_return std::move(exported->summary);
 }
 
 dataframe::LazyFrame collect(const ScanPlan& plan) {

@@ -22,13 +22,14 @@ set(DATAFRAME_TEST_SOURCES test_mask.cpp test_series.cpp test_series_math_bitwis
                            test_frame_gap_fill.cpp test_frame_asof.cpp test_lazy_asof_interval.cpp
                            test_frame_ops.cpp test_frame_index.cpp test_series_index.cpp test_label_lookup.cpp test_reindex.cpp test_reduce_types.cpp
                            test_count_nulls.cpp test_set_union.cpp test_cast_pairs.cpp
-                           test_filter_columns.cpp test_rank_pct.cpp test_rank_nan.cpp test_cut_flags.cpp test_fillna_bool_string.cpp test_cast_followups.cpp
+                           test_filter_columns.cpp test_rank_pct.cpp test_rank_nan.cpp test_cut_flags.cpp test_fillna_bool_string.cpp test_cast_followups.cpp test_nan_missing.cpp
                            test_where_null.cpp test_constant_column.cpp
                            test_variance_stable.cpp
                            test_covariance_stable.cpp
                            test_join_null_keys.cpp test_join_contract.cpp
                            test_concat_large_string.cpp
                            test_groupby_scale.cpp
+                           test_group_by_memory.cpp
                            test_float_keys.cpp
                            test_string_simd.cpp test_string_match.cpp test_expr_string_methods.cpp
                            test_concat_text.cpp test_struct_concat_by_name.cpp

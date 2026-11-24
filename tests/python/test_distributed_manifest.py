@@ -16,8 +16,9 @@ try:
 except ImportError:
     DASK_AVAILABLE = False
 
-from dftracer.utils import AggregationConfig, Indexer, TraceViewer
 from dftracer.utils.dask import distributed_index
+from dftracer.utils.index import AggregationConfig, Indexer
+from dftracer.utils.trace import TraceViewer
 
 from .common import Environment
 
@@ -276,7 +277,7 @@ class TestStoreSeesOtherProcesses:
 
             child = textwrap.dedent(
                 f"""
-                from dftracer.utils import Indexer
+                from dftracer.utils.index import Indexer
                 Indexer(files=[{second!r}], index_dir={index_dir!r},
                         require_checkpoint=True, require_bloom=True).ensure()
                 """

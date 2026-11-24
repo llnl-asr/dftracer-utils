@@ -54,8 +54,7 @@ template <typename T>
 T read_be_checked(dstd::StringView bytes) {
     if (bytes.size() < sizeof(T))
         dstd::fatal("index layout: truncated integer");
-    return dstd::read_be<T>(
-        reinterpret_cast<const std::uint8_t*>(bytes.data()));
+    return dstd::read_be<T>(dstd::ByteView(bytes).as<std::uint8_t>());
 }
 }  // namespace
 

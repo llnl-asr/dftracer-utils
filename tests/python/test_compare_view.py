@@ -7,14 +7,15 @@ import math
 import pytest
 
 import dftracer.utils as dftu_utils
-from dftracer.utils import DFTUtilsValueError, TraceViewer
+from dftracer.utils.errors import DFTUtilsValueError
+from dftracer.utils.trace import TraceViewer
 
 from .common import Environment
 
 
 def _indexed(env):
     gz = env.create_test_gzip_file()
-    with dftu_utils.Indexer(files=[gz]) as indexer:
+    with dftu_utils.index.Indexer(files=[gz]) as indexer:
         indexer.ensure()
     return gz
 

@@ -70,14 +70,14 @@ def trace(tmp_path_factory):
                 fh.write(gzip.compress(lines.encode()))
         files.append(path)
     idx = str(d / "index")
-    with dftu.Indexer(files=files, index_dir=idx, checkpoint_size="4KB") as ix:
+    with dftu.index.Indexer(files=files, index_dir=idx, checkpoint_size="4KB") as ix:
         ix.ensure()
     return files, idx
 
 
 def _viewer(trace, rt):
     files, idx = trace
-    return dftu.TraceViewer(files, idx, runtime=rt)
+    return dftu.trace.TraceViewer(files, idx, runtime=rt)
 
 
 def _rows(df):
@@ -102,7 +102,7 @@ def _first_by(rows, key):
 
 def _check_all_threads(trace, build, expected):
     for threads in THREADS:
-        with dftu.Runtime(threads=threads) as rt:
+        with dftu.runtime.Runtime(threads=threads) as rt:
             lf = build(_viewer(trace, rt))
             assert "unique" not in lf.explain()
             assert _rows(lf.collect()) == expected, "threads=%d" % threads
@@ -119,7 +119,7 @@ def test_string_key_matches_first_occurrence_in_file_order(trace):
 
 def test_drop_duplicates_is_unique(trace):
     ctr = dftu.col("gtype") == "counter"
-    with dftu.Runtime(threads=2) as rt:
+    with dftu.runtime.Runtime(threads=2) as rt:
         lf = _viewer(trace, rt).filter(ctr).select("run", "metric")
         assert "unique" not in lf.drop_duplicates().explain()
         assert _rows(lf.drop_duplicates().collect()) == _rows(lf.unique().collect())
@@ -131,7 +131,7 @@ def test_subset_keeps_the_first_whole_row(trace):
         (r["run"], r["metric"], r["seq"]) for r in _first_by(_counters(), lambda r: r["run"])
     ]
     for threads in THREADS:
-        with dftu.Runtime(threads=threads) as rt:
+        with dftu.runtime.Runtime(threads=threads) as rt:
             lf = _viewer(trace, rt).filter(ctr).select("run", "metric", "seq")
             key = list(lf.columns)[0]
             sub = lf.unique(subset=[key])
@@ -144,7 +144,7 @@ def test_null_key_is_one_value(trace):
     expected = [(r["metric"], r["seq"]) for r in _first_by(_counters(), lambda r: r["metric"])]
     assert any(m is None for m, _ in expected)
     for threads in THREADS:
-        with dftu.Runtime(threads=threads) as rt:
+        with dftu.runtime.Runtime(threads=threads) as rt:
             lf = _viewer(trace, rt).filter(ctr).select("metric", "seq")
             sub = lf.unique(subset=[list(lf.columns)[0]])
             assert _rows(sub.collect()) == expected, "threads=%d" % threads
@@ -154,7 +154,7 @@ def test_numeric_key_matches_first_occurrence(trace):
     ctr = dftu.col("gtype") == "counter"
     expected = [(r["num"], r["seq"]) for r in _first_by(_counters(), lambda r: r["num"])]
     for threads in THREADS:
-        with dftu.Runtime(threads=threads) as rt:
+        with dftu.runtime.Runtime(threads=threads) as rt:
             lf = _viewer(trace, rt).filter(ctr).select("num", "seq")
             sub = lf.unique(subset=[list(lf.columns)[0]])
             assert "unique" not in sub.explain()
@@ -164,12 +164,12 @@ def test_numeric_key_matches_first_occurrence(trace):
 @pytest.mark.parametrize("column", ["mix_num", "mix_all"])
 def test_mixed_type_key_matches_host(trace, column):
     ctr = dftu.col("gtype") == "counter"
-    with dftu.Runtime(threads=1) as rt:
+    with dftu.runtime.Runtime(threads=1) as rt:
         lf = _viewer(trace, rt).filter(ctr).select(column, "seq")
         host = _rows(lf.collect().unique(subset=[list(lf.columns)[0]]))
     assert len(host) > 3
     for threads in THREADS:
-        with dftu.Runtime(threads=threads) as rt:
+        with dftu.runtime.Runtime(threads=threads) as rt:
             lf = _viewer(trace, rt).filter(ctr).select(column, "seq")
             sub = lf.unique(subset=[list(lf.columns)[0]])
             assert "unique" not in sub.explain()
@@ -177,17 +177,17 @@ def test_mixed_type_key_matches_host(trace, column):
 
 
 def test_io_cat_is_refused_and_matches_host(trace):
-    with dftu.Runtime(threads=1) as rt:
+    with dftu.runtime.Runtime(threads=1) as rt:
         lf = _viewer(trace, rt).select("io_cat")
         host = _rows(lf.collect().unique())
     assert len(host) > 1
     for threads in THREADS:
-        with dftu.Runtime(threads=threads) as rt:
+        with dftu.runtime.Runtime(threads=threads) as rt:
             lf = _viewer(trace, rt).select("io_cat").unique()
             assert "unique" in lf.explain()
             assert sorted(_rows(lf.collect())) == sorted(host)
 
 
 def test_acc_pat_is_refused(trace):
-    lf = dftu.TraceViewer(trace[0], trace[1]).select("acc_pat").unique()
+    lf = dftu.trace.TraceViewer(trace[0], trace[1]).select("acc_pat").unique()
     assert "unique" in lf.explain()

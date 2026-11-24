@@ -48,10 +48,10 @@ Windows
 
 .. automethod:: dftracer.utils.Series.ewm
 
-.. autoclass:: dftracer.utils.dftracer_utils_ext.Rolling
+.. autoclass:: dftracer.utils.typing.Rolling
    :members:
 
-.. autoclass:: dftracer.utils.dftracer_utils_ext.Ewm
+.. autoclass:: dftracer.utils.typing.Ewm
    :members:
 
 Comparisons (``<``, ``<=``, ``>``, ``>=``, ``==``, ``!=``, plus the named

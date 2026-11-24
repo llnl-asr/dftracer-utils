@@ -57,7 +57,7 @@ dftu_status namespace_name(dftu_ctx* ctx, dstd::StringView plugin,
         return name_refused(ctx, name, "contains '..'");
     if (name.front() == '.') return name_refused(ctx, name, "starts with '.'");
     for (const dstd::StringView kept : HOST_NAMES) {
-        if (name.substr(0, kept.size()) == kept)
+        if (name.starts_with(kept))
             return name_refused(ctx, name,
                                 "starts with a name the host keeps for itself");
     }

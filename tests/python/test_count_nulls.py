@@ -74,7 +74,8 @@ def test_matches_pandas_on_random_data_with_nulls():
 def test_trace_view_counted_field_counts_present_rows(tmp_path):
     pytest.importorskip("pyarrow")
     import dftracer.utils as dft
-    from dftracer.utils import F, TraceViewer
+    from dftracer.utils import F
+    from dftracer.utils.trace import TraceViewer
 
     path = tmp_path / "t.pfw.gz"
     with gzip.open(path, "wt") as f:
@@ -95,7 +96,7 @@ def test_trace_view_counted_field_counts_present_rows(tmp_path):
                 )
                 + "\n"
             )
-    with dft.Indexer(files=[str(path)]) as ix:
+    with dft.index.Indexer(files=[str(path)]) as ix:
         ix.ensure()
 
     def run(*specs):

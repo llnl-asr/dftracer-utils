@@ -919,8 +919,10 @@ dstd::Result<bool> fill_missing_rows(const FillSpec& spec,
     if (carry) {
         const dstd::Vector<std::int64_t> none(static_cast<std::size_t>(n), 0);
         const dstd::Vector<std::int64_t> ones(static_cast<std::size_t>(m), 1);
-        flagged = f.with_column("__duql_added",
-                                dataframe::Series::flat_i64(none.data(), n));
+        auto flagged_rows = f.with_column(
+            "__duql_added", dataframe::Series::flat_i64(none.data(), n));
+        if (!flagged_rows) return flagged_rows.error();
+        flagged = std::move(*flagged_rows);
         add.names.emplace_back("__duql_added");
         add.columns.push_back(dataframe::Series::flat_i64(ones.data(), m));
     }

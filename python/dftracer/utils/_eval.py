@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Evaluate an :class:`~dftracer.utils.expr.Expr` in memory: the native engine
+"""Evaluate an :class:`~dftracer.utils.Expr` in memory: the native engine
 for an expression over columns, and the Python evaluator for a constant one.
 
 ``Columnar(expr).apply(source)`` serializes the expression tree to a post-order
@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING, Dict, NamedTuple, Optional, Union, cast
 
 from . import dftracer_utils_ext as _ext
 from ._convert import _arrow_native
-from .enums import DType
-from .expr import (
+from ._enums import DType
+from ._expr import (
     CMP_CODES,
     LOGICAL_CODES,
     PRIM_CODES,
@@ -40,15 +40,15 @@ from .expr import (
     collect_columns,
     emit_ast,
 )
-from .series import Series
+from ._series import Series
 
 if TYPE_CHECKING:
     import pyarrow as pa
     from typing_extensions import TypeAlias
 
-    from .dataframe import DataFrame
+    from ._dataframe import DataFrame
 
-__all__ = ["Columnar", "eval_many", "where"]
+__all__ = ["Columnar"]
 
 
 class AstOp(NamedTuple):
@@ -98,30 +98,6 @@ Frame: TypeAlias = Union["DataFrame", "pa.Table"]
 _INT64 = int(DType.INT64)
 _UINT64 = int(DType.UINT64)
 _FLOAT64 = int(DType.FLOAT64)
-
-
-def where(table: Frame, pred: Expr | str) -> Frame:
-    """Keep the rows where ``pred`` is true.
-
-    ``pred`` is either an expression (numeric comparisons / ``& | ~``),
-    evaluated on the DataFrame engine to a boolean mask, or a duql
-    **string** (e.g. ``"dur > 100 and cat == 'io'"``), parsed by the duql
-    library and evaluated as a SIMD mask. A native ``DataFrame`` in stays fully
-    columnar (returns a filtered ``DataFrame``); a ``pyarrow.Table`` in returns
-    a filtered ``pyarrow.Table``."""
-    native = table
-    if isinstance(pred, str):
-        if isinstance(native, _ext.DataFrame):
-            return _ext.DataFrame.query(native, pred)
-        import pyarrow as pa
-
-        return pa.table(_arrow_native("_dataframe_from_arrow")(native).query(pred))
-    mask = Columnar(pred).apply(native)  # a wrapped Series
-    if isinstance(native, _ext.DataFrame):
-        return _ext.DataFrame.filter(native, mask)
-    import pyarrow as pa
-
-    return native.filter(pa.array(mask))
 
 
 class Columnar:
@@ -221,33 +197,6 @@ def _import_vec_columns(names: list[str], source: Source) -> dict[str, Series]:
     return cols
 
 
-def eval_many(exprs: list[Expr | Columnar], source: Source) -> list[Series]:
-    """Evaluate several value expressions in ONE compiled pass over `source`.
-
-    CSE spans all of them, so a subexpression shared across outputs is computed
-    once. Returns one :class:`Series` per input expression, aligned to `exprs`.
-    `source` is a native vec batch or a pyarrow Table, as for :meth:`Columnar.apply`."""
-    cs = [e if isinstance(e, Columnar) else Columnar(e) for e in exprs]
-    union: list[str] = []
-    seen = set()
-    for c in cs:
-        for name in c.columns:
-            if name not in seen:
-                seen.add(name)
-                union.append(name)
-    if not union:  # all-constant expressions: no shared program to build
-        return [c.apply(source) for c in cs]
-    cols = _import_vec_columns(union, source)
-    inputs = [cols[name] for name in union]
-    index = {name: i for i, name in enumerate(union)}
-    asts: list[list[tuple[object, ...]]] = []
-    for c in cs:
-        ast: list[tuple[object, ...]] = []
-        emit_ast(c._expr, index.__getitem__, ast)
-        asts.append(ast)
-    return list(_ext.vec_eval_many(asts, inputs))
-
-
 def _broadcast_scalar(value: Scalar, out_float: bool, cols: dict[str, Series]) -> Series:
     # Only the length of an input column is used, never its values: a null,
     # NaN or infinity in that column must not reach the constant. An all-null
@@ -255,7 +204,7 @@ def _broadcast_scalar(value: Scalar, out_float: bool, cols: dict[str, Series]) -
     if not cols:
         raise ValueError("a constant columnar expression needs at least one column")
     n = len(next(iter(cols.values())))
-    return _ext._series_nulls(int(_FLOAT64 if out_float else _INT64), n).fillna(value)
+    return _ext._series_nulls(int(_FLOAT64 if out_float else _INT64), n).fill_null(value)
 
 
 def _is_float(expr: Expr, cols: dict[str, Series]) -> bool:

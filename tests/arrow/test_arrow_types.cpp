@@ -3,6 +3,7 @@
 #include <arrow/arrow_helpers.h>
 #include <dftracer/utils/arrow/arrow.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <doctest/doctest.h>
@@ -504,4 +505,56 @@ TEST_CASE(
     CHECK(back.string_at(0) == "one");
     CHECK(back.string_at(1) == "two");
     CHECK(back.string_at(2) == "three");
+}
+
+namespace {
+
+// Four int64 rows whose Arrow bitmap marks every row valid, with `nulls` as
+// the array's declared null count (-1: unknown).
+Series import_all_valid(std::int64_t nulls) {
+    BuiltArrow b;
+    ArrowSchemaInit(&b.schema);
+    REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_INT64) ==
+            NANOARROW_OK);
+    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
+            NANOARROW_OK);
+    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
+    for (std::int64_t v = 0; v < 3; ++v) append_i64(&b.array, v);
+    REQUIRE(ArrowArrayAppendNull(&b.array, 1) == NANOARROW_OK);
+    finish(&b.array);
+    REQUIRE(b.array.buffers[0] != nullptr);
+    auto* bits =
+        static_cast<std::uint8_t*>(const_cast<void*>(b.array.buffers[0]));
+    bits[0] |= 0b1000;
+    b.array.null_count = nulls;
+    return test_types::import_series(&b.schema, &b.array);
+}
+
+}  // namespace
+
+TEST_CASE("an imported column with no nulls keeps no validity bitmap") {
+    for (const std::int64_t declared : {std::int64_t{0}, std::int64_t{-1}}) {
+        Series s = import_all_valid(declared);
+        REQUIRE(s.valid());
+        CHECK(s.null_count() == 0);
+        CHECK(dftu_series_validity(s.handle(), nullptr) == nullptr);
+    }
+}
+
+TEST_CASE("an imported column with a null keeps its validity bitmap") {
+    BuiltArrow b;
+    ArrowSchemaInit(&b.schema);
+    REQUIRE(ArrowSchemaSetType(&b.schema, NANOARROW_TYPE_INT64) ==
+            NANOARROW_OK);
+    REQUIRE(ArrowArrayInitFromSchema(&b.array, &b.schema, nullptr) ==
+            NANOARROW_OK);
+    REQUIRE(ArrowArrayStartAppending(&b.array) == NANOARROW_OK);
+    append_i64(&b.array, 1);
+    REQUIRE(ArrowArrayAppendNull(&b.array, 1) == NANOARROW_OK);
+    finish(&b.array);
+    b.array.null_count = -1;
+    Series s = test_types::import_series(&b.schema, &b.array);
+    REQUIRE(s.valid());
+    CHECK(s.null_count() == 1);
+    CHECK(dftu_series_validity(s.handle(), nullptr) != nullptr);
 }

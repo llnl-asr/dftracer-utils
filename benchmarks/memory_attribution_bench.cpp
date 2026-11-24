@@ -117,20 +117,16 @@ const char* group_name(PoolGroup g) {
     return "-";
 }
 
-bool ends_with(dstd::StringView s, dstd::StringView tail) {
-    return s.size() >= tail.size() && s.substr(s.size() - tail.size()) == tail;
-}
-
 bool in_group(const memory::detail::PoolStats& p, PoolGroup g) {
     switch (g) {
         case PoolGroup::None:
             return false;
         case PoolGroup::Query:
-            return ends_with(p.path, "/query");
+            return p.path.ends_with("/query");
         case PoolGroup::Genesis:
             return p.path.find("/genesis/") != dstd::String::npos;
         case PoolGroup::FoldBuffers:
-            return ends_with(p.path, "/fold buffers");
+            return p.path.ends_with("/fold buffers");
     }
     return false;
 }

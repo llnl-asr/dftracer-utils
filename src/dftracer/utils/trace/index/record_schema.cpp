@@ -138,39 +138,65 @@ dstd::Result<void> for_each_head_line(const dstd::File& file,
     return {};
 }
 
+constexpr std::size_t NO_COND = static_cast<std::size_t>(-1);
+
+struct SchemaCond {
+    dstd::String text;
+    bool args_fallback = false;
+    duql::Query query;
+};
+
+/// The distinct `data` conditions of the registered schemas, parsed once and
+/// shared by every file's detection. Immutable once published, and an
+/// evaluation keeps its state per thread, so several threads may use it.
+struct SchemaPlan {
+    dstd::Vector<SchemaCond> conds;
+    /// Per candidate, NO_COND when its `data` row set is empty.
+    dstd::Vector<std::size_t> cond_of;
+    dstd::Vector<const RecordSchema*> candidates;
+    const RecordSchema* generic = nullptr;
+};
+
+dstd::SharedPtr<SchemaPlan> build_plan(
+    dstd::Vector<const RecordSchema*> candidates, const RecordSchema* generic) {
+    auto plan = dstd::make_shared<SchemaPlan>();
+    plan->generic = generic;
+    plan->cond_of.assign(candidates.size(), NO_COND);
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        const RecordSchema* s = candidates[i];
+        if (s->data.empty()) continue;
+        auto same = std::find_if(
+            plan->conds.begin(), plan->conds.end(), [&](const auto& c) {
+                return c.text == s->data && c.args_fallback == s->args_fallback;
+            });
+        if (same == plan->conds.end()) {
+            auto parsed = duql::Query::from_string(s->data);
+            if (!parsed)
+                dstd::fatal(
+                    "a registered record schema data condition does not "
+                    "parse",
+                    parsed.error().message.c_str());
+            plan->conds.push_back(
+                {s->data, s->args_fallback, std::move(*parsed)});
+            same = std::prev(plan->conds.end());
+        }
+        plan->cond_of[i] = static_cast<std::size_t>(same - plan->conds.begin());
+    }
+    plan->candidates = std::move(candidates);
+    return plan;
+}
+
 // Scores the registered schemas on lines fed one at a time. A schema judges
 // only the records its `data` row set does not leave out, so metadata lines
 // neither match nor miss it.
 class Detector {
    public:
-    Detector(dstd::Vector<const RecordSchema*> candidates,
-             const RecordSchema* generic)
-        : candidates_(std::move(candidates)), generic_(generic) {
-        judged_.assign(candidates_.size(), 0);
-        hits_.assign(candidates_.size(), 0);
-        cond_of_.assign(candidates_.size(), NONE);
-        for (std::size_t i = 0; i < candidates_.size(); ++i) {
-            const RecordSchema* s = candidates_[i];
-            if (s->data.empty()) continue;
-            auto same =
-                std::find_if(conds_.begin(), conds_.end(), [&](const Cond& c) {
-                    return c.text == s->data &&
-                           c.args_fallback == s->args_fallback;
-                });
-            if (same == conds_.end()) {
-                auto parsed = duql::Query::from_string(s->data);
-                if (!parsed)
-                    dstd::fatal(
-                        "a registered record schema data condition does not "
-                        "parse",
-                        parsed.error().message.c_str());
-                conds_.push_back(
-                    {s->data, s->args_fallback, std::move(*parsed), 0});
-                same = std::prev(conds_.end());
-            }
-            cond_of_[i] = static_cast<std::size_t>(same - conds_.begin());
-        }
-        truth_.resize(conds_.size());
+    explicit Detector(dstd::SharedPtr<const SchemaPlan> plan)
+        : plan_(std::move(plan)) {
+        judged_.assign(plan_->candidates.size(), 0);
+        hits_.assign(plan_->candidates.size(), 0);
+        left_out_.assign(plan_->conds.size(), 0);
+        truth_.resize(plan_->conds.size());
     }
 
     // Whether more lines are wanted.
@@ -187,21 +213,23 @@ class Detector {
         ++out_.objects;
         const json::JsonValue record(root);
         bool metadata = false;
-        for (std::size_t k = 0; k < conds_.size(); ++k) {
+        const auto& conds = plan_->conds;
+        for (std::size_t k = 0; k < conds.size(); ++k) {
             truth_[k] = duql::evaluate_truth(
-                duql::detail::QueryAccess::root(conds_[k].query), record,
-                conds_[k].args_fallback);
+                duql::detail::QueryAccess::root(conds[k].query), record,
+                conds[k].args_fallback);
             if (truth_[k] == duql::Truth::No) {
                 metadata = true;
-                ++conds_[k].left_out;
+                ++left_out_[k];
             }
         }
         out_.records += !metadata;
-        for (std::size_t i = 0; i < candidates_.size(); ++i) {
-            if (cond_of_[i] != NONE && truth_[cond_of_[i]] == duql::Truth::No)
-                continue;
+        const auto& candidates = plan_->candidates;
+        for (std::size_t i = 0; i < candidates.size(); ++i) {
+            const std::size_t k = plan_->cond_of[i];
+            if (k != NO_COND && truth_[k] == duql::Truth::No) continue;
             ++judged_[i];
-            hits_[i] += matches(*candidates_[i], record);
+            hits_[i] += matches(*candidates[i], record);
         }
         return out_.records < SCHEMA_SAMPLE_LINES;
     }
@@ -209,8 +237,9 @@ class Detector {
     SchemaDetection finish() {
         const RecordSchema* best = nullptr;
         double best_share = 0;
-        for (std::size_t i = 0; i < candidates_.size(); ++i) {
-            const RecordSchema* c = candidates_[i];
+        const auto& candidates = plan_->candidates;
+        for (std::size_t i = 0; i < candidates.size(); ++i) {
+            const RecordSchema* c = candidates[i];
             const double share = judged_[i]
                                      ? static_cast<double>(hits_[i]) /
                                            static_cast<double>(judged_[i])
@@ -226,20 +255,11 @@ class Detector {
             }
         }
         if (!best && out_.records == 0) best = metadata_owner();
-        out_.chosen = best ? best : generic_;
+        out_.chosen = best ? best : plan_->generic;
         return std::move(out_);
     }
 
    private:
-    static constexpr std::size_t NONE = static_cast<std::size_t>(-1);
-
-    struct Cond {
-        dstd::String text;
-        bool args_fallback = false;
-        duql::Query query;
-        std::size_t left_out = 0;
-    };
-
     // Every required path present; for a schema whose fields are all
     // optional, any declared path present.
     static bool matches(const RecordSchema& s, const json::JsonValue& record) {
@@ -267,10 +287,11 @@ class Detector {
     // row set leaves out every object: no record says which child it is.
     const RecordSchema* metadata_owner() const {
         const RecordSchema* best = nullptr;
-        for (std::size_t i = 0; i < candidates_.size(); ++i) {
-            const RecordSchema* c = candidates_[i];
-            if (cond_of_[i] == NONE || out_.objects == 0 ||
-                conds_[cond_of_[i]].left_out != out_.objects)
+        const auto& candidates = plan_->candidates;
+        for (std::size_t i = 0; i < candidates.size(); ++i) {
+            const RecordSchema* c = candidates[i];
+            if (plan_->cond_of[i] == NO_COND || out_.objects == 0 ||
+                left_out_[plan_->cond_of[i]] != out_.objects)
                 continue;
             if (!best || c->require.size() < best->require.size() ||
                 (c->require.size() == best->require.size() && c->builtin &&
@@ -280,10 +301,8 @@ class Detector {
         return best;
     }
 
-    dstd::Vector<const RecordSchema*> candidates_;
-    const RecordSchema* generic_;
-    dstd::Vector<Cond> conds_;
-    dstd::Vector<std::size_t> cond_of_;
+    dstd::SharedPtr<const SchemaPlan> plan_;
+    dstd::Vector<std::size_t> left_out_;
     dstd::Vector<duql::Truth> truth_;
     dstd::Vector<std::size_t> judged_;
     dstd::Vector<std::size_t> hits_;
@@ -571,6 +590,24 @@ class Registry {
         return out;
     }
 
+    /// The parsed conditions of the current schemas, built on first use and
+    /// again after the schema set changes.
+    dstd::SharedPtr<const SchemaPlan> plan() {
+        {
+            std::shared_lock lock(mu_);
+            if (plan_ && plan_gen_ == gen_) return plan_;
+        }
+        std::unique_lock lock(mu_);
+        if (!plan_ || plan_gen_ != gen_) {
+            dstd::Vector<const RecordSchema*> candidates;
+            candidates.reserve(entries_.size());
+            for (const auto& e : entries_) candidates.push_back(e.schema.get());
+            plan_ = build_plan(std::move(candidates), find_locked("generic"));
+            plan_gen_ = gen_;
+        }
+        return plan_;
+    }
+
     dstd::Result<const RecordSchema*> add(const SchemaSpec& spec,
                                           dstd::String source);
 
@@ -593,6 +630,8 @@ class Registry {
         std::unique_lock lock(mu_);
         dstd::Vector<Entry> released;
         entries_.swap(released);
+        plan_.reset();
+        ++gen_;
     }
 
    private:
@@ -608,6 +647,9 @@ class Registry {
 
     mutable std::shared_mutex mu_;
     dstd::Vector<Entry> entries_;
+    dstd::SharedPtr<SchemaPlan> plan_;
+    std::size_t gen_ = 0;
+    std::size_t plan_gen_ = 0;
     std::mutex loaded_mu_;
     dstd::Set<dstd::String> loaded_;
 };
@@ -760,6 +802,7 @@ dstd::Result<const RecordSchema*> Registry::add(const SchemaSpec& spec,
     }
     entries_.push_back(
         {dstd::make_unique<RecordSchema>(std::move(s)), std::move(source)});
+    ++gen_;
     return entries_.back().schema.get();
 }
 
@@ -991,7 +1034,7 @@ dstd::Result<SchemaDetection> explain_schema(
     dstd::Span<const dstd::StringView> lines) {
     auto reg = try_registry();
     if (!reg) return reg.error();
-    Detector d((*reg)->all(), (*reg)->find("generic"));
+    Detector d((*reg)->plan());
     for (auto line : lines) d.add(line);
     return d.finish();
 }
@@ -1050,7 +1093,7 @@ dstd::Result<SchemaDetection> explain_file_schema(dstd::CStringView file_path,
     if (!reg) return reg.error();
     if (const auto hit = cached_detection(**reg, file_path, size, mtime_ns))
         return *hit;
-    Detector d((*reg)->all(), (*reg)->find("generic"));
+    Detector d((*reg)->plan());
     if (auto read = for_each_head_line(
             file, file_path,
             [&](dstd::StringView line) { return d.add(line); });

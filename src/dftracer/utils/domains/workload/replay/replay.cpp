@@ -620,10 +620,7 @@ dstd::Result<dstd::Vector<dstd::String>> glob_trace_files(
                 return dstd::fs::WalkAction::Continue;
             }
             const dstd::StringView s = path.str();
-            if (suffix.empty() || (s.size() >= suffix.size() &&
-                                   s.compare(s.size() - suffix.size(),
-                                             suffix.size(), suffix) == 0))
-                out.emplace_back(s);
+            if (suffix.empty() || s.ends_with(suffix)) out.emplace_back(s);
             return dstd::fs::WalkAction::Continue;
         });
     if (!walked) return walked.error();

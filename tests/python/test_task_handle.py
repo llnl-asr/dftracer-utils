@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from dftracer.utils import Runtime, TaskHandle
+from dftracer.utils.runtime import Runtime, TaskHandle
 
 
 class TestTaskHandleBasic:

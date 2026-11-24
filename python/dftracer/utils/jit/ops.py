@@ -28,17 +28,18 @@ a column op, or a Python scalar for a reducer.
 from typing import TYPE_CHECKING, Callable, Dict, List, Union
 
 from .. import dftracer_utils_ext as _ext
-from ..series import Series
+from .._public import set_home as _set_home
+from .._series import Series as _Series
 
 if TYPE_CHECKING:
-    from ..expr import Expr
+    from .._expr import Expr
 
 __all__ = ["run", "get", "list", "names", "info"]
 
 # A column argument is a Series; any other operand follows the op's signature.
-Operand = Union[Series, int, float, str]
+_Operand = Union[_Series, int, float, str]
 # A column op returns a Series; a reducer returns a Python scalar.
-Result = Union[Series, int, float]
+_Result = Union[_Series, int, float]
 
 
 class _UserOp:
@@ -64,7 +65,7 @@ def _register_user(name: str, n_args: int, expr: "Expr") -> None:
     _USER[name] = _UserOp(name, n_args, expr)
 
 
-def run(name: str, *args: Operand) -> Result:
+def run(name: str, *args: _Operand) -> _Result:
     """Run the op `name` on `args` (Series unwrapped in, result wrapped out).
     Resolves a user op (@jit.series) before the built-in registry."""
     uop = _USER.get(name)
@@ -76,10 +77,10 @@ def run(name: str, *args: Operand) -> Result:
     return _ext.op_run(name, *args)
 
 
-def get(name: str) -> Callable[..., Result]:
+def get(name: str) -> Callable[..., _Result]:
     """The op `name` as a bound callable, so `ops.get("dftu.series.mul")(a, b)` runs it."""
 
-    def call(*args: Operand) -> Result:
+    def call(*args: _Operand) -> _Result:
         return run(name, *args)
 
     call.__name__ = name
@@ -149,7 +150,7 @@ class _ModuleNs:
     def __init__(self, prefix: str) -> None:
         self._prefix = prefix
 
-    def __getattr__(self, name: str) -> Union[Callable[..., Result], "_ModuleNs"]:
+    def __getattr__(self, name: str) -> Union[Callable[..., _Result], "_ModuleNs"]:
         full = f"{self._prefix}.{name}"
         key = _resolve(full)
         # A dotted module (`series.add`) nests one namespace per segment.
@@ -158,7 +159,7 @@ class _ModuleNs:
         return get(key if key is not None else full)
 
 
-def __getattr__(name: str) -> Union[Callable[..., Result], _ModuleNs]:
+def __getattr__(name: str) -> Union[Callable[..., _Result], _ModuleNs]:
     # A user op's literal path, or a built-in with "dftu." elided -> a bound
     # callable; ops.<module> -> a namespace.
     key = _resolve(name)
@@ -167,3 +168,6 @@ def __getattr__(name: str) -> Union[Callable[..., Result], _ModuleNs]:
     if _is_module(name):
         return _ModuleNs(name)
     raise AttributeError(f"module {__name__!r} has no op or attribute {name!r}")
+
+
+_set_home(__name__, globals(), __all__)

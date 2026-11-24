@@ -23,6 +23,8 @@ dstd::String encode_gzip_member_value(
 inline constexpr std::uint64_t METADATA_FLAG_TRUNCATED = 1;
 inline constexpr std::uint64_t METADATA_FLAG_OPEN_LINE = 2;
 inline constexpr std::uint64_t METADATA_FLAG_MID_LINE_CHUNK = 4;
+/// The file is a dftu.table whose every row was read clean when it was indexed.
+inline constexpr std::uint64_t METADATA_FLAG_TABLE_ROWS_COMPLETE = 8;
 // A restart piece has at most 7 spare bits, so the top bit of the byte is free.
 inline constexpr std::uint8_t MEMBER_FLAG_OPENS_MID_LINE = 0x80;
 

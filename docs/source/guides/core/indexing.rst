@@ -28,12 +28,12 @@ without worrying about redundant work.
 
          import dftracer.utils as dft
 
-         with dft.Indexer(files=["trace.pfw.gz"]) as ix:
+         with dft.index.Indexer(files=["trace.pfw.gz"]) as ix:
              status = ix.ensure()
              print(status.total_files, status.ready, status.needs_work)
 
          # Or point at a whole directory:
-         with dft.Indexer("traces/") as ix:
+         with dft.index.Indexer("traces/") as ix:
              ix.ensure()
 
       ``ensure()`` builds what is missing or stale and does nothing when the
@@ -47,7 +47,7 @@ without worrying about redundant work.
 
       .. code-block:: python
 
-         from dftracer.utils import Indexer, AggregationConfig
+         from dftracer.utils.index import Indexer, AggregationConfig
 
          with Indexer(
              "traces/",
@@ -97,7 +97,7 @@ without worrying about redundant work.
 
       .. code-block:: python
 
-         from dftracer.utils import BloomConfig, Indexer
+         from dftracer.utils.index import BloomConfig, Indexer
 
          with Indexer("traces/", require_bloom=BloomConfig(fields=["io.off"])) as ix:
              ix.ensure()
@@ -212,7 +212,7 @@ index records the schema the file was decoded with:
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          # No prior Indexer call needed: the first touch builds the index.
          df = TraceViewer("traces/").group_by("cat").agg("count").collect()
@@ -291,7 +291,7 @@ rebuilding the rest.
 
          import dftracer.utils as dft
 
-         with dft.Indexer("traces/") as ix:
+         with dft.index.Indexer("traces/") as ix:
              ix.ensure()
              for f in ix.manifest():
                  print(f["path"], [e["name"] for e in f["extensions"] if e["current"]])
@@ -306,7 +306,7 @@ rebuilding the rest.
              ix.rebuild_extension("bloom")    # rewrites bloom only
 
          # Build without counts; a later build does not add it back.
-         with dft.Indexer("traces/", extensions=["zonemap", "bloom", "postings"]) as ix:
+         with dft.index.Indexer("traces/", extensions=["zonemap", "bloom", "postings"]) as ix:
              ix.ensure()
 
    .. tab-item:: C++
@@ -359,7 +359,7 @@ ever compared keeps ranges and no bloom filter:
 
          import dftracer.utils as dft
 
-         ix = dft.Indexer(
+         ix = dft.index.Indexer(
              "traces/",
              summaries={"args.fhash": ["bloom"], "size": ["zonemap"]},
          )
@@ -367,7 +367,7 @@ ever compared keeps ranges and no bloom filter:
 
          # One row per stored summary per chunk: path, chunk, summary, bytes
          # and hash_version (null for a summary that holds no hash).
-         rows = dft.Index(status.index_dir).summaries("traces/a.pfw.gz")
+         rows = dft.index.Index(status.index_dir).summaries("traces/a.pfw.gz")
          print(rows.to_pandas().groupby(["path", "summary"]).bytes.sum())
 
          print(ix.explain_text("size >= 2000"))
@@ -400,7 +400,7 @@ in the index at ``status.index_dir``.
 Hash a value as the index does
 ------------------------------
 
-``dft.hash_value(x)`` returns the canonical typed hash the index builds its
+``dft.index.hash_value(x)`` returns the canonical typed hash the index builds its
 bloom filters and posting lists with, the one a plugin gets from
 ``dftu_svc_index.hash_value``. Every integer hashes as an int64 (one above int64
 as a uint64), a float that is a whole number in int64 range hashes as that
@@ -425,11 +425,11 @@ chunks. Detection is per file; set the schema to skip it or to override it:
 
       .. code-block:: python
 
-         with dft.Indexer(files=["requests.ndjson.gz"]) as ix:
+         with dft.index.Indexer(files=["requests.ndjson.gz"]) as ix:
              ix.ensure()                     # detected as generic
              print(ix.explain('op == "read"'))       # chunks the filter skips
 
-         with dft.Indexer("traces/", schema="dftracer") as ix:
+         with dft.index.Indexer("traces/", schema="dftracer") as ix:
              ix.ensure()
 
    .. tab-item:: C++
@@ -455,7 +455,7 @@ every aggregate read them:
 
 .. code-block:: python
 
-   tv = dft.TraceViewer("requests.ndjson.gz")
+   tv = dft.trace.TraceViewer("requests.ndjson.gz")
    tv.duql('op == "read" and io.off > 4096').select("op", "lat").collect()
    tv.group_by("op").agg("count", "sum:lat").collect()
 
@@ -532,11 +532,11 @@ as usual:
 
 .. code-block:: python
 
-   with dft.Indexer(files=["access.ndjson.gz"]) as ix:
+   with dft.index.Indexer(files=["access.ndjson.gz"]) as ix:
        ix.ensure()
        print(ix.explain('upstream == "u2"'))   # reads the u2 chunks only
 
-   tv = dft.TraceViewer("access.ndjson.gz")
+   tv = dft.trace.TraceViewer("access.ndjson.gz")
    tv.duql("""tags == '["api", "v1"]'""").group_by("status").agg("count").collect()
    tv.time_range(1_700_000_000_000_000, 1_700_000_001_000_000).collect()
    tv.time_bucket(1_000_000).agg("count").collect()
@@ -577,7 +577,7 @@ after the viewer's filters and time window:
 
       .. code-block:: python
 
-         for log in dft.TraceViewer("access.ndjson.gz").duql("status >= 500").rows(AccessLog):
+         for log in dft.trace.TraceViewer("access.ndjson.gz").duql("status >= 500").rows(AccessLog):
              print(log.upstream, log.request_time)
 
       ``rows`` collects the fields first, so use ``collect()`` for bulk
@@ -611,7 +611,7 @@ order in which the pieces were parsed; a build that spills is slower.
 
       .. code-block:: python
 
-         with dft.Indexer("traces/", memory_budget="2GB") as ix:
+         with dft.index.Indexer("traces/", memory_budget="2GB") as ix:
              ix.ensure()
 
    .. tab-item:: C++

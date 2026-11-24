@@ -24,7 +24,7 @@ def _trace(tmp_path):
 
 def test_the_explain_prefix_gives_the_plan_as_rows(tmp_path):
     path = _trace(tmp_path)
-    tv = dftu.TraceViewer(path)
+    tv = dftu.trace.TraceViewer(path)
     plain = tv.explain_duql(f'from "{path}" | where dur > 100')
     got = tv.duql(f'explain from "{path}" | where dur > 100').collect().to_dict()
     assert list(got) == ["plan"]
@@ -33,7 +33,7 @@ def test_the_explain_prefix_gives_the_plan_as_rows(tmp_path):
 
 def test_explain_analyze_runs_the_plan_and_measures_each_stage(tmp_path):
     path = _trace(tmp_path)
-    tv = dftu.TraceViewer(path)
+    tv = dftu.trace.TraceViewer(path)
     text = tv.explain_duql(f'explain analyze from "{path}" | where dur > 100 | select name')
     assert "run:" in text
     assert "analyze:" in text
@@ -52,7 +52,7 @@ def test_the_builder_asks_for_analyze(tmp_path):
 
 def test_viewer_explain_analyze(tmp_path):
     path = _trace(tmp_path)
-    text = dftu.TraceViewer(path).filter(dftu.col("dur") > 100).explain(analyze=True)
+    text = dftu.trace.TraceViewer(path).filter(dftu.col("dur") > 100).explain(analyze=True)
     assert "analyze:" in text
     assert "rows out " in text
 
@@ -60,4 +60,4 @@ def test_viewer_explain_analyze(tmp_path):
 def test_a_field_named_explain_needs_backticks(tmp_path):
     path = _trace(tmp_path)
     with pytest.raises(Exception):
-        dftu.TraceViewer(path).duql("explain == 1").collect()
+        dftu.trace.TraceViewer(path).duql("explain == 1").collect()

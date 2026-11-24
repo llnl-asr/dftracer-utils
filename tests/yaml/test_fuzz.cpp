@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/string.h>
@@ -29,16 +30,15 @@ using yaml::Value;
 namespace {
 
 std::size_t seed_count() {
-    if (const char* more = std::getenv("YAML_FUZZ_SEEDS"))
-        return static_cast<std::size_t>(std::strtoull(more, nullptr, 10));
-    return 3000;
+    const auto more = common::Env::get<std::uint64_t>("YAML_FUZZ_SEEDS");
+    return more ? static_cast<std::size_t>(*more) : 3000;
 }
 
 // The text of the records that a text of a generated tree has.
 void expected_records(dstd::StringView text, const Tree& tree,
                       dstd::Vector<const Tree*>& out) {
     dstd::StringView rest = text;
-    if (rest.substr(0, 3) == "\xEF\xBB\xBF") rest.remove_prefix(3);
+    if (rest.starts_with("\xEF\xBB\xBF")) rest.remove_prefix(3);
     while (!rest.empty()) {
         const std::size_t end = rest.find('\n');
         const dstd::StringView line = rest.substr(0, end);
@@ -48,8 +48,7 @@ void expected_records(dstd::StringView text, const Tree& tree,
             line[line.find_first_not_of(" \t\r")] == '#')
             continue;
         if (tree.kind == Tree::Kind::Seq && line[0] == '-' &&
-            (line.size() == 1 || line[1] == ' ') &&
-            line.substr(0, 3) != "---") {
+            (line.size() == 1 || line[1] == ' ') && !line.starts_with("---")) {
             for (const Tree& item : tree.items) out.push_back(&item);
             return;
         }
@@ -83,7 +82,7 @@ std::size_t touch(Value value, std::size_t& misses, int depth = 0) {
 // Whether `message` is `name:line:col: reason`.
 bool is_well_formed(dstd::StringView message, dstd::StringView name,
                     std::size_t line_count) {
-    if (message.substr(0, name.size()) != name) return false;
+    if (!message.starts_with(name)) return false;
     message.remove_prefix(name.size());
     if (message.empty() || message[0] != ':') return false;
     message.remove_prefix(1);

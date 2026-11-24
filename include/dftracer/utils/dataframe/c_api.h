@@ -170,6 +170,10 @@ DFTU_EXPORT dftu_series* dftu_series_new_string_view(
 
 /** Create a FLAT variable-width column (String or Binary) copying `n` values.
  * `offsets` has n+1 int32 entries into `data`; `data` holds offsets[n] bytes.
+ * A String or Binary column made by dftu_series_slice has offsets that may
+ * start above 0 and share the parent's data: value i is
+ * data[offsets[i] .. offsets[i+1]], and a reader must not assume
+ * offsets[0] == 0.
  * `validity` is an Arrow-layout bitmap (1 = valid) or NULL for no nulls.
  * Returns NULL for another dtype or a negative `offsets[n]` (offsets that
  * wrapped past INT32_MAX). */
@@ -360,11 +364,12 @@ DFTU_EXPORT dftu_series* dftu_series_share(const dftu_series* col);
  * view with the values, nulls, type and type parameters of a gather of those
  * rows. Fixed-width, Bool, String, Binary and their Large forms are windowed
  * in place; VIEW, DICTIONARY and SELECTION columns keep their layout and share
- * their blobs, child or base. A string slice copies only its rebased offsets;
- * a bit-packed Bool or validity range off a byte boundary is repacked. The
- * result is owned by the caller (free with dftu_series_free) and keeps the
- * base buffers alive after `col` is freed. NULL for a NULL `col` and for a
- * LIST, MAP, STRUCT or CONSTANT column. */
+ * their blobs, child or base. A string slice copies nothing: it shares the
+ * parent's offsets and data, so its offsets may start above 0; a bit-packed
+ * Bool or validity range off a byte boundary is repacked. The result is owned
+ * by the caller (free with dftu_series_free) and keeps the base buffers alive
+ * after `col` is freed. NULL for a NULL `col` and for a LIST, MAP, STRUCT or
+ * CONSTANT column. */
 DFTU_EXPORT dftu_series* dftu_series_slice(const dftu_series* col,
                                            int64_t offset, int64_t len);
 
@@ -1130,6 +1135,14 @@ DFTU_EXPORT dftu_series* dftu_series_clip(const dftu_series* v, dftu_scalar lo,
 DFTU_EXPORT dftu_series* dftu_series_round(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_fillna(const dftu_series* v,
                                             dftu_scalar fill);
+/** Replace each NaN of a Float32 or Float64 column with `fill`, converted to
+ * the column's type; a NULL scalar turns the NaN into a null. A null row stays
+ * null and a column of any other type, or a float column with no NaN, is
+ * returned as it is (shared, as dftu_series_share). The caller owns the result
+ * and frees it with dftu_series_free. NULL for a NULL `v` and for an ERR or
+ * string scalar on a float column. */
+DFTU_EXPORT dftu_series* dftu_series_fill_nan(const dftu_series* v,
+                                              dftu_scalar fill);
 DFTU_EXPORT dftu_series* dftu_series_cumsum(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_cummax(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_cummin(const dftu_series* v);
@@ -1225,6 +1238,14 @@ DFTU_EXPORT dftu_series* dftu_series_is_infinite(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_null_mask(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_valid_mask(const dftu_series* v);
 
+/** The pandas view of missing data, each a bit-packed Bool column with no
+ * nulls. na_mask[i] is true where row i is null or, for a Float32 or Float64
+ * column, NaN; notna_mask is its complement. On every other type they are
+ * null_mask and valid_mask. The caller owns each result and frees it with
+ * dftu_series_free. NULL if `v` is NULL. */
+DFTU_EXPORT dftu_series* dftu_series_na_mask(const dftu_series* v);
+DFTU_EXPORT dftu_series* dftu_series_notna_mask(const dftu_series* v);
+
 /** is_unique[i] is true iff v's value at row i occurs exactly once;
  * is_duplicated is its complement (true for a repeated value). Both are
  * bit-packed Bool columns (hash pass; polars semantics). NULL rows form one
@@ -1245,6 +1266,12 @@ DFTU_EXPORT int32_t dftu_series_is_sorted(const dftu_series* v,
 
 /** Drop null rows, returning a SELECTION over `v` of the non-null rows. */
 DFTU_EXPORT dftu_series* dftu_series_drop_nulls(const dftu_series* v);
+
+/** Drop the NaN rows of a Float32 or Float64 column (a null row stays); a
+ * column of any other type, or with no NaN, is returned as it is (shared). The
+ * caller owns the result and frees it with dftu_series_free. NULL if `v` is
+ * NULL. */
+DFTU_EXPORT dftu_series* dftu_series_drop_nans(const dftu_series* v);
 
 /** Bit-packed Bool mask, true where `v`'s value is present in the `values`
  * column (a hash-set probe). NULL rows are never in the set. Numeric `v`
@@ -1614,6 +1641,8 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_select(const dftu_dataframe* df,
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_rename(const dftu_dataframe* df,
                                                   const char* const* new_names,
                                                   int32_t n);
+/** Add or replace column `name`. Returns NULL when `col` has a different
+    length than the frame's other columns, or on a null argument. */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_with_column(const dftu_dataframe* df,
                                                        const char* name,
                                                        const dftu_series* col);
@@ -1624,6 +1653,18 @@ DFTU_EXPORT dftu_dataframe* dftu_dataframe_drop_nulls(const dftu_dataframe* df);
  * scalar (string/bool) are carried over unchanged. */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_fill_null(const dftu_dataframe* df,
                                                      dftu_scalar value);
+/** Drop every row that holds a NaN in any Float32 or Float64 column (a null is
+ * not a NaN). The caller owns the result and frees it with
+ * dftu_dataframe_free. NULL if `df` is NULL or a float column cannot be read.
+ */
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_drop_nans(const dftu_dataframe* df);
+/** Replace the NaN of every Float32 or Float64 column with `value` (a NULL
+ * scalar makes it null, as dftu_series_fill_nan); other columns are carried
+ * over unchanged. The caller owns the result and frees it with
+ * dftu_dataframe_free. NULL if `df` is NULL or `value` is a string or error
+ * scalar. */
+DFTU_EXPORT dftu_dataframe* dftu_dataframe_fill_nan(const dftu_dataframe* df,
+                                                    dftu_scalar value);
 /** Distinct ROWS (keep first), hashing all columns as the composite key.
  * dftu_dataframe_drop_duplicates is an alias. */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_unique(const dftu_dataframe* df);
@@ -1715,20 +1756,20 @@ enum {
     DFTU_GROUPWISE_CUMPROD = 18
 };
 /** `kind` (a dftu_groupwise_op) over the groups of the `n_keys` `keys`
- * columns. CUMSUM / CUMPROD (Float64) / CUMMAX / CUMMIN / DIFF / PCT_CHANGE /
- * RANK take every numeric non-key column, SHIFT every non-key column, each
- * output under the column's own name; CUMCOUNT / NGROUP are one Int64 column of
- * that name; HEAD / TAIL / NTH keep the input columns of the selected rows;
- * FFILL / BFILL fill each non-key column's nulls within the group from the
- * nearest present value before / after; ROLLING_SUM / MEAN / MIN / MAX reduce
- * the trailing `n` rows of each numeric non-key column within the group, null
- * until the window holds `n` present values. `n` is the SHIFT periods
- * (negative looks ahead), the HEAD / TAIL count, the NTH position (0-based,
- * negative from the end) or the rolling window; `rank_method` (a
- * dftu_rank_method) and `ascending` apply to RANK. A null value stays null.
- * Runs the window kernel the utilities library registers as
- * `dftu.frame.window`. NULL if `df` is NULL, `kind` is not a transform, a key
- * is absent, NGROUP has no keys or no column is eligible. */
+ * columns. CUMSUM / CUMPROD (Int64 or UInt64 over an integer column, wrapping)
+ * / CUMMAX / CUMMIN / DIFF / PCT_CHANGE / RANK take every numeric non-key
+ * column, SHIFT every non-key column, each output under the column's own name;
+ * CUMCOUNT / NGROUP are one Int64 column of that name; HEAD / TAIL / NTH keep
+ * the input columns of the selected rows; FFILL / BFILL fill each non-key
+ * column's nulls within the group from the nearest present value before /
+ * after; ROLLING_SUM / MEAN / MIN / MAX reduce the trailing `n` rows of each
+ * numeric non-key column within the group, null until the window holds `n`
+ * present values. `n` is the SHIFT periods (negative looks ahead), the HEAD /
+ * TAIL count, the NTH position (0-based, negative from the end) or the rolling
+ * window; `rank_method` (a dftu_rank_method) and `ascending` apply to RANK. A
+ * null value stays null. Runs the window kernel the utilities library registers
+ * as `dftu.frame.window`. NULL if `df` is NULL, `kind` is not a transform, a
+ * key is absent, NGROUP has no keys or no column is eligible. */
 DFTU_EXPORT dftu_dataframe* dftu_dataframe_group_transform(
     const dftu_dataframe* df, const char* const* keys, int32_t n_keys,
     int32_t kind, int64_t n, int32_t rank_method, int32_t ascending);
@@ -2019,6 +2060,10 @@ DFTU_EXPORT dftu_expr* dftu_expr_select(const dftu_expr* cond,
 /** The Bool mask of the rows where `a` is null (`null` nonzero) or present
  * (`null` zero). NULL if `a` is NULL. */
 DFTU_EXPORT dftu_expr* dftu_expr_is_null(const dftu_expr* a, int32_t null);
+/** As dftu_expr_is_null for missing data in the pandas sense: `na` nonzero is
+ * true where `a` is null or, in a float operand, NaN; zero is its complement.
+ * NULL if `a` is NULL. */
+DFTU_EXPORT dftu_expr* dftu_expr_is_na(const dftu_expr* a, int32_t na);
 
 /* duql semantics (see expr.h): an unknown result is a null cell. Each builder
  * returns NULL when a handle it needs is NULL. The n-ary builders borrow
@@ -2232,6 +2277,9 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_tail(const dftu_lazyframe* lf,
 
 /** Drop every row that is null in ANY column. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_drop_nulls(const dftu_lazyframe* lf);
+/** Drop every row that holds a NaN in any float column. The caller owns the
+ * result and frees it with dftu_lazyframe_free. NULL if `lf` is NULL. */
+DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_drop_nans(const dftu_lazyframe* lf);
 
 /** Distinct rows (keep first), in original order. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_unique(const dftu_lazyframe* lf);
@@ -2290,6 +2338,12 @@ DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_slice(const dftu_lazyframe* lf,
 /** Replace every null with `value`, cast to each column's type. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_fill_null(const dftu_lazyframe* lf,
                                                      dftu_scalar value);
+/** Replace the NaN of every float column with `value` (a NULL scalar makes it
+ * null); other columns pass through. The caller owns the result and frees it
+ * with dftu_lazyframe_free. NULL if `lf` is NULL or `value` is a string or
+ * error scalar. */
+DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_fill_nan(const dftu_lazyframe* lf,
+                                                    dftu_scalar value);
 
 /** Append an Int64 row-index column named `name`, starting at 0. */
 DFTU_EXPORT dftu_lazyframe* dftu_lazyframe_with_row_index(
@@ -2512,8 +2566,9 @@ enum { DFTU_WINDOW_FRAME_ROWS = 0, DFTU_WINDOW_FRAME_RANGE = 1 };
 /** One appended window column: `func` over `value` (a column name, or NULL
  * when the function takes none) into `out`. FILL_FORWARD is the nearest
  * present value at or before the row in the partition; RUNNING_PROD the
- * Float64 product of the present values so far. `param` holds what only some
- * functions read, and `func` names the member that is set:
+ * product of the present values so far (Int64 or UInt64 over an integer
+ * column, wrapping on overflow; Float64 over a float one). `param` holds what
+ * only some functions read, and `func` names the member that is set:
  * - `offset`: the LAG/LEAD shift, NTILE bucket count or NTH_VALUE 1-based k.
  * - `frame` (FRAME_*): the present count below which the output is null (0 =
  *   none), the bounds (DFTU_WINDOW_UNBOUNDED = no bound) and their `mode`:

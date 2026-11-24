@@ -500,7 +500,7 @@ inline void write_plan(const PlanResult& plan, const dftu_scan_request& req,
 /// A source that says what its scan will do before it opens a cursor:
 ///   dstd::Result<PlanResult> plan(const ScanView&) const;
 /// The host then sets dftu_source_vt::plan and uses the votes (see
-/// @ref PlanResult).
+/// @ref dftracer::utils::plugins::PlanResult).
 template <class S>
 concept HasPlan = requires(const S& s, const ScanView& v) {
     { s.plan(v) } -> std::same_as<dstd::Result<PlanResult>>;

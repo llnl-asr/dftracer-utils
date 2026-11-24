@@ -63,7 +63,7 @@ Python and C++ analysis paths both use it.
 
    import dftracer.utils as dft
 
-   with dft.Indexer(files=["trace.pfw.gz"]) as ix:
+   with dft.index.Indexer(files=["trace.pfw.gz"]) as ix:
        ix.ensure()
 
 The CLI does the same without Python. It indexes every trace under a directory,
@@ -86,7 +86,7 @@ spec: ``count``, ``sum_dur``, ``mean_dur``.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          df = (
              TraceViewer("trace.pfw.gz")
@@ -200,7 +200,8 @@ the same predicate reads almost identically in Python and C++. Keep only the
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer, col
+         from dftracer.utils import col
+         from dftracer.utils.trace import TraceViewer
 
          df = (
              TraceViewer("trace.pfw.gz")
@@ -287,7 +288,7 @@ Now read the folder.
 
       .. code-block:: python
 
-         from dftracer.utils import TraceViewer
+         from dftracer.utils.trace import TraceViewer
 
          df = (
              TraceViewer("traces")

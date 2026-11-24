@@ -145,7 +145,7 @@ TEST_SUITE("RowSetFold") {
     }
 
     TEST_CASE("a row set that aggregates or reads another is not indexed") {
-        const auto& s = dftu_utils_test::ok_ref(trace::index::register_schema(
+        const auto& s = *dftu_utils_test::ok(trace::index::register_schema(
             "id: rs_mixed\nsource: |\n"
             "  big = where x > 1 | select x, y;\n"
             "  counts = where x > 1 | group y { n = count() };\n"
@@ -282,7 +282,7 @@ TEST_SUITE("RowSetFold") {
             R"({"gtype":"func","run":"ab","path":"main;f","ts":1,)"
             R"("dur":{"sketch":"UNIQUE_SKETCH_BLOB","count":2}})";
         const auto& genesis =
-            dftu_utils_test::ok_ref(trace::index::get_schema("genesis"));
+            *dftu_utils_test::ok(trace::index::get_schema("genesis"));
         for (const bool skip : {true, false}) {
             CAPTURE(skip);
             dstd::StringIntern intern;

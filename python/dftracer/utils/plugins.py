@@ -24,8 +24,11 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, NamedTuple, Union, cast
 
-from ._jit_errors import check_port_wiring, translate_plan_error, translate_run_error
-from .dataframe import DataFrame
+from ._dataframe import DataFrame as _DataFrame
+from ._jit_errors import check_port_wiring as _check_port_wiring
+from ._jit_errors import translate_plan_error as _translate_plan_error
+from ._jit_errors import translate_run_error as _translate_run_error
+from ._public import set_home as _set_home
 from .dftracer_utils_ext import DataFrame as _NativeDataFrame
 from .dftracer_utils_ext import Plugins as _NativePlugins
 from .dftracer_utils_ext import _load_plugin, _unload_plugin
@@ -35,17 +38,25 @@ if TYPE_CHECKING:
 
     import pyarrow as pa
 
+    from ._lazyframe import LazyFrame
     from .dftracer_utils_ext import PluginRecord
-    from .lazyframe import LazyFrame
     from .runtime import Runtime
 
-__all__ = ["Plugins", "PluginHandle", "PluginInfo", "PluginRun", "load_plugin", "unnest"]
+__all__ = [
+    "JSONValue",
+    "PluginHandle",
+    "PluginInfo",
+    "PluginRun",
+    "Plugins",
+    "load_plugin",
+    "unnest",
+]
 
 # A JSON-serializable value tree (config is handed straight to json.dumps).
 JSONValue = Union[str, int, float, bool, None, List["JSONValue"], Dict[str, "JSONValue"]]
 
 # One run() result value per emit kind: bytes, a native frame or a lazy plan.
-_RunResult = Union[bytes, "DataFrame", "LazyFrame"]
+_RunResult = Union[bytes, "_DataFrame", "LazyFrame"]
 
 
 def unnest(
@@ -70,7 +81,7 @@ def unnest(
 
     if isinstance(result, pa.RecordBatchReader):
         result = result.read_all()
-    return DataFrame.from_arrow(pa.table(result)).unnest(column, keep_empty).to_arrow()
+    return _DataFrame.from_arrow(pa.table(result)).unnest(column, keep_empty).to_arrow()
 
 
 def _plugin_key(plugin: str | type) -> str:
@@ -168,18 +179,18 @@ class Plugins:
             if isinstance(plugin, str):
                 path = plugin
             else:
-                from .jit.maps import plugin_config
-                from .jit.package import compile_class, plugin_result_names
+                from .jit._maps import plugin_config
+                from .jit._package import compile_class, plugin_result_names
 
                 cfg = plugin_config(plugin, cfg)
                 result_names.update(plugin_result_names(plugin))
                 path = compile_class(plugin)
             specs.append((path, json.dumps(cfg) if cfg is not None else None))
-        check_port_wiring(plugins)
+        _check_port_wiring(plugins)
         try:
             self._native = _NativePlugins(specs, result_names or None, runtime)
         except (ImportError, ValueError) as exc:
-            translated = translate_plan_error(plugins, exc)
+            translated = _translate_plan_error(plugins, exc)
             if translated is None:
                 raise
             raise translated from exc
@@ -245,7 +256,7 @@ class Plugins:
         try:
             raw_results, stats = self._native.run(traces, index_dir, auto_index)
         except Exception as exc:
-            failure = translate_run_error(exc)
+            failure = _translate_run_error(exc)
             if failure is None:
                 raise
             raise failure from exc
@@ -262,7 +273,7 @@ class Plugins:
         if isinstance(obj, bytes):
             return obj
         if isinstance(obj, _NativeDataFrame):
-            return DataFrame(obj)
+            return _DataFrame(obj)
         return cast("_RunResult", obj)
 
 
@@ -318,7 +329,7 @@ def load_plugin(path: str | os.PathLike[str]) -> PluginHandle:
     """Load the compiled plugin at ``path`` into the process and return its
     handle, which works as a context manager::
 
-        with dft.load_plugin("csv_reader.so"):
+        with dft.plugins.load_plugin("csv_reader.so"):
             frame = dft.scan_file("data.csv").collect()
 
     Loading a path that is already loaded, by the handle of an earlier call or
@@ -328,3 +339,6 @@ def load_plugin(path: str | os.PathLike[str]) -> PluginHandle:
     text = os.fspath(path)
     _load_plugin(text)
     return PluginHandle(text)
+
+
+_set_home(__name__, globals(), __all__)

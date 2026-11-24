@@ -4,9 +4,11 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_i64/u64/f64
 #include <dftracer/utils/dataframe/internal/float_key.h>
+#include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/sketch.h>  // DDSketch, sketch_bucket_keys
 #include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/function_ref.h>
@@ -25,6 +27,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <string>
 #include <utility>
@@ -419,18 +422,18 @@ struct PlainKey {
         if (codes) return dvals[static_cast<std::size_t>(codes[i])];
         if (views) {
             const std::uint8_t* v = views + static_cast<std::size_t>(i) * 16;
-            std::int32_t size;
-            std::memcpy(&size, v, sizeof(size));
-            const auto n = static_cast<std::size_t>(size);
-            if (size <= 12)
-                return dstd::StringView(reinterpret_cast<const char*>(v + 4),
-                                        n);
-            std::int32_t index, offset;
-            std::memcpy(&index, v + 8, sizeof(index));
-            std::memcpy(&offset, v + 12, sizeof(offset));
-            if (static_cast<std::size_t>(index) >= blob_data.size()) return {};
+            const auto decoded = decode_view(v);
+            const auto n = static_cast<std::size_t>(decoded.size);
+            if (decoded.size <= 12)
+                return dstd::StringView(
+                    reinterpret_cast<const char*>(decoded.inline_data), n);
+            if (static_cast<std::size_t>(decoded.buffer_index) >=
+                blob_data.size())
+                return {};
             return dstd::StringView(
-                blob_data[static_cast<std::size_t>(index)] + offset, n);
+                blob_data[static_cast<std::size_t>(decoded.buffer_index)] +
+                    decoded.offset,
+                n);
         }
         if (off64)
             return dstd::StringView(
@@ -776,7 +779,7 @@ __attribute__((always_inline)) inline int light_add(
                 const auto x = std::bit_cast<std::int64_t>(bits);
                 if (sum) {
                     std::int64_t s = 0;
-                    if (__builtin_add_overflow(
+                    if (dstd::bits::add_overflow(
                             std::bit_cast<std::int64_t>(*sum), x, &s))
                         [[unlikely]]
                         wrap = x < 0 ? -1 : 1;
@@ -787,7 +790,8 @@ __attribute__((always_inline)) inline int light_add(
                 break;
             }
             case FieldStatDomain::U64:
-                if (sum && __builtin_add_overflow(*sum, bits, sum)) [[unlikely]]
+                if (sum && dstd::bits::add_overflow(*sum, bits, sum))
+                    [[unlikely]]
                     wrap = 1;
                 if (lo && bits < *lo) *lo = bits;
                 if (hi && bits > *hi) *hi = bits;
@@ -967,7 +971,10 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
                 total *= w;
             }
             const std::uint64_t limit =
-                static_cast<std::uint64_t>(end - begin) * 4 + 1024;
+                static_cast<std::uint64_t>(
+                    std::max<std::int64_t>(end - begin, st.rows_hint)) *
+                    4 +
+                1024;
             if (fits && total <= limit && total <= (std::uint64_t{1} << 26)) {
                 bool same = !st.direct_groups.empty();
                 for (std::size_t j = 0; j < nk && same; ++j)
@@ -1070,12 +1077,12 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
                     groups[static_cast<std::size_t>(r + AHEAD)]);
                 if (nf > 0) {
                     if (st.light_on)
-                        __builtin_prefetch(
-                            st.light.data() + ga * st.light_stride, 1);
+                        dstd::bits::prefetch_write(st.light.data() +
+                                                   ga * st.light_stride);
                     else
-                        __builtin_prefetch(st.fstats.data() + ga * nf, 1);
+                        dstd::bits::prefetch_write(st.fstats.data() + ga * nf);
                 }
-                __builtin_prefetch(st.counts.data() + ga, 1);
+                dstd::bits::prefetch_write(st.counts.data() + ga);
             }
             add_row.template operator()<Moments, Nulls>(
                 groups[static_cast<std::size_t>(r)], b0 + r);
@@ -1151,20 +1158,18 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
             }
             const std::size_t mask = st.fast_slots.size() - 1;
             for (std::int64_t r = 0; r < std::min(m, AHEAD); ++r)
-                __builtin_prefetch(
+                dstd::bits::prefetch_read(
                     st.fast_slots.data() +
-                        (static_cast<std::size_t>(
-                             hashes[static_cast<std::size_t>(r)]) &
-                         mask),
-                    0);
+                    (static_cast<std::size_t>(
+                         hashes[static_cast<std::size_t>(r)]) &
+                     mask));
             for (std::int64_t r = 0; r < m; ++r) {
                 if (r + AHEAD < m)
-                    __builtin_prefetch(
+                    dstd::bits::prefetch_read(
                         st.fast_slots.data() +
-                            (static_cast<std::size_t>(
-                                 hashes[static_cast<std::size_t>(r + AHEAD)]) &
-                             mask),
-                        0);
+                        (static_cast<std::size_t>(
+                             hashes[static_cast<std::size_t>(r + AHEAD)]) &
+                         mask));
                 const std::uint64_t h = hashes[static_cast<std::size_t>(r)];
                 const std::uint64_t e =
                     st.fast_slots[static_cast<std::size_t>(h) & mask];
@@ -1174,15 +1179,16 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
                     (e & FAST_TAG) == (h & FAST_TAG)) {
                     g = static_cast<std::int64_t>(e & ~FAST_TAG);
                     const auto gi = static_cast<std::size_t>(g);
-                    __builtin_prefetch(st.fast_words.data() + gi * W, 0);
+                    dstd::bits::prefetch_read(st.fast_words.data() + gi * W);
                     if (nf > 0) {
                         if (st.light_on)
-                            __builtin_prefetch(
-                                st.light.data() + gi * st.light_stride, 1);
+                            dstd::bits::prefetch_write(st.light.data() +
+                                                       gi * st.light_stride);
                         else
-                            __builtin_prefetch(st.fstats.data() + gi * nf, 1);
+                            dstd::bits::prefetch_write(st.fstats.data() +
+                                                       gi * nf);
                     }
-                    __builtin_prefetch(st.counts.data() + gi, 1);
+                    dstd::bits::prefetch_write(st.counts.data() + gi);
                 }
                 cand[static_cast<std::size_t>(r)] = g;
             }
@@ -2144,10 +2150,20 @@ AggStatePtr agg_merge_many(dstd::Vector<AggStatePtr>& partials) {
         return nullptr;
     }
     AggStatePtr base = std::move(partials[widest]);
-    base->settle_light();
-    dstd::Vector<const AggState*> others;
+    // Partials of one layout merge in the light form, which holds a cell as
+    // the words its reducers read; any other mix is expanded into field stats.
+    bool light = true;
     for (const AggStatePtr& p : partials)
-        if (p && p->inited) others.push_back(&settled(*p));
+        if (p && p->inited && !base->light_matches(*p)) light = false;
+    if (!light) base->settle_light();
+    dstd::Vector<const AggState*> others;
+    dstd::Vector<std::size_t> owner;  // the partial each of `others` came from
+    for (std::size_t i = 0; i < partials.size(); ++i)
+        if (partials[i] && partials[i]->inited) {
+            others.push_back(light ? partials[i].get()
+                                   : &settled(*partials[i]));
+            owner.push_back(i);
+        }
     // One remap per partial, built here because it grows base's name table
     // and the merges below run in parallel.
     dstd::Vector<dstd::Vector<std::uint32_t>> dyn_map(others.size());
@@ -2178,36 +2194,56 @@ AggStatePtr agg_merge_many(dstd::Vector<AggStatePtr>& partials) {
                 base->find_group_of_other(*others[p], j);
         }
     });
-    const std::int64_t ng = base->ngroups();
-    constexpr std::int64_t GRAIN = 1024;
-    parallel_for(ng, GRAIN, [&](std::int64_t gb, std::int64_t ge) {
-        for (std::size_t p = 0; p < others.size(); ++p) {
-            const dstd::Vector<std::int64_t>& m = map[p];
-            for (std::size_t j = 0; j < m.size(); ++j)
-                if (m[j] >= gb && m[j] < ge)
-                    base->merge_group(
-                        m[j], *others[p], static_cast<std::int64_t>(j),
-                        others[p]->has_dyn ? &dyn_map[p] : nullptr);
-        }
-    });
+    // The groups the others add, at most: each partial's unmapped groups, so
+    // the per-group arrays grow once and not as each group arrives.
+    std::size_t added = 0;
+    for (const dstd::Vector<std::int64_t>& m : map)
+        added += static_cast<std::size_t>(std::count(m.begin(), m.end(), -1));
+    if (added != 0)
+        base->reserve_groups(static_cast<std::size_t>(base->ngroups()) + added);
+    // One partial at a time, in order, and each is released once merged. The
+    // groups of one partial map to distinct groups here, so they merge in
+    // parallel, and a group still sees the partials in order.
+    bool rows_known = agg_first_rows_known(*base);
+    for (const AggState* o : others)
+        rows_known = rows_known && agg_first_rows_known(*o);
     for (std::size_t p = 0; p < others.size(); ++p) {
         dstd::Vector<std::int64_t>& m = map[p];
+        const dstd::Vector<std::uint32_t>* dm =
+            others[p]->has_dyn ? &dyn_map[p] : nullptr;
         for (std::size_t j = 0; j < m.size(); ++j)
-            if (m[j] < 0) {
+            if (m[j] < 0)
                 m[j] = base->group_of_other(*others[p],
                                             static_cast<std::int64_t>(j));
-                base->merge_group(m[j], *others[p],
-                                  static_cast<std::int64_t>(j),
-                                  others[p]->has_dyn ? &dyn_map[p] : nullptr);
-            }
-    }
-    // The UDAF tables merge one after another: each is used by one thread.
-    if (base->has_udaf)
-        for (std::size_t p = 0; p < others.size(); ++p) {
-            dstd::Vector<std::int64_t> from(map[p].size());
+        // The new groups' first rows are taken by the merge like any other.
+        if (rows_known)
+            base->group_first_row.resize(
+                static_cast<std::size_t>(base->ngroups()),
+                std::numeric_limits<std::int64_t>::max());
+        AggState::LightCarries carried;
+        std::mutex carried_mutex;
+        parallel_for(static_cast<std::int64_t>(m.size()), 1024,
+                     [&](std::int64_t jb, std::int64_t je) {
+                         AggState::LightCarries mine;
+                         for (std::int64_t j = jb; j < je; ++j)
+                             base->merge_group(m[static_cast<std::size_t>(j)],
+                                               *others[p], j, dm, &mine);
+                         if (mine.empty()) return;
+                         const std::lock_guard<std::mutex> lock(carried_mutex);
+                         carried.insert(carried.end(), mine.begin(),
+                                        mine.end());
+                     });
+        for (const auto& [slot, wraps] : carried)
+            base->light_carry[slot] = wraps;
+        // The UDAF tables merge one after another: each is used by one thread.
+        if (base->has_udaf) {
+            dstd::Vector<std::int64_t> from(m.size());
             std::iota(from.begin(), from.end(), std::int64_t{0});
-            base->udaf_combine(*others[p], map[p], from);
+            base->udaf_combine(*others[p], m, from);
         }
+        partials[owner[p]].reset();
+        m = {};
+    }
     return base;
 }
 

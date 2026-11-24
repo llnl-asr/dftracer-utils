@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -152,9 +153,9 @@ void write_scale_set(dstd::String dir, int files, bool variant) {
                 "}}\n";
         }
         text += "]\n";
-        char name[32];
-        std::snprintf(name, sizeof(name), "/trace_%04d.pfw.gz", f);
-        REQUIRE(!dftu_utils_test::write_gz_trace(dir + name, text).empty());
+        REQUIRE(!dftu_utils_test::write_gz_trace(
+                     dir + dstd::fmt<"/trace_{:04}.pfw.gz">(f), text)
+                     .empty());
     }
 }
 

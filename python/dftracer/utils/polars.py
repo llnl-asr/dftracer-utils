@@ -9,16 +9,20 @@ the polars names on them: ``df.height`` / ``df.width`` / ``df.schema``,
 ``s.str.to_lowercase()``, ``s.is_in([...])``, ``s.is_null()``. ``col`` and
 ``lit`` build the expressions ``filter`` / ``with_columns`` take. The module
 functions below are the polars top-level ones that map onto engine ops.
+
+This is a compatibility namespace: it re-exports the engine names that the top
+level of ``dftracer.utils`` also exports, so ``import dftracer.utils.polars as pl``
+reads like polars. The one-import-path rule exempts it.
 """
 
 from __future__ import annotations
 
 from typing import Literal, Sequence, cast, overload
 
-from .dataframe import DataFrame
-from .expr import Expr, col, lit
-from .lazyframe import LazyFrame
-from .series import Series
+from ._dataframe import DataFrame
+from ._expr import Expr, col, lit
+from ._lazyframe import LazyFrame
+from ._series import Series
 
 __all__ = [
     "DataFrame",

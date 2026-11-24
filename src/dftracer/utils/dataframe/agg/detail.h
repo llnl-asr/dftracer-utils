@@ -138,10 +138,10 @@ void agg_accumulate_packed(AggState& st, dstd::Span<const Series* const> keys,
                            dstd::Span<const Series* const> values,
                            const AggPacked& shape, const AggPages& rows);
 
-/// Merge the partials into one state: the groups the widest partial holds
-/// merge in parallel over group ranges (each partial's groups mapped to it
-/// first), the rest are appended after. Empty partials are skipped; null
-/// when there is none.
+/// Merge the partials into one state: the widest partial is the base and the
+/// others follow in order, each one's groups merging in parallel (the groups it
+/// adds are appended first). Empty partials are skipped; null when there is
+/// none. Each partial is released once merged.
 AggStatePtr agg_merge_many(dstd::Vector<AggStatePtr>& partials);
 
 /// Default sketch width when AggSpec::param does not set one.
@@ -1479,6 +1479,9 @@ class AggState : public dstd::HeapObject {
     // rows), reserved once the first group arrives, so the per-group arrays
     // are allocated once and not regrown (and freed) as the groups come in.
     std::size_t groups_hint = 0;
+    /// Rows a caller folds in several calls, so the direct table is sized as
+    /// for one call over all of them. Zero: the rows of each call.
+    std::int64_t rows_hint = 0;
     void reserve_groups(std::size_t h) {
         counts.reserve(h);
         group_first_row.reserve(h);
@@ -1612,6 +1615,51 @@ class AggState : public dstd::HeapObject {
                 break;
         }
         return f;
+    }
+    // Net wraps of integer light sums that changed in a merge, as (light slot,
+    // wraps), for a caller that merges groups in parallel and applies them
+    // once the threads have joined.
+    using LightCarries = dstd::Vector<dstd::Pair<std::size_t, std::int64_t>>;
+    // Writes `f`, a merge of slot i's stat, back into its light cells: the
+    // inverse of light_words_stat. The slot's domain does not change.
+    void light_store(std::size_t i, const FieldStat& f,
+                     std::int64_t carry_before, LightCarries* carries) {
+        const std::size_t fld = i % nf;
+        std::uint64_t* row = light.data() + (i / nf) * light_stride;
+        const std::uint8_t mask = light_mask[fld];
+        std::uint64_t* c = row + light_off[fld];
+        if (fld < 64) row[0] |= std::uint64_t{1} << fld;
+        std::size_t pos = 0;
+        if (mask & LIGHT_N) c[pos++] = f.n;
+        const bool exact = f.domain != FieldStatDomain::F64;
+        if (mask & LIGHT_SUM)
+            c[pos++] = exact ? std::bit_cast<std::uint64_t>(f.esum)
+                             : std::bit_cast<std::uint64_t>(f.sum);
+        if (mask & LIGHT_MIN)
+            c[pos++] = exact ? std::bit_cast<std::uint64_t>(f.emin)
+                             : std::bit_cast<std::uint64_t>(f.min);
+        if (mask & LIGHT_MAX)
+            c[pos++] = exact ? std::bit_cast<std::uint64_t>(f.emax)
+                             : std::bit_cast<std::uint64_t>(f.max);
+        if (mask & LIGHT_MOM) {
+            c[pos++] = std::bit_cast<std::uint64_t>(f.shift);
+            c[pos++] = std::bit_cast<std::uint64_t>(f.cmean);
+            c[pos++] = std::bit_cast<std::uint64_t>(f.cm2);
+        }
+        if (f.ecarry != carry_before) {
+            if (carries)
+                carries->emplace_back(i, f.ecarry);
+            else
+                light_carry[i] = f.ecarry;
+        }
+    }
+    // Whether `other` holds the same light cells in the same layout, so its
+    // groups merge into this state's without leaving the light form.
+    bool light_matches(const AggState& other) const {
+        return light_on && other.light_on && nf == other.nf &&
+               light_stride == other.light_stride &&
+               light_mask == other.light_mask && light_off == other.light_off &&
+               field_domain == other.field_domain;
     }
     // The field stat of slot i, wherever it is kept.
     FieldStat field_stat(std::size_t i) const {
@@ -1799,7 +1847,8 @@ class AggState : public dstd::HeapObject {
     /// `dyn_map` maps other's dyn ids to this state's. Null when the two
     /// states share one name table.
     void merge_group(std::int64_t g, const AggState& other, std::int64_t j,
-                     const dstd::Vector<std::uint32_t>* dyn_map = nullptr) {
+                     const dstd::Vector<std::uint32_t>* dyn_map = nullptr,
+                     LightCarries* carries = nullptr) {
         const std::int64_t rows_before = counts[static_cast<std::size_t>(g)];
         if (has_apos && rows_before > 0 &&
             static_cast<std::size_t>(j) < other.group_first_row.size() &&
@@ -1820,11 +1869,31 @@ class AggState : public dstd::HeapObject {
         }
         const std::size_t db = static_cast<std::size_t>(g) * nf;
         const std::size_t sb = static_cast<std::size_t>(j) * nf;
-        for (std::size_t fj = 0; fj < nf; ++fj) {
-            FieldStat unpacked;
-            fstats[db + fj].merge(other.light_on
-                                      ? (unpacked = other.light_stat(sb + fj))
-                                      : other.fstats[sb + fj]);
+        if (light_on) {
+            // `other` matches this layout (light_matches): a cell is merged as
+            // a field stat and written back, never held expanded.
+            for (std::size_t fj = 0; fj < nf; ++fj) {
+                const FieldStat o = other.light_stat(sb + fj);
+                if (o.n == 0) continue;
+                FieldStat f = light_stat(db + fj);
+                if (carries)
+                    for (auto it = carries->rbegin(); it != carries->rend();
+                         ++it)
+                        if (it->first == db + fj) {
+                            f.ecarry = it->second;
+                            break;
+                        }
+                const std::int64_t carry_before = f.ecarry;
+                f.merge(o);
+                light_store(db + fj, f, carry_before, carries);
+            }
+        } else {
+            for (std::size_t fj = 0; fj < nf; ++fj) {
+                FieldStat unpacked;
+                fstats[db + fj].merge(
+                    other.light_on ? (unpacked = other.light_stat(sb + fj))
+                                   : other.fstats[sb + fj]);
+            }
         }
         if (has_fl) {
             for (std::size_t fj = 0; fj < nf; ++fj) {

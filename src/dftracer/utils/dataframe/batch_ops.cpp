@@ -19,6 +19,7 @@
 #include <dftracer/utils/dataframe/kernels/field_stat.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/kernels/group_by.h>
+#include <dftracer/utils/dataframe/kernels/nan_rows.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/algorithm.h>
@@ -46,6 +47,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <type_traits>
 
 dftu_series* dftu_chunk_results(
     dftracer::utils::dstd::Vector<dftu_series*>& parts) {
@@ -234,13 +236,19 @@ static dstd::Result<DataFrame> rename_raw(
     return out;
 }
 
-static DataFrame with_column_raw(const DataFrame& b, dstd::StringView name,
-                                 const Series& col) {
+static dstd::Result<DataFrame> with_column_raw(const DataFrame& b,
+                                               dstd::StringView name,
+                                               const Series& col) {
+    const std::int64_t i = index_of(b, name);
+    const std::size_t others = b.columns.size() - (i >= 0 ? 1 : 0);
+    if (others > 0 && col.length() != b.num_rows())
+        return invalid_argument<
+            "with_column: column {} has length {} but the frame has {} "
+            "rows">(name, col.length(), b.num_rows());
     DataFrame out;
     out.names = b.names;
     out.columns.reserve(b.columns.size() + 1);
     for (const Series& c : b.columns) out.columns.push_back(c.share());
-    std::int64_t i = index_of(b, name);
     if (i >= 0) {
         out.columns[static_cast<std::size_t>(i)] = col.share();
     } else {
@@ -1394,6 +1402,36 @@ static DataFrame fill_null_raw(const DataFrame& b, dftu_scalar value) {
     return out;
 }
 
+static bool is_float_column(const Series& c) {
+    return c.type() == TypeId::Float32 || c.type() == TypeId::Float64;
+}
+
+static dstd::Result<DataFrame> drop_nans_raw(const DataFrame& b) {
+    Series keep;
+    for (const Series& c : b.columns) {
+        if (!is_float_column(c)) continue;
+        std::int64_t nans = 0;
+        Series ok = keep_non_nan(c, &nans);
+        if (nans < 0)
+            return invalid_argument<
+                "drop_nans: a float column cannot be read">();
+        if (nans == 0) continue;
+        keep = keep.valid() ? keep.logical_and(ok) : std::move(ok);
+    }
+    return keep.valid() ? b.filter(keep) : b.share();
+}
+
+static DataFrame fill_nan_raw(const DataFrame& b, dftu_scalar value) {
+    DataFrame out;
+    out.names = b.names;
+    out.columns.reserve(b.columns.size());
+    for (const Series& c : b.columns) {
+        Series f = c.fill_nan(value);
+        out.columns.push_back(f.valid() ? std::move(f) : c.share());
+    }
+    return out;
+}
+
 static dstd::Result<DataFrame> unique_raw(
     const DataFrame& b, dstd::Span<const dstd::String> subset) {
     const std::int64_t n = b.num_rows();
@@ -1514,6 +1552,92 @@ bool permutation_order(const Series& c, bool descending, std::int64_t n,
     return true;
 }
 
+template <class F>
+bool with_int_data(const Series& c, F&& f) {
+    if (!c.is_flat()) return false;
+    switch (c.type()) {
+        case TypeId::Int8:
+            return f(c.data<std::int8_t>());
+        case TypeId::Int16:
+            return f(c.data<std::int16_t>());
+        case TypeId::Int32:
+            return f(c.data<std::int32_t>());
+        case TypeId::Int64:
+            return f(c.data<std::int64_t>());
+        case TypeId::Uint8:
+            return f(c.data<std::uint8_t>());
+        case TypeId::Uint16:
+            return f(c.data<std::uint16_t>());
+        case TypeId::Uint32:
+            return f(c.data<std::uint32_t>());
+        case TypeId::Uint64:
+            return f(c.data<std::uint64_t>());
+        default:
+            return false;
+    }
+}
+
+// The row order of a multi-key sort of integer keys whose value ranges fit
+// together in 64 bits: each key becomes its offset from the end it sorts from
+// (a null one step past the end it goes to), the offsets pack first key
+// highest, and one stable argsort of the packed codes is the order.
+bool packed_order(dstd::Span<const Series* const> keys,
+                  dstd::Span<const std::uint8_t> desc,
+                  dstd::Span<const std::uint8_t> nulls_last, std::int64_t n,
+                  dstd::Vector<std::int64_t>& order) {
+    if (keys.size() < 2 || n == 0) return false;
+    dstd::Vector<std::uint64_t> codes(static_cast<std::size_t>(n), 0);
+    unsigned used = 0;
+    for (std::size_t k = 0; k < keys.size(); ++k) {
+        const Series& c = *keys[k];
+        const bool has_nulls = c.null_count() > 0;
+        const bool down = desc[k] != 0;
+        const bool null_high = nulls_last[k] != 0;
+        const bool ok = with_int_data(c, [&](const auto* p) {
+            using T = std::remove_cv_t<std::remove_pointer_t<decltype(p)>>;
+            bool any = false;
+            T lo{};
+            T hi{};
+            for (std::int64_t i = 0; i < n; ++i) {
+                if (has_nulls && c.is_null(i)) continue;
+                if (!any || p[i] < lo) lo = p[i];
+                if (!any || p[i] > hi) hi = p[i];
+                any = true;
+            }
+            const std::uint64_t span =
+                static_cast<std::uint64_t>(hi) - static_cast<std::uint64_t>(lo);
+            if (has_nulls && span == std::numeric_limits<std::uint64_t>::max())
+                return false;
+            const std::uint64_t top = span + (has_nulls ? 1 : 0);
+            const unsigned width = static_cast<unsigned>(std::bit_width(top));
+            if (used + width > 64) return false;
+            used += width;
+            const std::uint64_t shift_values = has_nulls && !null_high ? 1 : 0;
+            const std::uint64_t null_code = null_high ? top : 0;
+            for (std::int64_t i = 0; i < n; ++i) {
+                std::uint64_t code;
+                if (has_nulls && c.is_null(i)) {
+                    code = null_code;
+                } else {
+                    const auto v = static_cast<std::uint64_t>(p[i]);
+                    code = (down ? static_cast<std::uint64_t>(hi) - v
+                                 : v - static_cast<std::uint64_t>(lo)) +
+                           shift_values;
+                }
+                std::uint64_t& out = codes[static_cast<std::size_t>(i)];
+                out = width == 64 ? code : (out << width) | code;
+            }
+            return true;
+        });
+        if (!ok) return false;
+    }
+    const Series packed = Series::flat(TypeId::Uint64, codes.data(), n);
+    const Series perm = packed.argsort(false, true);
+    const std::int64_t* p = perm.data<std::int64_t>();
+    std::copy(p, p + n, order.begin());
+    return true;
+}
+
 // The row order of a multi-key sort as one stable argsort per key, last key
 // first: each pass sorts the key as the previous passes left it, so ties keep
 // the order the later keys gave. A pass uses the single-key argsort, which is
@@ -1524,6 +1648,7 @@ bool radix_order(dstd::Span<const Series* const> keys,
                  dstd::Span<const std::uint8_t> desc,
                  dstd::Span<const std::uint8_t> nulls_last, std::int64_t n,
                  dstd::Vector<std::int64_t>& order) {
+    if (packed_order(keys, desc, nulls_last, n, order)) return true;
     dstd::Vector<Series> passes(keys.size());
     for (std::size_t i = 0; i < keys.size(); ++i) {
         const Series& c = *keys[i];
@@ -2040,14 +2165,18 @@ static dstd::Result<DataFrame> unpivot_raw(
         DataFrame block = take(id_df, identity);
         dstd::Vector<dstd::String> varnames(static_cast<std::size_t>(n),
                                             value_vars[j]);
-        block = with_column(block, "variable", Series::strings(varnames));
+        dstd::Result<DataFrame> with_variable =
+            with_column(block, "variable", Series::strings(varnames));
+        if (!with_variable) return with_variable.error();
 
         const Series& src = b.columns[static_cast<std::size_t>(val_idx[j])];
         Series matv = flat_copy(src);
         Series valcol =
             matv.type() == common ? std::move(matv) : matv.cast(common);
-        block = with_column(block, "value", valcol);
-        blocks.push_back(std::move(block));
+        dstd::Result<DataFrame> with_value =
+            with_column(*with_variable, "value", valcol);
+        if (!with_value) return with_value.error();
+        blocks.push_back(std::move(*with_value));
     }
 
     dstd::Vector<const DataFrame*> parts;
@@ -2530,10 +2659,10 @@ dstd::Result<DataFrame> rename(const DataFrame& b,
     return out;
 }
 
-DataFrame with_column(const DataFrame& b, dstd::StringView name,
-                      const Series& col) {
-    DataFrame out = with_column_raw(b, name, col);
-    index_keep<"with_column">(b, out);
+dstd::Result<DataFrame> with_column(const DataFrame& b, dstd::StringView name,
+                                    const Series& col) {
+    dstd::Result<DataFrame> out = with_column_raw(b, name, col);
+    if (out) index_keep<"with_column">(b, *out);
     return out;
 }
 
@@ -2575,6 +2704,20 @@ DataFrame drop_nulls(const DataFrame& b) {
 DataFrame fill_null(const DataFrame& b, dftu_scalar value) {
     DataFrame out = fill_null_raw(b, value);
     index_keep<"fill_null">(b, out);
+    return out;
+}
+
+dstd::Result<DataFrame> drop_nans(const DataFrame& b) {
+    dstd::Result<DataFrame> out = drop_nans_raw(b);
+    if (out) index_keep<"drop_nans">(b, *out);
+    return out;
+}
+
+dstd::Result<DataFrame> fill_nan(const DataFrame& b, dftu_scalar value) {
+    if (value.kind == DFTU_SCALAR_TAG_STR || value.kind == DFTU_SCALAR_TAG_ERR)
+        return invalid_argument<"fill_nan: a NaN takes a number or null">();
+    DataFrame out = fill_nan_raw(b, value);
+    index_keep<"fill_nan">(b, out);
     return out;
 }
 

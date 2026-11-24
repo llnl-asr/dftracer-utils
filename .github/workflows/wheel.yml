@@ -10,7 +10,7 @@ on:
         required: true
         type: string
       publish:
-        description: Build for PyPI, with the web UI, and upload the wheels.
+        description: Build for PyPI and upload the wheels.
         required: false
         default: false
         type: boolean

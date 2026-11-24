@@ -11,6 +11,7 @@
 #include <dftracer/utils/trace/index/extensions/extension_registry.h>
 #include <dftracer/utils/trace/index/extensions/plugin_columns.h>
 #include <dftracer/utils/trace/index/tables.h>
+#include <dftracer/utils/trace/views/fold_event.h>
 
 #include <mutex>
 #include <shared_mutex>

@@ -363,10 +363,9 @@ dstd::Vector<dstd::String> view_trace_files(dstd::StringView dir) {
     dstd::Vector<dstd::String> out;
     for (const dstd::Path& path : list_kind(dir, dstd::fs::FileKind::File)) {
         const dstd::StringView name = path.view().filename();
-        if (name.size() >= 4 && name.compare(name.size() - 4, 4, ".pfw") == 0)
+        if (name.ends_with(".pfw"))
             out.emplace_back(path.str());
-        else if (name.size() >= 7 &&
-                 name.compare(name.size() - 7, 7, ".pfw.gz") == 0)
+        else if (name.ends_with(".pfw.gz"))
             out.emplace_back(path.str());
     }
     std::sort(out.begin(), out.end());

@@ -46,7 +46,7 @@ class GroupTransforms(Generic[R]):
         return self._transform("cummin")
 
     def cumprod(self) -> R:
-        """Each numeric column's running product within its group (Float64)."""
+        """Each numeric column's running product within its group; an integer column keeps its type (Int64 or UInt64) and the product wraps on overflow."""
         return self._transform("cumprod")
 
     def cumcount(self) -> R:

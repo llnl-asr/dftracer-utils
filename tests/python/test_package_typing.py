@@ -31,6 +31,8 @@ def test_mypy_strict_package_is_clean(tmp_path):
     r = subprocess.run(
         [
             "uvx",
+            "--python",
+            sys.executable,
             "mypy",
             "--strict",
             "--cache-dir",
@@ -51,6 +53,8 @@ def test_mypy_strict_package_is_clean_with_installed_libraries(tmp_path):
     r = subprocess.run(
         [
             "uvx",
+            "--python",
+            sys.executable,
             "mypy",
             "--strict",
             "--python-executable",

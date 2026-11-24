@@ -15,7 +15,7 @@ under the alias name. The adapters are the only hand-written alias code.
 under ``if TYPE_CHECKING:``, so a type checker sees them.
 """
 
-from typing import Dict, Iterator, Mapping, NamedTuple
+from typing import Dict, Iterator, Mapping, NamedTuple, Tuple
 
 
 class Alias(NamedTuple):
@@ -26,16 +26,12 @@ class Alias(NamedTuple):
     adapter: bool = False
 
 
-def _pandas(
-    cls: str, pairs: Mapping[str, str], adapters: "tuple[str, ...]" = ()
-) -> Iterator[Alias]:
+def _pandas(cls: str, pairs: Mapping[str, str], adapters: Tuple[str, ...] = ()) -> Iterator[Alias]:
     for alias, target in pairs.items():
         yield Alias(cls, alias, target, "pandas", alias in adapters)
 
 
-def _polars(
-    cls: str, pairs: Mapping[str, str], adapters: "tuple[str, ...]" = ()
-) -> Iterator[Alias]:
+def _polars(cls: str, pairs: Mapping[str, str], adapters: Tuple[str, ...] = ()) -> Iterator[Alias]:
     for alias, target in pairs.items():
         yield Alias(cls, alias, target, "polars", alias in adapters)
 
@@ -43,10 +39,8 @@ def _polars(
 _SERIES = {
     "aggregate": "agg",
     "astype": "cast",
-    "isna": "is_null",
-    "isnull": "is_null",
-    "notna": "is_not_null",
-    "notnull": "is_not_null",
+    "isnull": "isna",
+    "notnull": "notna",
     "dropna": "drop_nulls",
     "fillna": "fill_null",
     "isin": "is_in",
@@ -84,10 +78,8 @@ _SERIES = {
 }
 
 _EXPR = {
-    "isna": "is_null",
-    "isnull": "is_null",
-    "notna": "is_not_null",
-    "notnull": "is_not_null",
+    "isnull": "isna",
+    "notnull": "notna",
     "isin": "is_in",
     "astype": "cast",
     "fillna": "fill_null",
@@ -143,12 +135,13 @@ ADAPTERS = {
         "kurt",
         "drop_duplicates",
         "dropna",
+        "fillna",
         "take",
         "between",
         "loc",
         "at",
     ),
-    "Expr": ("between",),
+    "Expr": ("between", "fillna"),
     "DataFrame": (
         "groupby",
         "sort_values",
@@ -162,7 +155,7 @@ ADAPTERS = {
     "LazyFrame": ("sort_values",),
 }
 
-PANDAS: "tuple[Alias, ...]" = (
+PANDAS: Tuple[Alias, ...] = (
     *_pandas("Series", _SERIES, ADAPTERS["Series"]),
     *_pandas("Expr", _EXPR, ADAPTERS["Expr"]),
     *_pandas("DataFrame", _DATAFRAME, ADAPTERS["DataFrame"]),
@@ -171,7 +164,7 @@ PANDAS: "tuple[Alias, ...]" = (
     *_pandas("LazyGroupBy", _GROUPBY),
 )
 
-POLARS: "tuple[Alias, ...]" = (
+POLARS: Tuple[Alias, ...] = (
     *_polars(
         "Series",
         {"alias": "rename", "clone": "copy", "limit": "head", "not_": "__invert__"},
@@ -191,10 +184,10 @@ POLARS: "tuple[Alias, ...]" = (
     ),
 )
 
-ALIASES: "tuple[Alias, ...]" = PANDAS + POLARS
+ALIASES: Tuple[Alias, ...] = PANDAS + POLARS
 
 
-def install(name: str, cls: type, faces: "tuple[str, ...]" = ("pandas", "polars")) -> None:
+def install(name: str, cls: type, faces: Tuple[str, ...] = ("pandas", "polars")) -> None:
     """Give class ``cls`` (called ``name`` in the tables) its aliases of the
     given ``faces``: each identity alias becomes the canonical attribute under
     the alias name; an adapter must already be defined in the class body (a

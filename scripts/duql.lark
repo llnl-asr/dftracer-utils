@@ -27,7 +27,7 @@ member: NAME "=" pipeline                           -> member_rowset
 
 // `sink` ends a pipeline, so no rule reads a stage after it.
 from_pipeline: "from" src ("," src)* ("|" stage)* ["|" sink]
-sink: "sink" STRING (NAME STRING)*
+sink: "sink" [("trace" | "table")] STRING (NAME STRING)*
 
 src: STRING | NAME | PARAM
 

@@ -102,7 +102,8 @@ further:
 
       .. code-block:: python
 
-         from dftracer.utils import Runtime, TraceViewer
+         from dftracer.utils.runtime import Runtime
+         from dftracer.utils.trace import TraceViewer
 
          rt = Runtime(threads=16, io_threads=16)
          view = TraceViewer("traces/", runtime=rt)

@@ -4,7 +4,7 @@ Schemas Module
 ==============
 
 ``dftracer.utils.schemas`` declares and registers record schemas, the record
-formats the index and :class:`~dftracer.utils.TraceViewer` read. The spec
+formats the index and :class:`~dftracer.utils.trace.TraceViewer` read. The spec
 keys and field settings are listed in :doc:`../reference/record-schema`.
 
 Schema classes

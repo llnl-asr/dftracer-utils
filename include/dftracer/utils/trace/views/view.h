@@ -254,29 +254,26 @@ struct ScanCounter {
     }
 };
 
-/// Options for sink_trace(): write the view's events as a new
-/// re-indexable multi-member trace through the parallel (PFS-aware) writer.
-/// `member_size` is the target uncompressed bytes per gzip member (0 =
-/// default); `worker_count` caps the writer fan-out. The writer layout
-/// (striped/sharded/padded) and the exact worker count are chosen from the
-/// target filesystem.
+/// Options for sink_trace(): write the view's event lines, unchanged, as a
+/// new multi-member trace. `member_size` is the uncompressed bytes per gzip
+/// member (0 is the index checkpoint size); `worker_count` is the compression
+/// workers (0 is the machine's). Missing parent folders are created. The
+/// output is staged beside `output_path` and renamed over it when complete; a
+/// failed or cancelled write leaves the target as it was.
 struct TraceWriteOptions {
     dstd::String output_path;
     std::size_t member_size = 0;
-    std::size_t worker_count = 1;
+    std::size_t worker_count = 0;
     bool compress = true;
     int level = 6;
-    /// Build the member+bloom+stats index during the write (no re-inflate of
-    /// the output). `index_dir` is the index DB directory; empty falls back to
-    /// the indexer default location for `output_path`. When set, the write uses
-    /// a single in-order member stream (scan/decompress stays parallel) so the
-    /// index needs no post-hoc offset remap.
+    /// Index the output while it is written (members, blooms, zonemaps; no
+    /// aggregation tier). `index_dir` is the index root; empty is the default
+    /// root of `output_path`. Plain output cannot be indexed.
     bool build_index = false;
     dstd::String index_dir;
-    /// Roll to a new `part-<k>` file once a part reaches this many uncompressed
-    /// bytes, so one large result splits into several indexed part files
-    /// sharing `index_dir`. 0 = one file. Only honored on the indexed write
-    /// path.
+    /// 0 writes one file at `output_path`. Otherwise `output_path` is a folder
+    /// of `part-NNNNN.pfw.gz` files, each ending at the first line end at or
+    /// past this many uncompressed bytes.
     std::size_t part_size = 0;
 };
 
@@ -734,6 +731,19 @@ class View : public dataframe::LazyOps<View> {
 
     static View from_file(dstd::String file_path, dstd::String index_path = "");
     static View from_files(dstd::Vector<ViewFile> files);
+    /// A view over every input form: a file, a directory, a glob (`*`, `?`,
+    /// `[...]`, `**`), or a list of them. A directory is scanned as
+    /// @ref from_directory does, a file is read whatever its name, and a path
+    /// that does not exist and has no wildcard is kept, so the view keeps its
+    /// error. The files are those of the inputs in order, each once by device
+    /// and inode when there are several inputs; one directory or glob lists its
+    /// files sorted by path. A glob that matches nothing adds no file. Each
+    /// file's index resolves under `index_dir` (empty = beside the trace);
+    /// `format` is
+    /// @ref ViewFile::format of every file.
+    static coro::CoroTask<View> from_inputs(dstd::Vector<dstd::String> inputs,
+                                            dstd::String index_dir = "",
+                                            dstd::String format = "");
     /// Scans `dir` recursively for gzip trace files (*.gz),
     /// sorted by path; index, split and schemas
     /// directories are skipped. Each file's index resolves under
@@ -1023,6 +1033,14 @@ class View : public dataframe::LazyOps<View> {
     dstd::Result<dstd::Vector<dstd::String>> mv_source() const;
     dstd::Result<dstd::String> materialize_dir() const;
     dstd::Result<void> register_materialized(dstd::StringView dir) const;
+
+    /// Whether the files are dftu.table files: the plan then reads them as a
+    /// table, so the trace builders (phase, time range, time buckets, group
+    /// keys, trace aggregates and terminals) do not apply to it. A set of
+    /// files that mixes tables and traces is an error kept as @ref status.
+    bool is_table() const;
+    /// The source of a table view, else null.
+    dstd::SharedPtr<const dataframe::Source> table_source() const;
 
     /// The plan: the trace scan as a source plus the ops above it.
     const dataframe::LazyFrame& lazy() const { return lf_; }

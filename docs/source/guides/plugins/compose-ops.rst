@@ -93,7 +93,7 @@ In Python: ``@jit.op``
 
 ``jit.op`` (``dftracer.utils.jit``) turns a single-argument, single-expression
 Python function into the ``In -> Out`` job leaf. The body must be one ``return`` of arithmetic on the
-argument; anything else raises ``JitOpError`` at decoration time.
+argument; anything else raises :exc:`~dftracer.utils.jit.JitOpError` at decoration time.
 
 .. code-block:: python
 
@@ -119,7 +119,7 @@ see :doc:`../../jit` for that authoring surface.
 Applied to a whole column (``double(series)``), a ``@jit.op`` is lowered to
 the engine's expression IR rather than called per element: 2M values run
 in a third of a second, where the per-element path through the host took
-hours. ``can_fuse()`` on the op says which path a call will take; a body
+hours. ``jit.can_fuse(op)`` says which path a call will take; a body
 the IR cannot express keeps the per-element path.
 
 In Python: ``@jit.series``, a column op from an expression
@@ -127,7 +127,7 @@ In Python: ``@jit.series``, a column op from an expression
 
 For a reusable **column** op there is no compile step at all: ``@jit.series``
 takes a function whose body builds a column expression from its arguments
-(the :mod:`~dftracer.utils.expr` DSL: arithmetic, comparisons, ``clip``
+(the expression DSL of :doc:`../../api/columnar`: arithmetic, comparisons, ``clip``
 / ``cast`` / ``fillna``, the prims) and registers it as an engine op under
 ``<module>.<name>``, next to the built-ins:
 

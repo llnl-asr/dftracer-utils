@@ -7,7 +7,6 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
-#include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/detail/manager.h>
 
 #include <algorithm>
@@ -19,20 +18,63 @@ namespace dftracer::utils::dstd {
 
 namespace {
 constexpr std::size_t CHUNK_ALIGN = 8;
+// Room for the shared count block and the Chunk in front of the bytes, so a
+// chunk block keeps the power-of-two size its heap size class holds.
+constexpr std::size_t CHUNK_HEAD_RESERVE = 64;
 
 String id_text(std::uint32_t id) {
     char buf[16];
     const auto r = to_chars(buf, buf + sizeof(buf), id);
     return String(buf, r.ptr);
 }
+
+/// The one block of a chunk: the shared count block that holds the Chunk, then
+/// the chunk bytes. The bytes start past the whole count block, so nothing
+/// depends on where the library puts the Chunk inside it. `allocate` runs
+/// before the Chunk is made and tells it where its bytes start.
+template <class T>
+class ChunkBlockAllocator {
+   public:
+    using value_type = T;
+    using size_type = std::size_t;
+    using difference_type = std::ptrdiff_t;
+    using propagate_on_container_move_assignment = std::true_type;
+    using is_always_equal = std::false_type;
+
+    ChunkBlockAllocator(memory::Pool& pool, std::size_t bytes,
+                        char** tail) noexcept
+        : pool_(&pool), bytes_(bytes), tail_(tail) {}
+    template <class U>
+    ChunkBlockAllocator(const ChunkBlockAllocator<U>& other) noexcept
+        : pool_(&other.pool()), bytes_(other.bytes()), tail_(other.tail()) {}
+
+    memory::Pool& pool() const noexcept { return *pool_; }
+    std::size_t bytes() const noexcept { return bytes_; }
+    char** tail() const noexcept { return tail_; }
+
+    [[nodiscard]] T* allocate(std::size_t /*n*/) {
+        static_assert(HEAD <= CHUNK_HEAD_RESERVE);
+        auto* block = static_cast<char*>(
+            memory::detail::allocate(HEAD + bytes_, ALIGN, *pool_));
+        *tail_ = block + HEAD;
+        return reinterpret_cast<T*>(block);
+    }
+
+    void deallocate(T* p, std::size_t /*n*/) noexcept {
+        memory::detail::deallocate(p, HEAD + bytes_);
+    }
+
+   private:
+    static constexpr std::size_t ALIGN = alignof(T) > CHUNK_ALIGN ? alignof(T)
+                                                                  : CHUNK_ALIGN;
+    static constexpr std::size_t HEAD = (sizeof(T) + ALIGN - 1) & ~(ALIGN - 1);
+
+    memory::Pool* pool_;
+    std::size_t bytes_;
+    char** tail_;
+};
+
 }  // namespace
-
-StringIntern::Chunk::Chunk(std::size_t size, memory::Pool& pool)
-    : data_(static_cast<char*>(
-          memory::detail::allocate(size, CHUNK_ALIGN, pool))),
-      size_(size) {}
-
-StringIntern::Chunk::~Chunk() { memory::detail::deallocate(data_, size_); }
 
 void StringIntern::release_bytes(void* p, std::size_t bytes) noexcept {
     memory::detail::deallocate(p, bytes);
@@ -234,16 +276,19 @@ const char* StringIntern::write_record(Shard& sh, StringView sv) {
     const std::size_t need = (RECORD_HEADER + sv.size() + 3) & ~std::size_t{3};
     std::uint32_t c;
     std::size_t off;
-    if (need > CHUNK_BYTES) {
+    if (need > CHUNK_BYTES - CHUNK_HEAD_RESERVE) {
         c = add_chunk(need);
         off = 0;
     } else {
-        if (!sh.have_cur || sh.cur_used + need > sh.cur_size) {
+        // cur_size is the whole block; its first CHUNK_HEAD_RESERVE bytes go
+        // to the chunk's own header.
+        if (!sh.have_cur ||
+            sh.cur_used + need > sh.cur_size - CHUNK_HEAD_RESERVE) {
             std::size_t size = sh.have_cur
                                    ? std::min(sh.cur_size * 2, CHUNK_BYTES)
                                    : FIRST_CHUNK_BYTES;
-            while (size < need) size *= 2;
-            sh.cur = add_chunk(size);
+            while (size - CHUNK_HEAD_RESERVE < need) size *= 2;
+            sh.cur = add_chunk(size - CHUNK_HEAD_RESERVE);
             sh.cur_size = size;
             sh.have_cur = true;
             sh.cur_used = 0;
@@ -261,15 +306,21 @@ const char* StringIntern::write_record(Shard& sh, StringView sv) {
 }
 
 StringIntern::Index* StringIntern::make_index(std::size_t slots) {
-    auto* array = make_array<IndexSlot>(slots);
-    auto* idx = make_array<Index>(1);
-    *idx = Index{slots - 1, array, nullptr};
+    auto* block = static_cast<char*>(
+        memory::detail::allocate(slot_offset() + slots * sizeof(IndexSlot),
+                                 alignof(std::atomic<std::uint64_t>), *pool_));
+    auto* idx = new (block) Index;
+    idx->mask = slots - 1;
+    idx->slots = reinterpret_cast<IndexSlot*>(block + slot_offset());
+    idx->retired_next = nullptr;
+    std::uninitialized_value_construct_n(idx->slots, slots);
     return idx;
 }
 
 void StringIntern::delete_index(Index* idx) {
-    free_array(idx->slots, idx->mask + 1);
-    free_array(idx, 1);
+    const std::size_t slots = idx->mask + 1;
+    std::destroy_n(idx->slots, slots);
+    memory::detail::deallocate(idx, slot_offset() + slots * sizeof(IndexSlot));
 }
 
 std::uint32_t StringIntern::lookup(std::size_t h, StringView sv) const {
@@ -442,8 +493,9 @@ void StringIntern::free_directory(Directory<Block, N>& dir,
 }
 
 SharedPtr<StringIntern::Chunk> StringIntern::make_chunk(std::size_t bytes) {
-    return std::allocate_shared<Chunk>(memory::PoolAllocator<Chunk>(*pool_),
-                                       bytes, *pool_);
+    char* data = nullptr;
+    return std::allocate_shared<Chunk>(
+        ChunkBlockAllocator<Chunk>(*pool_, bytes, &data), data, bytes);
 }
 
 }  // namespace dftracer::utils::dstd

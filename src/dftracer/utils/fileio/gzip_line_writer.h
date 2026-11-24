@@ -62,6 +62,10 @@ struct GzipWriterOptions {
     /// on_member.
     dstd::String part_header;
     dstd::String part_footer;
+    /// Writes part_header as a gzip member of stored deflate blocks, so its
+    /// bytes sit in the file as they are and a later patch can recompute the
+    /// member's CRC32 (@ref gzip_stored_member). Needs compress.
+    bool part_header_stored = false;
     /// Once per part, after its file is closed. `uc_bytes` and `lines` count
     /// appended data only. Must not throw.
     dstd::Function<void(std::size_t part, dstd::StringView path,
@@ -87,6 +91,16 @@ struct WriteSummary {
     std::size_t peak_in_flight = 0;  ///< most members held at once
     std::uint64_t peak_bytes = 0;    ///< most bytes reserved against the budget
 };
+
+/// The longest data of one stored deflate block.
+inline constexpr std::size_t GZIP_STORED_BLOCK_MAX = 65535;
+
+/// `bytes` as one gzip member of stored deflate blocks of at most
+/// @ref GZIP_STORED_BLOCK_MAX bytes: a 10-byte header, a 5-byte block header
+/// before each block, then CRC32 and ISIZE. The byte at text offset `i` is at
+/// member offset `10 + 5 * (i / GZIP_STORED_BLOCK_MAX + 1) + i`, and the CRC32
+/// is the 4 bytes at `size() - 8`.
+dstd::Vector<std::uint8_t> gzip_stored_member(dstd::StringView bytes);
 
 /// `<stem>-<idx>.pfw[.gz]` from a base like `<stem>.pfw[.gz]`; `base` itself
 /// when `multi` is false.

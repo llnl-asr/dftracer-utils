@@ -23,10 +23,6 @@ constexpr char DOUBLE_TAG = 'd';
 constexpr char STRING_TAG = 's';
 constexpr char BOOL_TAG = 'b';
 
-std::uint64_t get_u64(dstd::StringView s) {
-    return dstd::read_u64_be(reinterpret_cast<const std::uint8_t*>(s.data()));
-}
-
 }  // namespace
 
 void append_int_key(dstd::String& out, bool negative, std::uint64_t magnitude) {
@@ -77,16 +73,16 @@ dstd::String key_text(dstd::StringView key) {
         key.remove_prefix(1);
         if (tag == INT_TAG) {
             if (key[0] == '-') out += '-';
-            out += dstd::int_text(get_u64(key.substr(1)));
+            out += dstd::int_text(dstd::read_u64_be(key.substr(1)));
             key.remove_prefix(9);
         } else if (tag == DOUBLE_TAG) {
-            const double d = dstd::bits_double(get_u64(key));
+            const double d = dstd::bits_double(dstd::read_u64_be(key));
             char buf[32];
             out.append(buf,
                        dstd::to_chars_general(buf, buf + sizeof(buf), d, 17));
             key.remove_prefix(8);
         } else if (tag == STRING_TAG) {
-            const auto n = static_cast<std::size_t>(get_u64(key));
+            const auto n = static_cast<std::size_t>(dstd::read_u64_be(key));
             out += '"';
             out += key.substr(8, n);
             out += '"';

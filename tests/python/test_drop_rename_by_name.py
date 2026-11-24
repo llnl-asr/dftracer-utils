@@ -33,7 +33,7 @@ def genesis(tmp_path_factory):
 
 
 def _view(path):
-    return dftu.TraceViewer(path, record_schema="genesis").duql(BASE)
+    return dftu.trace.TraceViewer(path, record_schema="genesis").duql(BASE)
 
 
 def test_trace_viewer_drop_keeps_undeclared_columns(genesis):

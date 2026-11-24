@@ -1434,10 +1434,7 @@ static coro::CoroTask<int> run_view_body(const ViewArgParse* cli, ViewRun& run,
     run.final_output = dstd::String(dstd::StringView(cli->output));
     if (run.write_trace && !run.final_output.empty()) {
         const dstd::String gz = ".gz";
-        if (run.final_output.size() < gz.size() ||
-            run.final_output.compare(run.final_output.size() - gz.size(),
-                                     gz.size(), gz) != 0)
-            run.final_output += gz;
+        if (!run.final_output.ends_with(gz)) run.final_output += gz;
     }
 
     // The trace-writing path owns its output through the parallel writer; only

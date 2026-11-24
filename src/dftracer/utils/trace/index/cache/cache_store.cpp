@@ -75,8 +75,7 @@ dstd::StringView text_of(dstd::ByteView b) {
 }
 
 std::uint64_t u64_at(dstd::ByteView b, std::size_t at) {
-    return dstd::read_u64_be(reinterpret_cast<const std::uint8_t*>(b.data()) +
-                             at);
+    return dstd::read_u64_be(b.subspan(at));
 }
 
 dstd::Unexpected<dstd::Error> io_error(dstd::StringView what,

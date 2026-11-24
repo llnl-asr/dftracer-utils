@@ -14,7 +14,7 @@ Sessions: many reads, one scan
 Why a session
 -------------
 
-Every terminal you run on its own (``collect``, ``sink_json``,
+Every terminal you run on its own (``collect``, ``sink``,
 ``materialize``, ``call_tree(...).collect()``, ...) runs its own scan: it
 decompresses the gzip members and parses the JSON once, for that one result.
 When you want several results from the same base view - a couple of unrelated
@@ -49,21 +49,21 @@ Python
 
 ``s.collect(root)`` registers any :class:`~dftracer.utils.LazyFrame` (a
 ``TraceViewer`` plan included) or :class:`~dftracer.utils.LazyResult` and
-returns a :class:`~dftracer.utils.trace.Handle`. ``s.sink_json(viewer, path)``,
+returns a :class:`~dftracer.utils.trace.Handle`. ``s.sink_trace(viewer, path)``,
 ``s.materialize(viewer)`` and ``s.attach(plugins)`` register an export, a
 materialization and a plugin set the same way. A ``with`` block executes on
 exit, or call ``s.execute()`` (the first ``handle.result()`` also triggers it):
 
 .. code-block:: python
 
-   from dftracer.utils import TraceViewer
+   from dftracer.utils.trace import TraceViewer
 
    tv = TraceViewer("trace.pfw.gz")
 
    with tv.session() as s:
        by_cat  = s.collect(tv.group_by("cat").agg("count", "mean:dur"))
        by_rank = s.collect(tv.group_by("rank").agg("count").sort_by("count"))
-       posix   = s.sink_json(tv.filter('cat == "POSIX"'), "posix.json")
+       posix   = s.sink_trace(tv.filter('cat == "POSIX"'), "posix.pfw.gz")
        tree    = s.collect(tv.filter('cat == "POSIX"').call_tree(partition=("pid", "tid")))
 
    cat_df  = by_cat.result()     # a DataFrame, resolved by the one scan

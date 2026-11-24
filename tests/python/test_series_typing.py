@@ -11,6 +11,7 @@ returns, the promotion rules and the dtype-literal ``cast``.
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -42,7 +43,16 @@ def _ty(path: Path) -> subprocess.CompletedProcess:
 def _mypy(tmp_path: Path, path: Path) -> subprocess.CompletedProcess:
     # Settings live in [tool.mypy] in pyproject.toml, read from the repo root.
     return subprocess.run(
-        ["uvx", "mypy", "--strict", "--cache-dir", str(tmp_path / "mypy_cache"), str(path)],
+        [
+            "uvx",
+            "--python",
+            sys.executable,
+            "mypy",
+            "--strict",
+            "--cache-dir",
+            str(tmp_path / "mypy_cache"),
+            str(path),
+        ],
         capture_output=True,
         text=True,
         cwd=_ROOT,

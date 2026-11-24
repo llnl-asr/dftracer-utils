@@ -4,7 +4,7 @@
 # ##############################################################################
 
 set(MEMORY_TEST_SOURCES test_system_backend.cpp test_heap.cpp
-                        test_heap_threads.cpp test_heap_trim.cpp
+                        test_heap_threads.cpp test_heap_trim.cpp test_heap_thread_footprint.cpp
                         test_budget.cpp test_pool.cpp
                         test_pool_threads.cpp test_reclaim.cpp
                         test_pressure.cpp test_debug.cpp test_allocator.cpp

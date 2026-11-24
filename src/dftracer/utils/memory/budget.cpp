@@ -146,7 +146,7 @@ std::atomic<std::uint64_t> g_budget_version{0};
 
 int budget_bucket(std::uint64_t budget) noexcept {
     if (budget == 0 || budget / 4 >= detail::IDLE_BACKED_CAP) return -1;
-    return std::bit_width(budget) - 1;
+    return static_cast<int>(std::bit_width(budget)) - 1;
 }
 
 void apply_idle_cap() noexcept {

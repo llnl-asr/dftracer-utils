@@ -157,16 +157,15 @@ def unwrap_source_columns(source: object) -> dict[str, Series]:
         return dict(native)
     if isinstance(native, _ext.DataFrame):
         return {name: _ext.DataFrame.__getitem__(native, name) for name in native.column_names}
-    import pyarrow as pa
+    frame = _arrow_frame(native)
+    return {name: _ext.DataFrame.__getitem__(frame, name) for name in frame.column_names}
 
-    table = cast("pa.Table", native)
-    out: dict[str, Series] = {}
-    for name in table.column_names:
-        arr = table.column(name)
-        if isinstance(arr, pa.ChunkedArray):
-            arr = arr.combine_chunks()
-        out[name] = _arrow_native("_series_from_arrow")(arr)
-    return out
+
+def _arrow_frame(table: object) -> _ext.DataFrame:
+    """A pyarrow Table (any ``__arrow_c_stream__`` provider) as a native frame
+    read through its stream, so its chunks are shared, not joined."""
+    frame: _ext.DataFrame = _arrow_native("_dataframe_from_arrow")(table)
+    return frame
 
 
 def _first_column(source: Source) -> dict[str, Series]:
@@ -185,16 +184,10 @@ def _import_vec_columns(names: list[str], source: Source) -> dict[str, Series]:
         return {name: source[name] for name in names}
     if isinstance(source, _ext.DataFrame):
         return {name: _ext.DataFrame.__getitem__(source, name) for name in names}
-    # A pyarrow Table: import each needed column into vec at the boundary.
-    import pyarrow as pa
-
-    cols: dict[str, Series] = {}
-    for name in names:
-        arr = source.column(name)
-        if isinstance(arr, pa.ChunkedArray):
-            arr = arr.combine_chunks()
-        cols[name] = _arrow_native("_series_from_arrow")(arr)
-    return cols
+    # A pyarrow Table: only the named columns, each read through its stream
+    # at the boundary, so their chunks are shared.
+    table = cast("pa.Table", source)
+    return {name: _arrow_native("_series_from_arrow")(table.column(name)) for name in names}
 
 
 def _broadcast_scalar(value: Scalar, out_float: bool, cols: dict[str, Series]) -> Series:

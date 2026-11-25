@@ -28,6 +28,7 @@
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/internal/morsel_frame.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
+#include <dftracer/utils/dataframe/internal/nested_view.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>  // find_node
 #include <dftracer/utils/dataframe/internal/rest_column.h>
 #include <dftracer/utils/dataframe/internal/run_counters.h>
@@ -1288,13 +1289,30 @@ class ExplodeCursor : public Cursor {
         const auto ci = static_cast<std::size_t>(ci_);
         const Series& lst = m.columns[ci];
         if (lst.type() != TypeId::List) return left;
-        const std::int32_t* offs = lst.offsets();
         const std::int64_t at = feed_.position();
-        const std::int64_t elems = offs[at + left] - offs[at];
+        // The pieces are made once per morsel, at its first take: a SELECTION
+        // or DICTIONARY list is materialized for them.
+        if (at == 0 || !pieces_) {
+            auto made = nested_pieces(lst);
+            if (!made) return left;
+            pieces_ = std::move(*made);
+        }
+        const dstd::Optional<dstd::Vector<NestedPiece>>& pieces = pieces_;
+        auto values_of_row = [&](std::int64_t row) {
+            std::int64_t local = 0;
+            const ValueRange r = piece_at(*pieces, row, local).values_of(local);
+            return r.hi - r.lo;
+        };
+        std::int64_t all_values = 0;
+        for (const NestedPiece& p : *pieces)
+            if (p.length() > 0)
+                all_values +=
+                    p.values_of(p.length() - 1).hi - p.values_of(0).lo;
         // columns_bytes counts a list column by its offsets alone, so the
         // elements are counted through the child.
         dstd::Vector<Series> child_only;
-        child_only.push_back(lst.child(0));
+        for (const NestedPiece& p : *pieces)
+            child_only.push_back(Series{new dftu_series(p.child(0))});
         dstd::Vector<Series> others_only;
         for (std::size_t c = 0; c < m.columns.size(); ++c)
             if (c != ci) others_only.push_back(m.columns[c].share());
@@ -1303,17 +1321,22 @@ class ExplodeCursor : public Cursor {
             static_cast<std::uint64_t>(std::max<std::int64_t>(m.rows, 1));
         const std::uint64_t elem =
             spill::columns_bytes(child_only) /
-            static_cast<std::uint64_t>(
-                std::max<std::int64_t>(offs[m.rows] - offs[0], 1));
+            static_cast<std::uint64_t>(std::max<std::int64_t>(all_values, 1));
         // The exploded rows are built as index vectors, then gathered.
         const std::uint64_t row_bytes = 2 * (others + elem) + 16;
         const std::int64_t cap =
             rows_within(output_share(budget_), row_bytes,
                         std::numeric_limits<std::int64_t>::max());
-        if (elems <= cap) return std::min(left, max_rows);
-        std::int64_t k = 1;
-        while (k < left && offs[at + k + 1] - offs[at] <= cap) ++k;
-        return k;
+        // The leading rows whose values fit the cap, at least one and at most
+        // max_rows; the scan stops at the first row past either.
+        const std::int64_t most = std::min(left, max_rows);
+        if (most <= 0) return most;
+        std::int64_t k = 0;
+        for (std::int64_t sum = 0; k < most; ++k) {
+            sum += values_of_row(at + k);
+            if (sum > cap) break;
+        }
+        return std::max<std::int64_t>(k, 1);
     }
 
     dstd::UniquePtr<Cursor> in_;
@@ -1325,6 +1348,8 @@ class ExplodeCursor : public Cursor {
     int ci_;  // the list column's place in sch_, or -1 for one only the data
               // names
     MorselFeed feed_;
+    // The list column's pieces for the current morsel (see rows_to_explode).
+    mutable dstd::Optional<dstd::Vector<NestedPiece>> pieces_;
 };
 
 // Reshapes wide->long per morsel (streaming), taking as many input rows at a

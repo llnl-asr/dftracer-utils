@@ -259,8 +259,6 @@ def pandas_labels(s: pd.Series) -> tuple[list[str], list[Series]] | None:
     ``RangeIndex`` (``0 .. n-1`` with no name)."""
     import pandas as pd
 
-    from ._series import Series
-
     index = s.index
     if (
         isinstance(index, pd.RangeIndex)
@@ -270,11 +268,28 @@ def pandas_labels(s: pd.Series) -> tuple[list[str], list[Series]] | None:
     ):
         return None
     names = [internal_name(index.names[i], i) for i in range(index.nlevels)]
-    levels = [
-        Series._from_pandas_values(pd.Series(index.get_level_values(i)))
-        for i in range(index.nlevels)
-    ]
-    return names, levels
+    return names, [_pandas_level(index, i) for i in range(index.nlevels)]
+
+
+def _pandas_level(index: pd.Index, i: int) -> Series:
+    """Level ``i`` of ``index`` as one native column. A ``MultiIndex`` level
+    imports its distinct values once and takes them by its codes, so a level of
+    a few strings over many rows makes no Python string per row; a code of -1
+    (a missing label) takes a null."""
+    import numpy as np
+    import pandas as pd
+
+    from ._series import Series
+
+    if isinstance(index, pd.MultiIndex):
+        values = index.levels[i]
+        codes = index.codes[i]
+        # A code of -1 gives the level's own type with a null, not the float that
+        # pandas makes of it, so it takes this path whatever the lengths.
+        if 2 * len(values) <= len(codes) or (codes < 0).any():
+            distinct = Series._from_pandas_values(pd.Series(values, name=values.name))
+            return distinct.gather(Series.from_numpy(np.asarray(codes, dtype=np.int64)))
+    return Series._from_pandas_values(pd.Series(index.get_level_values(i)))
 
 
 def pandas_index(s: Series) -> pd.Index:

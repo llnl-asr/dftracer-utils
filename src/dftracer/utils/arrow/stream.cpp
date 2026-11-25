@@ -23,6 +23,7 @@
 #include <dftracer/utils/runtime/task_handle.h>
 #include <nanoarrow/nanoarrow.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstdint>
@@ -94,36 +95,56 @@ class PartsBody final : public StreamBody {
     explicit PartsBody(dstd::Vector<Part> parts) : parts_(std::move(parts)) {}
 
     int get_schema(ArrowSchema* out) override {
-        if (!have_schema_) {
-            nanoarrow::UniqueSchema built;
-            if (parts_.empty()) {
-                detail::column_schema(Series{}, built.get());
-            } else {
-                column_schema_of(parts_.front(), built.get());
-            }
-            schema_ = std::move(built);
-            have_schema_ = true;
-        }
+        build_schema();
         return copy_schema(schema_.get(), out);
     }
 
     int get_next(ArrowArray* out) override {
+        build_schema();
         if (index_ >= parts_.size()) {
             out->release = nullptr;
             return 0;
         }
-        detail::column_array(column_of(parts_[index_]), out);
+        Series part;
+        if (index_ == 0 && first_.valid()) {
+            part = std::move(first_);
+            first_ = Series{};
+        } else {
+            part = detail::for_export(column_of(parts_[index_]));
+            // Every batch has the schema of the first one; a part of another
+            // layout is converted to it, which copies the text it changes.
+            ArrowSchema own{};
+            detail::column_schema(part, &own);
+            const bool same = detail::same_schema(*schema_.get(), own);
+            own.release(&own);
+            if (!same) {
+                dstd::Result<Series> shaped =
+                    detail::conform_to_schema(part, *schema_.get(), false);
+                if (!shaped) return fail(shaped.error().c_str(), EIO);
+                part = std::move(*shaped);
+            }
+        }
+        detail::column_array(part, out);
         ++index_;
         return 0;
     }
 
    private:
-    static void column_schema_of(const Part& part, ArrowSchema* schema) {
-        if constexpr (std::is_same_v<Part, DataFrame>) {
-            detail::frame_schema(part, schema);
+    void build_schema() {
+        if (have_schema_) return;
+        nanoarrow::UniqueSchema built;
+        if (parts_.empty()) {
+            detail::column_schema(Series{}, built.get());
         } else {
-            detail::column_schema(part.share(), schema);
+            // The first part is joined once and kept for its get_next, so its
+            // schema and its array come from one object.
+            first_ = detail::for_export(column_of(parts_.front()));
+            detail::column_schema(first_, built.get());
+            if constexpr (std::is_same_v<Part, DataFrame>)
+                detail::set_frame_metadata(parts_.front(), built.get());
         }
+        schema_ = std::move(built);
+        have_schema_ = true;
     }
 
     static Series column_of(const Part& part) {
@@ -136,30 +157,13 @@ class PartsBody final : public StreamBody {
 
     dstd::Vector<Part> parts_;
     nanoarrow::UniqueSchema schema_;
+    Series first_;
     std::size_t index_ = 0;
     bool have_schema_ = false;
 };
 
 coro::CoroTask<void> drain_query(
     dstd::SharedPtr<coro::Channel<QueryBatch>> channel, LazyFrame plan);
-
-/// Whether `batch` has the columns of `fixed`, by name and Arrow format, in
-/// order, with the same dictionary value format.
-bool same_columns(const ArrowSchema& fixed, const ArrowSchema& batch) {
-    if (fixed.n_children != batch.n_children) return false;
-    for (std::int64_t i = 0; i < fixed.n_children; ++i) {
-        const ArrowSchema& a = *fixed.children[i];
-        const ArrowSchema& b = *batch.children[i];
-        if (std::strcmp(a.name, b.name) != 0) return false;
-        if (std::strcmp(a.format, b.format) != 0) return false;
-        if ((a.dictionary == nullptr) != (b.dictionary == nullptr))
-            return false;
-        if (a.dictionary != nullptr &&
-            std::strcmp(a.dictionary->format, b.dictionary->format) != 0)
-            return false;
-    }
-    return true;
-}
 
 /**
  * @brief A stream over a plan: a background task drains the plan into a bounded
@@ -197,21 +201,41 @@ class LazyBody final : public StreamBody {
             case Step::Frame:
                 break;
         }
-        Series st = detail::struct_column(frame);
+        // The first batch was joined for the schema; later ones join here.
+        const bool is_first = joined_first_.valid();
+        Series st = is_first ? std::move(joined_first_)
+                             : detail::for_export(detail::struct_column(frame));
+        joined_first_ = Series{};
         ArrowSchema batch_schema{};
         ArrowArray batch{};
-        detail::column_schema(st, &batch_schema);
         if (!open_) {
-            const bool same = same_columns(*fixed_.get(), batch_schema);
-            batch_schema.release(&batch_schema);
-            if (!same)
-                return fail(
-                    "to_arrow_stream: a batch has other columns than the "
-                    "first one; collect() the query instead",
-                    EIO);
+            // Every batch has the schema of the first one; a batch of another
+            // layout is converted to it, which copies the text it changes.
+            if (!is_first) {
+                detail::column_schema(st, &batch_schema);
+                const bool same =
+                    detail::same_schema(*fixed_.get(), batch_schema);
+                batch_schema.release(&batch_schema);
+                if (!same) {
+                    dstd::Result<Series> shaped =
+                        detail::conform_to_schema(st, *fixed_.get(), false);
+                    if (!shaped) return fail(shaped.error().c_str(), EIO);
+                    st = std::move(*shaped);
+                }
+            }
             detail::column_array(st, out);
             return 0;
         }
+        if (!is_first) {
+            nanoarrow::UniqueSchema locked;
+            if (reconciler_.copy_schema(locked.get()) != 0)
+                return fail(reconciler_.last_error(), EIO);
+            dstd::Result<Series> shaped =
+                detail::conform_to_schema(st, *locked.get(), true);
+            if (!shaped) return fail(shaped.error().c_str(), EIO);
+            st = std::move(*shaped);
+        }
+        detail::column_schema(st, &batch_schema);
         detail::column_array(st, &batch);
         rc = reconciler_.reconcile(&batch_schema, &batch, out);
         batch_schema.release(&batch_schema);
@@ -241,6 +265,8 @@ class LazyBody final : public StreamBody {
     /// The plan's columns, for the schema of a query that yields no batch.
     Schema declared_;
     dstd::Optional<DataFrame> pending_;
+    /// The first batch as one struct column, joined for the schema.
+    Series joined_first_;
     dstd::String message_;
     bool prepared_ = false;
     bool finished_ = false;
@@ -274,7 +300,9 @@ int LazyBody::prepare() {
     if (step == Step::Error) return fail(message_, EIO);
     if (!open_) {
         if (step == Step::Frame) {
-            detail::frame_schema(first, fixed_.get());
+            joined_first_ = detail::for_export(detail::struct_column(first));
+            detail::column_schema(joined_first_, fixed_.get());
+            detail::set_frame_metadata(first, fixed_.get());
             pending_.emplace(std::move(first));
         } else {
             DataFrame empty;
@@ -291,9 +319,9 @@ int LazyBody::prepare() {
         return 0;
     }
     if (step == Step::Frame) {
-        Series st = detail::struct_column(first);
+        joined_first_ = detail::for_export(detail::struct_column(first));
         ArrowSchema batch_schema{};
-        detail::column_schema(st, &batch_schema);
+        detail::column_schema(joined_first_, &batch_schema);
         reconciler_.merge(&batch_schema);
         batch_schema.release(&batch_schema);
         if (!reconciler_.last_error().empty())
@@ -389,6 +417,11 @@ dstd::Vector<DataFrame> frame_parts(const DataFrame& frame) {
                 per_chunk = part.columns.back().is_flat() &&
                             part.columns.back().length() ==
                                 part.columns.front().length();
+                // One stream schema describes every batch, so the chunks of a
+                // column share a layout.
+                if (per_chunk && k > 0)
+                    per_chunk = detail::same_layout(part.columns.back(),
+                                                    parts.front().columns[i]);
             }
             if (per_chunk) parts.push_back(std::move(part));
         }
@@ -706,16 +739,28 @@ dstd::Result<void> to_arrow_stream(const Series& col, ArrowArrayStream* out) {
     const std::int32_t count = dftu_series_chunk_count(col.handle());
     dstd::Vector<Series> chunks;
     chunks.reserve(static_cast<std::size_t>(count));
-    bool same_encoding = true;
-    for (std::int32_t i = 0; i < count; ++i) {
+    for (std::int32_t i = 0; i < count; ++i)
         chunks.emplace_back(dftu_series_chunk(col.handle(), i));
-        same_encoding = same_encoding &&
-                        chunks.back().encoding() == chunks.front().encoding();
-    }
-    // The schema comes from the first chunk, and a dictionary chunk exports in
-    // another layout than a flat one, so mixed chunks go out flat.
-    if (!same_encoding)
+    auto uniform = [&chunks] {
+        return std::all_of(chunks.begin(), chunks.end(), [&](const Series& c) {
+            return c.valid() && detail::same_layout(c, chunks.front());
+        });
+    };
+    // The schema comes from the first chunk, and a chunk exports in the layout
+    // of its encoding and children, so mixed chunks go out flat. Chunks whose
+    // children still differ (a view next to a plain string) go out as one
+    // array, a join that copies the rows.
+    if (!uniform())
         for (Series& chunk : chunks) chunk = chunk.materialize();
+    if (!uniform()) {
+        Series whole = col.materialize();
+        if (!whole.valid())
+            return common::make_error<
+                "to_arrow_stream: the chunks of a column cannot be joined">(
+                common::ErrorCode::InvalidArgument);
+        chunks.clear();
+        chunks.push_back(std::move(whole));
+    }
     return install(
         dstd::make_unique<PartsBody<Series>>(std::move(chunks)).release(), out);
 }
@@ -827,8 +872,8 @@ dstd::Result<DataFrame> dataframe_from_arrow_stream(ArrowArrayStream* in) {
             if (!frame.columns[i].valid())
                 return common::make_error<
                     "dataframe_from_arrow_stream: an Arrow type the engine "
-                    "cannot hold in column '{}'">(common::ErrorCode::NotFound,
-                                                  frame.names[i]);
+                    "cannot hold in column '{}'">(
+                    common::ErrorCode::InvalidArgument, frame.names[i]);
         parts.push_back(std::move(frame));
     }
     if (parts.empty()) {
@@ -843,8 +888,8 @@ dstd::Result<DataFrame> dataframe_from_arrow_stream(ArrowArrayStream* in) {
             if (!frame.columns[i].valid())
                 return common::make_error<
                     "dataframe_from_arrow_stream: an Arrow type the engine "
-                    "cannot hold in column '{}'">(common::ErrorCode::NotFound,
-                                                  frame.names[i]);
+                    "cannot hold in column '{}'">(
+                    common::ErrorCode::InvalidArgument, frame.names[i]);
         return frame;
     }
     DataFrame out;

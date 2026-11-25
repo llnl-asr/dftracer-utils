@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/result.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
@@ -19,7 +20,35 @@ namespace dftracer::utils::arrow::detail {
 void to_arrow(const dataframe::Series& col, ArrowSchema* schema,
               ArrowArray* array);
 
+/// `col` with every CHUNKED nested or text column joined (a copy of its rows,
+/// as an Arrow array has no chunks); `col` itself shared when it has none. The
+/// schema and the array of a column must come from the same result of this
+/// call: the type of a join can differ from the first chunk's, in a string_view
+/// child for one.
+dataframe::Series for_export(const dataframe::Series& col);
+
+/// Whether two schemas describe the same Arrow type at every node: formats,
+/// field names, children and dictionaries, and the metadata of each child (the
+/// JSON extension). The metadata of the roots is not compared.
+bool same_schema(const ArrowSchema& a, const ArrowSchema& b);
+
+/// `col`, a result of @ref for_export, in the layout of `schema`, so that a
+/// stream whose schema comes from its first batch exports every batch under it.
+/// Only a layout difference is converted: a text column as views or as plain
+/// text, at any depth, which copies its bytes. A struct field is matched by
+/// name when `by_name`, else by position. An error when the converted column's
+/// schema is still not `schema` (unless `by_name`, where the caller reconciles
+/// the rest).
+dstd::Result<dataframe::Series> conform_to_schema(const dataframe::Series& col,
+                                                  const ArrowSchema& schema,
+                                                  bool by_name);
+
+/// Whether two FLAT columns export under one schema.
+bool same_layout(const dataframe::Series& a, const dataframe::Series& b);
+
 /// Fills `schema` with the Arrow type of `col`, without exporting a buffer.
+/// Joins the chunked columns that @ref for_export joins, so a caller that also
+/// exports `col` passes it the result of @ref for_export to join them once.
 void column_schema(const dataframe::Series& col, ArrowSchema* schema);
 
 /// Fills `array` with the buffers of `col`, zero copy; the caller releases it.

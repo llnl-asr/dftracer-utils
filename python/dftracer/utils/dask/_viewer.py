@@ -19,6 +19,7 @@ from typing import (
     Tuple,
     TypeVar,
     Union,
+    cast,
     overload,
 )
 
@@ -145,15 +146,16 @@ def _dv_events_task(
     plan: _Plan,
     cursor: int | None,
     page_size: int,
-) -> pa.Table | None:
-    """Worker: this shard's matching events at ts >= cursor, up to page_size."""
+) -> DataFrame | None:
+    """Worker: this shard's matching events at ts >= cursor, up to page_size, as
+    a native frame (it pickles its columns out of band, with no copy)."""
     if cursor is not None:
         # The page cursor is a lower bound on ts; chunk ts-stats still prune.
         plan = replace(plan, filters=plan.filters + (f"ts >= {int(cursor)}",))
     # Order by ts before the limit so each shard yields its smallest-ts page;
     # the ts cursor would otherwise skip the events a shard dropped.
     df = _make_viewer(files, index_dir, plan).sort_by("ts").head(page_size).collect()
-    return df.to_arrow() if df.height else None
+    return df if df.height else None
 
 
 def _dv_write_task(
@@ -196,16 +198,13 @@ def _dv_collect_index_records_task(
     shard_end: int,
     map_fn: Optional[Callable[[IndexRecords[pa.Table]], object]],
     progress: Optional[str],
+    native: bool = False,
 ) -> object:
     """Worker: one CF shard range of the index records read. The tier is
     index-wide, so every worker sees all files but a distinct shard range of the
     aggregation CF - gives an ``IndexRecords`` of pyarrow Tables, or what
-    ``map_fn`` makes of it.
-
-    The C++ terminal yields native VecBatches, which are not picklable; import
-    each into a pyarrow Table here so a process cluster can ship them."""
-    import pyarrow as pa
-
+    ``map_fn`` makes of it. With ``native`` (and no ``map_fn``) it gives the
+    native frames, which pickle their columns out of band."""
     from ._progress import worker_progress_forwarder
 
     forward = (
@@ -216,10 +215,12 @@ def _dv_collect_index_records_task(
     records = _make_viewer(files, index_dir, plan).collect_index_records(
         shard_begin, shard_end, forward
     )
+    if native and map_fn is None:
+        return records
     tables = IndexRecords(
-        pa.table(records.regular),
-        pa.table(records.aggregated),
-        pa.table(records.counters),
+        records.regular.to_arrow(),
+        records.aggregated.to_arrow(),
+        records.counters.to_arrow(),
     )
     return tables if map_fn is None else map_fn(tables)
 
@@ -440,6 +441,14 @@ class DaskTraceViewer:
         ``client.nthreads()``, so an in-process client with one worker gives one
         future.
         """
+        return self._index_record_futures(map_fn, progress, native=False)
+
+    def _index_record_futures(
+        self,
+        map_fn: Optional[Callable[[IndexRecords[pa.Table]], object]],
+        progress: Optional[str],
+        native: bool,
+    ) -> List[Future[Any]]:  # type: ignore[type-arg, unused-ignore]  # ty: ignore[invalid-type-form]
         client = self._resolve_client()
         workers = list((client.nthreads() or {}).keys())
         n = max(1, len(workers))
@@ -459,6 +468,7 @@ class DaskTraceViewer:
                     se,
                     map_fn,
                     progress,
+                    native,
                     workers=[workers[i]] if workers else None,
                     pure=False,
                 )
@@ -468,15 +478,14 @@ class DaskTraceViewer:
     def collect_index_records(self) -> IndexRecords[pa.Table]:
         """Distributed one-pass index records read: :meth:`index_record_futures`
         gathered, each family concatenated into one pyarrow Table."""
-        import pyarrow as pa
-
-        parts: List[IndexRecords[pa.Table]] = self._resolve_client().gather(
-            self.index_record_futures()
+        parts: List[IndexRecords[DataFrame]] = self._resolve_client().gather(
+            self._index_record_futures(None, None, native=True)
         )
 
-        def cat(tables: List[pa.Table]) -> pa.Table:
-            # Permissive promotion unifies system's dynamic per-metric columns across shards.
-            return pa.concat_tables(tables, promote_options="permissive")
+        def cat(frames: List[DataFrame]) -> pa.Table:
+            # Diagonal concat unifies system's dynamic per-metric columns across
+            # shards; the pyarrow Table this returns shares the native columns.
+            return frames[0].concat(*frames[1:], how="diagonal").to_arrow()
 
         return IndexRecords(
             cat([p.regular for p in parts]),
@@ -507,8 +516,6 @@ class DaskTraceViewer:
         cursor across all shards, and `next_cursor` is where to resume (None at
         the end). Assumes page_size exceeds the events sharing any single ts.
         """
-        import pyarrow as pa
-
         client = self._resolve_client()
         futures = [
             client.submit(
@@ -516,19 +523,19 @@ class DaskTraceViewer:
             )
             for s in self._shards()
         ]
-        tables = [t for t in client.gather(futures) if t is not None and t.num_rows]
-        if not tables:
+        frames: List[DataFrame] = [f for f in client.gather(futures) if f is not None and f.height]
+        if not frames:
             return QueryPage(None, None)
-        combined = pa.concat_tables(tables).sort_by("ts")
-        page = combined.slice(0, page_size)
+        combined = frames[0].concat(*frames[1:]).sort_by("ts")
+        page = combined.head(page_size)
         # A full page means some shard hit its per-shard limit and may hold
         # more, so advance the cursor; a short page has drained every shard.
         # (Do not compare combined vs page: one shard returning exactly
         # page_size makes them equal yet more rows remain.)
         next_cursor = None
-        if page.num_rows >= page_size:
-            next_cursor = int(page.column("ts")[-1].as_py()) + 1
-        return QueryPage(page, next_cursor)
+        if page.height >= page_size:
+            next_cursor = int(cast("int", page["ts"].item(page.height - 1))) + 1
+        return QueryPage(page.to_arrow(), next_cursor)
 
     def pages(self, page_size: int = 100_000) -> Iterator[pa.Table]:
         """Iterate all matching events page by page (cursored by ts)."""

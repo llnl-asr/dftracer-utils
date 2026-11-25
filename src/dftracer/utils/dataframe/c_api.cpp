@@ -569,14 +569,89 @@ bool is_single_child_container(TypeId t) {
 }
 }  // namespace
 
+namespace {
+
+// The FLAT column that holds `col`'s nested type: `col` itself, its first
+// chunk, or the base of a SELECTION or DICTIONARY.
+const dftu_series* type_source(const dftu_series* col) {
+    while (col->encoding != Encoding::Flat) {
+        const dftu_series* next =
+            col->is_chunked()
+                ? (col->nested.empty() ? nullptr
+                                       : col->nested.front().series.get())
+            : col->encoding == Encoding::Selection ||
+                    col->encoding == Encoding::Dictionary
+                ? col->child().get()
+                : nullptr;
+        if (!next) return col;
+        col = next;
+    }
+    return col;
+}
+
+// Whether the rows of the FLAT list-like `c` use all of its child's rows, in
+// order, so the children of such chunks line up as one values column.
+bool uses_whole_child(const dftu_series& c) {
+    const dftu_series* ch = c.child().get();
+    if (!ch) return false;
+    if (c.type == TypeId::FixedSizeList)
+        return ch->length == c.length * c.fixed_size();
+    if (c.length == 0) return ch->length == 0;
+    std::int64_t lo = 0;
+    std::int64_t hi = 0;
+    if (c.wide_offsets()) {
+        const auto* o = reinterpret_cast<const std::int64_t*>(c.offsets.data());
+        lo = o[0];
+        hi = o[c.length];
+    } else {
+        const auto* o = reinterpret_cast<const std::int32_t*>(c.offsets.data());
+        lo = o[0];
+        hi = o[c.length];
+    }
+    return lo == 0 && hi == ch->length;
+}
+
+dftu_series* child_of_materialized(const dftu_series* col, std::int32_t i) {
+    dftu_series* flat = dftu_series_materialize(col);
+    if (!flat) return nullptr;
+    dftu_series* out = dftu_series_child(flat, i);
+    dftu_series_free(flat);
+    return out;
+}
+
+}  // namespace
+
 std::int32_t dftu_series_num_children(const dftu_series* col) {
-    if (is_single_child_container(col->type)) return col->child() ? 1 : 0;
-    return static_cast<std::int32_t>(col->num_fields());
+    const dftu_series* src = type_source(col);
+    if (is_single_child_container(src->type)) return src->child() ? 1 : 0;
+    return static_cast<std::int32_t>(src->num_fields());
 }
 
 dftu_series* dftu_series_child(const dftu_series* col, std::int32_t i) {
+    const bool list_like = is_single_child_container(col->type);
+    if (!list_like && col->type != TypeId::Struct) return nullptr;
+    if (i < 0 || i >= dftu_series_num_children(col)) return nullptr;
+    if (col->is_chunked()) {
+        // The chunks' children, chunked in turn: no copy when each chunk
+        // uses its whole child, else the child of the joined column.
+        dftracer::utils::dstd::Vector<
+            dftracer::utils::dstd::SharedPtr<dftu_series>>
+            parts;
+        parts.reserve(col->nested.size());
+        for (const dftu_nested& n : col->nested) {
+            if (list_like && (n.series->encoding != Encoding::Flat ||
+                              !uses_whole_child(*n.series)))
+                return child_of_materialized(col, i);
+            dftu_series* c = dftu_series_child(n.series.get(), i);
+            if (!c) return nullptr;
+            parts.push_back(adopt_series(c));
+        }
+        if (parts.size() == 1) return new dftu_series(*parts.front());
+        return dftracer::utils::dataframe::make_chunked(std::move(parts));
+    }
+    if (col->encoding != Encoding::Flat) return child_of_materialized(col, i);
     const dftracer::utils::dstd::SharedPtr<dftu_series>* ch = nullptr;
-    if (is_single_child_container(col->type)) {
+    if (list_like) {
         if (i == 0 && col->child()) ch = &col->child();
     } else if (i >= 0 && static_cast<std::size_t>(i) < col->num_fields()) {
         ch = &col->nested[static_cast<std::size_t>(i)].series;
@@ -588,9 +663,10 @@ dftu_series* dftu_series_child(const dftu_series* col, std::int32_t i) {
 
 const char* dftu_series_field_name(const dftu_series* col, std::int32_t i) {
     if (!col || col->type != TypeId::Struct) return nullptr;
-    if (i < 0 || static_cast<std::size_t>(i) >= col->num_fields())
+    const dftu_series* src = type_source(col);
+    if (i < 0 || static_cast<std::size_t>(i) >= src->num_fields())
         return nullptr;
-    return col->nested[static_cast<std::size_t>(i)].name.c_str();
+    return src->nested[static_cast<std::size_t>(i)].name.c_str();
 }
 
 std::int32_t dftu_series_time_unit(const dftu_series* col) {

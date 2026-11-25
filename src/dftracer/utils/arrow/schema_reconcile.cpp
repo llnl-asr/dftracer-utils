@@ -38,15 +38,30 @@ ArrowType type_from_format(const ArrowSchema *s) {
     return NANOARROW_TYPE_NA;
 }
 
+// A null parent appends empty (valid) rows to its children, whose dictionary
+// codes are 0; an empty dictionary under such rows gets one null entry so each
+// code is in range.
+int fill_empty_dictionaries(ArrowArray *a) {
+    if (a->dictionary != nullptr && a->length > 0 && a->dictionary->length == 0)
+        if (ArrowArrayAppendNull(a->dictionary, 1) != NANOARROW_OK) return -1;
+    for (std::int64_t i = 0; i < a->n_children; ++i)
+        if (fill_empty_dictionaries(a->children[i]) != 0) return -1;
+    return 0;
+}
+
 int build_null_array(const ArrowSchema *child_schema, std::int64_t length,
                      ArrowArray *out) {
     ArrowError err;
     ArrowErrorInit(&err);
-    ArrowType t = type_from_format(child_schema);
-    if (ArrowArrayInitFromType(out, t) != NANOARROW_OK) return -1;
-    if (ArrowArrayStartAppending(out) != NANOARROW_OK) return -1;
-    if (ArrowArrayAppendNull(out, length) != NANOARROW_OK) return -1;
-    if (ArrowArrayFinishBuildingDefault(out, &err) != NANOARROW_OK) return -1;
+    if (ArrowArrayInitFromSchema(out, child_schema, &err) != NANOARROW_OK)
+        return -1;
+    if (ArrowArrayStartAppending(out) != NANOARROW_OK ||
+        ArrowArrayAppendNull(out, length) != NANOARROW_OK ||
+        fill_empty_dictionaries(out) != 0 ||
+        ArrowArrayFinishBuildingDefault(out, &err) != NANOARROW_OK) {
+        out->release(out);
+        return -1;
+    }
     return 0;
 }
 
@@ -141,9 +156,27 @@ void append_json_scalar(const ArrowArrayView *view, ArrowType t,
     }
 }
 
+// Whether two columns have the same type down to the last child and dictionary:
+// formats and, under a struct, field names. An array of one type read under the
+// other's schema would be misread, so a mismatch at any depth counts.
 bool same_format(const ArrowSchema *a, const ArrowSchema *b) {
-    return a && b && a->format && b->format &&
-           dstd::StringView(a->format) == dstd::StringView(b->format);
+    if (!a || !b || !a->format || !b->format ||
+        dstd::StringView(a->format) != dstd::StringView(b->format) ||
+        a->n_children != b->n_children ||
+        (a->dictionary == nullptr) != (b->dictionary == nullptr))
+        return false;
+    const bool is_struct = dstd::StringView(a->format) == "+s";
+    for (std::int64_t i = 0; i < a->n_children; ++i) {
+        const ArrowSchema *x = a->children[i];
+        const ArrowSchema *y = b->children[i];
+        if (is_struct && x && y &&
+            dstd::StringView(x->name ? x->name : "") !=
+                dstd::StringView(y->name ? y->name : ""))
+            return false;
+        if (!same_format(x, y)) return false;
+    }
+    return a->dictionary == nullptr ||
+           same_format(a->dictionary, b->dictionary);
 }
 
 }  // namespace

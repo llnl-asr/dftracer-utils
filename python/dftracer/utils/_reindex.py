@@ -15,7 +15,8 @@ import sys
 from typing import TYPE_CHECKING, Sequence, Union, cast
 
 from . import dftracer_utils_ext as _ext
-from ._enums import DType
+from ._convert import _nanos, missing, timedelta_nanos, values_like
+from ._enums import UNIT_NS, DType
 from ._series import Series
 from ._series_index import default_name, internal_name, labels_from, levels_of, names_of
 
@@ -28,7 +29,7 @@ _METHODS = {None: 0, "pad": 1, "ffill": 1, "backfill": 2, "bfill": 2, "nearest":
 _JOINS = {"inner": 0, "left": 1, "right": 2, "outer": 3}
 _SWAPPED = {"inner": "inner", "left": "right", "right": "left", "outer": "outer"}
 _TEXT = frozenset({DType.STRING, DType.LARGE_STRING, DType.BINARY, DType.LARGE_BINARY})
-_TICKS = {"s": 1e9, "ms": 1e6, "us": 1e3, "ns": 1.0, "D": 86400e9}
+_DAY_NS = UNIT_NS["d"]
 _ONE = "__align_series__"
 _NO_LIMIT = -1
 
@@ -61,18 +62,8 @@ def _scalar(value: object) -> object:
     return item() if callable(item) and not isinstance(value, (str, bytes)) else value
 
 
-def _missing(value: object) -> bool:
-    value = _scalar(value)
-    if value is None:
-        return True
-    if isinstance(value, float):
-        return math.isnan(value)
-    pd = sys.modules.get("pandas")
-    return pd is not None and (value is pd.NA or value is pd.NaT)
-
-
 def _fill_series(value: object) -> Series | None:
-    if _missing(value):
+    if missing(value):
         return None
     return Series.from_list([_scalar(value)])
 
@@ -87,13 +78,10 @@ def _timedelta_nanos(value: object) -> int | None:
             raise TypeError("reindex: a string tolerance needs pandas to parse it") from None
         value = pandas.Timedelta(value)
     if isinstance(value, datetime.timedelta):
-        exact = getattr(value, "value", None)
-        if isinstance(exact, int):
-            return exact
-        return (value.days * 86400 + value.seconds) * 10**9 + value.microseconds * 1000
+        return timedelta_nanos(value)
     np = sys.modules.get("numpy")
     if np is not None and isinstance(value, np.timedelta64):
-        return int(value.astype("timedelta64[ns]").astype("int64"))
+        return _nanos(value)
     return None
 
 
@@ -101,7 +89,7 @@ def _tolerance(value: object, level: Series | None) -> tuple[float, int | None]:
     """The tolerance as the native call takes it: ``(number, None)`` in the
     units of the labels, or ``(0.0, nanoseconds)`` for a time span against
     timestamp, duration or time labels, which the engine compares exactly in
-    the unit of the labels (days for date labels)."""
+    the unit of the labels (days for date32 labels, milliseconds for date64)."""
     if value is None:
         return math.inf, None
     if isinstance(value, (list, tuple)) or (
@@ -113,12 +101,13 @@ def _tolerance(value: object, level: Series | None) -> tuple[float, int | None]:
         return float(cast("float", value)), None
     if level is None:
         raise TypeError("reindex: a timedelta tolerance needs timestamp labels")
-    arrow_type = level.slice(0, 0).to_arrow().type
-    unit = getattr(arrow_type, "unit", None)
-    if unit in _TICKS:
+    if level.dtype in (DType.TIMESTAMP, DType.DURATION, DType.TIME32, DType.TIME64):
         return 0.0, nanos
-    if str(arrow_type) == "date32[day]":
-        return nanos / _TICKS["D"], None
+    if level.dtype == DType.DATE32:
+        return nanos / _DAY_NS, None
+    if level.dtype == DType.DATE64:
+        # date64 counts milliseconds
+        return nanos / 1_000_000, None
     raise TypeError("reindex: a timedelta tolerance needs timestamp, date or duration labels")
 
 
@@ -139,11 +128,36 @@ def _target(
     names, keys = labels_from(labels, None)
     if len(keys[0]) == 0 and levels and len(keys) == len(levels):
         keys = [level.slice(0, 0) for level in levels]
+    elif len(keys) == len(levels):
+        keys = [_like_level(key, level) for key, level in zip(keys, levels)]
     if hasattr(labels, "name") and len(keys) == 1:
         names = [internal_name(labels.name, 0)]
     elif not hasattr(labels, "names") and not hasattr(labels, "columns"):
         names = source if len(source) == len(keys) else [default_name(i) for i in range(len(keys))]
     return names, keys
+
+
+# Label types that Python values do not build by themselves: a key column of
+# Python dates, times or decimals takes the level's type first.
+_PARAMETRIC = frozenset(
+    {DType.DATE64, DType.TIME32, DType.TIME64, DType.DECIMAL128, DType.DECIMAL256}
+)
+
+
+def _like_level(key: Series, level: Series) -> Series:
+    """``key`` in the type of ``level`` when the level has a type that Python
+    values do not build (date64, a time unit, a decimal scale); else ``key``."""
+    same = (
+        key.dtype == level.dtype
+        and key.time_unit == level.time_unit
+        and key._decimal == level._decimal
+    )
+    if level.dtype not in _PARAMETRIC or same:
+        return key
+    try:
+        return values_like(key.to_list(), level)
+    except (TypeError, ValueError):
+        return key
 
 
 def _renamed(out: Frameish, names: list[str]) -> Frameish:
@@ -357,7 +371,7 @@ def _joined_names(a: list[str], b: list[str], how: str) -> list[str]:
 
 
 def _filled(s: Series, fill_value: object) -> Series:
-    return s if _missing(fill_value) else s.fill_null(cast("float | str", _scalar(fill_value)))
+    return s if missing(fill_value) else s.fill_null(cast("float | str", _scalar(fill_value)))
 
 
 def align(

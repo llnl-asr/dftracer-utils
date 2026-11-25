@@ -1122,6 +1122,7 @@ set(DFTRACER_UTILS_VEC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/parallel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/parallel_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/batch_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/nested_view.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/c_api_tz.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/tz/database.cpp

@@ -2862,19 +2862,26 @@ def where(table: Frame, pred: Expr | str) -> Frame:
     a filtered ``pyarrow.Table``."""
     from ._eval import Columnar
 
-    native = table
-    if isinstance(pred, str):
-        if isinstance(native, _ext.DataFrame):
-            return _ext.DataFrame.query(native, pred)
-        import pyarrow as pa
-
-        return pa.table(_arrow_native("_dataframe_from_arrow")(native).query(pred))
-    mask = Columnar(pred).apply(native)  # a wrapped Series
-    if isinstance(native, _ext.DataFrame):
-        return _ext.DataFrame.filter(native, mask)
+    if isinstance(table, _ext.DataFrame):
+        if isinstance(pred, str):
+            return _ext.DataFrame.query(table, pred)
+        return _ext.DataFrame.filter(table, Columnar(pred).apply(table))
+    # A pyarrow Table in gives one out: the rows are kept natively and the
+    # result goes back through the Arrow stream, with no copy either way.
     import pyarrow as pa
 
-    return native.filter(pa.array(mask))
+    frame = _arrow_native("_dataframe_from_arrow")(table)
+    if isinstance(pred, str):
+        kept = _ext.DataFrame.query(frame, pred)
+    else:
+        kept = _ext.DataFrame.filter(frame, Columnar(pred).apply(frame))
+    result = pa.table(kept)
+    # the native round trip makes every field nullable and drops its metadata
+    fields = [
+        pa.field(out.name, out.type, src.nullable, src.metadata)
+        for out, src in zip(result.schema, table.schema)
+    ]
+    return result.cast(pa.schema(fields, metadata=table.schema.metadata))
 
 
 def eval_many(exprs: list[Expr | Columnar], source: Source) -> list[Series]:

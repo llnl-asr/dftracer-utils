@@ -202,21 +202,12 @@ def test_series_repr_does_not_crash(name):
     assert isinstance(str(s), str)
 
 
-# gather_column has no case for FixedSizeList/Map; head()/take() on them
-# raises RuntimeError rather than crashing or returning a broken column.
-_HEAD_UNSUPPORTED = {"fixed_size_list", "map"}
-
-
 @pytest.mark.parametrize("name", _TYPE_NAMES)
 def test_series_head_and_filter(name):
     arr, _, expected = _TYPE_CASES[name]
     s = Series.from_arrow(arr)
-    if name in _HEAD_UNSUPPORTED:
-        with pytest.raises(Exception):
-            s.head(1)
-    else:
-        h = s.head(1)
-        assert h.to_arrow().to_pylist() == expected[:1]
+    h = s.head(1)
+    assert h.to_arrow().to_pylist() == expected[:1]
 
     mask = Series.from_arrow(pa.array([True] + [False] * (len(arr) - 1)))
     f = s.filter(mask)
@@ -271,18 +262,10 @@ def test_dataframe_filter_and_head(name):
     df = DataFrame.from_arrow(table)
     mask = Series.from_arrow(pa.array([True] + [False] * (len(arr) - 1)))
 
-    if name in _HEAD_UNSUPPORTED:
-        h = df.head(1)
-        with pytest.raises(Exception):
-            h["v"]
-        f = df.filter(mask)
-        with pytest.raises(Exception):
-            f["v"]
-    else:
-        h = df.head(1)
-        assert h["v"].to_arrow().to_pylist() == expected[:1]
-        f = df.filter(mask)
-        assert f["v"].to_arrow().to_pylist() == expected[:1]
+    h = df.head(1)
+    assert h["v"].to_arrow().to_pylist() == expected[:1]
+    f = df.filter(mask)
+    assert f["v"].to_arrow().to_pylist() == expected[:1]
 
 
 # Types the group-key hash path supports today; the rest raise a ValueError
@@ -327,14 +310,15 @@ def test_dataframe_group_by_supported_or_clear_error(name):
 
 
 def test_series_from_arrow_unsupported_type_raises_not_silent():
-    # A column type the engine genuinely does not import (Arrow null type)
+    # A column type the engine genuinely does not import (an Arrow interval)
     # must raise, never hand back an invalid Series with no exception.
     with pytest.raises(ValueError):
-        Series.from_arrow(pa.array([None, None], type=pa.null()))
+        Series.from_arrow(pa.array([None, None], type=pa.month_day_nano_interval()))
 
 
 def test_dataframe_from_arrow_unsupported_column_raises_not_silent():
-    table = pa.table({"ok": pa.array([1, 2]), "bad": pa.array([None, None], type=pa.null())})
+    bad = pa.array([None, None], type=pa.month_day_nano_interval())
+    table = pa.table({"ok": pa.array([1, 2]), "bad": bad})
     with pytest.raises(ValueError):
         DataFrame.from_arrow(table)
 

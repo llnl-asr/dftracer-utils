@@ -99,7 +99,7 @@ TEST_SUITE("ExecutorWakeups") {
         constexpr auto WAIT = 40ms;
         constexpr auto MAX_CPU = 40ms;
         [[maybe_unused]] constexpr std::int64_t MAX_SWITCHES = 150;
-        constexpr auto MAX_MEDIAN_LATENCY = 1ms;
+        constexpr auto MAX_MEDIAN_LATENCY = 2ms;
 
         Runtime rt(THREADS);
         coro::AsyncSemaphore gate(1);

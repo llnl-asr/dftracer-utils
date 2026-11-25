@@ -2216,10 +2216,35 @@ bool field_is_json(PyObject* obj, Py_ssize_t i) {
     return json;
 }
 
-// vec_batch_from_arrow(table) -> DataFrame: import each column of a pyarrow
-// Table (or RecordBatch) into vec. Used to reconstruct a pickled DataFrame and
-// to lift Arrow into the native format.
+// A provider of __arrow_c_stream__ (a pyarrow Table or RecordBatchReader, a
+// polars frame): one chunk per batch, nothing joined or copied.
+PyObject* frame_from_arrow_stream(PyObject* obj) {
+    PyObject* cap = PyObject_CallMethod(obj, "__arrow_c_stream__", nullptr);
+    if (!cap) return nullptr;
+    auto* stream = static_cast<ArrowArrayStream*>(
+        PyCapsule_GetPointer(cap, "arrow_array_stream"));
+    if (!stream) {
+        Py_DECREF(cap);
+        return nullptr;
+    }
+    auto moved = dftracer::utils::dstd::make_unique<ArrowArrayStream>(*stream);
+    stream->release = nullptr;
+    Py_DECREF(cap);
+    auto imported =
+        dftracer::utils::arrow::dataframe_from_arrow_stream(moved.get());
+    if (!imported) {
+        dftracer::utils::python::core::set_py_error(imported.error());
+        return nullptr;
+    }
+    return make_dataframe(std::move(*imported));
+}
+
+// vec_batch_from_arrow(table) -> DataFrame: import an Arrow table into vec
+// with no copy. Used to reconstruct a pickled DataFrame and to lift Arrow into
+// the native format.
 PyObject* vec_batch_from_arrow(PyObject* /*self*/, PyObject* obj) {
+    if (PyObject_HasAttrString(obj, "__arrow_c_stream__"))
+        return frame_from_arrow_stream(obj);
     PyObject* names = PyObject_GetAttrString(obj, "column_names");
     if (!names) return nullptr;
     Py_ssize_t n = PySequence_Size(names);
@@ -2232,19 +2257,8 @@ PyObject* vec_batch_from_arrow(PyObject* /*self*/, PyObject* obj) {
         PyObject* nm = PySequence_GetItem(names, i);
         const char* s = nm ? PyUnicode_AsUTF8(nm) : nullptr;
         PyObject* ca = s ? PyObject_CallMethod(obj, "column", "n", i) : nullptr;
-        PyObject* arr = nullptr;
-        if (ca) {
-            if (PyObject_HasAttrString(ca, "combine_chunks"))
-                arr = PyObject_CallMethod(ca, "combine_chunks", nullptr);
-            else {
-                arr = ca;
-                Py_INCREF(arr);
-            }
-        }
-        Series col =
-            arr ? dftracer::utils::python::frame::column_from_arrow(arr)
-                : Series{};
-        Py_XDECREF(arr);
+        Series col = ca ? dftracer::utils::python::frame::column_from_arrow(ca)
+                        : Series{};
         Py_XDECREF(ca);
         if (col.valid() && !col.is_json() &&
             col.type() == dftracer::utils::dataframe::TypeId::String &&

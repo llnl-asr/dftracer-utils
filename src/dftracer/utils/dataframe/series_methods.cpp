@@ -74,6 +74,14 @@ Series Series::structs(std::initializer_list<const char*> names,
 }
 
 DataType Series::data_type() const {
+    // A CHUNKED column's chunks and a SELECTION or DICTIONARY's base hold
+    // the column's whole type.
+    const Encoding e = handle_->encoding;
+    if ((e == Encoding::Chunked || e == Encoding::Selection ||
+         e == Encoding::Dictionary) &&
+        !handle_->nested.empty())
+        return Series{new dftu_series(*handle_->nested.front().series)}
+            .data_type();
     DataType dt;
     dt.id = type();
     dt.set_time_unit(static_cast<TimeUnit>(dftu_series_time_unit(handle_)));

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/buffers.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/reshape.h>
 #include <dftracer/utils/dataframe/internal/value_ids.h>
@@ -8,6 +11,7 @@
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <numeric>
 
@@ -124,6 +128,84 @@ dstd::Result<dstd::Vector<Series>> unstack_columns(const Series& values,
     out.reserve(static_cast<std::size_t>(cells / row_count));
     for (std::int64_t at = 0; at < cells; at += row_count)
         out.push_back(all.slice(at, row_count));
+    return out;
+}
+
+dstd::Result<Series> dictionary_of(const Series& codes, const Series& values) {
+    if (!codes.valid() || !values.valid() || !codes.is_flat() ||
+        codes.type() != TypeId::Int32)
+        return invalid_argument<
+            "dictionary codes must be a flat Int32 column">();
+    const dftu_series& c = *codes.handle();
+    const std::int64_t n = c.length;
+    const std::int64_t size = values.length();
+    const auto* in = reinterpret_cast<const std::int32_t*>(c.data.data());
+    const std::uint8_t* bits = c.validity.block() ? c.validity.data() : nullptr;
+    auto is_valid = [&](std::int64_t i) {
+        return bits == nullptr || ((bits[i >> 3] >> (i & 7)) & 1) != 0;
+    };
+
+    bool rewrite = false;
+    for (std::int64_t i = 0; i < n; ++i) {
+        const bool out_of_range = in[i] < 0 || in[i] >= size;
+        if (!out_of_range) continue;
+        if (is_valid(i) && in[i] >= size)
+            return invalid_argument<
+                "dictionary code {} is out of range for {} "
+                "values">(in[i], size);
+        rewrite = true;
+    }
+    // A dictionary child is FLAT: a lazy one (a selection) counts its nulls
+    // only on demand, which a code lookup would miss, so it is made flat (a
+    // copy). No values: every row is null (any valid code failed above), so
+    // the dictionary is one null entry that no code may miss.
+    Series dictionary;
+    if (size == 0) {
+        dictionary = null_column_like(values, 1);
+        if (!dictionary.valid())
+            return invalid_argument<
+                "an empty dictionary of type '{}' cannot hold null rows">(
+                type_name(values.type()));
+        rewrite = true;
+    } else if (values.is_flat()) {
+        dictionary = values.share();
+    } else {
+        dictionary = values.materialize();
+        if (!dictionary.valid())
+            return invalid_argument<
+                "the values of a dictionary of type '{}' cannot be made "
+                "flat">(type_name(values.type()));
+    }
+
+    auto* h = new dftu_series();
+    Series out{h};
+    adopt_type_from(*h, *dictionary.handle());
+    h->encoding = Encoding::Dictionary;
+    h->length = n;
+    h->set_child(adopt_series(dictionary.release()));
+    if (!rewrite) {
+        h->data = c.data;
+        h->validity = c.validity;
+        h->null_count = c.null_count;
+        return out;
+    }
+    const auto bytes = static_cast<std::size_t>((n + 7) / 8);
+    h->data = new_buffer(static_cast<std::size_t>(n) * sizeof(std::int32_t));
+    h->validity = new_buffer(bytes);
+    auto* codes_out = reinterpret_cast<std::int32_t*>(writable(h->data));
+    std::uint8_t* valid_out = writable(h->validity);
+    std::memset(valid_out, 0, bytes);
+    std::int64_t nulls = 0;
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (is_valid(i) && in[i] >= 0 && in[i] < size) {
+            codes_out[i] = in[i];
+            valid_out[i >> 3] |= static_cast<std::uint8_t>(1U << (i & 7));
+        } else {
+            codes_out[i] = 0;
+            ++nulls;
+        }
+    }
+    h->null_count = nulls;
     return out;
 }
 

@@ -304,6 +304,19 @@ Series retype_series(const Series& s, TypeId type, dataframe::TimeUnit unit,
                      dftracer::utils::dstd::StringView zone, int precision,
                      int scale, int width);
 PyObject* Series_physical(PyObject* self, PyObject*);
+PyObject* Series_dictionary_parts(PyObject* self, PyObject*);
+PyObject* Series_null_bytes(PyObject* self, PyObject*);
+PyObject* Series_plain_text(PyObject* self, PyObject*);
+PyObject* Series_nulls_like(PyObject* self, PyObject* arg);
+PyObject* Series_joined_dictionary(PyObject* self, PyObject*);
+/// The lookup table of @ref null_mask_bytes: 8 mask bytes per validity byte.
+const std::uint64_t* null_expand_table();
+/// @p n bytes into @p dst, 1 where the validity bit is 0.
+void expand_null_bytes(const std::uint8_t* valid, std::int64_t n,
+                       std::uint8_t* dst);
+/// `n` bytes, 1 where the validity bit is 0, as a new bytearray.
+PyObject* null_mask_bytes(const std::uint8_t* valid, std::int64_t n);
+PyObject* series_from_dictionary(PyObject* self, PyObject* args);
 PyObject* Series_get_nbytes(PyObject* self, void*);
 PyObject* Series_to_bytes(PyObject* self, PyObject*);
 PyObject* series_retype(PyObject* self, PyObject* args);

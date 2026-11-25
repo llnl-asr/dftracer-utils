@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <limits>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -352,6 +353,36 @@ dftu_series* bytes_to_text(const dftu_series& v, TypeId text) {
                                        : bytes_to_text_w<std::int32_t>(v, text);
 }
 
+// String and LargeString, Binary and LargeBinary, List and LargeList differ
+// only in the width of their offsets.
+bool same_offset_family(TypeId a, TypeId b) {
+    return a != b && narrow_varwidth_type(a) == narrow_varwidth_type(b);
+}
+
+// `v` with its offsets rewritten at the width of `dst`; the bytes (or the
+// child) are shared. Null when they need offsets wider than 32 bits.
+template <typename From, typename To>
+dftu_series* rewidth_offsets(const dftu_series& v, TypeId dst) {
+    const auto n = static_cast<std::size_t>(v.length);
+    dftu_series* out = dftu_series_share(&v);
+    out->type = dst;
+    out->offsets = new_buffer((n + 1) * sizeof(To));
+    To* to = reinterpret_cast<To*>(writable(out->offsets));
+    if (!v.offsets.block()) {
+        std::memset(to, 0, (n + 1) * sizeof(To));
+        return out;
+    }
+    const auto* from = reinterpret_cast<const From*>(v.offsets.data());
+    if constexpr (sizeof(To) < sizeof(From)) {
+        if (from[n] > static_cast<From>(std::numeric_limits<To>::max())) {
+            dftu_series_free(out);
+            return nullptr;
+        }
+    }
+    for (std::size_t i = 0; i <= n; ++i) to[i] = static_cast<To>(from[i]);
+    return out;
+}
+
 }  // namespace
 
 Series cast(const Series& v, TypeId target) {
@@ -362,6 +393,22 @@ Series cast(const Series& v, TypeId target) {
 }  // namespace dftracer::utils::dataframe
 
 dftu_series* dftu_series_cast(const dftu_series* v, dftu_dtype target) {
+    // A chunked column changes its offsets chunk by chunk, so the bytes stay
+    // where they are.
+    if (v->is_chunked() &&
+        dftracer::utils::dataframe::same_offset_family(
+            v->type, static_cast<dftracer::utils::dataframe::TypeId>(target))) {
+        dftracer::utils::dstd::Vector<
+            dftracer::utils::dstd::SharedPtr<dftu_series>>
+            chunks;
+        chunks.reserve(v->nested.size());
+        for (const dftu_nested& c : v->nested) {
+            dftu_series* one = dftu_series_cast(c.series.get(), target);
+            if (!one) return nullptr;
+            chunks.push_back(adopt_series(one));
+        }
+        return dftracer::utils::dataframe::make_chunked(std::move(chunks));
+    }
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_cast(flat_v, target));
     using dftracer::utils::dataframe::buffer_bytes;
     using dftracer::utils::dataframe::byte_width;
@@ -397,6 +444,14 @@ dftu_series* dftu_series_cast(const dftu_series* v, dftu_dtype target) {
     // String, Bool or temporal column casts to its own type.
     if (src == dst && !dftracer::utils::dataframe::is_numeric(src))
         return dftu_series_share(v);
+    if (dftracer::utils::dataframe::same_offset_family(src, dst))
+        return dftracer::utils::dataframe::is_wide_offset_type(src)
+                   ? dftracer::utils::dataframe::rewidth_offsets<std::int64_t,
+                                                                 std::int32_t>(
+                         *v, dst)
+                   : dftracer::utils::dataframe::rewidth_offsets<std::int32_t,
+                                                                 std::int64_t>(
+                         *v, dst);
     // String and Binary share one layout: text to bytes re-tags the buffers,
     // and bytes to text keeps the rows that are valid UTF-8, the rest null.
     if ((src == TypeId::String && dst == TypeId::Binary) ||

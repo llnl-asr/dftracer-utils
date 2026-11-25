@@ -266,7 +266,12 @@ class PluginFold : public trace::views::detail::Fold {
     /// a reservation exists.
     void poll_reclaim();
 
-    Job& new_job(Job::Kind kind) { return jobs_.emplace_back(kind); }
+    /// Safe on many threads at once: task bodies that run in parallel make
+    /// their jobs at the same time.
+    Job& new_job(Job::Kind kind) {
+        std::lock_guard<std::mutex> lock(jobs_mutex_);
+        return jobs_.emplace_back(kind);
+    }
 
     dftracer::utils::dstd::StringIntern& intern_table() { return *intern_; }
     /// Keeps @p handle until @ref release_handle or the end of the fold and
@@ -409,6 +414,7 @@ class PluginFold : public trace::views::detail::Fold {
 
     // Keeps job addresses stable; jobs live for the scan.
     dstd::Deque<Job> jobs_;
+    std::mutex jobs_mutex_;
     std::mutex handles_mutex_;
     dstd::Vector<dstd::UniquePtr<PluginHandle>> handles_;
     dstd::Vector<dstd::UniquePtr<PluginTraceWriter>> trace_writers_;

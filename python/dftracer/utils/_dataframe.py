@@ -44,7 +44,7 @@ from ._convert import (
     _polars_via_arrow,
     _require_pyarrow,
     _row_indices,
-    _to_pandas,
+    arrow_pandas,
     index_columns,
 )
 from ._enums import DType, rule_to_units
@@ -558,8 +558,11 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
 
     @classmethod
     def from_polars(cls, df: pl.DataFrame) -> DataFrame:
-        """Import a ``polars.DataFrame`` with no pyarrow (see
-        :meth:`Series.from_polars`)."""
+        """Import a ``polars.DataFrame`` with no pyarrow: through the Arrow C stream
+        that polars exports (polars >= 1.3), sharing its buffers, else column by
+        column (see :meth:`Series.from_polars`)."""
+        if hasattr(df, "__arrow_c_stream__") and hasattr(_ext, "_dataframe_from_arrow"):
+            return DataFrame(_ext._dataframe_from_arrow(df))
         return _frame_of([(name, df[name]) for name in df.columns], Series.from_polars)
 
     @classmethod
@@ -582,15 +585,16 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
 
     @classmethod
     def from_dict(cls, mapping: Mapping[str, object]) -> DataFrame:
-        """Import a ``{name: array-like}`` mapping: Series, lists of scalars, NumPy
-        arrays, pandas or polars Series and flat pandas indexes (their values)
-        import natively; anything else (a pyarrow array, nested lists) goes
-        through pyarrow."""
+        """Import a ``{name: array-like}`` mapping: Series, lists (nested too),
+        tuples, ranges,
+        NumPy arrays, pandas or polars Series, pandas arrays and flat indexes
+        (their values) and Arrow arrays (zero copy through the C Data
+        Interface). ``TypeError`` for any other value."""
         native = _native_columns(mapping)
-        if native is not None:
-            return DataFrame(_ext._dataframe_from_columns(*native))
-        pa = _require_pyarrow()
-        return _dataframe_from_arrow(pa.table(mapping))
+        if native is None:
+            kinds = sorted({type(v).__name__ for v in mapping.values()})
+            raise TypeError(f"from_dict: cannot import a column of type {', '.join(kinds)}")
+        return DataFrame(_ext._dataframe_from_columns(*native))
 
     @classmethod
     def from_numpy(
@@ -663,7 +667,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         set_type: Callable[[list[JsonValue]], object] | None = None,
     ) -> pd.DataFrame:
         """This frame as a pandas DataFrame. By default the columns are NumPy
-        dtypes, which copies (pyarrow packs them into blocks), except that a
+        dtypes, one copy built natively, except that a
         dictionary-encoded string column becomes ``category`` and an integer,
         bool or string column that holds nulls becomes pandas' own nullable
         dtype (``Int8`` .. ``UInt64``, ``boolean``, ``string``), so
@@ -675,10 +679,11 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         the nullable dtypes (``Int8`` .. ``UInt64``, ``Float32``, ``Float64``,
         ``boolean``, ``string``) even for a column with no nulls, so a null is
         ``pd.NA`` and a float NaN stays NaN; a column of another type converts
-        as usual. The NumPy and nullable forms are built natively. A dictionary
-        column uses pyarrow, where installed, to read its codes without building
-        a string per row, and keeps the dictionary order of its used values;
-        without pyarrow the categories come out sorted.
+        as usual. The NumPy and nullable forms are built natively, one copy
+        that pandas owns. A dictionary column reads its native codes, so no
+        string is built per row, and keeps the dictionary order of its used
+        values; a column of dictionary chunks is one category too, its codes
+        joined (a copy). With ``arrow`` each column shares the native buffers.
 
         ``index`` names the columns to move into the pandas index, in the order
         given: a flat index for one name, a MultiIndex for several. An unknown
@@ -718,17 +723,26 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
             raise ValueError(
                 "to_pandas: set_type needs a frame with a table header, from a table or from_pandas"
             )
+        import pandas as pd
+
         if arrow:
-            out = cast("pd.DataFrame", _to_pandas(self.to_arrow(), arrow))
+            names = self._names()
+            if not names:
+                out = pd.DataFrame(index=pd.RangeIndex(self.num_rows))
+            else:
+                out = pd.DataFrame(
+                    {n: arrow_pandas(_ext.DataFrame.__getitem__(self, n)) for n in names},
+                    copy=False,
+                )
         else:
-            import pandas as pd
 
             def one(name: str) -> pd.Series | npt.NDArray[np.generic] | ExtensionArray:
                 col = _ext.DataFrame.__getitem__(self, name)
                 values = _pandas_nullable(col) if nullable else None
                 return values if values is not None else _pandas_default(col)
 
-            out = pd.DataFrame({name: one(name) for name in self._names()})
+            # one copy, so the result is pandas' own and writable
+            out = pd.DataFrame({name: one(name) for name in self._names()}, copy=True)
         if index is not None:
             return _apply_index(out, index)
         names = self.index_names()
@@ -2236,24 +2250,34 @@ def _native_columns(
     """The names and native columns of a mapping whose values are all Series,
     lists of scalars, NumPy arrays or pandas and polars Series that import
     without Arrow; None otherwise."""
+    from ._series_index import pandas_labels, with_levels
+
     names: list[str] = []
     cols: list[Series] = []
+    # The columns of one pandas frame share its index; import its labels once.
+    labels_of: dict[int, tuple[object, tuple[list[str], list[Series]] | None]] = {}
     for name, value in mapping.items():
         if isinstance(value, Series):
             cols.append(value)
-        elif isinstance(value, (list, tuple)):
-            items = list(value)
-            # no value to infer a type from: a string column of nulls, as from_pandas gives
-            kind = (int(DType.STRING),) if all(v is None for v in items) else ()
+        elif isinstance(value, (list, tuple, range)):
             try:
-                cols.append(_ext._series_from_list(items, *kind))
+                cols.append(Series.from_list(list(value)))
             except TypeError:
                 return None
         elif type(value).__module__.startswith("pandas") and type(value).__name__ == "Series":
+            pandas_series = cast(Any, value)
             try:
-                cols.append(Series.from_pandas(cast(Any, value)))
+                col = Series._from_pandas_values(pandas_series)
             except TypeError:
                 return None
+            index = pandas_series.index
+            seen = labels_of.get(id(index))
+            if seen is None or seen[0] is not index:
+                seen = (index, pandas_labels(pandas_series))
+                labels_of[id(index)] = seen
+            if seen[1] is not None:
+                col = with_levels(col, *seen[1])
+            cols.append(col)
         elif _is_flat_pandas_index(value):
             # an Index gives values, not row labels, as in the pandas constructor
             try:
@@ -2274,10 +2298,23 @@ def _native_columns(
                 cols.append(Series.from_numpy(cast(Any, value)))
             except (TypeError, BufferError, RuntimeError, ImportError):
                 return None
+        elif hasattr(value, "__arrow_c_array__") or hasattr(value, "__arrow_c_stream__"):
+            cols.append(Series.from_arrow(cast(Any, value)))
+        elif _is_pandas_array(value):
+            try:
+                pd = sys.modules["pandas"]
+                cols.append(Series.from_pandas(pd.Series(cast(Any, value), copy=False)))
+            except TypeError:
+                return None
         else:
             return None
         names.append(name)
     return names, cols
+
+
+def _is_pandas_array(value: object) -> bool:
+    pd = sys.modules.get("pandas")
+    return pd is not None and isinstance(value, (pd.Categorical, pd.api.extensions.ExtensionArray))
 
 
 def _is_flat_pandas_index(value: object) -> bool:
@@ -2346,9 +2383,11 @@ def _dataframe_from_arrow(table: pa.Table) -> DataFrame:
     with step 1 and no name, is none; another range becomes an index column of
     its values)."""
     frame = DataFrame(_arrow_native("_dataframe_from_arrow")(table))
-    names = _arrow_index_names(table.schema.metadata, frame)
+    # a stream provider other than a pyarrow Table may have no schema object
+    metadata = getattr(getattr(table, "schema", None), "metadata", None)
+    names = _arrow_index_names(metadata, frame)
     if not names:
-        return _range_index(table.schema.metadata, frame)
+        return _range_index(metadata, frame)
     try:
         return _bound(_ext.DataFrame.with_index(frame, names))
     except ValueError:

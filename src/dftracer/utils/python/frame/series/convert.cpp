@@ -19,6 +19,7 @@
 #include <dftracer/utils/python/core/errors.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -596,8 +597,6 @@ PyObject* Series_to_pylist(PyObject* self, PyObject*) {
     });
 }
 
-namespace {
-
 // 8 mask bytes (1 = null) for each validity byte: one store expands a byte of
 // the bitmap.
 const std::uint64_t* null_expand_table() {
@@ -614,12 +613,8 @@ const std::uint64_t* null_expand_table() {
     return table;
 }
 
-// n bytes, 1 where the validity bit is 0.
-PyObject* null_mask_bytes(const std::uint8_t* valid, std::int64_t n) {
-    PyObject* out =
-        PyByteArray_FromStringAndSize(nullptr, static_cast<Py_ssize_t>(n));
-    if (!out) return nullptr;
-    auto* dst = reinterpret_cast<std::uint8_t*>(PyByteArray_AS_STRING(out));
+void expand_null_bytes(const std::uint8_t* valid, std::int64_t n,
+                       std::uint8_t* dst) {
     const std::uint64_t* table = null_expand_table();
     const std::int64_t full = n / 8;
     for (std::int64_t k = 0; k < full; ++k) {
@@ -628,8 +623,19 @@ PyObject* null_mask_bytes(const std::uint8_t* valid, std::int64_t n) {
     }
     for (std::int64_t i = 8 * full; i < n; ++i)
         dst[i] = ((valid[i >> 3] >> (i & 7)) & 1U) ? 0 : 1;
+}
+
+// n bytes, 1 where the validity bit is 0.
+PyObject* null_mask_bytes(const std::uint8_t* valid, std::int64_t n) {
+    PyObject* out =
+        PyByteArray_FromStringAndSize(nullptr, static_cast<Py_ssize_t>(n));
+    if (!out) return nullptr;
+    expand_null_bytes(
+        valid, n, reinterpret_cast<std::uint8_t*>(PyByteArray_AS_STRING(out)));
     return out;
 }
+
+namespace {
 
 // Calls `set(i)` for every row whose validity bit is 0, skipping a byte of
 // eight present rows and jumping from zero bit to zero bit inside a byte.
@@ -1039,8 +1045,11 @@ PyObject* Series_item(PyObject* self, PyObject* arg) {
         return nullptr;
     }
     return guard_as(PyExc_TypeError, [&] {
-        if (a->encoding() == dataframe::Encoding::Chunked)
-            return cell(build_node(a->slice(i, 1)), 0);
+        if (a->encoding() == dataframe::Encoding::Chunked) {
+            std::int64_t local = 0;
+            const dftu_series& chunk = a->handle()->chunk_at(i, local);
+            return cell(build_node(Series{new dftu_series(chunk)}), local);
+        }
         return cell(build_node(*a), i);
     });
 }
@@ -1552,6 +1561,85 @@ PyObject* build_structs(PyObject** items, Py_ssize_t n, Bits& bits) {
                          bits, n);
 }
 
+struct IntRange {
+    std::int64_t lo;
+    std::uint64_t hi;
+};
+
+template <class T>
+constexpr IntRange range_of() {
+    return {static_cast<std::int64_t>(std::numeric_limits<T>::min()),
+            static_cast<std::uint64_t>(std::numeric_limits<T>::max())};
+}
+
+dftracer::utils::dstd::Optional<IntRange> int_range(TypeId t) {
+    switch (t) {
+        case TypeId::Int8:
+            return range_of<std::int8_t>();
+        case TypeId::Int16:
+            return range_of<std::int16_t>();
+        case TypeId::Int32:
+            return range_of<std::int32_t>();
+        case TypeId::Int64:
+            return range_of<std::int64_t>();
+        case TypeId::Uint8:
+            return range_of<std::uint8_t>();
+        case TypeId::Uint16:
+            return range_of<std::uint16_t>();
+        case TypeId::Uint32:
+            return range_of<std::uint32_t>();
+        case TypeId::Uint64:
+            return range_of<std::uint64_t>();
+        default:
+            return dftracer::utils::dstd::nullopt;
+    }
+}
+
+// Whether every int and float in `items` is a whole number that `range`
+// holds, so the cast to an integer type neither wraps nor truncates; with a
+// Python error set when it is not.
+bool ints_fit(PyObject** items, Py_ssize_t n, IntRange range, TypeId want) {
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        PyObject* v = items[i];
+        if (v == Py_None || PyBool_Check(v)) continue;
+        bool fits = true;
+        if (PyLong_Check(v)) {
+            int overflow = 0;
+            const long long x = PyLong_AsLongLongAndOverflow(v, &overflow);
+            if (overflow < 0) {
+                fits = false;
+            } else if (overflow > 0) {
+                const unsigned long long u = PyLong_AsUnsignedLongLong(v);
+                if (u == static_cast<unsigned long long>(-1) &&
+                    PyErr_Occurred()) {
+                    PyErr_Clear();
+                    fits = false;
+                } else {
+                    fits = u <= range.hi;
+                }
+            } else {
+                fits = x < 0 ? x >= range.lo
+                             : static_cast<std::uint64_t>(x) <= range.hi;
+            }
+        } else if (PyFloat_Check(v)) {
+            // hi is 2^k - 1, which a double rounds up to 2^k for k = 64; the
+            // exclusive bound 2^k is exact for every k.
+            const double d = PyFloat_AS_DOUBLE(v);
+            const double above =
+                (static_cast<double>(range.hi >> 1) + 1.0) * 2.0;
+            fits = std::isfinite(d) && std::trunc(d) == d &&
+                   d >= static_cast<double>(range.lo) && d < above;
+        }
+        if (!fits) {
+            PyErr_Format(PyExc_OverflowError,
+                         "value %R does not fit the requested type '%s'", v,
+                         dataframe::type_name(want));
+            return false;
+        }
+    }
+    return true;
+}
+
 PyObject* from_items(PyObject** items, Py_ssize_t n, int want, int empty) {
     bool seen[12] = {};
     bool any_other = false, any_negative = false, any_big = false,
@@ -1631,6 +1719,12 @@ PyObject* from_items(PyObject** items, Py_ssize_t n, int want, int empty) {
     if (!built || want == 0) return built;
     Series* got = as_native<Series>(built);
     if (!got || static_cast<int>(got->type()) == want) return built;
+    if (const auto range = int_range(static_cast<TypeId>(want));
+        range && (has(Kind::Int) || has(Kind::Float)) &&
+        !ints_fit(items, n, *range, static_cast<TypeId>(want))) {
+        Py_DECREF(built);
+        return nullptr;
+    }
     Series cast = got->cast(static_cast<TypeId>(want));
     Py_DECREF(built);
     if (!cast.valid())

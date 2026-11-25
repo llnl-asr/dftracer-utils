@@ -106,10 +106,10 @@ def test_float16_and_decimal_stay_native():
 
 def _pandas_documented(native):
     """The column as ``to_pandas`` documents it, from the NumPy values: a
-    dictionary string column is ``category`` and an integer or bool column that
-    holds nulls is pandas' own nullable dtype."""
+    dictionary string column, in one piece or in chunks, is ``category`` and an
+    integer or bool column that holds nulls is pandas' own nullable dtype."""
     values = pd.Series(_native_numpy(native))
-    if native.encoding == 2:
+    if pa.types.is_dictionary(pa.chunked_array(native).type):
         return values.astype("category")
     if native.null_count and pa.types.is_integer(pa.array(native).type):
         return values.astype("Int64")

@@ -748,6 +748,10 @@ function(need_highway)
       1.4.0
       GIT_TAG
       1.4.0
+      PATCH_COMMAND
+      ${CMAKE_COMMAND}
+      -P
+      ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../patches/highway_cmp0111.cmake
       OPTIONS
       "HWY_ENABLE_TESTS OFF"
       "HWY_ENABLE_EXAMPLES OFF"
@@ -1113,7 +1117,7 @@ endfunction()
 
 function(need_test_deps)
   cpmaddpackage(
-    NAME doctest GITHUB_REPOSITORY doctest/doctest VERSION 2.4.11
+    NAME doctest GITHUB_REPOSITORY doctest/doctest VERSION 2.5.3
     OPTIONS "DOCTEST_NO_INSTALL ON")
 
   cpmaddpackage(

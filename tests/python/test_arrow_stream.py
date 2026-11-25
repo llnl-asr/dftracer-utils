@@ -117,3 +117,70 @@ def test_a_stream_consumer_that_holds_the_gil_does_not_deadlock():
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "99989"
+
+
+@pytest.mark.parametrize("kind", [pa.string(), pa.large_string(), pa.binary(), pa.large_binary()])
+def test_a_column_from_two_batches_exports_as_one_valid_array(kind):
+    def batch(values):
+        return pa.record_batch({"s": pa.array(values, kind)})
+
+    first, second = (["a", "bb"], ["ccc", None]), (["dddddddddddddddd"], ["e"])
+    if kind in (pa.binary(), pa.large_binary()):
+        first = tuple([None if v is None else v.encode() for v in part] for part in first)
+        second = tuple([None if v is None else v.encode() for v in part] for part in second)
+    table = pa.Table.from_batches([batch(p) for p in first + second])
+    got = pa.array(DataFrame.from_arrow(table)["s"])
+    got.validate(full=True)
+    assert got.type == kind
+    assert got.to_pylist() == table.column("s").to_pylist()
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        pa.list_(pa.int64()),
+        pa.large_list(pa.int64()),
+        pa.list_(pa.int64(), 2),
+        pa.map_(pa.string(), pa.int64()),
+    ],
+    ids=["list", "large_list", "fixed_size_list", "map"],
+)
+def test_a_nested_column_from_two_batches_imports_and_exports(kind):
+    if pa.types.is_map(kind):
+        first, second = [[("a", 1)], None], [[("b", 2), ("c", 3)]]
+    else:
+        first, second = [[1, 2], None], [[3, 4]]
+    table = pa.Table.from_batches(
+        [pa.record_batch({"x": pa.array(v, kind)}) for v in (first, second)]
+    )
+    frame = DataFrame.from_arrow(table)
+    # the batches stay chunks: nothing is joined on import
+    assert frame["x"].encoding == 5
+    exported = pa.table(frame).column("x")
+    got = exported.combine_chunks()
+    got.validate(full=True)
+    assert got.type == kind
+    assert got.to_pylist() == table.column("x").to_pylist()
+    # one array of the whole column is joined, its text in its own type
+    whole = pa.array(frame["x"])
+    whole.validate(full=True)
+    assert whole.type == kind
+    assert whole.to_pylist() == table.column("x").to_pylist()
+
+
+def test_a_nested_column_from_many_batches_shares_their_values():
+    kind = pa.struct([("a", pa.list_(pa.int64())), ("b", pa.string())])
+    batches = [
+        pa.record_batch({"x": pa.array([{"a": [i, i + 1], "b": f"s{i}"}, None], kind)})
+        for i in range(4)
+    ]
+    table = pa.Table.from_batches(batches)
+    frame = DataFrame.from_arrow(table)
+    assert frame["x"].encoding == 5
+    out = pa.table(frame).column("x")
+    assert out.type == kind
+    assert out.num_chunks == table.column("x").num_chunks
+    for mine, theirs in zip(out.chunks, table.column("x").chunks):
+        values = mine.field("a").values.buffers()[1]
+        assert values.address == theirs.field("a").values.buffers()[1].address
+    assert out.to_pylist() == table.column("x").to_pylist()

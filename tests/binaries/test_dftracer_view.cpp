@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/file.h>
+#include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/int128.h>
 #include <dftracer/utils/dstd/span.h>
@@ -424,6 +425,49 @@ TEST_SUITE("DFTracerView") {
         // [0, ts of i=2) keeps only i=1: the window excludes its end.
         CHECK(count_lines(narrow) == 1);
         CHECK(count_lines(full) > count_lines(narrow));
+    }
+
+    TEST_CASE("list and struct cells of several files print") {
+        auto binary = find_view_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_view binary not found, skipping.");
+            return;
+        }
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+        // One trace per file: the collected list column then has a chunk per
+        // file, which the printer reads in place.
+        for (int f = 0; f < 3; ++f) {
+            dstd::String body = "[\n";
+            for (int i = 0; i < 4; ++i)
+                dstd::fmt_append<
+                    "{\"id\":{},\"name\":\"read\",\"cat\":\"POSIX\","
+                    "\"pid\":1,\"tid\":0,\"ts\":{},\"dur\":5,\"ph\":\"X\","
+                    "\"args\":{\"sizes\":[{},{}],\"level\":{}}}\n">(
+                    body, f * 10 + i, 1000 + 10 * (f * 10 + i), f, i, i);
+            REQUIRE(
+                !dftu_utils_test::write_gz_trace(
+                     env.dir() + "/t" + dstd::to_string(f) + ".pfw.gz", body)
+                     .empty());
+        }
+        dstd::String cap = env.dir() + "/cap.txt";
+        dstd::String out;
+        REQUIRE(run_view_capture(
+                    binary,
+                    {"-q", R"(cat == "POSIX" | select args.sizes)", env.dir()},
+                    cap, out) == 0);
+        const auto lines = sorted_lines(out);
+        CHECK(lines.size() == 12);
+        CHECK(std::find(lines.begin(), lines.end(),
+                        dstd::String(R"({"args.sizes":[2,3]})")) !=
+              lines.end());
+        dstd::String structs;
+        REQUIRE(run_view_capture(
+                    binary,
+                    {"-q", R"(cat == "POSIX" | select args)", env.dir()}, cap,
+                    structs) == 0);
+        CHECK(sorted_lines(structs).size() == 12);
+        CHECK(structs.find(R"("sizes":[2,3])") != dstd::String::npos);
     }
 
     TEST_CASE("agg-numeric-args aggregates numeric args") {

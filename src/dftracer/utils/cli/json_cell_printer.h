@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_CLI_JSON_CELL_PRINTER_H
 
 #include <dftracer/utils/dataframe/internal/column_read.h>
+#include <dftracer/utils/dataframe/internal/nested_view.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/string.h>
@@ -212,31 +213,38 @@ inline void append_cell_json(dstd::String& s, const dataframe::Series& c,
             s += '"';
             break;
         case TypeId::List:
-        case TypeId::LargeList: {
-            const dataframe::Series values = c.child(0);
-            const std::int64_t lo =
-                c.type() == TypeId::List ? c.offsets()[i] : c.offsets64()[i];
-            const std::int64_t hi = c.type() == TypeId::List
-                                        ? c.offsets()[i + 1]
-                                        : c.offsets64()[i + 1];
+        case TypeId::LargeList:
+        case TypeId::Struct: {
+            // The row is read where it lives (a chunk, a base row), with no
+            // join.
+            std::int64_t at = 0;
+            auto piece = dataframe::nested_row(c, i, at);
+            if (!piece) {
+                s += "null";
+                break;
+            }
+            const dataframe::NestedPiece& p = *piece;
+            if (p.type() == TypeId::Struct) {
+                s += '{';
+                for (std::int64_t f = 0; f < p.num_children(); ++f) {
+                    if (f > 0) s += ',';
+                    s += '"';
+                    json::append_json_escaped(s, p.field_name(f));
+                    s += "\":";
+                    append_cell_json(
+                        s, dataframe::Series{new dftu_series(p.child(f))}, at);
+                }
+                s += '}';
+                break;
+            }
+            const dataframe::Series values{new dftu_series(p.child(0))};
+            const dataframe::ValueRange r = p.values_of(at);
             s += '[';
-            for (std::int64_t k = lo; k < hi; ++k) {
-                if (k > lo) s += ',';
+            for (std::int64_t k = r.lo; k < r.hi; ++k) {
+                if (k > r.lo) s += ',';
                 append_cell_json(s, values, k);
             }
             s += ']';
-            break;
-        }
-        case TypeId::Struct: {
-            s += '{';
-            for (std::int64_t f = 0; f < c.num_children(); ++f) {
-                if (f > 0) s += ',';
-                s += '"';
-                json::append_json_escaped(s, c.field_name(f));
-                s += "\":";
-                append_cell_json(s, c.child(f), i);
-            }
-            s += '}';
             break;
         }
         case TypeId::FixedSizeList:

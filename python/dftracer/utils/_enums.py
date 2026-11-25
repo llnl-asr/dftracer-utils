@@ -132,6 +132,11 @@ class DType(IntEnum):
         return self in _FLOATS
 
     @property
+    def is_text(self) -> bool:
+        """Whether this is ``STRING`` or ``LARGE_STRING``."""
+        return self in _TEXTS
+
+    @property
     def is_numeric(self) -> bool:
         """Whether this is an integer or a float type."""
         return self in _INTEGERS or self in _FLOATS
@@ -151,6 +156,7 @@ _SIGNED_BITS = {DType.INT8: 8, DType.INT16: 16, DType.INT32: 32, DType.INT64: 64
 _UNSIGNED_BITS = {DType.UINT8: 8, DType.UINT16: 16, DType.UINT32: 32, DType.UINT64: 64}
 _INTEGERS = frozenset(_SIGNED_BITS) | frozenset(_UNSIGNED_BITS)
 _FLOATS = frozenset({DType.FLOAT32, DType.FLOAT64})
+_TEXTS = frozenset({DType.STRING, DType.LARGE_STRING})
 
 
 # Case-insensitive name -> DType, for Series.astype("int64") / .astype("Int64").
@@ -184,6 +190,7 @@ UNIT_NS: Dict[str, int] = {
 # The native time-unit code of a temporal column, in the order of the C enum; its
 # keys are the units a column counts in.
 UNIT_CODES: Dict[str, int] = {"s": 0, "ms": 1, "us": 2, "ns": 3}
+_UNIT_NAMES = tuple(UNIT_CODES)
 # Units a ``.dt`` accessor reads a column in: the native ones and ``sec``.
 DT_UNIT_CODES: Dict[str, int] = {**UNIT_CODES, "sec": UNIT_CODES["s"]}
 # The units ``freq`` strings of the ``.dt`` accessor name, and the units an epoch
@@ -197,6 +204,12 @@ DUQL_DURATION_UNITS = ("ns", "us", "ms", "s", "m", "h", "d")
 _OWN_UNIT_TYPES = frozenset((DType.TIMESTAMP, DType.DURATION, DType.TIME64))
 
 
+def unit_letters(time_unit: int) -> str:
+    """The unit letters (``"s"``, ``"ms"``, ``"us"`` or ``"ns"``) of a native
+    time-unit code."""
+    return _UNIT_NAMES[time_unit]
+
+
 def dt_unit(kind: int, time_unit: int, given: Optional[str]) -> str:
     """The unit ``.dt`` reads a column of type code ``kind`` in: ``given``, else
     a temporal column's own unit (date64 counts milliseconds), else
@@ -204,7 +217,7 @@ def dt_unit(kind: int, time_unit: int, given: Optional[str]) -> str:
     if given is not None:
         return given
     if kind in _OWN_UNIT_TYPES:
-        return tuple(UNIT_CODES)[time_unit]
+        return unit_letters(time_unit)
     return "ms" if kind == DType.DATE64 else "us"
 
 

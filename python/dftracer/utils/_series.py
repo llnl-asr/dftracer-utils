@@ -42,10 +42,13 @@ from ._convert import (
     _polars_via_arrow,
     _require_pyarrow,
     _row_indices,
-    _to_pandas,
+    arrow_native_type,
+    arrow_pandas,
+    is_na,
     numpy_to_native,
     pandas_to_native,
     polars_to_native,
+    temporal_from_values,
 )
 from ._enums import (
     DT_UNIT_CODES,
@@ -255,15 +258,28 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         cls,
         data: Series[Scalar] | Sequence[object] = (),
         name: builtins.str | None = None,
-        dtype: DType | int | pa.DataType | None = None,
+        dtype: DType | int | builtins.str | pa.DataType | None = None,
     ) -> Series[Scalar]:
         if cls is not Series:
             raise TypeError(
                 "Series cannot be subclassed: the native calls build the class bound by "
                 "_bind_types, so an instance of a subclass would come back as a Series"
             )
+        out: Series[Scalar]
         if isinstance(data, Series):
-            out = data.share() if dtype is None else data._cast(int(dtype))
+            if dtype is None:
+                out = data.share()
+            else:
+                kind, unit, zone = _list_dtype(dtype)
+                if unit and int(kind) != int(data.dtype):
+                    raise TypeError(f"Series: cannot cast a {data.dtype.name} column to {dtype}")
+                out = data.cast(kind)
+                if unit:
+                    # the same instants in the unit and zone the dtype names
+                    if UNIT_CODES[unit] != out.time_unit:
+                        out = out.dt.as_unit(unit)
+                    if kind == DType.TIMESTAMP and zone != out.timezone:
+                        out = out.with_timezone(zone)
         elif hasattr(data, "__arrow_c_array__"):
             out = _series_from_arrow(data)
         else:
@@ -279,41 +295,41 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         self: Series[bool],
         data: Sequence[bool],
         name: builtins.str | None = None,
-        dtype: DType | int | pa.DataType | None = None,
+        dtype: DType | int | builtins.str | pa.DataType | None = None,
     ) -> None: ...
     @overload
     def __init__(
         self: Series[int],
         data: Sequence[int],
         name: builtins.str | None = None,
-        dtype: DType | int | pa.DataType | None = None,
+        dtype: DType | int | builtins.str | pa.DataType | None = None,
     ) -> None: ...
     @overload
     def __init__(
         self: Series[float],
         data: Sequence[float],
         name: builtins.str | None = None,
-        dtype: DType | int | pa.DataType | None = None,
+        dtype: DType | int | builtins.str | pa.DataType | None = None,
     ) -> None: ...
     @overload
     def __init__(
         self: Series[builtins.str],
         data: Sequence[builtins.str],
         name: builtins.str | None = None,
-        dtype: DType | int | pa.DataType | None = None,
+        dtype: DType | int | builtins.str | pa.DataType | None = None,
     ) -> None: ...
     @overload
     def __init__(
         self,
         data: Series[Scalar] | Sequence[object] = (),
         name: builtins.str | None = None,
-        dtype: DType | int | pa.DataType | None = None,
+        dtype: DType | int | builtins.str | pa.DataType | None = None,
     ) -> None: ...
     def __init__(
         self,
         data: Series[Scalar] | Sequence[object] = (),
         name: builtins.str | None = None,
-        dtype: DType | int | pa.DataType | None = None,
+        dtype: DType | int | builtins.str | pa.DataType | None = None,
     ) -> None:
         pass
 
@@ -356,11 +372,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     def from_polars(cls, s: pl.Series) -> Series:
         """Import a ``polars.Series`` with no pyarrow. The name is ``s.name``;
         polars' default name ``""`` means no name."""
-        try:
-            out = polars_to_native(s)
-        except NeedsArrow:
-            _require_pyarrow()
-            out = _series_from_arrow(s.to_arrow())
+        out = polars_to_native(s)
         if s.name:
             out.name = s.name
         return out
@@ -376,39 +388,46 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
                 return _ext._series_from_numpy(a)
             except (TypeError, BufferError, RuntimeError, ValueError):
                 pass
-        try:
-            return numpy_to_native(a)
-        except TypeError:
-            pa = _require_pyarrow()
-            return _series_from_arrow(pa.array(a))
+        return numpy_to_native(a)
 
     @classmethod
     def from_list(
-        cls, values: Sequence[object], dtype: DType | int | pa.DataType | None = None
+        cls, values: Sequence[object], dtype: DType | int | builtins.str | pa.DataType | None = None
     ) -> Series:
         """Import a Python sequence with no pyarrow: bool, int, float, str,
         bytes, ``datetime.datetime`` (naive or aware), ``date``, ``time``,
-        ``timedelta`` and ``decimal.Decimal`` values, ``None`` for null. Int
+        ``timedelta`` and ``decimal.Decimal`` values, ``None`` for null. NumPy
+        scalars and arrays read as their Python values, and a list of only
+        ``datetime64`` (or only ``timedelta64``) keeps the NumPy unit. Int
         columns are int64 (uint64 when too large), decimals decimal128 with the
-        widest scale, times and datetimes microseconds. A native ``DType`` types
-        an empty or all-null list; a pyarrow type imports through pyarrow. With
-        no type, an empty or all-null list is a ``string`` column of nulls, the
-        type :meth:`DataFrame.from_pandas` gives a column of ``None``.
-        Lists and tuples become list columns and dicts struct columns (keys in
+        widest scale, times and datetimes microseconds. ``dtype`` takes any
+        spelling :meth:`cast` takes, or a pyarrow integer, float, bool, string,
+        binary, date32, timestamp or duration type (``TypeError`` for any other);
+        it also types an empty or all-null list. A value the integer ``dtype``
+        cannot hold raises ``OverflowError``, as does a float with a fraction.
+        With no type, an empty or all-null list is a ``string`` column of nulls,
+        the type :meth:`DataFrame.from_pandas` gives a column of ``None``. Lists
+        and tuples become list columns and dicts struct columns (keys in
         first-seen order, a missing key null), to any depth."""
         values = list(values)
-        if dtype is None and all(v is None for v in values):
-            dtype = DType.STRING
-        if dtype is None or isinstance(dtype, (DType, int)):
-            try:
-                if dtype is None:
-                    return _ext._series_from_list(values)
-                return _ext._series_from_list(values, int(dtype))
-            except TypeError:
-                if dtype is not None:
-                    raise
-        pa = _require_pyarrow()
-        return _series_from_arrow(pa.array(values, type=dtype))
+        kind_args: tuple[int, ...] = ()
+        if dtype is not None:
+            kind, unit, zone = _list_dtype(dtype)
+            if unit:
+                return temporal_from_values(values, kind, unit, zone)
+            kind_args = (int(kind),)
+        elif all(v is None for v in values):
+            kind_args = (int(DType.STRING),)
+        try:
+            return _ext._series_from_list(values, *kind_args)
+        except TypeError:
+            spans = _numpy_spans(values)
+            if spans is not None and not kind_args:
+                return spans
+            plain = _python_scalars(values)
+            if plain is values:
+                raise
+            return _ext._series_from_list(plain, *kind_args)
 
     def to_arrow(self) -> pa.Array:
         """This column as a ``pyarrow.Array`` (zero-copy via the C Data
@@ -427,23 +446,24 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         (``Int64``, ``Float64``, ``boolean``, ``string``, ...) even without
         nulls, where the column type has one, a null being ``pd.NA`` and a float
         NaN staying NaN (built without pyarrow). A type with no nullable dtype
-        converts as without the option. A dictionary column uses pyarrow, where
-        installed, to read its codes without building a string per row, and
-        keeps the dictionary order of its used values; without pyarrow the
-        categories come out sorted. The pandas Series takes this name and the row
+        converts as without the option. A dictionary column reads its native
+        codes, so no string is built per row, and keeps the dictionary order of
+        its used values; a column of dictionary chunks (a batched collect) is
+        one category too, its codes joined (a copy). The pandas Series takes this name and the row
         labels as its index (a ``MultiIndex`` for several levels; an unnamed level
         has the name ``None``)."""
         if arrow and nullable:
             raise ValueError("to_pandas: pass either arrow=True or nullable=True, not both")
         if arrow:
-            out = cast("pd.Series", _to_pandas(self.to_arrow(), arrow))
+            out = arrow_pandas(self)
         else:
             import pandas as pd
 
             values = _pandas_nullable(self) if nullable else None
             if values is None:
                 values = _pandas_default(self)
-            out = values if isinstance(values, pd.Series) else pd.Series(values)
+            # one copy, so the result is pandas' own and writable
+            out = values if isinstance(values, pd.Series) else pd.Series(values, copy=True)
         out.name = self.name
         if names_of(self):
             out.index = pandas_index(self)
@@ -872,7 +892,7 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     def _arms(self, other: Series | int | float | None) -> tuple[Series[Scalar], Series[Scalar]]:
         if isinstance(other, Series):
             return self, other
-        if other is None or type(other).__name__ == "NAType":
+        if is_na(other):
             return self, _ext._series_nulls(int(self.dtype), len(self))
         if isinstance(other, bool) or not isinstance(other, (int, float)):
             raise TypeError("other must be a Series, a number or null")
@@ -1969,6 +1989,75 @@ def _series_from_bytes(
     if names:
         out = with_levels(out, names, [_ext._series_from_bytes(b) for b in levels or ()])
     return out
+
+
+def _list_dtype(
+    dtype: DType | int | builtins.str | builtins.type | pa.DataType,
+) -> tuple[DType, str, str]:
+    """The native type, time unit and zone a ``dtype`` argument names: a pyarrow
+    type, or any spelling :meth:`Series.cast` takes. The unit is empty for a
+    type that has none."""
+    if type(dtype).__module__.startswith("pyarrow"):
+        kind, unit, zone = arrow_native_type(cast("pa.DataType", dtype))
+        return kind, unit if kind in (DType.TIMESTAMP, DType.DURATION) else "", zone
+    return DType(_resolve_dtype(cast("builtins.str | int | DType | builtins.type", dtype))), "", ""
+
+
+def _numpy_spans(values: list[object]) -> Series | None:
+    """``values`` as a column when every value is a NumPy ``datetime64`` (or
+    every one a ``timedelta64``) or ``None``, in the unit NumPy holds them;
+    ``None`` for any other list."""
+    import numpy as np
+
+    present = [v for v in values if v is not None]
+    for kind in (np.datetime64, np.timedelta64):
+        if present and all(isinstance(v, kind) for v in present):
+            # NumPy reads None as NaT in a datetime64 or timedelta64 array
+            return numpy_to_native(np.array(values, dtype=np.array(present).dtype))
+    return None
+
+
+def _python_scalar(value: object) -> object:
+    """``value`` with each NumPy scalar or array in it, at any depth, as Python
+    values. A ``datetime64`` or ``timedelta64`` turns into a microsecond
+    ``datetime`` or ``timedelta``, so a finer tick must be zero."""
+    import numpy as np
+
+    if isinstance(value, np.ndarray):
+        return [_python_scalar(v) for v in value]
+    if isinstance(value, (np.datetime64, np.timedelta64)):
+        if np.isnat(value):
+            return None
+        span = "datetime64" if value.dtype.kind == "M" else "timedelta64"
+        micro = value.astype(f"{span}[us]")
+        if micro != value:
+            raise ValueError(f"{value!r} is finer than a microsecond; pass a NumPy array")
+        return micro.item()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, (list, tuple)):
+        return [_python_scalar(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _python_scalar(v) for k, v in value.items()}
+    return value
+
+
+def _holds_numpy(value: object) -> bool:
+    if type(value).__module__ == "numpy":
+        return True
+    if isinstance(value, (list, tuple)):
+        return any(_holds_numpy(v) for v in value)
+    if isinstance(value, dict):
+        return any(_holds_numpy(v) for v in value.values())
+    return False
+
+
+def _python_scalars(values: list[object]) -> list[object]:
+    """``values`` with each NumPy scalar or array in it as Python values, or
+    ``values`` itself when it holds none."""
+    if not any(_holds_numpy(v) for v in values):
+        return values
+    return [_python_scalar(v) for v in values]
 
 
 def _series_from_arrow(array: pa.Array | pa.ChunkedArray) -> Series:

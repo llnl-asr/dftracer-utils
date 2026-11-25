@@ -336,7 +336,7 @@ class GroupBy(GroupTransforms[DataFrame]):
                 continue
             column = self._col(self._batch, name)
             kind = column.dtype
-            if kind in (DType.STRING, DType.LARGE_STRING):
+            if kind.is_text:
                 fits = isinstance(fill, str)
             elif kind == DType.BOOL:
                 fits = isinstance(fill, bool)

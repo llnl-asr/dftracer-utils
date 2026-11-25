@@ -7,9 +7,12 @@
 // nanoarrow's outer include guard, which would otherwise suppress its
 // ArrowArrayStream definition.
 #include <dftracer/utils/arrow/internal.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/view_builder.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <nanoarrow/nanoarrow.h>
@@ -519,7 +522,14 @@ void set_json_extension(ArrowSchema* schema) {
 // Map's pre-built "entries"/"key"/"value" nodes) and re-initing it would
 // orphan that name allocation.
 void set_type_in_place(const dftu_series& col, ArrowSchema* schema) {
-    if (col.type == TypeId::Struct) {
+    if (is_dict_encoded(col)) {
+        // SELECTION indices are int64; DICTIONARY codes are int32.
+        ArrowSchemaSetType(schema, col.encoding == Encoding::Selection
+                                       ? NANOARROW_TYPE_INT64
+                                       : NANOARROW_TYPE_INT32);
+        ArrowSchemaAllocateDictionary(schema);
+        build_schema(*col.child(), schema->dictionary);
+    } else if (col.type == TypeId::Struct) {
         ArrowSchemaSetType(schema, NANOARROW_TYPE_STRUCT);
         ArrowSchemaAllocateChildren(
             schema, static_cast<std::int64_t>(col.num_fields()));
@@ -568,32 +578,297 @@ void set_type_in_place(const dftu_series& col, ArrowSchema* schema) {
 }
 
 // Initialize a fresh `schema` (root, or a child from AllocateChildren) for
-// `col`.
+// `col`, which holds no CHUNKED column that the exported type depends on (see
+// join_for_export).
 void build_schema(const dftu_series& col, ArrowSchema* schema) {
     ArrowSchemaInit(schema);
-    if (is_dict_encoded(col)) {
-        // SELECTION indices are int64; DICTIONARY codes are int32.
-        ArrowSchemaSetType(schema, col.encoding == Encoding::Selection
-                                       ? NANOARROW_TYPE_INT64
-                                       : NANOARROW_TYPE_INT32);
-        ArrowSchemaAllocateDictionary(schema);
-        build_schema(*col.child(), schema->dictionary);
-    } else {
-        set_type_in_place(col, schema);
+    set_type_in_place(col, schema);
+}
+
+bool is_text(TypeId t) {
+    return t == TypeId::String || t == TypeId::LargeString ||
+           t == TypeId::Binary || t == TypeId::LargeBinary;
+}
+
+// Whether the Arrow type of the join of a CHUNKED column depends on the chunks
+// beyond their type: a nested one keeps the layout of its children, and a text
+// one joins into a view or a dictionary.
+bool type_depends_on_join(const dftu_series& col) {
+    return col.is_chunked() &&
+           (dataframe::is_nested(col.type) || is_text(col.type));
+}
+
+// Sets `out` to `col` with every CHUNKED column that its exported type depends
+// on joined, so the schema and the array come from one object: an Arrow array
+// has no chunks, and the first chunk's schema can differ from the join's. The
+// join copies the rows, as an export of a chunked column always did, except
+// that chunked text dictionaries join into one dictionary (only the codes are
+// copied) when their values merge, and into plain text otherwise. The
+// search goes through struct fields, list-like and map children, and the
+// base of a SELECTION or DICTIONARY. False, leaving `out` alone, when `col`
+// has none.
+bool join_for_export(const dftu_series& col, Series& out) {
+    if (type_depends_on_join(col)) {
+        if (is_text(col.type)) {
+            dstd::Vector<Series> owned;
+            dstd::Vector<const Series*> parts;
+            owned.reserve(col.nested.size());
+            for (const dftu_nested& n : col.nested)
+                owned.emplace_back(dftu_series_share(n.series.get()));
+            for (const Series& p : owned) parts.push_back(&p);
+            dstd::Result<Series> dictionary =
+                dataframe::concat_dictionaries(parts);
+            if (!dictionary)
+                dstd::fatal("to_arrow: cannot join a chunked column");
+            if (dictionary->valid()) {
+                out = std::move(*dictionary);
+                return true;
+            }
+        }
+        out = Series{dftu_series_materialize(&col)};
+        if (!out.valid()) dstd::fatal("to_arrow: cannot join a chunked column");
+        return true;
     }
+    if (col.is_chunked() || col.nested.empty()) return false;
+    dstd::Vector<Series> joined(col.nested.size());
+    bool any = false;
+    for (std::size_t i = 0; i < col.nested.size(); ++i)
+        any |= join_for_export(*col.nested[i].series, joined[i]);
+    if (!any) return false;
+    auto* copy = new dftu_series(col);
+    for (std::size_t i = 0; i < joined.size(); ++i)
+        if (joined[i].valid())
+            copy->nested[i].series = adopt_series(joined[i].release());
+    out = Series{copy};
+    return true;
+}
+
+// Whether two FLAT columns of one type export under one schema: the same
+// encodings, parameters and field names down to the last child.
+bool same_layout_of(const dftu_series& a, const dftu_series& b) {
+    if (a.type != b.type || a.encoding != b.encoding ||
+        !a.params.same(a.type, b.params) || a.nested.size() != b.nested.size())
+        return false;
+    for (std::size_t i = 0; i < a.nested.size(); ++i)
+        if (a.nested[i].name != b.nested[i].name ||
+            !same_layout_of(*a.nested[i].series, *b.nested[i].series))
+            return false;
+    return true;
+}
+
+// Whether `col` and everything under it is FLAT, so a batch of it exports
+// without a join.
+bool is_flat_through(const dftu_series& col) {
+    if (col.encoding != Encoding::Flat) return false;
+    for (const dftu_nested& n : col.nested)
+        if (!is_flat_through(*n.series)) return false;
+    return true;
+}
+
+// Whether the type of `a` and `b` is the same at every node: formats, names,
+// children and dictionaries. Only the metadata of a child counts (the JSON
+// extension), as the root carries the frame's index.
+bool same_schema_node(const ArrowSchema& a, const ArrowSchema& b, bool root) {
+    auto name_of = [](const ArrowSchema& s) {
+        return dstd::StringView(s.name != nullptr ? s.name : "");
+    };
+    if (dstd::StringView(a.format) != dstd::StringView(b.format) ||
+        name_of(a) != name_of(b) || a.n_children != b.n_children ||
+        (a.dictionary == nullptr) != (b.dictionary == nullptr) ||
+        (!root && (a.metadata == nullptr) != (b.metadata == nullptr)))
+        return false;
+    for (std::int64_t i = 0; i < a.n_children; ++i)
+        if (!same_schema_node(*a.children[i], *b.children[i], false))
+            return false;
+    return a.dictionary == nullptr ||
+           same_schema_node(*a.dictionary, *b.dictionary, false);
+}
+
+bool is_text_column(TypeId t) {
+    return t == TypeId::String || t == TypeId::LargeString ||
+           t == TypeId::Binary || t == TypeId::LargeBinary;
+}
+
+// `col` shaped like the Arrow type `target` where only the layout differs: a
+// text column as views, plain text or a dictionary, and the children of nested
+// columns the same way. Other differences stay for the caller's check. A struct
+// field is matched by name when `by_name`, else by position. Copies the bytes
+// of a text column whose layout changes (decoding a dictionary copies its
+// values per row; encoding one builds the distinct values and the codes, after
+// a copy of a view column's text into one buffer), and the headers of the
+// nested columns above it.
+dstd::Result<Series> conform_column(const Series& col,
+                                    const ArrowSchema& target, bool by_name) {
+    const dftu_series& c = *col.handle();
+    const bool want_dict = target.dictionary != nullptr;
+    const bool want_selection =
+        want_dict && std::strcmp(target.format, "l") == 0;
+    const bool decode =
+        is_dict_encoded(c) &&
+        (!want_dict || (c.encoding == Encoding::Selection && !want_selection));
+    // Encode only into dictionary values of this column's own type, so a
+    // column of another type stays as it is for the caller's check.
+    auto own_values = [&](dstd::StringView f) {
+        switch (c.type) {
+            case TypeId::String:
+                return f == "u" || f == "vu";
+            case TypeId::LargeString:
+                return f == "U";
+            case TypeId::Binary:
+                return f == "z" || f == "vz";
+            case TypeId::LargeBinary:
+                return f == "Z";
+            default:
+                return false;
+        }
+    };
+    const bool encode = !is_dict_encoded(c) && want_dict && !want_selection &&
+                        is_text_column(c.type) && !c.json() &&
+                        own_values(target.dictionary->format);
+    if (decode || encode) {
+        Series changed = decode ? Series{dftu_series_materialize(&c)}
+                                : col.dictionary_encode();
+        if (!changed.valid())
+            return common::make_error<
+                "to_arrow_stream: a column cannot change its dictionary "
+                "layout">(common::ErrorCode::InvalidArgument);
+        return conform_column(changed, target, by_name);
+    }
+    if (want_dict != is_dict_encoded(c)) return col.share();
+    if (target.dictionary != nullptr) {
+        dstd::Result<Series> values =
+            conform_column(Series{dftu_series_share(c.child().get())},
+                           *target.dictionary, false);
+        if (!values) return values;
+        auto* copy = new dftu_series(c);
+        copy->set_child(adopt_series(values->release()));
+        return Series{copy};
+    }
+    if (is_text_column(c.type)) {
+        const bool want_view = std::strcmp(target.format, "vu") == 0 ||
+                               std::strcmp(target.format, "vz") == 0;
+        if (want_view == (c.encoding == Encoding::View)) return col.share();
+        if (want_view) {
+            dataframe::ViewBuilder builder;
+            builder.reserve(c.length);
+            builder.append_column(c);
+            const bool binary =
+                c.type == TypeId::Binary || c.type == TypeId::LargeBinary;
+            return builder.finish(binary ? TypeId::Binary : TypeId::String,
+                                  c.json());
+        }
+        Series flat{dftu_series_materialize(&c)};
+        if (!flat.valid())
+            return common::make_error<
+                "to_arrow_stream: a text column cannot be made plain">(
+                common::ErrorCode::InvalidArgument);
+        return flat;
+    }
+    const bool has_child =
+        c.type == TypeId::List || c.type == TypeId::LargeList ||
+        c.type == TypeId::FixedSizeList || c.type == TypeId::Map;
+    if (has_child && c.child() && target.n_children == 1) {
+        dstd::Result<Series> child =
+            conform_column(Series{dftu_series_share(c.child().get())},
+                           *target.children[0], false);
+        if (!child) return child;
+        auto* copy = new dftu_series(c);
+        copy->set_child(adopt_series(child->release()));
+        return Series{copy};
+    }
+    if (c.has_fields()) {
+        if (!by_name &&
+            static_cast<std::int64_t>(c.nested.size()) != target.n_children)
+            return col.share();
+        auto* copy = new dftu_series(c);
+        Series owner{copy};
+        for (std::size_t i = 0; i < c.nested.size(); ++i) {
+            const ArrowSchema* want = nullptr;
+            if (!by_name) {
+                want = target.children[i];
+            } else {
+                for (std::int64_t k = 0; k < target.n_children; ++k)
+                    if (c.nested[i].name == target.children[k]->name)
+                        want = target.children[k];
+            }
+            if (want == nullptr) continue;
+            dstd::Result<Series> field = conform_column(
+                Series{dftu_series_share(c.nested[i].series.get())}, *want,
+                false);
+            if (!field) return field;
+            copy->nested[i].series = adopt_series(field->release());
+        }
+        return owner;
+    }
+    return col.share();
+}
+
+// Whether every nested or dictionary column of `got` that `target` also has,
+// with the same outer format, has the same type at every node. A deeper
+// difference fails the stream here: the column cannot take the locked schema
+// and the extra column holds only scalar values.
+bool same_nested_columns(const ArrowSchema& target, const ArrowSchema& got) {
+    for (std::int64_t i = 0; i < got.n_children; ++i) {
+        const ArrowSchema& g = *got.children[i];
+        for (std::int64_t k = 0; k < target.n_children; ++k) {
+            const ArrowSchema& t = *target.children[k];
+            if (dstd::StringView(t.name != nullptr ? t.name : "") !=
+                    dstd::StringView(g.name != nullptr ? g.name : "") ||
+                dstd::StringView(t.format) != dstd::StringView(g.format))
+                continue;
+            const bool nested = g.format[0] == '+' || g.dictionary != nullptr;
+            if (nested && !same_schema_node(t, g, false)) return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace
 
 namespace detail {
 
+bool same_schema(const ArrowSchema& a, const ArrowSchema& b) {
+    return same_schema_node(a, b, true);
+}
+
+dstd::Result<Series> conform_to_schema(const Series& col,
+                                       const ArrowSchema& schema,
+                                       bool by_name) {
+    dstd::Result<Series> out = conform_column(col, schema, by_name);
+    if (!out) return out;
+    ArrowSchema got{};
+    column_schema(*out, &got);
+    const bool same =
+        by_name ? same_nested_columns(schema, got) : same_schema(schema, got);
+    got.release(&got);
+    if (!same)
+        return common::make_error<
+            "to_arrow_stream: a batch has other columns than the first one; "
+            "collect() the query instead">(common::ErrorCode::InvalidArgument);
+    return out;
+}
+
+Series for_export(const Series& col) {
+    const dftu_series* c = col.handle();
+    if (c == nullptr) return Series{};
+    Series joined;
+    if (join_for_export(*c, joined)) return joined;
+    return col.share();
+}
+
+bool same_layout(const Series& a, const Series& b) {
+    return same_layout_of(*a.handle(), *b.handle());
+}
+
 void to_arrow(const Series& col, ArrowSchema* schema, ArrowArray* array) {
-    column_schema(col, schema);
-    column_array(col, array);
+    const Series ready = for_export(col);
+    column_schema(ready, schema);
+    column_array(ready, array);
 }
 
 void column_schema(const Series& col, ArrowSchema* schema) {
-    const dftu_series* c = col.handle();
+    const Series ready = for_export(col);
+    const dftu_series* c = ready.handle();
     if (c == nullptr) {
         ArrowSchemaInitFromType(schema, NANOARROW_TYPE_STRUCT);
         return;
@@ -632,8 +907,12 @@ dstd::Vector<ArrowArray> to_arrow_batches(const Series& st,
             per_chunk = f.is_chunked() && f.nested.size() == nchunks &&
                         std::memcmp(f.data.data(), first.data.data(),
                                     (nchunks + 1) * sizeof(std::int64_t)) == 0;
+            // One schema describes every batch, so the chunks of a column
+            // share a layout.
             for (std::size_t k = 0; per_chunk && k < nchunks; ++k)
-                per_chunk = f.nested[k].series->encoding == Encoding::Flat;
+                per_chunk =
+                    is_flat_through(*f.nested[k].series) &&
+                    same_layout_of(*f.nested[k].series, *f.nested[0].series);
         }
     }
     if (!per_chunk) {
@@ -641,15 +920,20 @@ dstd::Vector<ArrowArray> to_arrow_batches(const Series& st,
         to_arrow(st, schema, &out.back());
         return out;
     }
-    build_schema(*c, schema);
-    out.reserve(nchunks);
-    for (std::size_t k = 0; k < nchunks; ++k) {
-        dftu_series batch;
+    auto fill_batch = [&](std::size_t k, dftu_series& batch) {
         batch.type = TypeId::Struct;
         batch.length = c->nested[0].series->nested[k].series->length;
         for (std::size_t i = 0; i < c->num_fields(); ++i)
             batch.nested.push_back(
                 {c->nested[i].series->nested[k].series, c->nested[i].name});
+    };
+    dftu_series first_batch;
+    fill_batch(0, first_batch);
+    build_schema(first_batch, schema);
+    out.reserve(nchunks);
+    for (std::size_t k = 0; k < nchunks; ++k) {
+        dftu_series batch;
+        fill_batch(k, batch);
         out.emplace_back();
         export_struct(batch, &out.back());
     }
@@ -1019,6 +1303,11 @@ Series import_any(const ArrowSchema* schema, const ArrowArray* arr,
         // layout) and just tag the result Map.
         return import_list_like(TypeId::Map, schema, arr, owner);
     }
+    // An Arrow null column has no buffers. The engine has no null type, so it
+    // is a String column of nulls (polars and pandas give it for an all-null
+    // column).
+    if (view.type == NANOARROW_TYPE_NA)
+        return Series::nulls(TypeId::String, arr->length);
     Series out = import_flat(schema, arr, owner);
     if (view.extension_name.data != nullptr &&
         dstd::StringView(
@@ -1125,6 +1414,8 @@ dataframe::DataType field_type(const ArrowSchema* schema) {
         return dataframe::map_of(field_type(schema->children[0]->children[0]),
                                  field_type(schema->children[0]->children[1]));
 
+    if (view.type == NANOARROW_TYPE_NA)
+        return dataframe::scalar(TypeId::String);
     TypeId id;
     if (!from_arrow_type(view, id)) return type;
     type = dataframe::scalar(id);

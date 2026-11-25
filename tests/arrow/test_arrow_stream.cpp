@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -766,4 +767,113 @@ TEST_CASE("arrow stream: a stream with no batch gives no rows of its type") {
     CHECK(f.names[0] == "i");
     CHECK(f.columns[0].type() == TypeId::Int64);
     CHECK(f.columns[1].type() == TypeId::String);
+}
+
+namespace {
+
+DataFrame list_frame(dstd::Span<const std::int32_t> offsets, Series values) {
+    DataFrame frame;
+    frame.names.push_back(dstd::SharedString{"l"});
+    frame.columns.push_back(Series::list(offsets, std::move(values)));
+    return frame;
+}
+
+Series strings_of(std::initializer_list<const char*> rows) {
+    dstd::Vector<dstd::String> values;
+    for (const char* r : rows) values.push_back(dstd::String(r));
+    return Series::strings(values);
+}
+
+dstd::Vector<DataFrame> two_frames(DataFrame first, DataFrame second) {
+    dstd::Vector<DataFrame> frames;
+    frames.push_back(std::move(first));
+    frames.push_back(std::move(second));
+    return frames;
+}
+
+/// The item text of the list column of one stream batch, after the batch has
+/// been validated against the stream schema.
+dstd::Vector<dstd::String> list_items(const ArrowSchema* schema,
+                                      ArrowArray* array) {
+    ArrowArrayView view;
+    ArrowError error{};
+    REQUIRE(ArrowArrayViewInitFromSchema(&view, schema, &error) ==
+            NANOARROW_OK);
+    REQUIRE(ArrowArrayViewSetArray(&view, array, &error) == NANOARROW_OK);
+    CHECK(ArrowArrayViewValidate(&view, NANOARROW_VALIDATION_LEVEL_FULL,
+                                 &error) == NANOARROW_OK);
+    ArrowArrayViewReset(&view);
+    ArrowSchema copy;
+    REQUIRE(ArrowSchemaDeepCopy(schema, &copy) == NANOARROW_OK);
+    auto frame = dataframe_from_arrow(Batch::adopt(&copy, array));
+    REQUIRE(frame.has_value());
+    const Series items = frame->column("l").child(0);
+    dstd::Vector<dstd::String> out;
+    for (std::int64_t i = 0; i < items.length(); ++i)
+        out.push_back(dstd::String(items.string_at(i)));
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE(
+    "arrow stream: an undeclared list column keeps its dictionary or plain "
+    "child layout") {
+    const dstd::Vector<std::int32_t> off{0, 2};
+    for (bool dictionary_first : {true, false}) {
+        auto dictionary = [] {
+            return strings_of({"p", "q"}).dictionary_encode();
+        };
+        auto plain = [] { return strings_of({"r", "s"}); };
+        dstd::Vector<DataFrame> frames = two_frames(
+            list_frame(off, dictionary_first ? dictionary() : plain()),
+            list_frame(off, dictionary_first ? plain() : dictionary()));
+        LazyFrame lazy =
+            LazyFrame::scan(dstd::make_shared<const ScriptedSource>(
+                Schema{}, std::move(frames), 0, true));
+        REQUIRE(lazy.has_undeclared_columns());
+        StreamGuard out;
+        REQUIRE(to_arrow_stream(std::move(lazy), default_runtime(), &out.stream)
+                    .has_value());
+        ArrowSchema schema{};
+        REQUIRE(out.stream.get_schema(&out.stream, &schema) == 0);
+        CHECK((schema.children[0]->children[0]->dictionary != nullptr) ==
+              dictionary_first);
+        dstd::Vector<dstd::Vector<dstd::String>> got;
+        for (;;) {
+            ArrowArray array{};
+            REQUIRE(out.stream.get_next(&out.stream, &array) == 0);
+            if (array.release == nullptr) break;
+            got.push_back(list_items(&schema, &array));
+        }
+        schema.release(&schema);
+        REQUIRE(got.size() == 2);
+        CHECK(got[0] ==
+              dstd::Vector<dstd::String>{dictionary_first ? "p" : "r",
+                                         dictionary_first ? "q" : "s"});
+        CHECK(got[1] ==
+              dstd::Vector<dstd::String>{dictionary_first ? "r" : "p",
+                                         dictionary_first ? "s" : "q"});
+    }
+}
+
+TEST_CASE(
+    "arrow stream: an undeclared list column whose child type changes "
+    "fails") {
+    const dstd::Vector<std::int32_t> off{0, 2};
+    const std::int64_t ints[] = {1, 2};
+    dstd::Vector<DataFrame> frames =
+        two_frames(list_frame(off, strings_of({"p", "q"})),
+                   list_frame(off, Series::flat_i64(ints, 2)));
+    LazyFrame lazy = LazyFrame::scan(dstd::make_shared<const ScriptedSource>(
+        Schema{}, std::move(frames), 0, true));
+    StreamGuard out;
+    REQUIRE(to_arrow_stream(std::move(lazy), default_runtime(), &out.stream)
+                .has_value());
+    ArrowArray first{};
+    REQUIRE(out.stream.get_next(&out.stream, &first) == 0);
+    first.release(&first);
+    ArrowArray second{};
+    CHECK(out.stream.get_next(&out.stream, &second) == EIO);
+    CHECK(second.release == nullptr);
 }

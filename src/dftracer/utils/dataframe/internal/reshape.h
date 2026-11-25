@@ -40,6 +40,17 @@ dstd::Result<dstd::Vector<Series>> unstack_columns(const Series& values,
                                                    const Series& positions,
                                                    std::int64_t row_count);
 
+/// A DICTIONARY column of `codes` (a FLAT Int32 column) that index `values`.
+/// The column shares the codes buffer and validity, and `values`, with no copy;
+/// a negative code, or a code under a null row, that the engine could not read
+/// first moves the codes and the validity into new buffers, where a negative
+/// code becomes a null row. An InvalidArgument error for a `codes` column that
+/// is not FLAT Int32, or a code of a valid row that is not below
+/// `values.length()`. A `values` column that is not FLAT is made flat first (a
+/// copy). With no values every row is null, over a dictionary of one null
+/// entry.
+dstd::Result<Series> dictionary_of(const Series& codes, const Series& values);
+
 }  // namespace dftracer::utils::dataframe
 
 #endif  // DFTRACER_UTILS_DATAFRAME_INTERNAL_RESHAPE_H

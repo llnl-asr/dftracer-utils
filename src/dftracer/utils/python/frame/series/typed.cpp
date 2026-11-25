@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dataframe/internal/reshape.h>
 #include <dftracer/utils/dstd/string.h>
@@ -8,7 +10,9 @@
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/frame/series_detail.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <limits>
 #include <utility>
@@ -87,6 +91,244 @@ PyObject* Series_physical(PyObject* self, PyObject*) {
     h->set_time_unit(dataframe::TimeUnit::Micro);
     h->set_timezone({});
     return make_series(Series{h});
+}
+
+// _dictionary_parts() -> (codes, values) of a DICTIONARY column, both sharing
+// its buffers.
+PyObject* Series_dictionary_parts(PyObject* self, PyObject*) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    if (a->encoding() != dataframe::Encoding::Dictionary) {
+        PyErr_SetString(PyExc_TypeError,
+                        "_dictionary_parts(): not a dictionary-encoded column");
+        return nullptr;
+    }
+    Series codes{dftu_series_dictionary_codes(a->handle())};
+    Series values{dftu_series_dictionary_values(a->handle())};
+    if (!codes.valid() || !values.valid()) {
+        PyErr_SetString(PyExc_ValueError,
+                        "_dictionary_parts(): the column has no codes or "
+                        "no values");
+        return nullptr;
+    }
+    PyObject* codes_obj = make_series(std::move(codes));
+    if (!codes_obj) return nullptr;
+    PyObject* values_obj = make_series(std::move(values));
+    if (!values_obj) {
+        Py_DECREF(codes_obj);
+        return nullptr;
+    }
+    PyObject* pair = PyTuple_Pack(2, codes_obj, values_obj);
+    Py_DECREF(codes_obj);
+    Py_DECREF(values_obj);
+    return pair;
+}
+
+// _series_from_dictionary(codes, values): see dataframe::dictionary_of.
+PyObject* series_from_dictionary(PyObject*, PyObject* args) {
+    PyObject* codes_obj = nullptr;
+    PyObject* values_obj = nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &codes_obj, &values_obj)) return nullptr;
+    Series* codes = as_native_or_null<Series>(codes_obj);
+    Series* values = as_native_or_null<Series>(values_obj);
+    if (!codes || !values) {
+        PyErr_SetString(PyExc_TypeError,
+                        "_series_from_dictionary: expected two Series");
+        return nullptr;
+    }
+    if (!codes->is_flat() || codes->type() != TypeId::Int32) {
+        PyErr_SetString(PyExc_TypeError,
+                        "_series_from_dictionary: codes must be a flat Int32 "
+                        "Series");
+        return nullptr;
+    }
+    auto out = dataframe::dictionary_of(*codes, *values);
+    if (!out) {
+        core::set_py_error(out.error());
+        return nullptr;
+    }
+    return make_series(std::move(*out));
+}
+
+namespace {
+
+// Whether `c` or a column under it (a chunk, a dictionary or selection base,
+// a list's values, a struct field) holds view strings.
+bool has_view_text(const dftu_series& c) {
+    if (c.encoding == dataframe::Encoding::View) return true;
+    return std::any_of(c.nested.begin(), c.nested.end(),
+                       [](const dftu_nested& n) {
+                           return n.series && has_view_text(*n.series);
+                       });
+}
+
+// `s` with no view strings anywhere in it. A view is made flat (a copy of its
+// text); the rest is shared.
+dstd::Result<Series> plain_text(const Series& s) {
+    const dftu_series* h = s.handle();
+    if (!has_view_text(*h)) return s.share();
+    if (h->is_chunked()) {
+        dstd::Vector<dstd::SharedPtr<dftu_series>> chunks;
+        chunks.reserve(h->nested.size());
+        for (const dftu_nested& c : h->nested) {
+            Series one{new dftu_series(*c.series)};
+            auto flat = plain_text(one);
+            if (!flat) return flat;
+            chunks.push_back(adopt_series(flat->release()));
+        }
+        Series out{dataframe::make_chunked(std::move(chunks))};
+        out.handle()->name = h->name;
+        out.handle()->labels = h->labels;
+        return out;
+    }
+    if (h->encoding == dataframe::Encoding::Dictionary && h->child() &&
+        h->child()->encoding == dataframe::Encoding::View) {
+        Series codes{dftu_series_dictionary_codes(h)};
+        Series values{dftu_series_dictionary_values(h)};
+        auto out = dataframe::dictionary_of(codes, values);
+        if (out) {
+            out->handle()->name = h->name;
+            out->handle()->labels = h->labels;
+        }
+        return out;
+    }
+    if (h->encoding != dataframe::Encoding::Flat) {
+        // A view, or a selection or dictionary over views or over nested
+        // columns that hold them: gathered flat, then cleaned below.
+        Series flat = s.materialize();
+        if (!flat.valid())
+            return dataframe::invalid_argument<
+                "a view column cannot be made flat">();
+        if (!has_view_text(*flat.handle())) return flat;
+        return plain_text(flat);
+    }
+    // A FLAT nested column: the same buffers over children with no views.
+    auto* out = new dftu_series(*h);
+    Series owned{out};
+    for (dftu_nested& n : out->nested) {
+        auto clean = plain_text(Series{new dftu_series(*n.series)});
+        if (!clean) return clean;
+        n.series = adopt_series(clean->release());
+    }
+    return owned;
+}
+
+}  // namespace
+
+// _plain_text() -> Series: see plain_text.
+PyObject* Series_plain_text(PyObject* self, PyObject*) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    auto out = plain_text(*a);
+    if (!out) {
+        core::set_py_error(out.error());
+        return nullptr;
+    }
+    return make_series(std::move(*out));
+}
+
+// _joined_dictionary() -> Series or None: a CHUNKED column whose chunks are all
+// dictionaries joined into one column (its codes copied), a dictionary where
+// the values allow one, so pandas sees one category; None for any other column.
+PyObject* Series_joined_dictionary(PyObject* self, PyObject*) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    const dftu_series* h = a->handle();
+    const bool dictionaries =
+        h->is_chunked() && !h->nested.empty() &&
+        std::all_of(
+            h->nested.begin(), h->nested.end(), [](const dftu_nested& c) {
+                return c.series->encoding == dataframe::Encoding::Dictionary;
+            });
+    if (!dictionaries) Py_RETURN_NONE;
+    auto out = dataframe::join_chunks(*a);
+    if (!out) {
+        core::set_py_error(out.error());
+        return nullptr;
+    }
+    return make_series(std::move(*out));
+}
+
+// _nulls_like(n) -> Series: n null rows of this column's full type, nested
+// types included (see dataframe::null_column_like).
+PyObject* Series_nulls_like(PyObject* self, PyObject* arg) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    const long long n = PyLong_AsLongLong(arg);
+    if (n == -1 && PyErr_Occurred()) return nullptr;
+    if (n < 0) {
+        PyErr_SetString(PyExc_ValueError, "_nulls_like: n must be >= 0");
+        return nullptr;
+    }
+    Series out = dataframe::null_column_like(*a, n);
+    if (!out.valid()) {
+        PyErr_Format(PyExc_TypeError,
+                     "_nulls_like: a column of type '%s' has no null form",
+                     dataframe::type_name(a->type()));
+        return nullptr;
+    }
+    return make_series(std::move(out));
+}
+
+namespace {
+
+// The null mask of `c` (a byte per row, 1 where null) into `dst`, chunk by
+// chunk, with no copy of the column. A dictionary row is null where its code
+// is null or the value it points at is.
+void fill_null_mask(const dftu_series& c, std::uint8_t* dst) {
+    const std::int64_t n = c.length;
+    if (c.is_chunked()) {
+        const auto* starts =
+            reinterpret_cast<const std::int64_t*>(c.data.data());
+        for (std::size_t k = 0; k < c.nested.size(); ++k)
+            fill_null_mask(*c.nested[k].series, dst + starts[k]);
+        return;
+    }
+    if (c.encoding == dataframe::Encoding::Flat ||
+        c.encoding == dataframe::Encoding::View ||
+        c.encoding == dataframe::Encoding::Dictionary) {
+        if (c.validity.block() && c.null_count > 0) {
+            expand_null_bytes(c.validity.data(), n, dst);
+        } else {
+            std::memset(dst, 0, static_cast<std::size_t>(n));
+        }
+        if (c.encoding != dataframe::Encoding::Dictionary || !c.child() ||
+            c.child()->null_count == 0)
+            return;
+        const auto* codes =
+            reinterpret_cast<const std::int32_t*>(c.data.data());
+        for (std::int64_t i = 0; i < n; ++i)
+            if (!dst[i] && dftu_series_is_null(c.child().get(), codes[i]))
+                dst[i] = 1;
+        return;
+    }
+    for (std::int64_t i = 0; i < n; ++i)
+        dst[i] = dftu_series_is_null(&c, i) ? 1 : 0;
+}
+
+}  // namespace
+
+// _null_bytes() -> None without nulls, else a bytearray of a byte per row, 1
+// where the row is null. One pass over the validity, no copy of the column.
+PyObject* Series_null_bytes(PyObject* self, PyObject*) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    const dftu_series* h = a->handle();
+    const bool entry_nulls = h->encoding == dataframe::Encoding::Dictionary &&
+                             h->child() && h->child()->null_count > 0;
+    if (!entry_nulls && dftu_series_null_count(h) == 0 && !h->is_chunked())
+        Py_RETURN_NONE;
+    PyObject* out = PyByteArray_FromStringAndSize(
+        nullptr, static_cast<Py_ssize_t>(h->length));
+    if (!out) return nullptr;
+    auto* dst = reinterpret_cast<std::uint8_t*>(PyByteArray_AS_STRING(out));
+    fill_null_mask(*h, dst);
+    if ((h->is_chunked() || entry_nulls) &&
+        std::find(dst, dst + h->length, std::uint8_t{1}) == dst + h->length) {
+        Py_DECREF(out);
+        Py_RETURN_NONE;
+    }
+    return out;
 }
 
 // _series_retype(series, type_id, unit, timezone, precision, scale, width)

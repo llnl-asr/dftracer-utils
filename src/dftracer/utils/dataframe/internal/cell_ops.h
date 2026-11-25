@@ -141,6 +141,14 @@ inline bool try_append_struct_cell(dstd::String& key, const Series& c,
 /// column; `key` is then unfinished.
 inline bool try_append_cell(dstd::String& key, const Series& c, std::int64_t i,
                             TypeId& refused) {
+    if (c.handle()->is_chunked()) {
+        bool ok = true;
+        at_chunk(c, i, [&](const Series& k, std::int64_t j) {
+            ok = try_append_cell(key, k, j, refused);
+            return 0;
+        });
+        return ok;
+    }
     if (c.type() == TypeId::Struct && c.is_flat()) {
         if (c.is_null(i)) {
             key.push_back('\0');
@@ -155,14 +163,6 @@ inline bool try_append_cell(dstd::String& key, const Series& c, std::int64_t i,
     if (c.is_null(i)) {
         key.push_back('\0');
         return true;
-    }
-    if (c.handle()->is_chunked()) {
-        bool ok = true;
-        at_chunk(c, i, [&](const Series& k, std::int64_t j) {
-            ok = try_append_cell(key, k, j, refused);
-            return 0;
-        });
-        return ok;
     }
     key.push_back('\1');
     const TypeId t = c.type();

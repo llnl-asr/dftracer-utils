@@ -20,13 +20,25 @@ namespace dftracer::utils::dataframe {
 
 /// The parts of one column, in order, as a CHUNKED column (empty parts
 /// dropped, chunked parts flattened into their chunks), or joined by
-/// `concat_columns` when they differ in type or type parameters or are nested;
-/// the error of `concat_columns` when that join fails.
+/// `concat_columns` when they differ in type, type parameters or, for a nested
+/// type, in any child type or field name; the error of `concat_columns` when
+/// that join fails. Nested parts of one whole type stay chunks and are not
+/// joined; every chunk of a nested column is FLAT, so a SELECTION or
+/// DICTIONARY nested part is made FLAT first (a copy of its rows).
 dstd::Result<Series> chunked_column(dstd::Vector<Series> parts);
+/// A column of `n` null rows of the type of `like`, with its type parameters
+/// and, for a nested type, its child types. An invalid Series for a type with
+/// no null column.
+Series null_column_like(const Series& like, std::int64_t n);
 /// `c` with its chunks joined as `concat_columns` joins them (text stays a view
 /// or dictionary column); any other column is shared. The error of
 /// `concat_columns` when the chunks cannot be joined.
 dstd::Result<Series> join_chunks(const Series& c);
+/// The parts joined into one dictionary column, when every part is a text
+/// dictionary and their values merge: the values keep the type of the parts
+/// (never a view) and only the codes are copied. An invalid Series otherwise.
+/// An error for a code out of range.
+dstd::Result<Series> concat_dictionaries(dstd::Span<const Series* const> parts);
 /// `f` with every CHUNKED column joined by `join_chunks`, for a caller that
 /// reads one buffer per column. The columns are joined in parallel on the
 /// current executor, if any. Gives the error of @ref join_chunks for a column

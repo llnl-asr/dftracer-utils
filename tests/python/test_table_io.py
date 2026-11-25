@@ -255,7 +255,7 @@ def test_a_dftracer_frame_is_written_directly(tmp_path):
     assert exact["f"].isna().tolist() == [False, False, True] and math.isnan(exact["f"][1])
     assert exact["i"].dtype == "Int64" and exact["u8"].dtype == "uint8"
     assert exact["d"].tolist() == ["u", "v", "u"] and list(exact["d"].cat.categories) == ["u", "v"]
-    with pytest.raises(TypeError, match="Arrow type"):
+    with pytest.raises(TypeError, match="which a table cannot store"):
         save_table(
             DataFrame.from_arrow(pa.table({"t": pa.array([1], type=pa.timestamp("us"))})),
             path,

@@ -17,8 +17,8 @@ import re
 from typing import TYPE_CHECKING, Callable, Literal, Optional, Sequence, Tuple, Union, cast
 
 from . import dftracer_utils_ext as _ext
-from ._convert import _like
-from ._enums import UNIT_CODES, UNIT_NS, DType, rule_to_units
+from ._convert import _like, timedelta_nanos
+from ._enums import UNIT_NS, DType, rule_to_units, unit_letters
 from ._levels import pick_levels
 from ._series_index import (
     column_series as _column,
@@ -47,7 +47,6 @@ _EPOCH_ORDINAL = datetime.date(1970, 1, 1).toordinal()
 _BIN = "__dftu_bin__"
 _TICK = "__dftu_tick__"
 _VALUE = "__dftu_value__"
-_UNITS = tuple(UNIT_CODES)
 _WEEKDAYS = {d: i for i, d in enumerate(("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"))}
 _MONTHS = {
     m: i
@@ -84,7 +83,7 @@ def is_timestamp(s: Series) -> bool:
 
 
 def unit_name(s: Series) -> str:
-    return _UNITS[s.time_unit]
+    return unit_letters(s.time_unit)
 
 
 # The zones whose offset is always zero, which pandas and tzdata spell many ways.
@@ -291,7 +290,7 @@ def parse_rule(rule: object, unit: str, tz_aware: bool) -> _Rule:
     calendar offset. A day is a fixed 24 hours on a naive column and a
     calendar step on a zone-aware one, as pandas."""
     if isinstance(rule, datetime.timedelta):
-        ns = (rule.days * 86400 + rule.seconds) * 1_000_000_000 + rule.microseconds * 1000
+        ns = timedelta_nanos(rule)
         if ns <= 0:
             raise ValueError("resample: rule must be positive")
         return _Rule(str(rule), ns, None)
@@ -318,8 +317,7 @@ def parse_rule(rule: object, unit: str, tz_aware: bool) -> _Rule:
 
 def _timedelta_ns(value: object, what: str) -> int:
     if isinstance(value, datetime.timedelta):
-        whole = (value.days * 86400 + value.seconds) * 1_000_000_000 + value.microseconds * 1000
-        return whole + int(getattr(value, "nanoseconds", 0))
+        return timedelta_nanos(value)
     if isinstance(value, str):
         text = value.strip()
         sign = -1 if text.startswith("-") else 1
@@ -943,9 +941,7 @@ _NONEXISTENT = {"raise": 0, "shift_forward": 1, "shift_backward": 2, "NaT": 3, "
 def _nonexistent_code(nonexistent: object, unit: str) -> tuple[int, int]:
     """The engine code of ``nonexistent`` and its shift in ticks of ``unit``."""
     if isinstance(nonexistent, datetime.timedelta):
-        ns = (
-            nonexistent.days * 86400 + nonexistent.seconds
-        ) * 1_000_000_000 + nonexistent.microseconds * 1000
+        ns = timedelta_nanos(nonexistent)
         return 4, int(ns / UNIT_NS[unit])
     code = _NONEXISTENT.get(nonexistent) if isinstance(nonexistent, str) else None
     if code is None:

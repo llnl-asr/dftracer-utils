@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/internal/frame_index.h>
 #include <dftracer/utils/dataframe/internal/radix_dedup.h>  // parallel dedup
+#include <dftracer/utils/dataframe/internal/reshape.h>      // dictionary_of
 #include <dftracer/utils/dataframe/internal/rest_column.h>  // struct_of_length
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/internal/value_ids.h>
@@ -107,18 +108,44 @@ dstd::Result<Agg> agg_from_string(dstd::StringView name) {
     return not_found<"agg_from_string: unknown aggregate op {}">(name);
 }
 
+namespace {
+
+// Whether `col` is FLAT, or CHUNKED over FLAT chunks.
+bool flat_or_flat_chunks(const dftu_series& col) {
+    if (!col.is_chunked()) return col.encoding == Encoding::Flat;
+    return std::all_of(col.nested.begin(), col.nested.end(),
+                       [](const dftu_nested& n) {
+                           return n.series->encoding == Encoding::Flat;
+                       });
+}
+
+}  // namespace
+
 // The parts of one column as a CHUNKED column, or joined when they do not
-// share one type and parameters, or are nested (concat checks their fields).
+// share one type and parameters. Nested parts stay chunks when their whole
+// types (children and field names included) are equal, and every chunk of a
+// nested column is FLAT; concat reconciles the rest.
 dstd::Result<Series> chunked_column(dstd::Vector<Series> parts) {
+    if (parts.size() == 1) return std::move(parts.front());
+    for (Series& p : parts) {
+        if (!is_nested(p.type()) || flat_or_flat_chunks(*p.handle())) continue;
+        // A SELECTION or DICTIONARY over a nested column is made FLAT first (a
+        // copy of its rows), so its real nested type is compared and chunked.
+        Series flat = p.materialize();
+        if (!flat.valid())
+            return invalid_argument<
+                "chunked_column: a nested part cannot be made flat">();
+        p = std::move(flat);
+    }
     dstd::Vector<dstd::SharedPtr<dftu_series>> chunks;
     chunks.reserve(parts.size());
     const dftu_series& first = *parts.front().handle();
+    const bool nested = is_nested(first.type);
+    const DataType whole = nested ? parts.front().data_type() : DataType{};
     for (Series& p : parts) {
         const dftu_series* h = p.handle();
         if (h->type != first.type || !h->params.same(h->type, first.params) ||
-            h->type == TypeId::Struct || h->type == TypeId::List ||
-            h->type == TypeId::LargeList || h->type == TypeId::FixedSizeList ||
-            h->type == TypeId::Map) {
+            (nested && p.data_type() != whole)) {
             dstd::Vector<const Series*> ptrs;
             for (const Series& q : parts) ptrs.push_back(&q);
             return concat_columns(ptrs);
@@ -137,6 +164,79 @@ dstd::Result<Series> chunked_column(dstd::Vector<Series> parts) {
     if (chunks.empty()) return std::move(parts.front());
     if (chunks.size() == 1) return Series{new dftu_series(*chunks.front())};
     return Series{make_chunked(std::move(chunks))};
+}
+
+Series null_column_like(const Series& like, std::int64_t n) {
+    // The nested type is that of the FLAT column behind `like`: a SELECTION or
+    // DICTIONARY holds that column, not the child of a list-like type, as its
+    // one child.
+    const dftu_series* base = like.handle()->is_chunked()
+                                  ? like.handle()->nested.front().series.get()
+                                  : like.handle();
+    while ((base->encoding == Encoding::Selection ||
+            base->encoding == Encoding::Dictionary) &&
+           base->child())
+        base = base->child().get();
+    const dftu_series& h = *base;
+    const TypeId t = h.type;
+    auto with_null_rows = [n](dftu_series* out) {
+        out->encoding = Encoding::Flat;
+        out->length = n;
+        if (n == 0) return out;
+        out->validity = new_buffer(static_cast<std::size_t>((n + 7) / 8));
+        std::memset(writable(out->validity), 0, out->validity.size());
+        out->null_count = n;
+        return out;
+    };
+    if (t == TypeId::FixedSizeBinary) {
+        auto* out = new dftu_series();
+        adopt_type_from(*out, h);
+        const std::size_t bytes = static_cast<std::size_t>(n) *
+                                  static_cast<std::size_t>(h.fixed_size());
+        out->data = new_buffer(bytes);
+        std::memset(writable(out->data), 0, bytes);
+        return Series{with_null_rows(out)};
+    }
+    if (t == TypeId::List || t == TypeId::LargeList || t == TypeId::Map ||
+        t == TypeId::FixedSizeList) {
+        if (!h.child()) return Series{};
+        const Series child_like{dftu_series_share(h.child().get())};
+        const bool fixed = t == TypeId::FixedSizeList;
+        Series child =
+            null_column_like(child_like, fixed ? n * h.fixed_size() : 0);
+        if (!child.valid()) return Series{};
+        auto* out = new dftu_series();
+        adopt_type_from(*out, h);
+        if (!fixed) {
+            const std::size_t bytes =
+                static_cast<std::size_t>(n + 1) * (t == TypeId::LargeList
+                                                       ? sizeof(std::int64_t)
+                                                       : sizeof(std::int32_t));
+            out->offsets = new_buffer(bytes);
+            std::memset(writable(out->offsets), 0, bytes);
+        }
+        out->set_child(adopt_series(child.release()));
+        return Series{with_null_rows(out)};
+    }
+    if (t == TypeId::Struct) {
+        auto* out = new dftu_series();
+        adopt_type_from(*out, h);
+        for (const dftu_nested& f : h.nested) {
+            Series field =
+                null_column_like(Series{dftu_series_share(f.series.get())}, n);
+            if (!field.valid()) {
+                dftu_series_free(out);
+                return Series{};
+            }
+            out->nested.push_back({adopt_series(field.release()), f.name});
+        }
+        return Series{with_null_rows(out)};
+    }
+    Series flat = t == TypeId::LargeString || t == TypeId::LargeBinary
+                      ? Series::nulls(narrow_varwidth_type(t), n).cast(t)
+                      : Series::nulls(t, n);
+    if (flat.valid()) adopt_type_from(*flat.handle(), h);
+    return flat;
 }
 
 dstd::Result<Series> join_chunks(const Series& c) {
@@ -285,19 +385,24 @@ static dstd::Result<DataFrame> topk_raw(const DataFrame& b,
 }
 
 dstd::Result<Series> concat_struct_by_name(dstd::Span<const Series> mats);
+dstd::Result<Series> concat_parts(dstd::Span<const Series* const> parts,
+                                  bool child);
 
 namespace {
 
-bool is_numeric_type(TypeId t) {
-    return t != TypeId::String && t != TypeId::Binary && t != TypeId::Bool &&
-           t != TypeId::List && t != TypeId::Struct;
+// A scalar type whose value has a JSON form, so a clash among such types can
+// fall back to a JSON column. Fixed-size binary, temporal and decimal types do
+// not.
+bool has_json_form(TypeId t) {
+    return t == TypeId::String || t == TypeId::LargeString ||
+           t == TypeId::Bool || is_numeric(t);
 }
 
 // The type the same-named column takes across parts. Same type stays; a mix of
-// numeric types widens to Float64; a scalar clash of text with a number or
-// bool, or with a JSON part, is JSON, so each value keeps its JSON type (a
-// row frame's column type is inferred per batch); a nested/scalar clash has no
-// common type and is an error.
+// numeric types widens to Float64, a mix of binary widths to LargeBinary; a
+// scalar clash of text with a number or bool, or with a JSON part, is JSON, so
+// each value keeps its JSON type (a row frame's column type is inferred per
+// batch); a nested/scalar clash has no common type and is an error.
 struct ColumnKind {
     TypeId type;
     bool json;
@@ -311,49 +416,119 @@ dstd::Result<ColumnKind> promote_type(ColumnKind a, ColumnKind b,
         (a.type == TypeId::String || a.type == TypeId::LargeString) &&
         (b.type == TypeId::String || b.type == TypeId::LargeString))
         return ColumnKind{TypeId::LargeString, false};
-    const bool a_scalar = a.type != TypeId::List && a.type != TypeId::Struct;
-    const bool b_scalar = b.type != TypeId::List && b.type != TypeId::Struct;
-    if (!a.json && !b.json && is_numeric_type(a.type) &&
-        is_numeric_type(b.type))
+    // Binary and LargeBinary are one family, as the two text types are.
+    if (!a.json && !b.json &&
+        (a.type == TypeId::Binary || a.type == TypeId::LargeBinary) &&
+        (b.type == TypeId::Binary || b.type == TypeId::LargeBinary))
+        return ColumnKind{TypeId::LargeBinary, false};
+    if (!a.json && !b.json && is_numeric(a.type) && is_numeric(b.type))
         return ColumnKind{TypeId::Float64, false};
-    if (a_scalar && b_scalar) return ColumnKind{TypeId::String, true};
+    const bool a_json = a.json || has_json_form(a.type);
+    const bool b_json = b.json || has_json_form(b.type);
+    if (a_json && b_json) return ColumnKind{TypeId::String, true};
     return invalid_argument<
         "concat(diagonal): column '{}' has incompatible types across parts">(
         name);
 }
 
-// A List or Struct concat: offsets rebased and children concatenated, then
-// the null rows gathered as nulls.
-dstd::Result<Series> concat_nested(dstd::Span<const Series> mats,
-                                   std::int64_t total, bool any_null) {
-    Series out;
-    if (mats.front().type() == TypeId::List) {
-        dstd::Vector<std::int32_t> offs{0};
-        dstd::Vector<Series> kids;
+// The rows `[first, first + count)` of `child`: the child itself when they
+// are all of it, a slice that shares its buffers where the type has one, else
+// a gather. An invalid Series for a type that has neither.
+Series child_rows(const Series& child, std::int64_t first, std::int64_t count) {
+    if (first == 0 && count == child.length()) return child.share();
+    if (dftu_series* v = dftu_series_slice(child.handle(), first, count))
+        return Series{v};
+    dstd::Vector<std::int64_t> rows(static_cast<std::size_t>(count));
+    std::iota(rows.begin(), rows.end(), first);
+    return child.take(rows);
+}
+
+// A List, LargeList, Map or FixedSizeList concat: offsets rebased (none for
+// FixedSizeList, whose parts must share one size) and children concatenated;
+// `validity` (null: every row present) is the joined bitmap. The joined
+// offsets must fit `Off`.
+template <class Off>
+dstd::Result<Series> concat_list_family(dstd::Span<const Series> mats,
+                                        std::int64_t total,
+                                        const std::uint8_t* validity,
+                                        std::int64_t null_count) {
+    const TypeId t = mats.front().type();
+    const bool fixed = t == TypeId::FixedSizeList;
+    const std::int32_t size = mats.front().handle()->fixed_size();
+    if (!fixed) {
+        std::uint64_t run = 0;
         for (const Series& m : mats) {
-            const std::int32_t* o = m.offsets();
-            for (std::int64_t i = 0; i < m.length(); ++i)
-                offs.push_back(offs.back() + (o[i + 1] - o[i]));
-            const Series child = m.child(0);
-            const std::int64_t len = o[m.length()] - o[0];
-            if (o[0] == 0 && len == child.length()) {
-                kids.push_back(child.share());
-            } else {
-                dstd::Vector<std::int64_t> rows(static_cast<std::size_t>(len));
-                std::iota(rows.begin(), rows.end(), std::int64_t{o[0]});
-                kids.push_back(child.take(rows));
-            }
+            if (m.length() == 0) continue;
+            const auto* o =
+                reinterpret_cast<const Off*>(m.handle()->offsets.data());
+            run += static_cast<std::uint64_t>(o[m.length()] - o[0]);
+            if (run >
+                static_cast<std::uint64_t>(std::numeric_limits<Off>::max()))
+                return invalid_argument<
+                    "concat: the joined offsets of a nested column pass what "
+                    "its type holds">();
         }
-        dstd::Vector<const Series*> ptrs;
-        for (const Series& k : kids) ptrs.push_back(&k);
-        dstd::Result<Series> child = concat_columns(ptrs);
-        if (!child) return child.error();
-        out = Series::list(offs, std::move(*child));
-    } else {
-        dstd::Result<Series> fields = concat_struct_by_name(mats);
-        if (!fields) return fields.error();
-        out = std::move(*fields);
     }
+    dstd::Vector<Off> offs{0};
+    if (!fixed) offs.reserve(static_cast<std::size_t>(total) + 1);
+    dstd::Vector<Series> kids;
+    kids.reserve(mats.size());
+    for (const Series& m : mats) {
+        const dftu_series* h = m.handle();
+        if (!h->child())
+            return invalid_argument<"concat: a nested column has no child">();
+        const Series child{dftu_series_share(h->child().get())};
+        if (fixed) {
+            if (h->fixed_size() != size)
+                return invalid_argument<
+                    "concat: fixed_size_list parts of sizes {} and {}">(
+                    size, h->fixed_size());
+            kids.push_back(child_rows(child, 0, m.length() * size));
+            continue;
+        }
+        if (m.length() == 0) {
+            kids.push_back(child_rows(child, 0, 0));
+            continue;
+        }
+        const auto* o = reinterpret_cast<const Off*>(h->offsets.data());
+        for (std::int64_t i = 0; i < m.length(); ++i)
+            offs.push_back(offs.back() + (o[i + 1] - o[i]));
+        kids.push_back(
+            child_rows(child, static_cast<std::int64_t>(o[0]),
+                       static_cast<std::int64_t>(o[m.length()] - o[0])));
+    }
+    dstd::Vector<const Series*> ptrs;
+    for (const Series& k : kids) ptrs.push_back(&k);
+    dstd::Result<Series> child = concat_parts(ptrs, true);
+    if (!child) return child.error();
+    auto* col = new dftu_series();
+    col->type = t;
+    col->encoding = Encoding::Flat;
+    col->length = total;
+    if (fixed) {
+        col->set_fixed_size(size);
+    } else {
+        const std::size_t bytes = offs.size() * sizeof(Off);
+        col->offsets = new_buffer(bytes);
+        std::memcpy(writable(col->offsets), offs.data(), bytes);
+    }
+    if (validity != nullptr) {
+        const std::size_t bytes = static_cast<std::size_t>((total + 7) / 8);
+        col->validity = new_buffer(bytes);
+        std::memcpy(writable(col->validity), validity, bytes);
+        col->null_count = null_count;
+    }
+    col->set_child(adopt_series(child->release()));
+    return Series{col};
+}
+
+// A Struct concat: the fields joined by name, then the null rows gathered as
+// nulls.
+dstd::Result<Series> concat_struct(dstd::Span<const Series> mats,
+                                   std::int64_t total, bool any_null) {
+    dstd::Result<Series> fields = concat_struct_by_name(mats);
+    if (!fields) return fields.error();
+    Series out = std::move(*fields);
     if (!any_null) return out;
     dstd::Vector<std::int64_t> idx;
     idx.reserve(static_cast<std::size_t>(total));
@@ -436,10 +611,171 @@ bool fits_view(const dftu_series& c) {
     }
 }
 
+// Whether every part is a dictionary over text and none is JSON.
+bool all_text_dictionaries(dstd::Span<const Series* const> parts) {
+    return std::all_of(parts.begin(), parts.end(), [](const Series* p) {
+        const auto& c = p->handle()->child();
+        return !p->is_json() && p->encoding() == Encoding::Dictionary &&
+               (p->type() == TypeId::String ||
+                p->type() == TypeId::LargeString) &&
+               c &&
+               (c->type == TypeId::String || c->type == TypeId::LargeString);
+    });
+}
+
+// A flat LargeString column of `values`: the bytes are copied once, and the
+// 64-bit offsets do not overflow.
+Series large_strings(dstd::Span<const dstd::StringView> values) {
+    std::size_t bytes = 0;
+    for (const dstd::StringView& v : values) bytes += v.size();
+    auto* out = new dftu_series();
+    out->type = TypeId::LargeString;
+    out->encoding = Encoding::Flat;
+    out->length = static_cast<std::int64_t>(values.size());
+    out->offsets = new_buffer((values.size() + 1) * sizeof(std::int64_t));
+    auto* off = reinterpret_cast<std::int64_t*>(writable(out->offsets));
+    off[0] = 0;
+    if (bytes != 0) out->data = new_buffer(bytes);
+    char* at =
+        bytes != 0 ? reinterpret_cast<char*>(writable(out->data)) : nullptr;
+    std::int64_t end = 0;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (!values[i].empty())
+            std::memcpy(at + end, values[i].data(), values[i].size());
+        end += static_cast<std::int64_t>(values[i].size());
+        off[i + 1] = end;
+    }
+    return Series{out};
+}
+
+// Whether two dictionary value columns are one column: the same object, or
+// views over the same buffers (slices of one Arrow dictionary array import as
+// separate objects over them).
+bool same_values(const dftu_series& a, const dftu_series& b) {
+    if (a.encoding != Encoding::Flat) return false;
+    if (&a == &b) return true;
+    return a.type == b.type && a.encoding == Encoding::Flat &&
+           b.encoding == Encoding::Flat && a.length == b.length &&
+           a.data.block() && a.data.data() == b.data.data() &&
+           a.offsets.data() == b.offsets.data() &&
+           a.validity.data() == b.validity.data();
+}
+
+// Dictionary parts over text join into one dictionary: the distinct values are
+// merged, the codes remapped into a new codes buffer, and a row on a null
+// entry becomes a null row. The values are LargeString when any part is. At
+// the top level narrow values stay a view column over the buffers of the
+// parts, so a long value is not copied; `child` joins the children of nested
+// parts, whose values keep the value type of the parts. A column with no
+// value at all joins into a dictionary of one null entry. An invalid Series
+// means the parts need the flat path (too many values); a code out of range
+// is an error. Parts over one dictionary keep it, and only their codes copy.
+dstd::Result<Series> join_dictionaries(dstd::Span<const Series* const> parts,
+                                       std::int64_t total, bool child) {
+    constexpr std::int32_t NULL_ENTRY = -1;
+    dstd::HashMap<dstd::StringView, std::int32_t> seen;
+    dstd::Vector<dstd::StringView> merged;
+    dstd::Vector<dstd::Vector<std::int32_t>> remaps(parts.size());
+    const bool wide = std::any_of(
+        parts.begin(), parts.end(),
+        [](const Series* p) { return p->type() == TypeId::LargeString; });
+    const bool as_view = !child && !wide;
+    // One dictionary under every part (and no null entry to fold into the
+    // rows) is kept as it is: only the codes are copied.
+    const dftu_series* const one = parts[0]->handle()->child().get();
+    const bool shared =
+        one->null_count == 0 && !one->validity.block() &&
+        std::all_of(parts.begin(), parts.end(), [one](const Series* p) {
+            return same_values(*one, *p->handle()->child());
+        });
+    std::size_t merged_bytes = 0;
+    ViewBuilder builder;
+    for (std::size_t i = 0; !shared && i < parts.size(); ++i) {
+        const dftu_series* ch = parts[i]->handle()->child().get();
+        for (std::size_t j = 0; j < i; ++j)
+            if (parts[j]->handle()->child() == parts[i]->handle()->child())
+                remaps[i] = remaps[j];
+        if (!remaps[i].empty() || ch->length == 0) continue;
+        remaps[i].resize(static_cast<std::size_t>(ch->length));
+        for (std::int64_t k = 0; k < ch->length; ++k) {
+            std::int32_t& to = remaps[i][static_cast<std::size_t>(k)];
+            if (dftu_series_is_null(ch, k)) {
+                to = NULL_ENTRY;
+                continue;
+            }
+            std::int64_t n = 0;
+            const char* d = dftu_series_string_at(ch, k, &n);
+            const dstd::StringView v(d, static_cast<std::size_t>(n));
+            auto [it, fresh] =
+                seen.try_emplace(v, static_cast<std::int32_t>(merged.size()));
+            if (fresh) {
+                if (merged.size() >=
+                    static_cast<std::size_t>(
+                        std::numeric_limits<std::int32_t>::max()))
+                    return Series{};
+                merged_bytes += v.size();
+                merged.push_back(v);
+                if (as_view) builder.append_row(*ch, k);
+            }
+            to = it->second;
+        }
+    }
+    if (!wide && merged_bytes > static_cast<std::size_t>(
+                                    std::numeric_limits<std::int32_t>::max()))
+        return Series{};
+    // A code under a null row may hold any value, so only valid rows are
+    // remapped.
+    dstd::Vector<std::int32_t> codes(static_cast<std::size_t>(total), 0);
+    dstd::Vector<std::uint8_t> validity(
+        static_cast<std::size_t>((total + 7) / 8), 0xFF);
+    bool any_null = false;
+    std::int64_t row0 = 0;
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        const dftu_series* h = parts[i]->handle();
+        const auto* src = reinterpret_cast<const std::int32_t*>(h->data.data());
+        const auto size =
+            shared ? one->length : static_cast<std::int64_t>(remaps[i].size());
+        for (std::int64_t r = 0; r < h->length; ++r) {
+            const std::int64_t at = row0 + r;
+            const bool row_null =
+                h->validity.block() &&
+                !((h->validity.data()[r >> 3] >> (r & 7)) & 1);
+            std::int32_t code = NULL_ENTRY;
+            if (!row_null) {
+                if (src[r] < 0 || src[r] >= size)
+                    return invalid_argument<
+                        "concat: a dictionary part has a code out of range">();
+                code = shared ? src[r]
+                              : remaps[i][static_cast<std::size_t>(src[r])];
+            }
+            if (code == NULL_ENTRY) {
+                any_null = true;
+                validity[static_cast<std::size_t>(at >> 3)] &=
+                    static_cast<std::uint8_t>(~(1u << (at & 7)));
+            } else {
+                codes[static_cast<std::size_t>(at)] = code;
+            }
+        }
+        row0 += h->length;
+    }
+    const std::uint8_t* row_validity = any_null ? validity.data() : nullptr;
+    if (shared)
+        return dictionary_of(
+            Series::flat(TypeId::Int32, codes.data(), total, row_validity),
+            Series{dftu_series_share(one)});
+    if (as_view && !merged.empty())
+        return dictionary_from_codes(
+            codes, builder.finish(TypeId::String, false), row_validity);
+    Series values = wide ? large_strings(merged) : Series::strings(merged);
+    const Series code_column =
+        Series::flat(TypeId::Int32, codes.data(), total, row_validity);
+    return dictionary_of(code_column, values);
+}
+
 // Text parts (String/LargeString, or Binary/LargeBinary) concatenate into a
 // view column over the parts' buffers, or into one dictionary when every part
 // is a dictionary. An invalid Series means the parts need the flat path.
-Series concat_text_views(dstd::Span<const Series* const> parts) {
+dstd::Result<Series> concat_text_views(dstd::Span<const Series* const> parts) {
     auto family = [](TypeId x) {
         return x == TypeId::String || x == TypeId::LargeString ? TypeId::String
                : x == TypeId::Binary || x == TypeId::LargeBinary
@@ -458,79 +794,11 @@ Series concat_text_views(dstd::Span<const Series* const> parts) {
         total += p->length();
     }
 
-    const bool dict_all =
-        !json && fam == TypeId::String &&
-        std::all_of(parts.begin(), parts.end(), [](const Series* p) {
-            const auto& c = p->handle()->child();
-            return p->encoding() == Encoding::Dictionary &&
-                   p->type() == TypeId::String && c && c->null_count == 0 &&
-                   (c->type == TypeId::String ||
-                    c->type == TypeId::LargeString);
-        });
-    ViewBuilder builder;
-    if (dict_all) {
-        dstd::HashMap<dstd::StringView, std::int32_t> seen;
-        dstd::Vector<dstd::Vector<std::int32_t>> remaps(parts.size());
-        std::int32_t distinct = 0;
-        bool fits = true;
-        for (std::size_t i = 0; i < parts.size() && fits; ++i) {
-            const dftu_series* ch = parts[i]->handle()->child().get();
-            for (std::size_t j = 0; j < i; ++j)
-                if (parts[j]->handle()->child() == parts[i]->handle()->child())
-                    remaps[i] = remaps[j];
-            if (!remaps[i].empty() || ch->length == 0) continue;
-            remaps[i].resize(static_cast<std::size_t>(ch->length));
-            for (std::int64_t k = 0; k < ch->length; ++k) {
-                std::int64_t n = 0;
-                const char* d = dftu_series_string_at(ch, k, &n);
-                auto [it, fresh] = seen.try_emplace(
-                    dstd::StringView(d, static_cast<std::size_t>(n)), distinct);
-                if (fresh) {
-                    if (distinct == std::numeric_limits<std::int32_t>::max()) {
-                        fits = false;
-                        break;
-                    }
-                    ++distinct;
-                    builder.append_row(*ch, k);
-                }
-                remaps[i][static_cast<std::size_t>(k)] = it->second;
-            }
-        }
-        if (fits && distinct > 0) {
-            dstd::Vector<std::int32_t> codes(static_cast<std::size_t>(total));
-            dstd::Vector<std::uint8_t> validity(
-                static_cast<std::size_t>((total + 7) / 8), 0xFF);
-            bool any_null = false;
-            std::int64_t row0 = 0;
-            for (std::size_t i = 0; i < parts.size(); ++i) {
-                const dftu_series* h = parts[i]->handle();
-                if (h->length != 0 && !remaps[i].empty()) {
-                    const auto* src =
-                        reinterpret_cast<const std::int32_t*>(h->data.data());
-                    for (std::int64_t r = 0; r < h->length; ++r) {
-                        const bool null =
-                            h->validity.block() &&
-                            !((h->validity.data()[r >> 3] >> (r & 7)) & 1);
-                        const std::int64_t at = row0 + r;
-                        if (null) {
-                            any_null = true;
-                            validity[static_cast<std::size_t>(at >> 3)] &=
-                                static_cast<std::uint8_t>(~(1u << (at & 7)));
-                        } else {
-                            codes[static_cast<std::size_t>(at)] =
-                                remaps[i][static_cast<std::size_t>(src[r])];
-                        }
-                    }
-                }
-                row0 += h->length;
-            }
-            return dictionary_from_codes(codes,
-                                         builder.finish(TypeId::String, false),
-                                         any_null ? validity.data() : nullptr);
-        }
-        builder = ViewBuilder{};
+    if (!json && fam == TypeId::String && all_text_dictionaries(parts)) {
+        dstd::Result<Series> joined = join_dictionaries(parts, total, false);
+        if (!joined || joined->valid()) return joined;
     }
-
+    ViewBuilder builder;
     builder.reserve(total);
     for (const Series* p : parts) builder.append_column(*p->handle());
     return builder.finish(fam, json);
@@ -539,32 +807,64 @@ Series concat_text_views(dstd::Span<const Series* const> parts) {
 }  // namespace
 
 dstd::Result<Series> concat_columns(dstd::Span<const Series* const> parts) {
+    return concat_parts(parts, false);
+}
+
+dstd::Result<Series> concat_dictionaries(
+    dstd::Span<const Series* const> parts) {
     if (parts.empty()) return Series{};
-    if (Series out = concat_text_views(parts); out.valid()) return out;
+    for (const Series* p : parts)
+        if (!p->valid()) return Series{};
+    if (std::any_of(parts.begin(), parts.end(),
+                    [](const Series* p) { return p->is_json(); }) ||
+        !all_text_dictionaries(parts))
+        return Series{};
+    std::int64_t rows = 0;
+    for (const Series* p : parts) rows += p->length();
+    return join_dictionaries(parts, rows, true);
+}
+
+// `child`: the parts are the children of nested parts. Their text then keeps
+// its own type (a copy of the bytes) in place of the view a top-level text
+// concat gives, since the parent's type names its children's.
+dstd::Result<Series> concat_parts(dstd::Span<const Series* const> parts,
+                                  bool child) {
+    if (parts.empty()) return Series{};
+    for (const Series* p : parts)
+        if (!p->valid())
+            return invalid_argument<
+                "concat: a part of a nested column has rows this type cannot "
+                "slice or gather">();
+    if (!child) {
+        dstd::Result<Series> views = concat_text_views(parts);
+        if (!views) return views.error();
+        if (views->valid()) return views;
+    }
     // Materialize each part to FLAT so the value buffers are contiguous; concat
     // is a merge, so it copies (a single-buffer column can't alias many
     // inputs).
     // A JSON part makes the whole column JSON, its text parts quoted.
     const bool json = std::any_of(parts.begin(), parts.end(),
                                   [](const Series* p) { return p->is_json(); });
-    const bool dict_all =
-        !json && std::all_of(parts.begin(), parts.end(), [](const Series* p) {
-            const auto& c = p->handle()->child();
-            return p->encoding() == Encoding::Dictionary &&
-                   p->type() == TypeId::String && c &&
-                   c->type == TypeId::String && c->encoding == Encoding::Flat;
-        });
+    if (child && !json && all_text_dictionaries(parts)) {
+        std::int64_t rows = 0;
+        for (const Series* p : parts) rows += p->length();
+        dstd::Result<Series> joined = join_dictionaries(parts, rows, true);
+        if (!joined || joined->valid()) return joined;
+    }
     dstd::Vector<Series> mats;
     mats.reserve(parts.size());
     for (const Series* p : parts)
         mats.emplace_back(
-            dict_all || (!json && p->encoding() == Encoding::Flat)
-                ? p->share()
-                : [&] {
-                      Series s = json ? to_json_series(*p) : p->share();
-                      if (s.encoding() == Encoding::Flat) return s;
-                      return Series{dftu_series_materialize(s.handle())};
-                  }());
+            !json && p->encoding() == Encoding::Flat ? p->share() : [&] {
+                Series s = json ? to_json_series(*p) : p->share();
+                if (s.encoding() == Encoding::Flat) return s;
+                return Series{dftu_series_materialize(s.handle())};
+            }());
+    for (const Series& m : mats)
+        if (!m.valid())
+            return invalid_argument<
+                "concat: a dictionary part has a code out of range">();
 
     // A part with no values takes the type of the parts that have some.
     auto all_null = [](const Series& m) {
@@ -597,28 +897,43 @@ dstd::Result<Series> concat_columns(dstd::Span<const Series* const> parts) {
         std::find_if(mats.begin(), mats.end(),
                      [&](const Series& m) { return !all_null(m); });
     const TypeId t = typed == mats.end() ? mats.front().type() : typed->type();
-    if (typed != mats.end() && t != TypeId::List && t != TypeId::Struct &&
-        !typed->is_json())
+    const bool nested = is_nested(t);
+    if (typed != mats.end() && !nested && !typed->is_json())
         for (Series& m : mats)
-            if (m.type() != t && all_null(m)) m = Series::nulls(t, m.length());
+            if (m.type() != t && all_null(m)) {
+                m = null_column_like(*typed, m.length());
+                if (!m.valid())
+                    return invalid_argument<
+                        "concat: column type '{}' is unsupported">(
+                        type_name(t));
+            }
     // String and LargeString (64-bit offsets, as Dask writes its strings) are
-    // one family: a column may hold either, alone or mixed.
+    // one family: a column may hold either, alone or mixed. Binary and
+    // LargeBinary are the other one.
     auto is_text = [](TypeId x) {
         return x == TypeId::String || x == TypeId::LargeString;
     };
+    auto is_binary = [](TypeId x) {
+        return x == TypeId::Binary || x == TypeId::LargeBinary;
+    };
     const bool text = is_text(t);
+    const bool varwidth = text || is_binary(t);
+    const bool fixed_binary = t == TypeId::FixedSizeBinary;
     std::int64_t total = 0;
     bool any_null = false;
     for (const Series& m : mats) {
-        if (m.type() != t && !(text && is_text(m.type())))
+        if (m.type() != t && !(text && is_text(m.type())) &&
+            !(is_binary(t) && is_binary(m.type())))
             return invalid_argument<"concat: columns must share a type">();
-        // Every other branch below has an offset-aware path (String) or
-        // memcpy's byte_width(t) bytes per row; refuse anything with neither.
-        // FixedSizeBinary also refuses here: dftu_series_new_flat below has no
-        // fixed_size parameter to record on the result, so it cannot build one
-        // even when the width itself is known.
-        if (!text && t != TypeId::Bool && t != TypeId::List &&
-            t != TypeId::Struct && !byte_width(t))
+        if (fixed_binary &&
+            m.handle()->fixed_size() != mats.front().handle()->fixed_size())
+            return invalid_argument<
+                "concat: fixed_size_binary parts of widths {} and {}">(
+                mats.front().handle()->fixed_size(), m.handle()->fixed_size());
+        // Every other branch below has an offset-aware path (text, binary) or
+        // memcpy's byte width per row; refuse anything with neither.
+        if (!varwidth && t != TypeId::Bool && !nested && !fixed_binary &&
+            !byte_width(t))
             return invalid_argument<"concat: column type '{}' is unsupported">(
                 type_name(t));
         total += m.length();
@@ -663,58 +978,20 @@ dstd::Result<Series> concat_columns(dstd::Span<const Series* const> parts) {
             copy_bits(validity.data(), i, h->validity.data(), true);
         }
     }
-    if (t == TypeId::List || t == TypeId::Struct)
-        return concat_nested(mats, total, any_null);
+    if (t == TypeId::Struct) return concat_struct(mats, total, any_null);
+    if (nested) {
+        std::int64_t nulls = 0;
+        for (const Series& m : mats) nulls += m.null_count();
+        const std::uint8_t* bits = any_null ? validity.data() : nullptr;
+        return t == TypeId::LargeList
+                   ? concat_list_family<std::int64_t>(mats, total, bits, nulls)
+                   : concat_list_family<std::int32_t>(mats, total, bits, nulls);
+    }
     const std::uint8_t* vptr = any_null ? validity.data() : nullptr;
 
-    if (dict_all) {
-        dstd::HashMap<dstd::StringView, std::int32_t> seen;
-        dstd::Vector<dstd::StringView> merged;
-        dstd::Vector<dstd::Vector<std::int32_t>> remaps(mats.size());
-        bool fits = true;
-        for (std::size_t i = 0; i < mats.size() && fits; ++i) {
-            const dftu_series* ch = mats[i].handle()->child().get();
-            for (std::size_t j = 0; j < i; ++j)
-                if (mats[j].handle()->child() == mats[i].handle()->child())
-                    remaps[i] = remaps[j];
-            if (!remaps[i].empty() || ch->length == 0) continue;
-            remaps[i].resize(static_cast<std::size_t>(ch->length));
-            for (std::int64_t k = 0; k < ch->length; ++k) {
-                std::int64_t n = 0;
-                const char* d = dftu_series_string_at(ch, k, &n);
-                const dstd::StringView v(d, static_cast<std::size_t>(n));
-                auto [it, fresh] = seen.try_emplace(
-                    v, static_cast<std::int32_t>(merged.size()));
-                if (fresh) {
-                    if (merged.size() >=
-                        static_cast<std::size_t>(
-                            std::numeric_limits<std::int32_t>::max())) {
-                        fits = false;
-                        break;
-                    }
-                    merged.push_back(v);
-                }
-                remaps[i][static_cast<std::size_t>(k)] = it->second;
-            }
-        }
-        if (fits && !merged.empty()) {
-            dstd::Vector<std::int32_t> codes(static_cast<std::size_t>(total));
-            for (std::size_t i = 0; i < mats.size(); ++i) {
-                const dftu_series* h = mats[i].handle();
-                if (h->length == 0 || remaps[i].empty()) continue;
-                const auto* src =
-                    reinterpret_cast<const std::int32_t*>(h->data.data());
-                for (std::int64_t r = 0; r < h->length; ++r)
-                    codes[static_cast<std::size_t>(starts[i] + r)] =
-                        remaps[i][static_cast<std::size_t>(src[r])];
-            }
-            return dictionary_from_codes(codes, Series::strings(merged), vptr);
-        }
-    }
-
-    if (text) {
-        // Each part's raw buffers; a text part is Flat here (materialized
-        // above).
+    if (varwidth) {
+        // Each part's raw buffers; a text or binary part is Flat here
+        // (materialized above).
         struct TextPart {
             const std::int32_t* off32 = nullptr;
             const std::int64_t* off64 = nullptr;
@@ -760,7 +1037,8 @@ dstd::Result<Series> concat_columns(dstd::Span<const Series* const> parts) {
         const bool wide =
             any_wide || bytes > std::numeric_limits<std::int32_t>::max();
         auto* w = new dftu_series();
-        w->type = wide ? TypeId::LargeString : TypeId::String;
+        w->type = text ? (wide ? TypeId::LargeString : TypeId::String)
+                       : (wide ? TypeId::LargeBinary : TypeId::Binary);
         w->encoding = Encoding::Flat;
         w->length = total;
         w->offsets =
@@ -835,7 +1113,10 @@ dstd::Result<Series> concat_columns(dstd::Span<const Series* const> parts) {
         return Series{out};
     }
 
-    const std::size_t w = byte_width(t).value_or(0);
+    const std::size_t w =
+        fixed_binary
+            ? static_cast<std::size_t>(mats.front().handle()->fixed_size())
+            : byte_width(t).value_or(0);
     out->data = new_buffer(static_cast<std::size_t>(total) * w);
     std::uint8_t* buf = writable(out->data);
     parallel_for(
@@ -1181,6 +1462,13 @@ dstd::Vector<Series> diagonal_parts(
     const dstd::Vector<std::int64_t>* rows = nullptr) {
     dstd::Vector<Series> owned;
     owned.reserve(parts.size());
+    // A part that has the column with the target type gives the null rows of
+    // the others their type parameters and child types.
+    const Series* like = nullptr;
+    for (const DataFrame* p : parts)
+        for (std::size_t j = 0; j < p->names.size() && !like; ++j)
+            if (p->names[j] == name && p->columns[j].type() == target)
+                like = &p->columns[j];
     for (std::size_t pi = 0; pi < parts.size(); ++pi) {
         const DataFrame* p = parts[pi];
         std::int64_t at = -1;
@@ -1190,15 +1478,17 @@ dstd::Vector<Series> diagonal_parts(
                 break;
             }
         if (at < 0) {
-            Series nulls =
-                Series::nulls(target, rows ? (*rows)[pi] : p->num_rows());
+            const std::int64_t n = rows ? (*rows)[pi] : p->num_rows();
+            Series nulls = like && !json ? null_column_like(*like, n)
+                                         : Series::nulls(target, n);
             owned.push_back(json ? nulls.as_json() : std::move(nulls));
         } else {
             const Series& src = p->columns[static_cast<std::size_t>(at)];
             if (src.length() > 0 && src.null_count() == src.length() &&
-                src.type() != target && target != TypeId::List &&
-                target != TypeId::Struct) {
-                Series nulls = Series::nulls(target, src.length());
+                src.type() != target) {
+                Series nulls = like && !json
+                                   ? null_column_like(*like, src.length())
+                                   : Series::nulls(target, src.length());
                 owned.push_back(json ? nulls.as_json() : std::move(nulls));
             } else if (json)
                 owned.push_back(to_json_series(src));
@@ -1207,6 +1497,9 @@ dstd::Vector<Series> diagonal_parts(
             else if (target == TypeId::LargeString &&
                      src.type() == TypeId::String)
                 owned.push_back(src.share());  // concat_columns widens
+            else if (target == TypeId::LargeBinary &&
+                     src.type() == TypeId::Binary)
+                owned.push_back(src.share());
             else if (target == TypeId::String)
                 owned.push_back(to_string_series(src));
             else
@@ -1216,11 +1509,12 @@ dstd::Vector<Series> diagonal_parts(
     return owned;
 }
 
-dstd::Result<Series> concat_owned(dstd::Span<const Series> owned) {
+dstd::Result<Series> concat_owned(dstd::Span<const Series> owned,
+                                  bool child = false) {
     dstd::Vector<const Series*> cols;
     cols.reserve(owned.size());
     for (const Series& s : owned) cols.push_back(&s);
-    return concat_columns(cols);
+    return concat_parts(cols, child);
 }
 
 }  // namespace
@@ -1248,8 +1542,10 @@ dstd::Result<Series> concat_struct_by_name(dstd::Span<const Series> mats) {
     DiagonalSchema schema = std::move(*found);
     dstd::Vector<Series> fields;
     for (std::size_t c = 0; c < schema.names.size(); ++c) {
-        dstd::Result<Series> field = concat_owned(diagonal_parts(
-            parts, schema.names[c], schema.types[c], schema.json[c], &rows));
+        dstd::Result<Series> field =
+            concat_owned(diagonal_parts(parts, schema.names[c], schema.types[c],
+                                        schema.json[c], &rows),
+                         true);
         if (!field) return field.error();
         fields.push_back(std::move(*field));
     }

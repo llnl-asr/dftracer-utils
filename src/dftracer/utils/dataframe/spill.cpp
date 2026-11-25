@@ -585,11 +585,6 @@ void unmap(void* context) {
     delete m;
 }
 
-bool is_nested(TypeId t) {
-    return t == TypeId::Struct || t == TypeId::List || t == TypeId::LargeList ||
-           t == TypeId::FixedSizeList || t == TypeId::Map;
-}
-
 struct Piece {
     const void* src = nullptr;
     std::size_t bytes = 0;

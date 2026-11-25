@@ -137,9 +137,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Build the string and integer levels of a table's `MultiIndex` from the column dictionaries in `to_pandas`, so no Python object is made per row.
 - Make `DataFrame.from_pandas` borrow the values of a nullable pandas column (`Int64`, `Float64`, `boolean`) in place of copying them.
 - Make `group_by` with an 8, 16 or 32-bit integer key or value column take the fast fold, so it keeps about one word per group for each aggregate in place of a full statistics record.
+- Make `DataFrame.from_dict` and the `DataFrame` constructor import the row labels of pandas columns that share one index once, and a `MultiIndex` level through its codes, in place of once per column.
 - Make a group-by aggregate of a computed value, such as `col("x").where(col("c") == 1, float("nan")).sum()`, compute it one window of rows at a time, so the value is never held as a full column.
 - Read YAML with our own reader in place of rapidyaml and yaml-cpp.
   A mapping with a duplicate key is now an error, and anchors, aliases, tags, complex keys, directives and null keys are refused with an error that names the feature.
+- Convert between native columns and pandas, NumPy and polars with native code only.
+  `to_pandas`, `from_pandas`, table files, `loc`, `reindex`, `where`, `unnest` and the dask viewer run no pyarrow kernel, and the pandas and table paths work without pyarrow.
+  `to_pandas(arrow=True)` builds each column on the native buffers, and `from_polars` reads polars through the Arrow C stream with no copy.
+- Make `Series.from_list` and `Series(data, dtype=...)` take any dtype spelling that `cast` takes, and NumPy scalars and arrays natively.
+  A pyarrow type other than an integer, float, bool, string, binary, `date32`, timestamp or duration type now raises `TypeError`.
+  A value that the integer dtype cannot hold now raises `OverflowError` in place of wrapping.
+- Make `loc` writes and lookups build values in the full column type, so a decimal, time, `date64` or nested column keeps its type.
+- Make `Series.from_numpy` raise `TypeError` for an array it cannot import, in place of trying pyarrow.
 
 ### Added
 
@@ -197,6 +206,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Add `DFTRACER_UTILS_STORE_DIRECT_READS` to read the closed files of an index store past the page cache, off by default.
   Add `DFTRACER_UTILS_INDEX_STORE_REFRESH_MS` to set how soon a process sees the files that other processes wrote to an index.
 - Add `--shard i/N` and progress output to `dftracer_genesis_gen_dist`, and split its groups between MPI ranks by default in a build with `DFTRACER_UTILS_ENABLE_MPI=ON` ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Add `concat` and `unpivot` of `large_list`, `fixed_size_list` and `map` columns, such as a column read from several Parquet row groups.
+- Keep a nested column of several Arrow batches as chunks on import, with no copy, in place of joining it.
+- Add casts between `string` and `large_string`, and between `binary` and `large_binary`, that keep the bytes and rewrite only the offsets.
 
 ### Removed
 
@@ -223,6 +235,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix nested columns of several Arrow batches or files in lazy `explode` with a memory budget, `head_by` on a struct key and `dftracer_view` output of list and struct fields, which crashed.
+- Fix `Series.child` and `Series.num_children` on a nested column of several batches or after a `filter`, which gave no children.
+- Fix a dictionary or selection over a nested column whose null rows hold unused codes, which failed to materialize.
+- Fix `to_pandas(arrow=True)` of a nested column with `string_view` items.
+- Fix an Arrow export or stream of batches whose text children differ in layout (dictionary, view or plain), which failed or read the wrong buffers; each batch now takes the stream schema.
+- Fix a column of several Arrow batches with `string_view` children, such as `list<string_view>` or `struct<a: string_view>`, which exported empty strings or crashed.
+  The exported Arrow schema now always describes the exported array.
+- Fix `list<binary>`, `list<fixed_size_binary>` and `fixed_size_binary` columns of several Arrow batches, which stopped `to_arrow` and `to_list`.
+- Fix a `filter` of a nested column followed by a collect in small batches, which gave a chunked column of lazy parts or no error for parts of different types.
+- Fix the Arrow export of a list, large list, fixed-size list or map over a dictionary, and of a struct of dictionaries in several batches, whose schema did not describe its array.
+- Fix an Arrow stream whose batches had different child layouts (a string view in one batch, plain text in the next): every batch now has the schema of the first one, and a batch of another layout is converted to it.
+- Fix a diagonal `concat` of binary and large binary columns, which gave all nulls, and of fixed-size binary with a number, which now says the types are incompatible.
+- Fix a chunked dictionary column, which was exported as plain text: it is exported as one dictionary.
+- Fix `where` of two fixed-size binary columns of different widths, which read past the shorter values.
+- Fix the null rows that a `where` or a concat adds next to a filtered `list`, `struct` or `map` column, which had the wrong nested type or crashed, and give a `fixed_size_binary` column the same null rows.
+- Fix a join of dictionary columns over `large_string` or with null entries, which lost the dictionary.
+- Fix a join of `list` or `map` parts whose joined offsets pass 32 bits, which wrapped the offsets and now fails with an error.
+- Fix a diagonal concat of an all-null part next to a `list`, `struct`, `large_list`, `fixed_size_list` or `map` part, and a diagonal concat of a nested and a scalar column, which now fails with an error.
+- Fix `where` on two struct columns with different fields, which merged the fields.
 - Fix importing an Arrow stream or chunked array with no batch, which raised an error in place of giving no rows of its type.
 - Fix `hash_partition` and `partition_id` sending null keys to different parts when different values sit under the nulls.
   A null dictionary entry now goes with the other nulls too.
@@ -235,6 +266,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   They now read only the traces, and `Indexer.query_file_info` lists only the files of the indexer.
 - Fix `DataFrame.from_dict` refusing a column of empty lists next to a pandas `Index`.
   A pandas `Index` now imports as a pandas `Series` does.
+- Fix `to_pandas` with pandas 3 and pyarrow 17 on a column of view strings, such as the column names that `unstack` gives, which raised `ArrowNotImplementedError`.
+- Fix a crash or a `NULL in or out for a sized value` error in a JIT plugin whose tasks run at once, such as the tasks of one `jit.all`.
 - Fix `DataFrame.with_column`, `with_columns`, `assign` and `select` giving a frame with columns of different lengths.
 - Fix a rare abort at interpreter exit when a daemon thread waits on a batch Python UDF.
   The thread now ends with a bare `SystemExit` and prints no traceback.
@@ -274,6 +307,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Keep `dftracer_genesis_gen_dist` under `--memory-budget`, run again a group whose statistics do not fit instead of skipping it, and read runs that keep their time slices directly in the run directory ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Never spill to a RAM-backed directory.
   The fallback is the temp directory or `~/.cache/dftracer-utils/spill`, whichever is writable and not RAM-backed, and with neither the first spill fails with an error that names `DFTRACER_UTILS_SPILL_DIR` ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+- Fix a crash when a column of several `large_string` or `large_binary` Arrow chunks goes to Arrow or pandas.
+- Fix `take` and `where` on `fixed_size_list` and `map` columns, which failed.
+- Fix the import of an Arrow `null` column, such as an all-null polars column, which failed; it reads as a `string` column of nulls.
+- Fix `reindex` with a tolerance on `date64` labels.
+- Fix `to_pandas` of a dictionary column collected in several batches, which gave plain strings in place of a category.
+- Fix the string children of a joined nested column, which came back as `string_view` in place of their own type.
+- Fix a dictionary column collected in several batches: the table header stored it as `object`, `to_pandas` of an Arrow-dtype table column kept it a dictionary, and the native `to_polars` gave `String` in place of `Categorical`.
+- Fix `where` on a `pyarrow.Table`, which made every field nullable and dropped its metadata.
+- Fix `Series(series, dtype=pa.timestamp(...))` and `pa.duration(...)`, which ignored the unit and zone of the dtype.
+- Fix a timestamp or duration built from a NumPy value past the year 2262, which raised `OverflowError`.
+- Fix the type of a `MultiIndex` level with missing labels, which depended on the size of the level.
+- Fix `loc` and `reindex` keys and fill values for `list` and `fixed_size_binary` labels, which took another item type; a `struct`, `map`, `fixed_size_list` or `decimal256` label now raises `TypeError`.
 
 ## [0.0.14] - 2026-10-10
 

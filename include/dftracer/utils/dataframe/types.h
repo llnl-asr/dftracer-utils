@@ -691,6 +691,13 @@ constexpr bool is_wide_offset_type(TypeId t) noexcept {
            t == TypeId::LargeList;
 }
 
+/// True for a Struct and for every list-like type (List, LargeList,
+/// FixedSizeList, Map): a type whose values live in child columns.
+constexpr bool is_nested(TypeId t) noexcept {
+    return t == TypeId::Struct || t == TypeId::List || t == TypeId::LargeList ||
+           t == TypeId::FixedSizeList || t == TypeId::Map;
+}
+
 /// FLAT: values contiguous. CONSTANT: one value, logical length N. DICTIONARY:
 /// value[i] = base[codes[i]]. SELECTION: value[i] = base[sel[i]], a view over a
 /// base with no data movement. VIEW: a String or Binary column of 16-byte

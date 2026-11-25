@@ -103,7 +103,7 @@ column keeps its width (``int32``, ``uint8``, ``float32``); a column that holds
 a null is written with a nullable dtype (``Int32``, ``Float64``, ``boolean``),
 so a null stays apart from NaN; a string column is written as ``object`` and a
 dictionary-encoded string column as a ``category``. The frame's row index names
-become the header's index. A column of another Arrow type (timestamps, lists,
+become the header's index. A column of another type (timestamps, lists,
 structs) is refused with ``TypeError``.
 
 File format
@@ -148,7 +148,7 @@ What a table carries
 Carried: ``int8`` to ``int64``, ``uint8`` to ``uint64``, ``float32``,
 ``float64``, ``bool``, the nullable ``Int*``, ``UInt*``, ``Float32``,
 ``Float64`` and ``boolean``, strings, and dictionary-encoded string columns as
-``category``. A column of another Arrow type (timestamps, lists, structs) is
+``category``. A column of another type (timestamps, lists, structs) is
 refused with ``TypeError``. A table file written by another tool may also hold
 Arrow-backed dtypes, set and list columns and categories of numbers; a table
 read restores them and keeps them when the frame is written again.

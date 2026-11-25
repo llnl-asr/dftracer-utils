@@ -1453,6 +1453,39 @@ class Series(Generic[T_co]):
         self, nullable: bool = False, na: NAType | None = None
     ) -> tuple[bytearray, bytearray | None, str]: ...
     def _to_pylist(self) -> list[T_co | None]: ...
+    def _dictionary_parts(self) -> tuple[PublicSeries[int], PublicSeries[T_co]]:
+        """The Int32 codes and the values column of a dictionary-encoded column,
+        sharing its buffers; TypeError for another encoding."""
+        ...
+    def _values_buffer(self) -> memoryview:
+        """A read-only memoryview over the values of a flat numeric column,
+        nulls allowed (the values under a null are unspecified), with no copy;
+        BufferError for another encoding or type."""
+        ...
+    @property
+    def _decimal(self) -> tuple[int, int]:
+        """(precision, scale) of a Decimal column; (0, 0) for another type."""
+        ...
+    @property
+    def _fixed_size(self) -> int:
+        """Width of a FixedSizeBinary column or items per row of a
+        FixedSizeList; 0 for another type."""
+        ...
+    def _plain_text(self) -> PublicSeries[T_co]:
+        """The column with each view string column made flat; the rest shared."""
+        ...
+    def _joined_dictionary(self) -> PublicSeries[T_co] | None:
+        """A chunked column of dictionary chunks joined into one column (its
+        codes copied), a dictionary where the values allow one; None for any
+        other column."""
+        ...
+    def _nulls_like(self, n: int, /) -> PublicSeries[T_co]:
+        """``n`` null rows of this column's full type."""
+        ...
+    def _null_bytes(self) -> bytearray | None:
+        """A byte per row, 1 where the row is null (a null code or a null
+        dictionary value), or None when there are no nulls."""
+        ...
     def _physical(self) -> PublicSeries[int]: ...
     def to_bytes(self) -> bytes: ...
     def item(self, i: int) -> T_co | None: ...
@@ -1912,6 +1945,12 @@ def _series_from_list(values: Sequence[object], type_id: int = ...) -> PublicSer
     date, time, timedelta or Decimal (None is null), typed ``type_id`` when
     given; TypeError for an unknown value, ValueError for mixed or too wide
     ones."""
+    ...
+
+def _series_from_dictionary(codes: PublicSeries[int], values: PublicSeries) -> PublicSeries:
+    """A dictionary column over the flat Int32 ``codes`` (buffer shared; a null
+    or negative code is a null row) and ``values`` (shared); TypeError for
+    other codes, ValueError for a code past the values."""
     ...
 
 def _series_from_numpy(array: object, mask: object = ...) -> PublicSeries:

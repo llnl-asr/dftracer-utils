@@ -8,6 +8,7 @@
 #include <task_result.h>
 
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 
 // Reshaping/dedupe-key coverage for the non-native-constructor logical types:
@@ -132,7 +133,7 @@ const TypeRow TYPE_ROWS[] = {
     {TypeId::FixedSizeBinary,
      build_fixed_size_binary,
      needle_fixed_size_binary,
-     {C, C, C, C, R},
+     {C, C, C, C, C},
      0.0},
     {TypeId::LargeString,
      build_large_string,
@@ -147,14 +148,14 @@ const TypeRow TYPE_ROWS[] = {
     {TypeId::LargeList,
      build_large_list,
      needle_large_list,
-     {R, R, R, R, R},
+     {R, R, R, R, C},
      0.0},
     {TypeId::FixedSizeList,
      build_fixed_size_list,
      needle_fixed_size_list,
-     {R, R, R, R, R},
+     {R, R, R, R, C},
      0.0},
-    {TypeId::Map, build_map, needle_map, {R, R, R, R, R}, 0.0},
+    {TypeId::Map, build_map, needle_map, {R, R, R, R, C}, 0.0},
 };
 
 /// Types this file owns. No default case, so a new TypeId forces a decision.
@@ -371,6 +372,27 @@ TEST_SUITE("dataframe_types_reshape") {
                   (row.id == TypeId::LargeString   ? TypeId::String
                    : row.id == TypeId::LargeBinary ? TypeId::Binary
                                                    : row.id));
+            if (row.id == TypeId::LargeList ||
+                row.id == TypeId::FixedSizeList || row.id == TypeId::Map) {
+                // A sum of nested values is refused; the joined child is the
+                // check: both value_vars hold every row's elements.
+                CHECK(value.child(0).length() ==
+                      2 * row.build().child(0).length());
+                continue;
+            }
+            if (row.id == TypeId::FixedSizeBinary) {
+                // A sum of bytes is refused; both value_vars hold the rows.
+                const Series one = row.build();
+                const std::size_t bytes =
+                    static_cast<std::size_t>(one.length()) *
+                    static_cast<std::size_t>(one.handle()->fixed_size());
+                REQUIRE(value.length() == 2 * one.length());
+                CHECK(std::memcmp(value.data<char>(), one.data<char>(),
+                                  bytes) == 0);
+                CHECK(std::memcmp(value.data<char>() + bytes, one.data<char>(),
+                                  bytes) == 0);
+                continue;
+            }
             if (large) {
                 // A sum of text is refused; the values, in order, are the
                 // check.

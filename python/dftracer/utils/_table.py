@@ -20,16 +20,25 @@ import types
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Tuple, Union
 
 from . import dftracer_utils_ext as _ext
+from ._convert import (
+    _DICTIONARY,
+    _one_dictionary,
+    arrow_native_type,
+    clean_dictionary,
+    flat,
+    null_mask,
+    texts,
+)
 from ._dataframe import DataFrame, _bound
+from ._enums import DType
 from ._sink import _raw_columns
 
 if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
     import pandas as pd
-    import pyarrow as pa
 
-    from ._enums import DType
+    from ._series import Series
 
     PathLike = Union[str, "os.PathLike[str]"]
     # A MultiIndex level as its values and a code per row.
@@ -50,16 +59,6 @@ def _float_text(value: float) -> str:
     if math.isnan(value):
         return "NaN"
     return "Infinity" if value > 0 else "-Infinity"
-
-
-def _libs() -> tuple[types.ModuleType, types.ModuleType, types.ModuleType]:
-    try:
-        import numpy as np
-        import pandas as pd
-        import pyarrow as pa
-    except ImportError as exc:  # pragma: no cover - the extras are optional
-        raise ImportError("dftracer.utils tables need pandas, numpy and pyarrow") from exc
-    return np, pd, pa
 
 
 def _pandas_libs() -> tuple[types.ModuleType, types.ModuleType]:
@@ -158,7 +157,8 @@ def _arrow_alias(name: str, dtype: pd.ArrowDtype) -> str:
     """The text that rebuilds an ArrowDtype's pyarrow type with
     ``pa.type_for_alias``, which the reader needs because ``string[pyarrow]``
     names both ArrowDtype(pa.string()) and StringDtype("pyarrow")."""
-    _, _, pa = _libs()
+    import pyarrow as pa
+
     text = str(dtype.pyarrow_dtype)
     try:
         rebuilt = pa.type_for_alias(text)
@@ -269,50 +269,46 @@ def _describe_pandas(
     return imported, header
 
 
-def _is_text(t: pa.DataType) -> bool:
-    _, _, pa = _libs()
-    return bool(
-        pa.types.is_string(t)
-        or pa.types.is_large_string(t)
-        or getattr(pa.types, "is_string_view", lambda _: False)(t)
-    )
+def _column(frame: DataFrame, name: str) -> Series:
+    return _ext.DataFrame.__getitem__(frame, name)
 
 
 def _prepare_native(df: DataFrame, name: str, meta: Meta | None) -> Header:
-    """The header of a dftracer.utils frame, from its Arrow schema. A column keeps
-    its width; one that holds a null takes the nullable dtype, so a null stays
-    apart from NaN. Strings are ``object``, a dictionary column of strings a
-    ``category``, and the frame's row index names become the header's index."""
-    _, _, pa = _libs()
-    table = df.to_arrow()
-    names = [f.name for f in table.schema]
+    """The header of a dftracer.utils frame, from its native column types. A
+    column keeps its width; one that holds a null takes the nullable dtype, so
+    a null stays apart from NaN. Strings are ``object``, a dictionary column of
+    strings a ``category``, and the frame's row index names become the
+    header's index."""
+    names = df._names()
     if len(set(names)) != len(names):
         raise ValueError(f"table {name!r}: duplicate field names {names}")
     fields: list[dict[str, object]] = []
-    for position, arrow_field in enumerate(table.schema):
-        col = arrow_field.name
-        column = table.column(position)
-        t = arrow_field.type
-        nulls = column.null_count > 0
+    for col in names:
+        native = _one_dictionary(_column(df, col))
+        t = DType(native.type)
+        nulls = native.null_count > 0
         field: dict[str, object] = {"name": col}
-        if pa.types.is_dictionary(t) and _is_text(t.value_type):
-            chunks = column.unify_dictionaries().chunks
-            labels = chunks[0].dictionary.to_pylist() if chunks else []
+        if native.encoding == _DICTIONARY and t.is_text:
+            _, values = native._dictionary_parts()
             field.update(
-                dtype="category", categories=labels, categories_dtype="object", ordered=False
+                dtype="category",
+                categories=values.to_list(),
+                categories_dtype="object",
+                ordered=False,
             )
-        elif pa.types.is_signed_integer(t) or pa.types.is_unsigned_integer(t):
-            signed = pa.types.is_signed_integer(t)
-            stem = ("Int" if signed else "UInt") if nulls else ("int" if signed else "uint")
-            field["dtype"] = f"{stem}{t.bit_width}"
-        elif pa.types.is_floating(t) and t.bit_width in (32, 64):
-            field["dtype"] = f"Float{t.bit_width}" if nulls else f"float{t.bit_width}"
-        elif pa.types.is_boolean(t):
+        elif t.is_integer:
+            stem = t.name.lower().capitalize() if nulls else t.name.lower()
+            field["dtype"] = stem.replace("Uint", "UInt")
+        elif t in (DType.FLOAT32, DType.FLOAT64):
+            field["dtype"] = t.name.capitalize() if nulls else t.name.lower()
+        elif t == DType.BOOL:
             field["dtype"] = "boolean" if nulls else "bool"
-        elif _is_text(t):
+        elif t.is_text:
             field["dtype"] = "object"
         else:
-            raise TypeError(f"column {col!r} has the Arrow type {t}, which a table cannot store")
+            raise TypeError(
+                f"column {col!r} has the type {t.name.lower()}, which a table cannot store"
+            )
         fields.append(field)
     index_fields = list(df.index_names())
     return {
@@ -333,16 +329,14 @@ def _write_header(
     df: DataFrame, name: str | None, stem: str, meta: Meta | None
 ) -> tuple[Header, list[str]]:
     """The header ``df.write`` stores, and its raw columns: the header the frame
-    carries while it still describes the frame's columns and Arrow types, else
-    one made from the frame's schema."""
+    carries while it still describes the frame's columns and types, else one
+    made from the frame's column types."""
     carried = getattr(df, "_table_header", None)
     if carried is not None:
         own = _result_header(df, carried)
         if own is not None:
-            table = df.to_arrow()
             fields: list[dict[str, Any]] = own["fields"]
-            columns = [_plain(table.column(i)) for i in range(len(fields))]
-            if all(_fits(str(f["name"]), a, f) for f, a in zip(fields, columns)):
+            if all(_fits(str(f["name"]), _column(df, str(f["name"])), f) for f in fields):
                 own = {**own, "table": name or own.get("table") or stem}
                 if meta is not None:
                     own["meta"] = meta
@@ -354,53 +348,51 @@ def _write_header(
 # -- decoding ---------------------------------------------------------------
 
 
-def _plain(column: pa.ChunkedArray) -> pa.ChunkedArray:
-    """``column`` with its dictionary decoded; its chunks stay as they are, so a
-    conversion joins them once."""
-    _, _, pa = _libs()
-    if pa.types.is_dictionary(column.type):
-        column = column.cast(column.type.value_type)
-    return column
+class _DoesNotFit(ValueError):
+    """A column value that the header's dtype cannot hold."""
+
+
+def _in_range(name: str, native: Series, dtype: np.dtype[Any]) -> None:
+    """``_DoesNotFit`` when an integer value of ``native`` is outside ``dtype``."""
+    np, _ = _pandas_libs()
+    if dtype.kind not in "iu" or native.length == native.null_count:
+        return
+    own = DType(native.type)
+    if own.is_integer and np.can_cast(np.dtype(own.name.lower()), dtype, "safe"):
+        return
+    info = np.iinfo(dtype)
+    low, high = native.min(), native.max()
+    if low < info.min or high > info.max:
+        raise _DoesNotFit(f"column {name!r}: a value does not fit {dtype}")
 
 
 def _numpy(
-    arr: pa.ChunkedArray, dtype: np.dtype[Any], fill: object = None, share: bool = False
+    name: str,
+    native: Series,
+    dtype: np.dtype[Any],
+    fill: bool | float | None = None,
 ) -> npt.NDArray[Any]:
-    """``arr`` as one NumPy array of ``dtype``, nulls set to ``fill``. One copy,
-    made a chunk at a time; with ``share`` a column of one chunk with no nulls is
-    the read-only Arrow buffer itself."""
-    np, _, arrow = _libs()
-    target = arrow.from_numpy_dtype(dtype)
-
-    def part(chunk: pa.Array) -> npt.NDArray[Any]:
-        if fill is not None and chunk.null_count:
-            chunk = chunk.fill_null(fill)
-        values: npt.NDArray[Any] = chunk.cast(target, safe=True).to_numpy(zero_copy_only=False)
-        return values
-
-    if share and arr.num_chunks == 1 and not arr.null_count:
-        return part(arr.chunk(0)).astype(dtype, copy=False)
-    out: npt.NDArray[Any] = np.empty(len(arr), dtype=dtype)
-    at = 0
-    for chunk in arr.chunks:
-        out[at : at + len(chunk)] = part(chunk)
-        at += len(chunk)
-    return out
-
-
-def _null_mask(arr: pa.ChunkedArray) -> npt.NDArray[np.bool_]:
-    numpy, _, _ = _libs()
-    out: npt.NDArray[np.bool_] = numpy.zeros(len(arr), dtype=numpy.bool_)
-    at = 0
-    for chunk in arr.chunks:
-        if chunk.null_count:
-            out[at : at + len(chunk)] = chunk.is_null().to_numpy(zero_copy_only=False)
-        at += len(chunk)
+    """``native`` as one writable NumPy array of ``dtype``, nulls set to
+    ``fill``: one copy of the native values, in the target dtype."""
+    np, _ = _pandas_libs()
+    _in_range(name, native, dtype)
+    if native.null_count and fill is not None:
+        native = native.fill_null(fill)
+    native = flat(native)
+    values: npt.NDArray[Any]
+    if DType(native.type) == DType.BOOL:
+        # already a copy: the native bits widened to a byte per row
+        values = np.asarray(native.to_numpy())
+        owned = True
+    else:
+        values = np.asarray(native._values_buffer())
+        owned = False
+    out: npt.NDArray[Any] = values.astype(dtype, copy=not owned)
     return out
 
 
 def _resolve(dtype: str) -> Dtype:
-    _, pd, _ = _libs()
+    _, pd = _pandas_libs()
     try:
         return pd.api.types.pandas_dtype(dtype)
     except TypeError:
@@ -409,11 +401,11 @@ def _resolve(dtype: str) -> Dtype:
         raise
 
 
-def _restore_category(name: str, arr: pa.ChunkedArray, field: dict[str, Any]) -> pd.Categorical:
+def _restore_category(name: str, native: Series, field: dict[str, Any]) -> pd.Categorical:
     """A category column. Only a null is missing; a value that is not a label is
     an error. A file with no ``categories_dtype`` (older DFAnalyzer) also takes
     the string "NaN" as missing when "NaN" is no label, and a NaN float."""
-    np, pd, pa = _libs()
+    np, pd = _pandas_libs()
     labels = list(field.get("categories") or [])
     dtype_text = field.get("categories_dtype")
     cat_dtype: Any = _resolve(dtype_text) if dtype_text else None
@@ -422,25 +414,29 @@ def _restore_category(name: str, arr: pa.ChunkedArray, field: dict[str, Any]) ->
         labels = [_FLOAT_TEXT.get(c, c) if isinstance(c, str) else c for c in labels]
     elif legacy and not all(isinstance(c, str) for c in labels):
         labels = [_FLOAT_TEXT.get(c, c) if isinstance(c, str) else c for c in labels]
-    missing = _null_mask(arr)
+    t = DType(native.type)
+    missing = null_mask(native)
     text = all(isinstance(c, str) for c in labels)
-    if _is_text(arr.type) and text:
-        values = arr.to_numpy(zero_copy_only=False)
-        codes = pd.Index(labels, dtype=object).get_indexer(values)
+    if t.is_text and text:
+        # One lookup per distinct string, not per row.
+        codes, dictionary = clean_dictionary(native)._dictionary_parts()
+        distinct = texts(dictionary)
+        position = pd.Index(labels, dtype=object).get_indexer(distinct)
+        # the code under a null row is unspecified, so it is set to 0 first
+        raw = np.where(null_mask(codes), 0, np.asarray(flat(codes)._values_buffer()))
+        codes_out = position[raw] if len(distinct) else np.full(len(raw), -1)
         if legacy and "NaN" not in labels:
-            missing |= values == "NaN"
+            missing |= (distinct == "NaN")[raw] if len(distinct) else False
+        shown = distinct[raw] if len(distinct) else raw
+    elif t.is_integer and all(isinstance(c, int) and not isinstance(c, bool) for c in labels):
+        values = _numpy(name, native, np.dtype(np.int64), 0)
+        codes_out = pd.Index(np.array(labels, dtype=np.int64)).get_indexer(values)
         shown = values
-    elif pa.types.is_integer(arr.type) and all(
-        isinstance(c, int) and not isinstance(c, bool) for c in labels
-    ):
-        values = arr.fill_null(0).to_numpy(zero_copy_only=False)
-        codes = pd.Index(np.array(labels, dtype=np.int64)).get_indexer(values)
-        shown = values
-    elif pa.types.is_floating(arr.type) and all(
+    elif t.is_float and all(
         isinstance(c, (int, float)) and not isinstance(c, bool) for c in labels
     ):
-        values = arr.fill_null(0.0).to_numpy(zero_copy_only=False)
-        codes = pd.Index(np.array(labels, dtype=np.float64)).get_indexer(values)
+        values = _numpy(name, native, np.dtype(np.float64), 0.0)
+        codes_out = pd.Index(np.array(labels, dtype=np.float64)).get_indexer(values)
         if legacy:
             missing |= np.isnan(values)
         shown = values
@@ -449,30 +445,32 @@ def _restore_category(name: str, arr: pa.ChunkedArray, field: dict[str, Any]) ->
         lookup = {c: i for i, c in enumerate(labels)}
         decode = cat_dtype is not None and getattr(cat_dtype, "kind", "") == "f"
         decoded = []
-        for t in arr.to_pylist():
-            v = None if t is None else json.loads(t)
+        for cell in texts(native):
+            v = None if cell is None else json.loads(cell)
             decoded.append(_FLOAT_TEXT.get(v, v) if decode and isinstance(v, str) else v)
-        codes = np.array(
+        codes_out = np.array(
             [lookup.get(v, -1) if v is not None else -1 for v in decoded], dtype=np.int64
         )
         shown = np.array(decoded, dtype=object)
-    bad = (codes < 0) & ~missing
+    bad = (codes_out < 0) & ~missing
     if bad.any():
         raise ValueError(
             f"column {name!r}: {shown[int(np.argmax(bad))]!r} is not one of its categories"
         )
-    codes = np.where(missing, -1, codes)
+    codes_out = np.where(missing, -1, codes_out)
     categories = pd.Index(labels, dtype=cat_dtype) if cat_dtype is not None else pd.Index(labels)
     return pd.Categorical.from_codes(
-        codes, categories=categories, ordered=bool(field.get("ordered", False))
+        codes_out, categories=categories, ordered=bool(field.get("ordered", False))
     )
 
 
 def _resolved(name: str, field: dict[str, Any]) -> Dtype:
     """The pandas dtype a non-category, non-object field restores to."""
-    _, pd, pa = _libs()
+    _, pd = _pandas_libs()
     resolved = _resolve(str(field["dtype"]))
     if "arrow_type" in field:
+        import pyarrow as pa
+
         try:
             resolved = pd.ArrowDtype(pa.type_for_alias(str(field["arrow_type"])))
         except ValueError:
@@ -482,55 +480,63 @@ def _resolved(name: str, field: dict[str, Any]) -> Dtype:
     return resolved
 
 
-def _fits(name: str, arr: pa.ChunkedArray, field: dict[str, Any]) -> bool:
-    """Whether the column's current Arrow type is the one the header implies, so
-    that restoring it cannot wrap, truncate or turn a null into a value."""
-    np, pd, pa = _libs()
-    t = arr.type
+def _kind(t: DType) -> str:
+    """The family of a native type that a header dtype may restore from."""
+    if t.is_integer:
+        return "i"
+    if t.is_float:
+        return "f"
+    if t == DType.BOOL:
+        return "b"
+    return "s" if t.is_text else ""
+
+
+def _fits(name: str, native: Series, field: dict[str, Any]) -> bool:
+    """Whether the column's current type is one the header's dtype restores
+    from, so that restoring it cannot wrap, truncate or turn a null into a
+    value."""
+    np, pd = _pandas_libs()
+    kind = _kind(DType(native.type))
     dtype = str(field["dtype"])
     if dtype == "category":
-        return bool(_is_text(t) or pa.types.is_integer(t) or pa.types.is_floating(t))
+        labels = field.get("categories") or []
+        float_labels = str(field.get("categories_dtype") or "").startswith("float")
+        if labels and all(isinstance(c, str) for c in labels) and not float_labels:
+            return kind == "s"
+        return kind in "sif" and kind != ""
     if dtype == "object":
-        return _is_text(t)
+        return kind == "s"
     resolved = _resolved(name, field)
     if isinstance(resolved, pd.StringDtype):
-        return _is_text(t)
+        return kind == "s"
     if isinstance(resolved, pd.ArrowDtype):
-        wanted = resolved.pyarrow_dtype
-        same = (
-            pa.types.is_integer,
-            pa.types.is_floating,
-            pa.types.is_boolean,
-            _is_text,
-        )
-        return bool(t.equals(wanted) or any(k(t) and k(wanted) for k in same))
+        try:
+            wanted, _, _ = arrow_native_type(resolved.pyarrow_dtype)
+        except TypeError:
+            return False
+        return kind != "" and kind == _kind(wanted)
     numpy_dtype = (
         resolved if isinstance(resolved, np.dtype) else getattr(resolved, "numpy_dtype", None)
     )
     if numpy_dtype is None:
         return False
-    kind = {"b": pa.types.is_boolean, "i": pa.types.is_integer, "u": pa.types.is_integer}.get(
-        numpy_dtype.kind, pa.types.is_floating
-    )
-    if not kind(t):
+    if kind != {"b": "b", "i": "i", "u": "i"}.get(numpy_dtype.kind, "f"):
         return False
-    return not (isinstance(resolved, np.dtype) and resolved.kind != "f" and arr.null_count)
+    return not (isinstance(resolved, np.dtype) and resolved.kind != "f" and native.null_count)
 
 
-def _restore(
-    name: str, arr: pa.ChunkedArray, field: dict[str, Any], set_type: SetType = set
-) -> Column:
-    np, pd, pa = _libs()
+def _restore(name: str, native: Series, field: dict[str, Any], set_type: SetType = set) -> Column:
+    np, pd = _pandas_libs()
     dtype = str(field["dtype"])
     if dtype == "category":
-        return _restore_category(name, arr, field)
+        return _restore_category(name, native, field)
     if dtype == "object":
         elem = field.get("elem")
         if not elem:
-            return pd.Series(arr.to_numpy(zero_copy_only=False), dtype=object)
+            return pd.Series(texts(native), dtype=object)
         make: SetType = list if elem == "list" else set_type
-        out = np.empty(len(arr), dtype=object)
-        for i, t in enumerate(arr.to_pylist()):
+        out = np.empty(native.length, dtype=object)
+        for i, t in enumerate(texts(native)):
             if t is None:
                 out[i] = None
                 continue
@@ -540,35 +546,49 @@ def _restore(
             out[i] = make(cell)
         return pd.Series(out, dtype=object)
     resolved = _resolved(name, field)
-    # From pandas 3 on, copy-on-write makes the read-only Arrow buffer is safe to share, so a
-    # numpy column without nulls keeps it; otherwise a column is copied.
-    share = int(pd.__version__.split(".")[0]) >= 3
     if isinstance(resolved, np.dtype):
-        if resolved.kind == "f" and arr.null_count:
-            return _numpy(arr, resolved, math.nan)
-        return _numpy(arr, resolved, share=share)
+        if resolved.kind == "f" and native.null_count:
+            return _numpy(name, native, resolved, math.nan)
+        return _numpy(name, native, resolved)
     if isinstance(resolved, pd.ArrowDtype):
-        return pd.arrays.ArrowExtensionArray(arr.cast(resolved.pyarrow_dtype, safe=True))
+        # The column the user stored as an Arrow dtype: our buffers, retyped
+        # natively when the width differs.
+        import pyarrow as pa
+
+        wanted, _, _ = arrow_native_type(resolved.pyarrow_dtype)
+        # the dtype holds plain values: a dictionary, one column or chunked, is
+        # decoded natively (a copy)
+        native = flat(_one_dictionary(native), keep_chunks=True)
+        if DType(native.type) != wanted:
+            if wanted.is_integer:
+                _in_range(name, native, np.dtype(wanted.name.lower()))
+            native = native._cast(int(wanted))
+        return pd.arrays.ArrowExtensionArray(pa.chunked_array(native._plain_text()))
     if isinstance(resolved, pd.StringDtype):
-        return resolved.__from_arrow__(arr)
+        if resolved.storage == "pyarrow":
+            import pyarrow as pa
+
+            plain = flat(_one_dictionary(native), keep_chunks=True)._plain_text()
+            return resolved.__from_arrow__(pa.chunked_array(plain))
+        return pd.array(texts(native, resolved.na_value), dtype=resolved)
     numpy_dtype = getattr(resolved, "numpy_dtype", None)
     if numpy_dtype is not None and isinstance(resolved, pd.api.extensions.ExtensionDtype):
         fill = False if numpy_dtype == np.dtype(bool) else 0
-        data = _numpy(arr, numpy_dtype, fill, share)
-        return resolved.construct_array_type()(data, _null_mask(arr))
+        mask = null_mask(native)
+        data = _numpy(name, native, numpy_dtype, fill)
+        return resolved.construct_array_type()(data, mask)
     raise TypeError(f"dtype {field['dtype']} cannot be restored")
 
 
 def _exact_pandas(frame: DataFrame, header: Header, set_type: SetType = set) -> pd.DataFrame | None:
     """The exact pandas frame a table header describes, or None when a column of
-    ``frame`` no longer has the name or Arrow type the header implies."""
-    _, pd, pa = _libs()
+    ``frame`` no longer has the name or type the header implies."""
+    _, pd = _pandas_libs()
     fields: list[dict[str, Any]] = header["fields"]
     names = [str(f["name"]) for f in fields]
     if frame._names() != names:
         return None
-    table = frame.to_arrow()
-    columns = [_plain(table.column(i)) for i in range(len(names))]
+    columns = [_column(frame, n) for n in names]
     if not all(_fits(n, a, f) for n, a, f in zip(names, columns, fields)):
         return None
     index_fields: list[str] = header.get("index", [])
@@ -585,7 +605,7 @@ def _exact_pandas(frame: DataFrame, header: Header, set_type: SetType = set) -> 
             for n, a, f in zip(names, columns, fields)
             if coded.get(n) is None
         }
-    except pa.ArrowInvalid:
+    except _DoesNotFit:
         return None
     if not index_fields:
         return pd.DataFrame(data, columns=names, copy=False)
@@ -612,34 +632,36 @@ def _exact_pandas(frame: DataFrame, header: Header, set_type: SetType = set) -> 
 
 
 def _index_level(
-    name: str, arr: pa.ChunkedArray, field: dict[str, Any], set_type: SetType
+    name: str, native: Series, field: dict[str, Any], set_type: SetType
 ) -> CodedLevel | None:
     """One MultiIndex level as its sorted values and a code per row, as
-    ``MultiIndex.from_arrays`` makes it, built from the Arrow dictionary of the
-    column so no value is made per row. None for a column of another kind."""
-    numpy, pandas, arrow = _libs()
-    if str(field["dtype"]) == "category" or field.get("elem"):
+    ``MultiIndex.from_arrays`` makes it, built natively so no value is made per
+    row: from the dictionary of a string column, from the sorted distinct values
+    of an integer column. None for a column of another kind."""
+    np, pd = _pandas_libs()
+    if str(field["dtype"]) == "category" or field.get("elem") or native.length == 0:
         return None
-    if not (_is_text(arr.type) or arrow.types.is_integer(arr.type)) or arr.num_chunks == 0:
+    kind = DType(native.type)
+    if kind.is_integer:
+        codes, distinct = native.factorize()
+        values = pd.Index(_restore(name, distinct, field, set_type))
+        return values, np.asarray(codes._values_buffer()).astype(np.intp)
+    if not kind.is_text:
         return None
-    encoded = arr.dictionary_encode()
-    if encoded.num_chunks == 0:
-        return None
-    dictionary = encoded.chunk(0).dictionary
-    values = pandas.Index(_restore(name, arrow.chunked_array([dictionary]), field, set_type))
+    encoded = clean_dictionary(native)
+    codes, dictionary = encoded._dictionary_parts()
+    valid = null_mask(codes) == 0
+    # the code under a null row is unspecified: it points past the dictionary
+    raw = np.where(valid, np.asarray(flat(codes)._values_buffer()), len(dictionary)).astype(np.intp)
+    # The dictionary may hold an entry only null rows point at; it is no level value.
+    used = np.bincount(raw[valid], minlength=len(dictionary)) > 0
+    kept = np.flatnonzero(used)
+    values = pd.Index(_restore(name, dictionary.take(kept.tolist()), field, set_type))
     order = values.argsort()
-    rank: npt.NDArray[Any] = numpy.empty(len(order) + 1, dtype=numpy.intp)
-    rank[order] = numpy.arange(len(order))
-    rank[-1] = -1
-    codes: npt.NDArray[Any] = numpy.empty(len(arr), dtype=numpy.intp)
-    at = 0
-    for chunk in encoded.chunks:
-        if not chunk.dictionary.equals(dictionary):
-            return None
-        indices = chunk.indices.fill_null(-1).to_numpy(zero_copy_only=False)
-        codes[at : at + len(chunk)] = rank[indices]
-        at += len(chunk)
-    return values.take(order), codes
+    rank: npt.NDArray[Any] = np.full(len(dictionary) + 1, -1, dtype=np.intp)
+    rank[kept[order]] = np.arange(len(order))
+    out: npt.NDArray[Any] = np.where(valid, rank[raw], -1)
+    return values.take(order), out
 
 
 def _merged_header(headers: list[Header]) -> Header:
@@ -705,20 +727,11 @@ def _typed_empty(schema: dict[str, DType]) -> DataFrame | None:
     """A frame of no rows with the columns of ``schema``, or None when a dtype is
     not one a table reads. A streamed plan that filters every row out sends no
     morsel, so its collect has no columns of its own."""
-    _, _, pa = _libs()
-    from ._enums import DType as Kind
-
-    arrow = {
-        Kind.BOOL: pa.bool_(),
-        Kind.INT64: pa.int64(),
-        Kind.UINT64: pa.uint64(),
-        Kind.FLOAT64: pa.float64(),
-        Kind.STRING: pa.string(),
-    }
-    if not schema or any(t not in arrow for t in schema.values()):
+    kinds = (DType.BOOL, DType.INT64, DType.UINT64, DType.FLOAT64, DType.STRING)
+    if not schema or any(t not in kinds for t in schema.values()):
         return None
-    table = pa.table({n: pa.array([], type=arrow[t]) for n, t in schema.items()})
-    return DataFrame.from_arrow(table)
+    columns = [_ext._series_from_list([], int(t)) for t in schema.values()]
+    return DataFrame(_ext._dataframe_from_columns(list(schema), columns))
 
 
 def _carry_header(frame: DataFrame, header: Header | None) -> DataFrame:

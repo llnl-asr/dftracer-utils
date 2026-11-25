@@ -21,14 +21,14 @@ from typing import TYPE_CHECKING, Any, Sequence, cast
 from . import dftracer_utils_ext as _ext
 from ._agg import AggForm, AggKeyword, reduce_specs
 from ._apply import Row
-from ._enums import DType
+from ._convert import temporal_from_values, values_like
+from ._enums import DType, unit_letters
 from ._expr import Expr, col, collect_columns, lit, when
 from ._series import Series
 
 if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
-    import pyarrow as pa
 
     from ._dataframe import DataFrame
     from ._expr import Expr
@@ -221,19 +221,16 @@ def _awareness_differs(values: list[object], tz: object) -> bool:
     )
 
 
-def _stamp_type(values: list[object], arrow_type: pa.DataType) -> pa.DataType:
-    """The type a key column of timestamps is built in. A key keeps all its
-    precision (nanoseconds when a value has them, else microseconds) when the
-    labels are coarser, and the engine compares them in the finer unit, so a key
-    that is not a whole tick of the labels finds nothing instead of rounding
-    into a match."""
-    unit = getattr(arrow_type, "unit", None)
-    if unit not in ("s", "ms", "us") or not hasattr(arrow_type, "tz"):
-        return arrow_type
-    import pyarrow as pa
-
-    has_nanos = any(getattr(v, "nanosecond", 0) for v in values)
-    return pa.timestamp("ns" if has_nanos else "us", tz=arrow_type.tz)
+def _key_unit(values: list[object], level: Series) -> str:
+    """The unit a key column of timestamps or durations is built in. A timestamp
+    key keeps all its precision (nanoseconds when a value has them, else
+    microseconds) when the labels are coarser, and the engine compares them in
+    the finer unit, so a key that is not a whole tick of the labels finds nothing
+    instead of rounding into a match."""
+    unit = unit_letters(level.time_unit)
+    if level.dtype != DType.TIMESTAMP or unit == "ns":
+        return unit
+    return "ns" if any(getattr(v, "nanosecond", 0) for v in values) else "us"
 
 
 def _key_series(labels: Labels, level: int, values: list[object], scalar: bool = False) -> Series:
@@ -257,11 +254,13 @@ def _key_series(labels: Labels, level: int, values: list[object], scalar: bool =
         raise _Unkeyable
     lv = labels.level(level)
     assert lv is not None
-    arrow_type = lv.slice(0, 0).to_arrow().type
-    if _awareness_differs(values, getattr(arrow_type, "tz", None)):
+    zone = lv.timezone if own == DType.TIMESTAMP else ""
+    if _awareness_differs(values, zone or None):
         raise _Unkeyable
     try:
-        return Series.from_list(values, dtype=_stamp_type(values, arrow_type))
+        if own in (DType.TIMESTAMP, DType.DURATION):
+            return temporal_from_values(values, own, _key_unit(values, lv), zone)
+        return values_like(values, lv)
     except Exception:
         raise _Unkeyable from None
 
@@ -570,19 +569,21 @@ def _fits(value: object, own: DType, column: DType) -> bool:
 
 
 def _fill(value: object, n: int, like: Series) -> Series:
-    """``value`` repeated ``n`` times as a Series of ``like``'s type. A type a
-    native DType does not name in full (list, struct, timestamp, decimal, ...)
-    goes through its Arrow type."""
+    """``value`` repeated ``n`` times as a Series of ``like``'s full type: its
+    time unit, zone, decimal precision and scale, and for ``None`` its nested
+    type too."""
     column = like.dtype
     if (
         column.int_range is None
         and not column.is_float
         and not any(column in kinds for kinds in _SAME_KIND.values())
     ):
-        return Series.from_list([value] * n, dtype=like.to_arrow().type)
+        if value is None:
+            return like._nulls_like(n)
+        return values_like([value] * n, like)
     if value is not None and not _fits(value, Series.from_list([value]).dtype, column):
         raise TypeError(f"cannot assign {value!r} to a {column.name.lower()} column")
-    return Series.from_list([value] * n, dtype=column)
+    return values_like([value] * n, like)
 
 
 def _broadcast(value: object, n: int, like: Series | None) -> Series:
@@ -672,7 +673,7 @@ def assign_rows(df: DataFrame, rows: Rows, columns: list[str], value: object) ->
         except Exception as e:
             if type(e) in (TypeError, ValueError):
                 raise
-            # A pyarrow conversion error: the value does not fit the column.
+            # A conversion error: the value does not fit the column.
             raise TypeError(f"cannot assign {value!r} to column {name!r}: {e}") from None
         if mask is not None:
             if existing is None:

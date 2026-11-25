@@ -534,7 +534,7 @@ static dftu_series* gather_list_w(const dftu_series& base, const Idx* idx,
         offsets.push_back(static_cast<Off>(child_idx.size()));
     }
     auto* out = new dftu_series();
-    out->type = base.type;
+    dftracer::utils::dataframe::adopt_type_from(*out, base);
     out->encoding = Encoding::Flat;
     out->length = n;
     const std::size_t off_bytes = offsets.size() * sizeof(Off);
@@ -554,6 +554,33 @@ static dftu_series* gather_list(const dftu_series& base, const Idx* idx,
     return is_wide_offset_type(base.type)
                ? gather_list_w<std::int64_t, Idx>(base, idx, n, info)
                : gather_list_w<std::int32_t, Idx>(base, idx, n, info);
+}
+
+// FixedSizeList: row r is child rows [r * size, (r + 1) * size); a null row
+// (a negative index) gathers `size` null child rows, so the child keeps its
+// length of n * size.
+template <class Idx>
+static dftu_series* gather_fixed_list(const dftu_series& base, const Idx* idx,
+                                      std::int64_t n, const IdxInfo& info) {
+    const std::int64_t size = base.fixed_size();
+    if (!base.child() || size < 0) return nullptr;
+    dftracer::utils::dstd::Vector<std::int64_t> child_idx(
+        static_cast<std::size_t>(n * size));
+    for (std::int64_t i = 0; i < n; ++i)
+        for (std::int64_t j = 0; j < size; ++j)
+            child_idx[static_cast<std::size_t>(i * size + j)] =
+                idx[i] >= 0 ? static_cast<std::int64_t>(idx[i]) * size + j : -1;
+    dftu_series* child =
+        gather_column(*base.child(), child_idx.data(), n * size);
+    if (!child) return nullptr;
+    auto* out = new dftu_series();
+    dftracer::utils::dataframe::adopt_type_from(*out, base);
+    out->encoding = Encoding::Flat;
+    out->length = n;
+    out->set_child(adopt_series(child));
+    out->validity =
+        gather_validity(base, idx, n, out->null_count, info.has_neg);
+    return out;
 }
 
 // Bool: bit-packed, so a row is a bit, not a byte. A negative index gathers a
@@ -1013,7 +1040,10 @@ static dftu_series* gather_column(const dftu_series& base, const Idx* idx,
     if (base_kind == TypeId::String || base_kind == TypeId::Binary)
         return gather_varwidth(base, idx, n, info);
     if (base.type == TypeId::Struct) return gather_struct(base, idx, n, info);
-    if (base_kind == TypeId::List) return gather_list(base, idx, n, info);
+    if (base_kind == TypeId::List || base.type == TypeId::Map)
+        return gather_list(base, idx, n, info);
+    if (base.type == TypeId::FixedSizeList)
+        return gather_fixed_list(base, idx, n, info);
     if (base.type == TypeId::Bool) return gather_bool(base, idx, n, info);
 
     const std::size_t width =
@@ -1081,7 +1111,9 @@ static dftu_series* gather_column(const dftu_series& base, const Idx* idx,
 
 namespace {
 
-dftu_series* materialize_view(const dftu_series& v) {
+// `v` as a FLAT column of offsets, 64-bit when `wide_type` is a Large type or
+// the bytes need them.
+dftu_series* materialize_view(const dftu_series& v, TypeId wide_type) {
     constexpr std::size_t VIEW_BYTES = 16;
     constexpr std::int32_t INLINE_BYTES = 12;
     const std::int64_t n = v.length;
@@ -1099,13 +1131,15 @@ dftu_series* materialize_view(const dftu_series& v) {
     std::uint64_t total = 0;
     for (std::int64_t i = 0; i < n; ++i)
         if (valid(i)) total += static_cast<std::uint32_t>(size_of(i));
-    const bool wide = total > static_cast<std::uint64_t>(INT32_MAX);
+    const bool wide = is_wide_offset_type(wide_type) ||
+                      total > static_cast<std::uint64_t>(INT32_MAX);
 
     auto* out = new dftu_series();
     dftracer::utils::dataframe::adopt_type_from(*out, v);
     if (wide)
-        out->type = v.type == TypeId::String ? TypeId::LargeString
-                                             : TypeId::LargeBinary;
+        out->type = v.type == TypeId::String || v.type == TypeId::LargeString
+                        ? TypeId::LargeString
+                        : TypeId::LargeBinary;
     out->encoding = Encoding::Flat;
     out->length = n;
     out->validity = v.validity;
@@ -1152,11 +1186,15 @@ dftu_series* dftu_series_materialize(const dftu_series* v) {
         dftu_series* one = rechunk(*v);
         if (!one) return nullptr;
         if (one->encoding == Encoding::Flat) return one;
-        dftu_series* flat = dftu_series_materialize(one);
+        // The joined text is a VIEW of the narrow type; it keeps the chunks'
+        // Large type, which the column's schema already names.
+        dftu_series* flat = one->encoding == Encoding::View
+                                ? materialize_view(*one, v->type)
+                                : dftu_series_materialize(one);
         dftu_series_free(one);
         return flat;
     }
-    if (v->encoding == Encoding::View) return materialize_view(*v);
+    if (v->encoding == Encoding::View) return materialize_view(*v, v->type);
     if ((v->encoding != Encoding::Selection &&
          v->encoding != Encoding::Dictionary) ||
         !v->child())
@@ -1193,16 +1231,39 @@ dftu_series* dftu_series_materialize(const dftu_series* v) {
         return out;
     };
 
+    // Arrow lets an index under a null row hold any value, so with own nulls
+    // the indices are copied with -1 (a null row) there before the gather.
+    if (v->validity.block() && v->null_count > 0) {
+        const std::uint8_t* own = v->validity.data();
+        const bool wide = v->encoding == Encoding::Selection;
+        dftracer::utils::dstd::Vector<std::int64_t> idx(
+            static_cast<std::size_t>(v->length));
+        for (std::int64_t i = 0; i < v->length; ++i) {
+            const std::int64_t at =
+                wide ? reinterpret_cast<const std::int64_t*>(v->data.data())[i]
+                     : reinterpret_cast<const std::int32_t*>(v->data.data())[i];
+            const bool valid = (own[i >> 3] >> (i & 7)) & 1;
+            // A SELECTION's -1 is a null row as well; a DICTIONARY has none.
+            if (valid && (at >= base.length || (at < 0 && !wide)))
+                return nullptr;
+            idx[static_cast<std::size_t>(i)] = valid ? at : -1;
+        }
+        // Every own null row is -1 here, so the gather sets those nulls.
+        return gather_column(base, idx.data(), v->length);
+    }
     if (v->encoding == Encoding::Selection) {
         const std::int64_t* idx =
             reinterpret_cast<const std::int64_t*>(v->data.data());
         return with_own_nulls(gather_column(base, idx, v->length));
     }
     // Dictionary codes are int32 (they index a small distinct-value set);
-    // the gather reads them as they are.
+    // the gather reads them as they are, after a check that none is negative,
+    // which the gather would read as a null row.
     const std::int32_t* codes =
         reinterpret_cast<const std::int32_t*>(v->data.data());
-    return with_own_nulls(gather_column(base, codes, v->length));
+    const IdxInfo info = scan_indices(codes, v->length);
+    if (info.has_neg) return nullptr;
+    return with_own_nulls(gather_column(base, codes, v->length, &info));
 }
 
 namespace dftracer::utils::dataframe {
@@ -1233,6 +1294,27 @@ bool mask_bit(const dftu_series& m, std::int64_t i) {
     if (!is_valid(m, i)) return false;
     const std::uint8_t* b = m.data.data();
     return (b[i >> 3] & (1u << (i & 7))) != 0;
+}
+
+// Per-row pick between two nested columns of one type: both columns are
+// joined (a copy of every row of both), then the picked rows are taken (a
+// second copy). Null when the two columns differ in their nested types, field
+// names included: the join would otherwise merge two structs by field name.
+dftu_series* where_nested(const dftu_series& mask, const dftu_series& a,
+                          const dftu_series& b, std::int64_t n) {
+    using dftracer::utils::dataframe::Series;
+    const Series sa{new dftu_series(a)};
+    const Series sb{new dftu_series(b)};
+    if (sa.data_type() != sb.data_type()) return nullptr;
+    const Series* parts[2] = {&sa, &sb};
+    auto joined = dftracer::utils::dataframe::concat_columns(
+        dftracer::utils::dstd::Span<const Series* const>(parts, 2));
+    if (!joined) return nullptr;
+    dftracer::utils::dstd::Vector<std::int64_t> pick(
+        static_cast<std::size_t>(n));
+    for (std::int64_t i = 0; i < n; ++i)
+        pick[static_cast<std::size_t>(i)] = mask_bit(mask, i) ? i : n + i;
+    return dftu_series_take(joined->handle(), pick.data(), n);
 }
 
 // Per-row pick between two FLAT columns of one type. The validity bit follows
@@ -1300,7 +1382,9 @@ dftu_series* dftu_series_where(const dftu_series* mask, const dftu_series* a,
     if (mask->type != TypeId::Bool || mask->encoding != Encoding::Flat)
         return nullptr;
     const std::int64_t n = mask->length;
-    if (a->length != n || b->length != n || a->type != b->type) return nullptr;
+    if (a->length != n || b->length != n || a->type != b->type ||
+        !a->params.same(a->type, b->params))
+        return nullptr;
     dftu_series* fa = dftu_series_materialize(a);
     dftu_series* fb = dftu_series_materialize(b);
     if (!fa || !fb) {
@@ -1355,6 +1439,8 @@ dftu_series* dftu_series_where(const dftu_series* mask, const dftu_series* a,
                         src + static_cast<std::size_t>(i) * width, width);
         }
         out->validity = where_validity(*mask, *fa, *fb, n, out->null_count);
+    } else if (is_nested(fa->type)) {
+        out = where_nested(*mask, *fa, *fb, n);
     }
     dftu_series_free(fa);
     dftu_series_free(fb);

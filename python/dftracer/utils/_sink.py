@@ -190,7 +190,7 @@ def _events_problem(schema: Mapping[str, DType]) -> str | None:
     if missing:
         return f"the plan has no column {', '.join(repr(m) for m in missing)}"
     for name in _EVENT_TEXT:
-        if schema[name] not in (DType.STRING, DType.LARGE_STRING):
+        if not schema[name].is_text:
             return f"column {name!r} is {schema[name].name.lower()}, not text"
     for name in _EVENT_INT + (("dur",) if "dur" in schema else ()):
         if not schema[name].is_integer:
@@ -199,7 +199,7 @@ def _events_problem(schema: Mapping[str, DType]) -> str | None:
         if name in _EVENT_TEXT or name in _EVENT_INT or name == "dur":
             continue
         if name in _EVENT_HASHES:
-            if dtype not in (DType.STRING, DType.LARGE_STRING):
+            if not dtype.is_text:
                 return f"column {name!r} is {dtype.name.lower()}, not text"
             continue
         if not name.startswith("args.") or len(name) == len("args."):
@@ -249,7 +249,7 @@ def _carried_fits(field: Mapping[str, Any], dtype: DType) -> bool:
     if text == "category":
         return dtype in _CATEGORY_TYPES
     if text in ("object", "str", "string", "large_string"):
-        return dtype in (DType.STRING, DType.LARGE_STRING)
+        return dtype.is_text
     if text in ("bool", "boolean"):
         return dtype == DType.BOOL
     if text == "float32" or full.startswith("float["):

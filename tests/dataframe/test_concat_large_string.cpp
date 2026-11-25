@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
@@ -146,5 +147,58 @@ TEST_SUITE("concat string and large_string") {
                                                 .submit(lx.concat(ly).collect())
                                                 .get());
         CHECK(cells_of(out.column("s")) == Cells{"a", "b", "c"});
+    }
+
+    TEST_CASE("a chunked large_string column joins as large_string") {
+        dstd::Vector<Series> parts;
+        parts.push_back(make_large_utf8({"a", "bb"}));
+        parts.push_back(make_large_utf8({"ccc", dstd::nullopt}));
+        Series chunked =
+            dftu_utils_test::ok(dataframe::chunked_column(std::move(parts)));
+        REQUIRE(chunked.encoding() == Encoding::Chunked);
+        REQUIRE(chunked.type() == TypeId::LargeString);
+        Series joined{dftu_series_materialize(chunked.handle())};
+        REQUIRE(joined.valid());
+        CHECK(joined.encoding() == Encoding::Flat);
+        CHECK(joined.type() == TypeId::LargeString);
+        CHECK(joined.handle()->wide_offsets());
+        CHECK(cells_of(joined) == Cells{"a", "bb", "ccc", dstd::nullopt});
+    }
+
+    TEST_CASE("one part is the column itself, not joined") {
+        dstd::Vector<Series> parts;
+        parts.push_back(make_large_utf8({"a", "b"}));
+        const dftu_series* before = parts.front().handle();
+        Series one =
+            dftu_utils_test::ok(dataframe::chunked_column(std::move(parts)));
+        CHECK(one.handle() == before);
+    }
+
+    TEST_CASE(
+        "string and large_string cast into each other on the same bytes") {
+        Series s = make_string({"a", dstd::nullopt, "ccc"});
+        Series wide = s.cast(TypeId::LargeString);
+        REQUIRE(wide.valid());
+        CHECK(wide.type() == TypeId::LargeString);
+        CHECK(wide.handle()->data.data() == s.handle()->data.data());
+        CHECK(cells_of(wide) == Cells{"a", dstd::nullopt, "ccc"});
+        Series back = wide.cast(TypeId::String);
+        REQUIRE(back.valid());
+        CHECK(back.type() == TypeId::String);
+        CHECK(back.handle()->data.data() == s.handle()->data.data());
+        CHECK(cells_of(back) == Cells{"a", dstd::nullopt, "ccc"});
+    }
+
+    TEST_CASE("a chunked large_string column casts chunk by chunk") {
+        dstd::Vector<Series> parts;
+        parts.push_back(make_large_utf8({"a"}));
+        parts.push_back(make_large_utf8({"bb", "c"}));
+        Series chunked =
+            dftu_utils_test::ok(dataframe::chunked_column(std::move(parts)));
+        Series narrow = chunked.cast(TypeId::String);
+        REQUIRE(narrow.valid());
+        CHECK(narrow.encoding() == Encoding::Chunked);
+        CHECK(narrow.type() == TypeId::String);
+        CHECK(cells_of(narrow) == Cells{"a", "bb", "c"});
     }
 }

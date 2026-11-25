@@ -482,3 +482,12 @@ def test_stack_with_an_all_null_column_next_to_numbers():
     _stacked_values(pf, future_stack=False)
     _stacked_values(pf, future_stack=False, dropna=False)
     _stacked_values(pd.DataFrame({"u": [1, 2], "w": [None, None]}), future_stack=True)
+
+
+def test_a_view_string_level_converts_to_the_pandas_string_dtype():
+    # The column names of an unstacked frame are a view string level, which
+    # pyarrow 17 cannot cast to the large_string of pandas' string dtype; it
+    # is made flat natively.
+    skip_below_pandas3()
+    got = DataFrame.from_pandas(FRAMES["none"]).unstack().to_pandas()
+    _same(got, FRAMES["none"].unstack())

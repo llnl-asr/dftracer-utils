@@ -55,7 +55,7 @@ still import and export every column type:
   needs pyarrow (pandas itself needs it to hold one).
   A pandas ``str`` column that pyarrow holds, the pandas 3 default, shares its text buffer with no copy.
   A pandas ``category`` column whose categories are strings becomes a dictionary-encoded string column; other categories keep their values.
-  With pyarrow installed the column is built from the category codes and keeps the category order, and ``to_pandas`` gives back the categories that are used.
+  The column is built from the category codes, with or without pyarrow, and keeps the category order, and ``to_pandas`` gives back the categories that are used.
 - ``from_parquet`` reads through ``pyarrow.parquet``.
 - ``from_dict`` builds the frame natively from Series, lists of scalars, NumPy
   arrays and pandas or polars Series; a mapping with anything else (a pyarrow
@@ -78,8 +78,8 @@ still import and export every column type:
   ``decimal.Decimal`` (decimal128 with the widest scale, up to 38 digits), with
   ``None`` for null, natively. Lists and tuples become list columns and dicts struct
   columns (keys in first-seen order, a missing key null), to any depth. Pass a
-  native ``DType`` as ``dtype=`` to type an empty or all-null list; a pyarrow
-  type goes through pyarrow.
+  native ``DType``, a dtype name such as ``"float64"`` or a simple pyarrow
+  type as ``dtype=`` to type an empty or all-null list.
 
 Every ``from_*`` path except ``from_arrow`` works without pyarrow, apart from
 the cases above; ``from_arrow`` itself needs only the capsule protocol.

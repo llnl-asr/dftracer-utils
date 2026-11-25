@@ -21,6 +21,7 @@ from typing import (
     cast,
 )
 
+from ._convert import is_na
 from ._enums import DType
 from ._label_align import LabelAlignMixin
 from ._levels import (
@@ -285,7 +286,7 @@ def _plain(v: ReplaceScalar) -> PlainScalar:
 
 def _kind(v: PlainScalar) -> str:
     """What a replace value is: ``null``, ``nan``, ``str`` or ``num``."""
-    if v is None or type(v).__name__ == "NAType":  # pd.NA, without importing pandas
+    if is_na(v):
         return "null"
     if isinstance(v, str):
         return "str"

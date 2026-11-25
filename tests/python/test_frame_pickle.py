@@ -79,7 +79,11 @@ def test_non_contiguous_columns_round_trip():
         buffers = []
         stream = pickle.dumps(frame, protocol=5, buffer_callback=buffers.append)
         back = pickle.loads(stream, buffers=buffers)
-        assert back.to_arrow().cast(frame.to_arrow().schema).equals(frame.to_arrow()), name
+        assert back.columns == frame.columns, name
+        if name != "dictionary":
+            # a dictionary column pickles as plain strings
+            assert back.to_arrow().schema == frame.to_arrow().schema, name
+        assert back.equals(frame), name
 
 
 def test_large_frame_sends_its_columns_with_no_copy():

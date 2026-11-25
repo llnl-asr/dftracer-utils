@@ -87,6 +87,62 @@ Py_ssize_t Series_length_sq(PyObject* self) {
 // so numpy reads it (np.asarray) with no pyarrow. Bit-packed Bool, strings,
 // nulls, and non-FLAT encodings raise BufferError; the Python wrapper then
 // falls back to the Arrow path.
+// The buffer-protocol format and item size of a fixed-width numeric type;
+// false, with a BufferError set, for any other type.
+bool numeric_format(TypeId type, const char** fmt, Py_ssize_t* itemsize) {
+    // numpy gives its fixed-width int64 types the C long code where long is 64
+    // bits. With "q" and "Q" it makes longlong and ulonglong, which pandas
+    // cannot factorize, so a merge on such a key fails.
+    constexpr const char* INT64_FORMAT = sizeof(long) == 8 ? "l" : "q";
+    constexpr const char* UINT64_FORMAT = sizeof(long) == 8 ? "L" : "Q";
+    switch (type) {
+        case TypeId::Int8:
+            *fmt = "b";
+            *itemsize = 1;
+            return true;
+        case TypeId::Int16:
+            *fmt = "h";
+            *itemsize = 2;
+            return true;
+        case TypeId::Int32:
+            *fmt = "i";
+            *itemsize = 4;
+            return true;
+        case TypeId::Int64:
+            *fmt = INT64_FORMAT;
+            *itemsize = 8;
+            return true;
+        case TypeId::Uint8:
+            *fmt = "B";
+            *itemsize = 1;
+            return true;
+        case TypeId::Uint16:
+            *fmt = "H";
+            *itemsize = 2;
+            return true;
+        case TypeId::Uint32:
+            *fmt = "I";
+            *itemsize = 4;
+            return true;
+        case TypeId::Uint64:
+            *fmt = UINT64_FORMAT;
+            *itemsize = 8;
+            return true;
+        case TypeId::Float32:
+            *fmt = "f";
+            *itemsize = 4;
+            return true;
+        case TypeId::Float64:
+            *fmt = "d";
+            *itemsize = 8;
+            return true;
+        default:
+            PyErr_SetString(PyExc_BufferError,
+                            "Series type has no plain numeric buffer");
+            return false;
+    }
+}
+
 int Series_getbuffer(PyObject* self, Py_buffer* view, int flags) {
     view->obj = nullptr;
     Series* a = as_native<Series>(self);
@@ -101,59 +157,11 @@ int Series_getbuffer(PyObject* self, Py_buffer* view, int flags) {
                         "Series is not a flat, non-null column");
         return -1;
     }
-    // numpy gives its fixed-width int64 types the C long code where long is 64
-    // bits. With "q" and "Q" it makes longlong and ulonglong, which pandas
-    // cannot factorize, so a merge on such a key fails.
-    constexpr const char* INT64_FORMAT = sizeof(long) == 8 ? "l" : "q";
-    constexpr const char* UINT64_FORMAT = sizeof(long) == 8 ? "L" : "Q";
     const char* fmt = nullptr;
     Py_ssize_t itemsize = 0;
-    switch (static_cast<TypeId>(dftu_series_type(h))) {
-        case TypeId::Int8:
-            fmt = "b";
-            itemsize = 1;
-            break;
-        case TypeId::Int16:
-            fmt = "h";
-            itemsize = 2;
-            break;
-        case TypeId::Int32:
-            fmt = "i";
-            itemsize = 4;
-            break;
-        case TypeId::Int64:
-            fmt = INT64_FORMAT;
-            itemsize = 8;
-            break;
-        case TypeId::Uint8:
-            fmt = "B";
-            itemsize = 1;
-            break;
-        case TypeId::Uint16:
-            fmt = "H";
-            itemsize = 2;
-            break;
-        case TypeId::Uint32:
-            fmt = "I";
-            itemsize = 4;
-            break;
-        case TypeId::Uint64:
-            fmt = UINT64_FORMAT;
-            itemsize = 8;
-            break;
-        case TypeId::Float32:
-            fmt = "f";
-            itemsize = 4;
-            break;
-        case TypeId::Float64:
-            fmt = "d";
-            itemsize = 8;
-            break;
-        default:
-            PyErr_SetString(PyExc_BufferError,
-                            "Series type has no plain numeric buffer");
-            return -1;
-    }
+    if (!numeric_format(static_cast<TypeId>(dftu_series_type(h)), &fmt,
+                        &itemsize))
+        return -1;
     const void* data = dftu_series_data(h);
     std::int64_t n = dftu_series_length(h);
     if (!data && n > 0) {
@@ -183,6 +191,85 @@ int Series_getbuffer(PyObject* self, Py_buffer* view, int flags) {
 
 void Series_releasebuffer(PyObject* self, Py_buffer*) {
     --reinterpret_cast<SeriesObject*>(self)->exports;
+}
+
+// The values of a FLAT fixed-width numeric column as a buffer, nulls or not
+// (the values under a null are unspecified). It holds its own share of the
+// column, so a later _replace of the Series cannot change or free what a view
+// reads; _values_buffer() wraps it in a memoryview.
+struct ValuesObject {
+    PyObject_HEAD Series* col;
+    const char* format;
+    Py_ssize_t itemsize;
+    Py_ssize_t shape;
+    Py_ssize_t stride;
+};
+
+PyTypeObject ValuesType;
+PyBufferProcs Values_as_buffer = {};
+
+void Values_dealloc(ValuesObject* self) {
+    // made by dstd::make_unique, so freed by its deleter
+    dftracer::utils::dstd::UniquePtr<Series>{self->col};
+    Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
+}
+
+int Values_getbuffer(PyObject* self, Py_buffer* view, int flags) {
+    view->obj = nullptr;
+    auto* v = reinterpret_cast<ValuesObject*>(self);
+    if ((flags & PyBUF_WRITABLE) == PyBUF_WRITABLE) {
+        PyErr_SetString(PyExc_BufferError, "Series buffer is read-only");
+        return -1;
+    }
+    static const char EMPTY = 0;
+    const void* data = dftu_series_data(v->col->handle());
+    if (!data) data = &EMPTY;
+    Py_INCREF(self);
+    view->obj = self;
+    view->buf = const_cast<void*>(data);
+    view->len = v->shape * v->itemsize;
+    view->readonly = 1;
+    view->itemsize = v->itemsize;
+    view->format =
+        (flags & PyBUF_FORMAT) ? const_cast<char*>(v->format) : nullptr;
+    view->ndim = 1;
+    view->shape = &v->shape;
+    view->strides = &v->stride;
+    view->suboffsets = nullptr;
+    view->internal = nullptr;
+    return 0;
+}
+
+// _values_buffer() -> a read-only memoryview over the values of a FLAT numeric
+// column, with no copy and nulls allowed. BufferError for any other column.
+PyObject* Series_values_buffer(PyObject* self, PyObject*) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    dftu_series* h = a->handle();
+    if (dftu_series_encoding(h) != 0) {
+        PyErr_SetString(PyExc_BufferError, "Series is not a flat column");
+        return nullptr;
+    }
+    const char* fmt = nullptr;
+    Py_ssize_t itemsize = 0;
+    if (!numeric_format(static_cast<TypeId>(dftu_series_type(h)), &fmt,
+                        &itemsize))
+        return nullptr;
+    const std::int64_t n = dftu_series_length(h);
+    if (!dftu_series_data(h) && n > 0) {
+        PyErr_SetString(PyExc_BufferError, "Series has no contiguous buffer");
+        return nullptr;
+    }
+    auto* v = PyObject_New(ValuesObject, &ValuesType);
+    if (!v) return nullptr;
+    v->col = dftracer::utils::dstd::make_unique<Series>(a->share()).release();
+    v->format = fmt;
+    v->itemsize = itemsize;
+    v->shape = static_cast<Py_ssize_t>(n);
+    v->stride = itemsize;
+    PyObject* view = PyMemoryView_FromObject(reinterpret_cast<PyObject*>(v));
+    Py_DECREF(v);
+    return view;
 }
 
 // _replace(other): this Series takes the column, the name and the labels of
@@ -240,6 +327,19 @@ PyObject* Series_get_timezone(PyObject* self, void*) {
     Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     return PyUnicode_FromString(dftu_series_timezone(a->handle()));
+}
+
+PyObject* Series_get_decimal(PyObject* self, void*) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    return Py_BuildValue("(ii)", dftu_series_decimal_precision(a->handle()),
+                         dftu_series_decimal_scale(a->handle()));
+}
+
+PyObject* Series_get_fixed_size(PyObject* self, void*) {
+    Series* a = as_native<Series>(self);
+    if (!a) return nullptr;
+    return PyLong_FromLong(dftu_series_fixed_size(a->handle()));
 }
 
 PyObject* Series_get_is_json(PyObject* self, void*) {
@@ -735,6 +835,23 @@ PyMethodDef Series_methods[] = {
     {"_to_pylist", Series_to_pylist, METH_NOARGS,
      "_to_pylist() -> list of Python values, None for null; TypeError for a "
      "column type with no native conversion."},
+    {"_dictionary_parts", Series_dictionary_parts, METH_NOARGS,
+     "_dictionary_parts() -> (codes, values): the FLAT Int32 codes and the "
+     "values column of a dictionary-encoded column, sharing its buffers."},
+    {"_values_buffer", Series_values_buffer, METH_NOARGS,
+     "_values_buffer() -> memoryview: the values of a flat numeric column, "
+     "nulls included (unspecified under a null), with no copy."},
+    {"_plain_text", Series_plain_text, METH_NOARGS,
+     "_plain_text() -> Series: the column with each view string column (at "
+     "the top, in the dictionary or in a chunk) made flat; the rest shared."},
+    {"_joined_dictionary", Series_joined_dictionary, METH_NOARGS,
+     "_joined_dictionary() -> Series or None: a chunked column of dictionary "
+     "chunks as one dictionary column; None for any other column."},
+    {"_nulls_like", Series_nulls_like, METH_O,
+     "_nulls_like(n) -> Series: n null rows of this column's full type."},
+    {"_null_bytes", Series_null_bytes, METH_NOARGS,
+     "_null_bytes() -> bytearray or None: a byte per row, 1 where the row is "
+     "null; None when there are no nulls."},
     {"_physical", Series_physical, METH_NOARGS,
      "_physical() -> Series: the integers of a date, time, timestamp, "
      "duration or float16 column (buffers shared)."},
@@ -1022,6 +1139,13 @@ PyGetSetDef Series_getset[] = {
     {"timezone", Series_get_timezone, nullptr,
      "Zone name of a Timestamp column; '' for a naive one or another type.",
      nullptr},
+    {"_decimal", Series_get_decimal, nullptr,
+     "(precision, scale) of a Decimal column; (0, 0) for another type.",
+     nullptr},
+    {"_fixed_size", Series_get_fixed_size, nullptr,
+     "Width of a FixedSizeBinary column or items per row of a FixedSizeList; "
+     "0 for another type.",
+     nullptr},
     {"name", Series_get_name, Series_set_name,
      "The name of the Series, None when it has none. Ops keep it as pandas "
      "does: an elementwise or transform op gives the result this name, a "
@@ -1169,6 +1293,15 @@ int init_series(PyObject* m) {
     // subclass builds one from Python data in its own __new__.
     SeriesType.tp_new = nullptr;
     if (register_type(m, &SeriesType, "Series") < 0) return -1;
+    ValuesType = {};
+    ValuesType.ob_base = {PyObject_HEAD_INIT(nullptr) 0};
+    ValuesType.tp_name = "dftracer.utils.dftracer_utils_ext._SeriesValues";
+    ValuesType.tp_basicsize = sizeof(ValuesObject);
+    ValuesType.tp_flags = Py_TPFLAGS_DEFAULT;
+    ValuesType.tp_dealloc = reinterpret_cast<destructor>(Values_dealloc);
+    Values_as_buffer.bf_getbuffer = Values_getbuffer;
+    ValuesType.tp_as_buffer = &Values_as_buffer;
+    if (PyType_Ready(&ValuesType) < 0) return -1;
     if (init_accessors(m) < 0) return -1;
     if (init_windows(m) < 0) return -1;
 
@@ -1299,6 +1432,20 @@ int init_series(PyObject* m) {
     if (!bytes_fn) return -1;
     if (PyModule_AddObject(m, "_series_from_bytes", bytes_fn) < 0) {
         Py_DECREF(bytes_fn);
+        return -1;
+    }
+
+    static PyMethodDef from_dictionary_def = {
+        "_series_from_dictionary", series_from_dictionary, METH_VARARGS,
+        "_series_from_dictionary(codes, values) -> Series: a dictionary column "
+        "over a flat Int32 `codes` column (buffer shared; a null or negative "
+        "code is a null row) and `values` (shared); ValueError for a code "
+        "past the values."};
+    PyObject* dictionary_fn =
+        PyCFunction_NewEx(&from_dictionary_def, nullptr, nullptr);
+    if (!dictionary_fn) return -1;
+    if (PyModule_AddObject(m, "_series_from_dictionary", dictionary_fn) < 0) {
+        Py_DECREF(dictionary_fn);
         return -1;
     }
 

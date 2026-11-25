@@ -77,11 +77,7 @@ def unnest(
     ``keep_empty=True`` it emits one row whose exploded column(s) are null (SQL
     outer/left unnest). Row order is input order, then element order within a row.
     """
-    import pyarrow as pa
-
-    if isinstance(result, pa.RecordBatchReader):
-        result = result.read_all()
-    return _DataFrame.from_arrow(pa.table(result)).unnest(column, keep_empty).to_arrow()
+    return _DataFrame.from_arrow(result).unnest(column, keep_empty).to_arrow()
 
 
 def _plugin_key(plugin: str | type) -> str:

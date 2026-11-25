@@ -569,7 +569,9 @@ def emit_flows(
         out += _step_fn(
             fn,
             cfg_pre,
-            has_stores,
+            # A task cannot read the store, and the tasks of one jit.all run
+            # at once, so only the finalize step writes the shared store context.
+            has_stores and fn.sig is None,
             "cap" in uses,
             root_close_lines(chans) if fn.sig is None else None,
         )

@@ -91,7 +91,7 @@ def test_all_gives_the_results_in_order_and_runs_the_tasks_at_once(trace):
         @jit.finalize
         async def done(self) -> None:
             a, b, c, d = await jit.all(
-                self.work(1, 0.25), self.work(2, 0.25), self.work(3, 0.25), self.work(4, 0.25)
+                self.work(1, 0.5), self.work(2, 0.5), self.work(3, 0.5), self.work(4, 0.5)
             )
             jit.emit("a", a)
             jit.emit("b", b)
@@ -101,8 +101,10 @@ def test_all_gives_the_results_in_order_and_runs_the_tasks_at_once(trace):
             jit.emit("p", p)
             jit.emit("q", q)
 
+    # built before the clock starts: the JIT compile time is no part of the run
+    plugins = Plugins([Fan])
     start = time.monotonic()
-    results = Plugins([Fan]).run(trace).results
+    results = plugins.run(trace).results
     elapsed = time.monotonic() - start
     assert _bytes(results) == {
         "a": b"10",
@@ -112,8 +114,95 @@ def test_all_gives_the_results_in_order_and_runs_the_tasks_at_once(trace):
         "p": b"1.5",
         "q": b"50",
     }
-    # Four tasks of 0.25 s one after the other would take a second.
-    assert elapsed < 0.9
+    # Four tasks of 0.5 s one after the other would take two seconds.
+    assert elapsed < 1.5
+
+
+def test_tasks_that_run_at_once_make_their_jobs_at_once(trace):
+    # Each task makes three sleep jobs, so the tasks of one jit.all make
+    # jobs on many threads at the same time.
+    @jit.plugin
+    class Busy:
+        n: int = 0
+
+        @jit.each_event
+        def step(self, e):
+            self.n += 1
+
+        @jit.task
+        async def work(self, a: int) -> int:
+            await jit.sleep(0.0)
+            await jit.sleep(0.0)
+            await jit.sleep(0.0)
+            return a
+
+        @jit.finalize
+        async def done(self) -> None:
+            t = 0
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            t += a + b + c + d
+            jit.emit("t", t)
+
+    for _ in range(10):
+        assert _bytes(Plugins([Busy]).run(trace).results) == {"t": b"300"}
 
 
 def test_any_takes_the_first_and_cancels_the_rest_at_their_await(trace):
@@ -435,6 +524,53 @@ def test_a_store_get_is_awaited_in_finalize(trace, tmp_path):
     store.flush()
     store.close()
     assert _bytes(Plugins([Reads]).run(trace, index_dir=idx).results) == {"a": b"42", "b": b"5"}
+
+
+def test_a_store_get_after_tasks_that_ran_at_once(trace, tmp_path):
+    from dftracer.utils.store import Store as PyStore
+
+    idx = str(tmp_path / "idx")
+
+    @jit.plugin
+    class Touch:
+        n: int = 0
+
+        @jit.each_event
+        def step(self, e):
+            self.n += 1
+
+    Plugins([Touch]).run(trace, index_dir=idx)
+
+    @jit.plugin
+    class Mixed:
+        runs: jit.Store[int, int]
+        n: int = 0
+
+        @jit.each_event
+        def step(self, e):
+            self.n += 1
+
+        @jit.task
+        async def work(self, a: int) -> int:
+            await jit.sleep(0.0)
+            await jit.sleep(0.0)
+            return a
+
+        @jit.finalize
+        async def done(self) -> None:
+            a, b, c, d = await jit.all(self.work(1), self.work(2), self.work(3), self.work(4))
+            v = await self.runs.get(1, 0)
+            jit.emit("t", a + b + c + d + v)
+
+    name = Path(jit.compile_class(Mixed)).stem
+    store = PyStore.open(os.path.join(idx, ".dftindex", "store"))
+    ns = store.namespace(f"plugin.{name}.runs", 1, durable=True, shared=True)
+    with store.batch(ns, None) as batch:
+        batch.put(1, 32)
+    store.flush()
+    store.close()
+    for _ in range(5):
+        assert _bytes(Plugins([Mixed]).run(trace, index_dir=idx).results) == {"t": b"42"}
 
 
 # ---- compile errors --------------------------------------------------------

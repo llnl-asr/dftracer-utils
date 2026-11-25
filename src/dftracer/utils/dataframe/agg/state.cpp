@@ -1482,14 +1482,18 @@ dstd::Result<void> agg_accumulate(AggState& st,
                     st.specs[s].param = 1.0 + static_cast<double>(t);
                 continue;
             }
-            if (set_is_list(t) && set_scalar_type(vc->child(0).type())) {
+            // The element type, read from the type alone: child(0) of a
+            // SELECTION would materialize the column.
+            const DataType vt = set_is_list(t) ? vc->data_type() : DataType{};
+            const TypeId elem =
+                vt.fields.empty() ? TypeId::Unknown : vt.fields.front().type.id;
+            if (set_is_list(t) && set_scalar_type(elem)) {
                 if (!vc->is_flat())
                     return common::make_error<
                         "set_union: aggregate '{}' needs a flat list column">(
                         common::ErrorCode::InvalidArgument, st.specs[s].out);
                 if (set_typed(st.specs[s]))
-                    st.specs[s].param =
-                        1.0 + static_cast<double>(vc->child(0).type());
+                    st.specs[s].param = 1.0 + static_cast<double>(elem);
                 continue;
             }
             return common::make_error<
@@ -1497,7 +1501,7 @@ dstd::Result<void> agg_accumulate(AggState& st,
                 "a string, bool, number or a list of those">(
                 common::ErrorCode::InvalidArgument, st.specs[s].out,
                 (set_is_list(t)
-                     ? dstd::fmt<"a list of {}">(type_name(vc->child(0).type()))
+                     ? dstd::fmt<"a list of {}">(type_name(elem))
                      : dstd::fmt<"a column of type {}">(type_name(t))));
         }
         for (std::size_t s = 0; s < st.specs.size(); ++s) {

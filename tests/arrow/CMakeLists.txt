@@ -18,6 +18,7 @@ set(ARROW_TEST_SOURCES
     test_arrow_view.cpp
     test_arrow_zero_copy.cpp
     test_arrow_type_parameters.cpp
+    test_chunked_nested_export.cpp
 )
 
 foreach(test_file ${ARROW_TEST_SOURCES})

@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <coroutine>
 #include <cstdint>
 #include <string_view>
 #include <thread>
@@ -35,6 +36,24 @@ coro::detail::Coro drive(coro::CoroTask<void> task, std::atomic<bool>& done,
     error = std::move(settled.error);
     done.store(true, std::memory_order_release);
 }
+
+/// Waits on @p op and sets @p parked once the wait has suspended, so a stop
+/// sent after the flag finds the call parked. A stop that comes before the
+/// wait ends the task at the co_await and never touches the call.
+struct ParkedWait {
+    comm::Op<void>& op;
+    std::atomic<bool>& parked;
+
+    bool await_ready() const noexcept { return op.await_ready(); }
+    template <class Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        std::atomic<bool>* flag = &parked;
+        const bool suspended = op.await_suspend(handle);
+        flag->store(true, std::memory_order_release);
+        return suspended;
+    }
+    dstd::Result<void> await_resume() { return op.await_resume(); }
+};
 
 }  // namespace
 
@@ -258,22 +277,22 @@ TEST_SUITE("CommOp") {
     TEST_CASE("a stopped scope leaves a barrier that will never complete") {
         Runtime rt(2);
         comm::Communicator communicator = make_communicator(2, *rt.executor());
-        std::atomic<bool> registered{false};
+        std::atomic<bool> parked{false};
         std::atomic<bool> child_end{false};
 
         auto driver =
-            coro::with_scope([&communicator, &registered, &child_end](
+            coro::with_scope([&communicator, &parked, &child_end](
                                  coro::Scope& scope) -> coro::CoroTask<void> {
-                scope.spawn([&communicator, &registered,
+                scope.spawn([&communicator, &parked,
                              &child_end]() -> coro::CoroTask<void> {
                     comm::Group group = communicator.world(0);
                     comm::Op<void> call = group.barrier();
-                    registered.store(true, std::memory_order_release);
-                    auto outcome = co_await call;
+                    ParkedWait wait{call, parked};
+                    auto outcome = co_await wait;
                     (void)outcome;
                     child_end.store(true, std::memory_order_release);
                 });
-                co_await dftu_comm_test::wait_flag(registered);
+                co_await dftu_comm_test::wait_flag(parked);
                 co_await coro::yield();
                 scope.request_stop();
                 co_return;

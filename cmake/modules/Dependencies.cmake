@@ -900,6 +900,11 @@ function(need_vectorscan)
       list(APPEND hs_args "-DCMAKE_${lang}_FLAGS=${hs_flags}")
     endif()
   endforeach()
+  # Older CMake does not know this variable and warns that it is unused.
+  set(hs_policy_arg "")
+  if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.0)
+    set(hs_policy_arg -DCMAKE_POLICY_VERSION_MINIMUM=3.5)
+  endif()
   set(hs_fixed_args
       -Wno-dev
       -DCMAKE_BUILD_TYPE=${hs_build_type}
@@ -907,7 +912,7 @@ function(need_vectorscan)
       -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
       -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-      -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+      ${hs_policy_arg}
       -DBUILD_STATIC_LIBS=ON
       -DBUILD_SHARED_LIBS=OFF
       -DBUILD_UNIT=OFF

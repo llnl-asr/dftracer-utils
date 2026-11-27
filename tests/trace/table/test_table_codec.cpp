@@ -666,6 +666,59 @@ TEST_SUITE("trace::table codec") {
         CHECK(ok_read.frame.columns[0].values<std::uint64_t>()[0] == U64_MAX);
     }
 
+    TEST_CASE("a List column writes each cell as a JSON array") {
+        TestEnvironment env(0);
+        // [["a", "b"], [], [null, "c"]]
+        const dstd::StringView items[] = {"a", "b", "", "c"};
+        const std::uint8_t item_valid[1] = {0x0b};
+        Series child = Series::strings(items, item_valid);
+        const std::int32_t offsets[] = {0, 2, 2, 4};
+        Series list = Series::list(offsets, std::move(child));
+        DataFrame frame;
+        frame.names.push_back(dstd::SharedString("tags"));
+        frame.columns.push_back(std::move(list));
+        const dstd::String fields[] = {
+            field_json("tags", "object", "\"elem\":\"list\"")};
+        const dstd::StringView raw[] = {"tags"};
+        WriteOptions options;
+        options.raw_columns = raw;
+        options.compress = false;
+        const dstd::String path = env.dir() + "/list.pfw";
+        dftu_utils_test::ok(
+            write_table(frame, path, header_json(3, fields), options));
+        auto t = dftu_utils_test::ok(read_table(path));
+        const Series& back = t.frame.columns[0];
+        CHECK(back.string_at(0) == "[\"a\",\"b\"]");
+        CHECK(back.string_at(1) == "[]");
+        CHECK(back.string_at(2) == "[null,\"c\"]");
+    }
+
+    TEST_CASE("a List column with a dictionary child writes its values") {
+        TestEnvironment env(0);
+        // [["x", "y"], ["x"]], the items dictionary-encoded
+        const dstd::StringView items[] = {"x", "y", "x"};
+        Series child = Series::strings(items).dictionary_encode();
+        REQUIRE(child.encoding() == dataframe::Encoding::Dictionary);
+        const std::int32_t offsets[] = {0, 2, 3};
+        Series list = Series::list(offsets, std::move(child));
+        DataFrame frame;
+        frame.names.push_back(dstd::SharedString("tags"));
+        frame.columns.push_back(std::move(list));
+        const dstd::String fields[] = {
+            field_json("tags", "object", "\"elem\":\"list\"")};
+        const dstd::StringView raw[] = {"tags"};
+        WriteOptions options;
+        options.raw_columns = raw;
+        options.compress = false;
+        const dstd::String path = env.dir() + "/dict_list.pfw";
+        dftu_utils_test::ok(
+            write_table(frame, path, header_json(2, fields), options));
+        auto t = dftu_utils_test::ok(read_table(path));
+        const Series& back = t.frame.columns[0];
+        CHECK(back.string_at(0) == "[\"x\",\"y\"]");
+        CHECK(back.string_at(1) == "[\"x\"]");
+    }
+
     TEST_CASE("the writer checks the header against the frame") {
         TestEnvironment env(0);
         auto sample = sample_frame();

@@ -356,12 +356,14 @@ def test_pandas_agg_forms():
     assert ints.agg("sum", axis=1).to_list() == [4, 5]
     with pytest.raises(ValueError, match="sum, mean, min, max and count"):
         df.agg("var", axis=1)
-    # A quantile name needs its level, and nunique's engine form is a sketch:
-    # both are refused, not approximated.
+    # median and nunique are exact, as pandas; a quantile name needs its level.
     with pytest.raises(ValueError, match="needs its level"):
-        df.agg("median")
-    with pytest.raises(ValueError, match="sketch"):
-        gb.agg({"a": "nunique"})
+        df.agg("quantile")
+    assert _dict(gb.agg({"a": "median"})) == _dict(gb.median().select("k", "a"))
+    assert _dict(gb.agg({"a": "nunique"})) == _dict(gb.nunique().select("k", "a"))
+    # A streaming group-by has no exact distinct count, so a plan refuses it.
+    with pytest.raises(ValueError, match="exact nunique"):
+        df.lazy().group_by("k").agg({"a": "nunique"}).collect()
     # Lazy: the same forms, each a streaming group-by step.
     lf = df.lazy()
     assert _dict(lf.agg(["sum", "max"]).collect()) == _dict(df.agg(["sum", "max"]))

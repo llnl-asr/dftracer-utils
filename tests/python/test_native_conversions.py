@@ -393,7 +393,7 @@ def test_pickle_round_trip():
 
 def test_wrappers_run_without_arrow():
     frame = _mixed_frame()
-    assert frame.memory_usage().to_dict()["i"][0] > 0
+    assert frame.memory_usage()["i"] > 0
     words = dftu.Series.from_list(["ab", "cd", None])
     assert words.str.get(0).to_list() == [97, 99, None] or words.str.get(0).to_list()[2] is None
     days = dftu.Series.from_list([dt.datetime(2021, 1, 4), dt.datetime(2020, 12, 31)])

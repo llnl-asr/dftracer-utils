@@ -835,6 +835,7 @@ dftu_series* list_transform(const dftu_series* v, Fn fn) {
 
 dftu_series* dftu_series_list_len(const dftu_series* v) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_list_len(flat_v));
+    DFTU_LIST_OPERAND(v, narrow, dftu_series_list_len(narrow));
 
     if (!v || v->type != TypeId::List || v->encoding != Encoding::Flat)
         return nullptr;
@@ -857,6 +858,7 @@ dftu_series* dftu_series_list_len(const dftu_series* v) {
 
 dftu_series* dftu_series_list_get(const dftu_series* v, std::int64_t index) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_list_get(flat_v, index));
+    DFTU_LIST_OPERAND(v, narrow, dftu_series_list_get(narrow, index));
 
     if (!v || v->type != TypeId::List || v->encoding != Encoding::Flat)
         return nullptr;
@@ -1762,20 +1764,51 @@ dftu_series* dftu_series_str_cat(const dftu_series* a, const dftu_series* b) {
     return cat_impl<std::int32_t, std::int32_t>(a, b);
 }
 
+namespace dftracer::utils::dataframe {
+
+Series str_affix(const Series& v, dstd::StringView piece, bool before) {
+    const Series flat = v.is_flat() ? v.share() : v.materialize();
+    const auto size = static_cast<std::int64_t>(piece.size());
+    const auto* bytes = reinterpret_cast<const std::uint8_t*>(piece.data());
+    return Series{map_strings(
+        flat.handle(),
+        [size](const auto& f, std::int64_t i) { return f.len(i) + size; },
+        [&](const auto& f, std::int64_t i, std::uint8_t* dst) {
+            if (before) {
+                copy_bytes(dst, bytes, size);
+                copy_bytes(dst + size, f.row(i), f.len(i));
+            } else {
+                copy_bytes(dst, f.row(i), f.len(i));
+                copy_bytes(dst + f.len(i), bytes, size);
+            }
+        })};
+}
+
+}  // namespace dftracer::utils::dataframe
+
 dftu_series* dftu_series_list_join(const dftu_series* v, const char* sep,
                                    std::int32_t sep_size) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_list_join(flat_v, sep, sep_size));
+    DFTU_LIST_OPERAND(v, narrow, dftu_series_list_join(narrow, sep, sep_size));
     if (!v || v->type != TypeId::List || v->encoding != Encoding::Flat)
         return nullptr;
     if (!dftu_series_offsets(v) || !v->child() ||
         !is_string_kind(v->child()->type))
         return nullptr;
-    const dftu_series& child = *v->child();
+    // A string_view, dictionary or sliced child has no flat offsets to join
+    // from, so it is materialized first.
+    dftu_series* flat_child = v->child()->encoding == Encoding::Flat
+                                  ? nullptr
+                                  : dftu_series_materialize(v->child().get());
+    if (v->child()->encoding != Encoding::Flat && !flat_child) return nullptr;
+    const dftu_series& child = flat_child ? *flat_child : *v->child();
     const dftracer::utils::dstd::StringView s(
         sep, static_cast<std::size_t>(sep_size));
-    return is_wide_offset_type(child.type)
-               ? join_impl<std::int64_t>(v, child, s)
-               : join_impl<std::int32_t>(v, child, s);
+    dftu_series* out = is_wide_offset_type(child.type)
+                           ? join_impl<std::int64_t>(v, child, s)
+                           : join_impl<std::int32_t>(v, child, s);
+    if (flat_child) dftu_series_free(flat_child);
+    return out;
 }
 
 dftu_series* dftu_series_str_findall(const dftu_series* v, const char* pattern,

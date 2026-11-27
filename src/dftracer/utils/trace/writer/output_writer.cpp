@@ -4,6 +4,8 @@
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/spawn_future.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -18,6 +20,7 @@
 #include <dftracer/utils/fileio/gzip_line_writer.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/value.h>
+#include <dftracer/utils/json/writer.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/indexer.h>
@@ -29,6 +32,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <climits>
+#include <cmath>
 #include <cstdint>
 #include <mutex>
 #include <utility>
@@ -189,14 +194,100 @@ ArgValue value_at(const OutColumn& c, std::size_t row) {
     }
 }
 
+// One list element as a JSON value. A NaN or infinite float has no JSON
+// form, and the pandas table writer refuses it too.
+bool write_element(json::Writer& w, const dataframe::Series& e,
+                   std::int64_t j) {
+    if (e.is_null(j)) {
+        w.null();
+        return true;
+    }
+    const TypeId t = e.type();
+    if (is_string_type(t)) {
+        w.value(e.string_at(j));
+    } else if (t == TypeId::Bool) {
+        w.value(dataframe::read_i64(e, j) != 0);
+    } else if (is_signed_type(t)) {
+        w.value(dataframe::read_i64(e, j));
+    } else if (is_unsigned_type(t)) {
+        w.value(dataframe::read_u64(e, j));
+    } else if (t == TypeId::Float32 || t == TypeId::Float64) {
+        const double x = dataframe::read_f64(e, j);
+        if (!std::isfinite(x)) return false;
+        w.value(x);
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// A List column as the JSON text of each cell, the form a table stores for a
+// field with elem "list". The text is a copy: a record holds each cell as
+// JSON text.
+dstd::Result<dataframe::Series> list_json(const dataframe::Series& list,
+                                          dstd::StringView name) {
+    dataframe::Series flat = list.is_flat() ? list.share() : list.materialize();
+    if (flat.type() == TypeId::LargeList)
+        flat = dataframe::Series{dataframe::narrow_large_list(flat.handle())};
+    if (!flat.valid())
+        return common::make_error<"list column {} has more than 2^31 items">(
+            ErrorCode::InvalidArgument, name);
+    const std::int32_t* off = dftu_series_offsets(flat.handle());
+    if (flat.num_children() != 1 || (!off && flat.length() > 0))
+        return common::make_error<"list column {} has no offsets">(
+            ErrorCode::Internal, name);
+    // The element readers see a FLAT child's buffers only, so a dictionary
+    // or run-length child is decoded first.
+    const dataframe::Series raw_child = flat.child(0);
+    const dataframe::Series child =
+        raw_child.is_flat() ? raw_child.share() : raw_child.materialize();
+    const std::int64_t n = flat.length();
+    dstd::String data;
+    dstd::Vector<std::int32_t> offsets(static_cast<std::size_t>(n) + 1, 0);
+    dstd::Vector<std::uint8_t> validity(static_cast<std::size_t>((n + 7) / 8),
+                                        0xFF);
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (flat.is_null(i)) {
+            validity[static_cast<std::size_t>(i >> 3)] &=
+                static_cast<std::uint8_t>(~(1u << (i & 7)));
+        } else {
+            json::Writer w(data);
+            w.begin_array();
+            for (std::int64_t j = off[i]; j < off[i + 1]; ++j)
+                if (!write_element(w, child, j))
+                    return common::make_error<
+                        "row {}, column {}: a list element is NaN, infinite "
+                        "or of a type a table cannot store">(
+                        ErrorCode::InvalidArgument, i, name);
+            w.end_array();
+        }
+        if (data.size() > static_cast<std::size_t>(INT32_MAX))
+            return common::make_error<
+                "column {}: the JSON text of its lists passes 2 GiB">(
+                ErrorCode::InvalidArgument, name);
+        offsets[static_cast<std::size_t>(i) + 1] =
+            static_cast<std::int32_t>(data.size());
+    }
+    return dataframe::Series{dftu_series_new_string(
+        static_cast<dftu_dtype>(TypeId::String), offsets.data(), data.data(), n,
+        flat.null_count() > 0 ? validity.data() : nullptr)};
+}
+
 dstd::Result<OutColumn> prepare_column(const dataframe::DataFrame& frame,
                                        std::size_t i, bool raw) {
     const dstd::StringView name(frame.names[i]);
     OutColumn c;
     c.type = frame.columns[i].type();
-    c.series = frame.columns[i].is_flat() || is_string_type(c.type)
-                   ? frame.columns[i].share()
-                   : frame.columns[i].materialize();
+    if (raw && (c.type == TypeId::List || c.type == TypeId::LargeList)) {
+        auto text = list_json(frame.columns[i], name);
+        if (!text) return text.error();
+        c.series = std::move(*text);
+        c.type = c.series.type();
+    } else {
+        c.series = frame.columns[i].is_flat() || is_string_type(c.type)
+                       ? frame.columns[i].share()
+                       : frame.columns[i].materialize();
+    }
     c.raw = raw;
     if (c.raw && !is_string_type(c.type))
         return common::make_error<"raw column {} is not a string column">(

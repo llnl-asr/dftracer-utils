@@ -20,6 +20,7 @@ from typing import (
 
 from . import dftracer_utils_ext as _ext
 from ._agg import (
+    NUNIQUE_OP,
     PANDAS_AGG_NAMES,
     AggForm,
     AggKeyword,
@@ -133,8 +134,65 @@ class GroupBy(GroupTransforms[DataFrame]):
 
     def agg(self, *specs: AggForm, **named: AggKeyword) -> DataFrame:
         flat = flatten_agg_specs(self._batch, self._keys, specs, named)
-        native = self._batch
         aggs = [to_agg(s) for s in flat]
+        for a in aggs:
+            if a.out in self._keys:
+                # The result holds the key column under that name already.
+                raise ValueError(
+                    f"agg: the output name {a.out!r} is a group key; give the aggregate another name"
+                )
+        return self._run_aggs(aggs, specs)
+
+    def _run_aggs(self, aggs: list[Agg], specs: Sequence[AggForm]) -> DataFrame:
+        exact = [a for a in aggs if a.op == NUNIQUE_OP]
+        if not exact:
+            return self._strip_single(self._engine_agg(aggs), specs)
+        rest = [a for a in aggs if a.op != NUNIQUE_OP]
+        frame = self._frame()
+        out = (
+            self._engine_agg(rest)
+            if rest
+            else self._sorted(GroupBy(frame, self._keys)._size_frame().select(*self._keys))
+        )
+        for a in exact:
+            if type(a.value) is not Col:
+                raise ValueError(f"agg {a.out!r}: nunique takes a column, not an expression")
+            name = a.value.name
+            if name in self._keys:
+                # A key holds one value per group: 1, or 0 for the null key.
+                counts = GroupBy(frame, self._keys)._size_frame().select(*self._keys)
+                counts = counts.with_column(
+                    a.out, self._col(counts, name).is_not_null().cast(DType.INT64)
+                )
+            else:
+                counts = self._nunique_column(frame, name).rename({name: a.out})
+            out = (
+                out.join(counts, on=self._keys, how="left", nulls_equal=True)
+                if self._keys
+                else out.with_column(a.out, counts[a.out])
+            )
+        out = self._sorted(out.select(*self._keys, *[a.out for a in aggs]))
+        return self._strip_single(out, specs)
+
+    def _strip_single(self, out: DataFrame, specs: Sequence[AggForm]) -> DataFrame:
+        """A one-column group-by with a list of functions names each result
+        by the function alone, as pandas."""
+        if self._single is not None and any(isinstance(sp, (list, tuple)) for sp in specs):
+            prefix = f"{self._single}_"
+            names = {
+                c: c[len(prefix) :]
+                for c in out.columns
+                if c.startswith(prefix) and c not in self._keys
+            }
+            for name in names.values():
+                if name in self._keys:
+                    # The frame holds the key under that name already.
+                    raise ValueError(f"cannot insert {name}, already exists")
+            out = out.rename(names)
+        return out
+
+    def _engine_agg(self, aggs: list[Agg]) -> DataFrame:
+        native = self._batch
         # Plain aggregates over plain columns take the engine's group_by
         # directly; anything with an expression goes through the
         # expression group-by.
@@ -163,9 +221,6 @@ class GroupBy(GroupTransforms[DataFrame]):
         else:
             names = list(native.column_names)
             out = _ext.DataFrame._group_agg_expr(native, self._keys, [a._spec(names) for a in aggs])
-        if self._single is not None and any(isinstance(sp, (list, tuple)) for sp in specs):
-            prefix = f"{self._single}_"
-            out = out.rename({c: c[len(prefix) :] for c in out.columns if c.startswith(prefix)})
         return self._sorted(out)
 
     def reduce(self, agg: str) -> DataFrame:
@@ -225,11 +280,20 @@ class GroupBy(GroupTransforms[DataFrame]):
         it; the Polars ``group_by`` and ``as_index=False`` give the frame."""
         out = self._size_frame()
         if self._as_index and self._keys:
-            return out["size"].rename(None)
+            return out[self._count_name()].rename(None)
+        if "size" in self._keys:
+            raise ValueError("cannot insert size, already exists")
         return out
 
+    def _count_name(self) -> str:
+        name = "size"
+        while name in self._keys:
+            name = "_" + name
+        return name
+
     def _size_frame(self) -> DataFrame:
-        return self.agg(Agg("count", None, "size"))
+        # Internal: the rows per group under _count_name(), never a key's name.
+        return self._run_aggs([Agg("count", None, self._count_name())], ())
 
     def _pandas_face(self) -> bool:
         return pandas_named(self)
@@ -486,7 +550,7 @@ class GroupBy(GroupTransforms[DataFrame]):
         """The exact median of each numeric column per group (pandas
         ``GroupBy.median``): the plan of :func:`lazyframe.group_quantile`
         over this frame, collected."""
-        return self.quantile(0.5)
+        return self.quantile(0.5, "midpoint")
 
     def quantile(self, q: float = 0.5, interpolation: str = "linear") -> DataFrame:
         """The exact ``q`` quantile of each numeric column per group; the
@@ -831,7 +895,7 @@ class GroupBy(GroupTransforms[DataFrame]):
             else sizes[k].to_list()
             for k in self._keys
         ]
-        counts = cast("List[int]", sizes["size"].to_list())
+        counts = cast("List[int]", sizes[self._count_name()].to_list())
         out: dict[GroupKey, list[int]] = {}
         start = 0
         for g, n in enumerate(counts):
@@ -851,18 +915,27 @@ class GroupBy(GroupTransforms[DataFrame]):
         frame = self._frame()
         out: DataFrame | None = None
         for c in [n for n in frame._names() if n not in self._keys]:
-            present = frame.filter(self._col(frame, c).is_not_null())
-            pairs = GroupBy(present, self._keys + [c])._size_frame()
-            counts = GroupBy(pairs, self._keys).agg(Agg("count", None, c))
-            every = GroupBy(frame, self._keys)._size_frame().select(*self._keys)
-            if len(counts) < len(every):
-                # A group whose values are all missing has no pair: zero values.
-                counts = every.join(counts, on=self._keys, how="left", nulls_equal=True)
-                counts = counts.with_column(c, self._col(counts, c).fill_null(0))
+            counts = self._nunique_column(frame, c)
             out = counts if out is None else out.join(counts, on=self._keys)
         if out is None:
             raise ValueError("nunique: no columns besides the keys")
         return self._sorted(out)
+
+    def _nunique_column(self, frame: DataFrame, c: str) -> DataFrame:
+        """The keys and the exact count of distinct present values of ``c``,
+        under ``c``: a group-by over the keys plus the column, then a count
+        per key."""
+        if not self._keys:
+            return DataFrame.from_dict({c: [int(self._col(frame, c).nunique())]})
+        present = frame.filter(self._col(frame, c).is_not_null())
+        pairs = GroupBy(present, self._keys + [c])._size_frame()
+        counts = GroupBy(pairs, self._keys).agg(Agg("count", None, c))
+        every = GroupBy(frame, self._keys)._size_frame().select(*self._keys)
+        if len(counts) < len(every):
+            # A group whose values are all missing has no pair: zero values.
+            counts = every.join(counts, on=self._keys, how="left", nulls_equal=True)
+            counts = counts.with_column(c, self._col(counts, c).fill_null(0))
+        return counts
 
     def sem(self) -> DataFrame:
         """Standard error of the mean per group: ``std / sqrt(count)``."""
@@ -981,7 +1054,8 @@ class GroupBy(GroupTransforms[DataFrame]):
             if pandas_named(self) and self._col(frame, c).dtype.is_float:
                 frame = frame.filter(self._col(frame, c).is_nan().logical_not())
         if self._sort or not pandas_named(self):
-            out = GroupBy(frame, self._keys + cols)._size_frame().rename({"size": "count"})
+            every = GroupBy(frame, self._keys + cols)
+            out = every._size_frame().rename({every._count_name(): "count"})
             out = out._sort_values(
                 self._keys + ["count"], ascending=[True] * len(self._keys) + [ascending]
             )
@@ -1300,7 +1374,13 @@ class SeriesGroupBy(GroupBy):
         if not pandas_named(self):
             return out
         prefix = f"{self._single}_"
-        return out.rename({c: c[len(prefix) :] for c in out.columns if c.startswith(prefix)})
+        return out.rename(
+            {
+                c: c[len(prefix) :]
+                for c in out.columns
+                if c.startswith(prefix) and c not in self._keys
+            }
+        )
 
     def apply(self, func: Callable[..., object]) -> DataFrame | Series:
         """``func`` over the column of each group (pandas

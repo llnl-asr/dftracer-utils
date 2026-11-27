@@ -443,10 +443,13 @@ DFTU_EXPORT dftu_series* dftu_series_div_scalar(const dftu_series* a,
                                                 dftu_scalar s);
 
 /** Floor division, remainder and power with Python's rules: the quotient
- * floors toward minus infinity, the remainder takes the divisor's sign, a
- * zero divisor is null, a negative integer exponent is null. Int64 when both
- * operands are integral (Bool included), else Float64. The scalar forms take
- * an I64 or F64 scalar; `reverse` nonzero computes `s <op> a`. */
+ * floors toward minus infinity, the remainder takes the divisor's sign. An
+ * integer zero divisor is null; a float zero divisor gives inf or NaN in a
+ * floor division and null in a remainder. A negative integer exponent is
+ * null. Uint64 when both operands are unsigned and one is Uint64 (in floor
+ * division and remainder, a non-negative integer scalar counts as unsigned),
+ * Int64 for other integral operands (Bool included), else Float64. The scalar
+ * forms take an I64 or F64 scalar; `reverse` nonzero computes `s <op> a`. */
 DFTU_EXPORT dftu_series* dftu_series_floordiv(const dftu_series* a,
                                               const dftu_series* b);
 DFTU_EXPORT dftu_series* dftu_series_mod(const dftu_series* a,
@@ -1127,8 +1130,9 @@ DFTU_EXPORT dftu_series* dftu_series_unique(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_unique_nulls(const dftu_series* v,
                                                   int32_t maintain_order);
 
-/** Elementwise transforms -> a new FLAT column (caller owns). abs/clip/round
- * are SIMD; fillna clears nulls; cumsum is a running sum. */
+/** Elementwise transforms -> a new FLAT column (caller owns); abs of a Bool
+ * column shares the input in its own encoding. abs/clip/round are SIMD;
+ * fillna clears nulls; cumsum is a running sum. */
 DFTU_EXPORT dftu_series* dftu_series_abs(const dftu_series* v);
 DFTU_EXPORT dftu_series* dftu_series_clip(const dftu_series* v, dftu_scalar lo,
                                           dftu_scalar hi);

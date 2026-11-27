@@ -969,6 +969,8 @@ Series expm1(const Series& v) { return Series{dftu_series_expm1(v.handle())}; }
 using dftracer::utils::dataframe::TypeId;
 
 dftu_series* dftu_series_abs(const dftu_series* a) {
+    // A bool is its own absolute value, as pandas gives, in any encoding.
+    if (a && a->type == TypeId::Bool) return dftu_series_share(a);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_abs(flat_a));
 
     using namespace dftracer::utils::dataframe;

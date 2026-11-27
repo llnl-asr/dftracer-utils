@@ -969,11 +969,21 @@ class FramePandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin, _ext.DataFr
         ]
         return self._frame().select(*keep)
 
-    def memory_usage(self) -> DataFrame:
-        """One row: the bytes each column's Arrow buffers hold."""
-        from ._dataframe import DataFrame
+    def memory_usage(self, index: bool = True, deep: bool = False) -> Series[int]:
+        """The bytes each column's buffers hold, labelled by column, as pandas.
+        With ``index`` the first row, ``"Index"``, holds the row label columns
+        (0 for a frame with none). ``deep`` changes nothing: the buffers
+        already hold every string byte."""
+        from ._series import Series
 
-        return DataFrame({c: [self._col(c).nbytes] for c in self.columns})
+        names = list(self.columns)
+        sizes = [int(self._col(c).nbytes) for c in names]
+        if index:
+            shown = set(names)
+            labels = [c for c in self._frame()._names() if c not in shown]
+            names.insert(0, "Index")
+            sizes.insert(0, sum(int(self._col(c).nbytes) for c in labels))
+        return cast("Series[int]", Series.from_list(sizes, DType.INT64).set_axis(names))
 
     def isin(self, values: Sequence[object] | Series | Mapping[str, Sequence[object]]) -> DataFrame:
         """A Bool frame: each cell's membership in ``values`` (a list or

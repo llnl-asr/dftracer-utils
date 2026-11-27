@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/kernels/prims.h>
+#include <dftracer/utils/dataframe/kernels/string_ops.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/python/core/errors.h>
 #include <dftracer/utils/python/core/scalar_helpers.h>
@@ -13,6 +14,10 @@
 namespace dftracer::utils::python::frame::series_detail {
 
 namespace {
+
+bool is_text(TypeId t) {
+    return t == TypeId::String || t == TypeId::LargeString;
+}
 
 // Arithmetic between two dtypes that promotion cannot reconcile (e.g. a
 // non-numeric column) is a dtype mismatch, not the generic "null column"
@@ -26,6 +31,23 @@ PyObject* make_arith_series(Series&& col, TypeId a_type, TypeId b_type) {
         return nullptr;
     }
     return make_series(std::move(col));
+}
+
+// A String column plus a str, either side, as pandas concatenates them. The
+// str is repeated into a column, a copy that str_cat needs; it takes the
+// column's row labels so the two line up.
+PyObject* text_add_str(PyObject* self, PyObject* text, bool text_first) {
+    Held held(self);
+    Series* a = held.get();
+    if (!a) return nullptr;
+    Py_ssize_t size = 0;
+    const char* p = PyUnicode_AsUTF8AndSize(text, &size);
+    if (!p) return nullptr;
+    const dstd::StringView piece(p, static_cast<std::size_t>(size));
+    Series out =
+        kernel(*a, [&] { return dataframe::str_affix(*a, piece, text_first); });
+    return make_arith_series(named_like(std::move(out), *a), a->type(),
+                             TypeId::String);
 }
 
 // The operands of a Series-Series op aligned on their row labels as pandas
@@ -112,6 +134,10 @@ PyObject* Series_add(PyObject* self, PyObject* other) {
     if (!a || !b) return nullptr;
     dataframe::AlignedSeries aligned;
     if (!align_operands(a, b, aligned)) return nullptr;
+    if (is_text(a->type()) && is_text(b->type()))
+        return make_arith_series(
+            named_like(kernel(*a, [&] { return a->str_cat(*b); }), *a, *b),
+            a->type(), b->type());
     return make_arith_series(
         named_like(kernel(*a, [&] { return dataframe::add(*a, *b); }), *a, *b),
         a->type(), b->type());
@@ -387,6 +413,13 @@ PyObject* binary(PyObject* left, PyObject* right, Bin op) {
             case Bin::Pow:
                 return extra_apply(self, other, ExtraOp::Pow, false);
         }
+    }
+    if (op == Bin::Add && PyUnicode_Check(other)) {
+        Held held(self);
+        Series* s = held.get();
+        if (s && is_text(s->type()))
+            return text_add_str(self, other, reflected);
+        if (!s) return nullptr;
     }
     if (!is_number(other)) Py_RETURN_NOTIMPLEMENTED;
     switch (op) {

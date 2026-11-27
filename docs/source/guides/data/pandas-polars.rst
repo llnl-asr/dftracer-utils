@@ -408,9 +408,11 @@ other columns are null, a label that does not fit the index type is a
 Series is immutable.
 ``s[new] = value`` also raises ``BufferError`` while a numpy array or memoryview
 over the Series is alive, and ``TypeError`` for a value of another type than the
-Series holds, where pandas upcasts. ``DataFrame.query`` takes the duql
-expression language, not the pandas one: there is no ``@var`` for a Python
-variable and no backticks around a column name.
+Series holds, where pandas upcasts. ``DataFrame.query(expr)`` takes the syntax of
+``eval`` (see below) and keeps the rows of ``df[df.eval(expr)]``, so a row where
+``expr`` is null is dropped. ``@name`` reads ``local_dict``, then ``global_dict``,
+or the caller's variables, as pandas. A predicate in the duql expression language
+goes in ``query(duql=...)``.
 
 Arithmetic between two Series aligns on the labels, as pandas does. Labels that
 are equal, level for level and in order, leave the rows in place. Otherwise the
@@ -489,6 +491,19 @@ changing the list of level names and the label columns: no row moves except in
   listed levels only, as pandas), ``na_position``, ``ignore_index`` and ``key`` (a
   function of each level) work as in pandas, and the sort is stable. A single
   level ignores ``level``, as pandas.
+
+In the pandas ``agg`` forms (a name, a list, a dict or ``out=("column", name)``),
+``median`` is the exact median (the middle value, or the mean of the two middle
+values, as pandas) and ``nunique`` is the exact count of
+distinct present values, as pandas. A NaN value is a value in these and in the
+other group aggregates (``mean``, ``sum`` and the rest), where pandas skips it, so
+fill or drop NaN first to get the pandas result. A lazy group-by refuses ``nunique``, because a
+streaming group-by has no exact distinct count; collect first, or use
+``col("x").distinct()``, a sketch that is exact below 1024 values.
+``group_by("host", "time_range")`` groups by both columns, as Polars reads it.
+``groupby`` (the pandas name) leaves a
+row with a null or NaN key out, as pandas; ``group_by`` (the Polars name) keeps a
+NaN key as its own group.
 
 ``groupby(keys)["column"]`` is the pandas ``SeriesGroupBy``: its reductions
 (``sum``, ``mean``, ``min``, ``max``, ``count``, ``first``, ``last``, ``median``,
@@ -709,7 +724,7 @@ Formulas as text: ``eval``
 ``df.eval(expr)`` evaluates Python expressions over the columns, lowered by the
 same code as the source tier of ``apply`` and never run as Python code: the text is
 parsed with ``ast``, a bare name is a column or a ``KeyError``, and a construct with
-no engine form raises ``TranspileError`` naming it. ``df.eval("a / b")`` gives a
+no engine form raises ``DFTUtilsTranspileError`` naming it. ``df.eval("a / b")`` gives a
 Series; ``df.eval("m = a / b")`` gives a new frame with ``m`` added or replaced.
 Several lines run in order, each seeing the columns the lines before it made (with
 their types), every line but the last an assignment; a last expression line returns
@@ -725,17 +740,23 @@ Supported: column names; number literals; ``+ - * /`` with a number on either si
 ``//`` and ``%`` (integer columns give integers, as Python does); ``**`` with a
 constant exponent from 0 to 8 or 0.5; unary ``- +``; ``< <= > >= == !=`` (chains
 too); ``and``, ``or``, ``not``; ``x if c else y``; ``in`` and ``not in`` a list of
-constants; ``x is None``; ``abs``, ``min``, ``max``, ``int``, ``float``, ``round``
+constants, and ``x.isin([...])`` (numbers, bools or strings; an empty list matches
+nothing); ``True`` and ``False`` in a comparison (a Bool
+value, or 1 and 0 against a number); ``x is None``; ``abs``, ``min``, ``max``, ``int``, ``float``, ``round``
 (whole numbers), ``len``; ``math.sqrt``, ``log``, ``exp``, ``floor``, ``ceil``; the
 string methods ``lower``, ``upper``, ``strip``, ``lstrip``, ``rstrip``,
-``startswith``, ``endswith``, ``replace`` and ``contains``; and ``x.isna()``,
+``startswith``, ``endswith``, ``replace`` and ``contains``; ``x.str.split(sep).str[i]``
+and ``rsplit`` for one part (null past the end); a ``split`` separator of two or more
+characters has no regex character (pandas reads it as a regex), and an ``rsplit``
+separator cannot overlap itself, such as ``"##"``; ``@name`` for a Python
+variable (a number, a string, a bool or a list, a NumPy array or a Series too); and ``x.isna()``,
 ``isnull()``, ``notna()``, ``notnull()``. Nulls propagate as the column operators
 propagate them (``a > 1`` is null where ``a`` is), where pandas compares NaN as
 false; ``(x.isna() | x == 0)`` is true where ``x`` is null or NaN, as in pandas.
 
-Not supported, each with an error that names it: ``@name`` locals and ``@`` matrix
-products, backtick column names, ``inplace``, bitwise ``&`` ``|`` ``~`` on integer
-columns, attribute access, subscripts, lambdas, comprehensions, and string methods
+Not supported, each with an error that names it: ``@`` matrix products, backtick
+column names, ``inplace``, bitwise ``&`` ``|`` ``~`` on integer
+columns, attribute access, subscripts other than a split part, lambdas, comprehensions, and string methods
 beyond the list.
 
 .. code-block:: python
@@ -743,6 +764,8 @@ beyond the list.
    df.eval("m = a / b\nn = m * 100\nn + c")      # three lines, one result
    df.eval("io_cat == 3 and func_name.str.contains('close') and ~func_name.str.contains('dir')")
    df.eval("(x.isna() | x == 0) & (y.isna() | y == 0)")
+   df.eval('host = proc_name.str.split("#").str[1]')
+   df.query("time_range in @keys", local_dict={"keys": [1, 3]})
 
 Left out, and why
 ------------------

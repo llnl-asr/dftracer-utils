@@ -1227,9 +1227,10 @@ class Expr(_Namespaces):
         return Agg("quantile", self, param=float(quantile), interpolation=interpolation)
 
     def median(self) -> Agg:
-        """The exact median per group (an :class:`Agg`): :meth:`quantile` at
-        0.5, whose two interpolations of the middle ranks agree."""
-        return self.quantile(0.5, "linear")
+        """The exact median per group (an :class:`Agg`): the middle value or
+        the mean of the two middle values, as pandas and numpy give it
+        (:meth:`quantile` at 0.5 with ``midpoint``)."""
+        return self.quantile(0.5, "midpoint")
 
     def n_unique(self) -> Agg:
         """The number of distinct present values per group (an :class:`Agg`):
@@ -1785,12 +1786,10 @@ class _IsIn(Expr):
 
     def __init__(self, arg: Expr, values: Sequence[Value], negate: bool) -> None:
         vals = list(values)
-        if any(isinstance(v, bool) for v in vals):
-            raise TypeError("is_in values must be ints or strings, not bools")
         if vals and not (
-            all(isinstance(v, int) for v in vals) or all(isinstance(v, str) for v in vals)
+            all(isinstance(v, (int, float)) for v in vals) or all(isinstance(v, str) for v in vals)
         ):
-            raise TypeError("is_in values must be all ints or all strings")
+            raise TypeError("is_in values must be all numbers (bools too) or all strings")
         self.arg = arg
         self.values = vals
         self.negated = negate

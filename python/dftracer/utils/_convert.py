@@ -665,12 +665,12 @@ def values_like(values: Sequence[object], like: Series) -> Series:
     null. ``TypeError`` for a struct, map or fixed-size list, which no native
     build gives the type of ``like``. A type with no parameters builds as
     ``Series.from_list(values, dtype)`` does."""
-    import numpy as np
-
     kind = DType(like.type)
     if kind in (DType.TIMESTAMP, DType.DURATION):
         return temporal_from_values(values, kind, unit_letters(like.time_unit), like.timezone)
     if kind in (DType.DATE64, DType.TIME32, DType.TIME64):
+        import numpy as np
+
         tick = 86_400_000 if kind == DType.DATE64 else UNIT_NS[unit_letters(like.time_unit)]
 
         def convert(value: object) -> int:

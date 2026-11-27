@@ -30,6 +30,7 @@ from typing import (
 
 from . import dftracer_utils_ext as _ext
 from ._agg import (
+    NUNIQUE_OP,
     PANDAS_AGG_NAMES,
     AggForm,
     AggKeyword,
@@ -574,11 +575,17 @@ class LazyFrame(SinkVerbs, _ext.LazyFrame):
         without, a :class:`LazyGroupBy` takes the aggregates
         (``.agg(...)``, ``.sum()``, ...). A row whose key is null is
         filtered out first, as pandas; ``dropna=False`` keeps the null keys
-        as their own group."""
+        as their own group. Leading names that are columns are more keys,
+        as Polars reads ``group_by("a", "b")``."""
         keys = as_names(key)
-        if not aggs:
+        rest = list(aggs)
+        if rest:
+            names = set(self.columns)
+            while rest and rest[0] != "count" and ":" not in rest[0] and rest[0] in names:
+                keys.append(rest.pop(0))
+        if not rest:
             return LazyGroupBy(self, keys, dropna=dropna)
-        out = self._new(_ext.LazyFrame.group_by(self, keys, list(aggs)))
+        out = self._new(_ext.LazyFrame.group_by(self, keys, rest))
         return _drop_null_key_groups(out, keys) if dropna else out
 
     def reduce(self, agg: str) -> LazyFrame:
@@ -915,6 +922,12 @@ def agg_spec_strings(
             continue
         if not isinstance(spec, Agg):
             raise TypeError(f"agg() takes Agg or str specs, got {type(spec).__name__}")
+        if spec.op == NUNIQUE_OP:
+            raise ValueError(
+                f"lazy group_by: {spec.out!r} asks for an exact nunique, which a streaming "
+                "group-by has no aggregate for; collect first, or use col(...).distinct() "
+                "(a sketch, exact below 1024 values)"
+            )
         if isinstance(spec, UdafAgg):
             if not all(isinstance(a, Col) for a in spec.args):
                 raise ValueError(
@@ -1054,7 +1067,7 @@ class LazyGroupBy(GroupTransforms[LazyFrame]):
     def median(self) -> LazyFrame:
         """The exact median of each numeric column per group (pandas
         ``GroupBy.median``), as :func:`group_quantile` plan steps."""
-        return self.quantile(0.5)
+        return self.quantile(0.5, "midpoint")
 
     def quantile(self, q: float = 0.5, interpolation: str = "linear") -> LazyFrame:
         """The exact ``q`` quantile of each numeric column per group; the

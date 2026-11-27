@@ -699,7 +699,8 @@ static DataFrame finalize_impl(const AggState& st_in,
                 dstd::Vector<double> values =
                     st.qv[g * st.n_qv + static_cast<std::size_t>(slot)];
                 if (values.empty()) continue;
-                v[g] = quantile_of(values, q, interp);
+                v[g] = quantile_of(values, q, interp, true,
+                                   QuantileForm::PandasGroup);
                 valid[g >> 3] |= static_cast<std::uint8_t>(1u << (g & 7));
             }
             out.columns.push_back(Series::flat_f64(v.data(), ng, valid.data()));

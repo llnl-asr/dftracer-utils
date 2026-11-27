@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/scalar.h>
+#include <dftracer/utils/dataframe/kernels/stats.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -189,7 +190,7 @@ double Series::quantile(double q, Interpolation interp) const {
     return dftu_series_quantile_interp(handle_, q,
                                        static_cast<dftu_interpolation>(interp));
 }
-double Series::median() const { return dftu_series_quantile(handle_, 0.5); }
+double Series::median() const { return dataframe::median(*this); }
 std::int64_t Series::nunique() const { return dftu_series_nunique(handle_); }
 
 Series Series::rank(RankMethod method, bool descending, bool pct) const {

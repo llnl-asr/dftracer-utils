@@ -94,17 +94,29 @@ bool py_str_view(PyObject* o, dftracer::utils::dstd::StringView* out) {
     return true;
 }
 
-// The is_in value list as a Series: all ints (Int64) or all strs (String).
+// The is_in value list as a Series: all strs (String); otherwise numbers,
+// where a bool is 0 or 1. Ints alone are Int64, or Uint64 when one is above
+// the int64 range; a float among them makes Float64. An empty list is an
+// empty Int64, which matches nothing.
 bool py_values_series(PyObject* list, dataframe::Series* out) {
     dftracer::utils::python::core::FastSeq items;
     if (!items.open(list, "is_in values must be a sequence")) return false;
     const auto n = static_cast<std::size_t>(items.size());
     bool all_str = n > 0;
-    bool all_int = n > 0;
+    bool any_str = false;
+    bool any_float = false;
     for (Py_ssize_t i = 0; i < items.size(); ++i) {
         PyObject* v = items.item(i);
-        if (!PyUnicode_Check(v)) all_str = false;
-        if (PyBool_Check(v) || !PyLong_Check(v)) all_int = false;
+        const bool str = PyUnicode_Check(v);
+        all_str = all_str && str;
+        any_str = any_str || str;
+        if (PyFloat_Check(v)) {
+            any_float = true;
+        } else if (!str && !PyLong_Check(v)) {
+            PyErr_SetString(PyExc_TypeError,
+                            "is_in values must be strings, numbers or bools");
+            return false;
+        }
     }
     if (all_str) {
         dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> values;
@@ -117,22 +129,61 @@ bool py_values_series(PyObject* list, dataframe::Series* out) {
         *out = dataframe::Series::strings(values);
         return true;
     }
-    if (all_int) {
-        dftracer::utils::dstd::Vector<std::int64_t> values;
+    if (any_str) {
+        PyErr_SetString(PyExc_TypeError,
+                        "is_in values must be all strings or all numbers");
+        return false;
+    }
+    if (any_float) {
+        dftracer::utils::dstd::Vector<double> values;
         values.reserve(n);
         for (Py_ssize_t i = 0; i < items.size(); ++i) {
-            values.push_back(
-                static_cast<std::int64_t>(PyLong_AsLongLong(items.item(i))));
+            values.push_back(PyFloat_AsDouble(items.item(i)));
             if (PyErr_Occurred()) return false;
         }
+        *out = dataframe::Series::flat_f64(values.data(),
+                                           static_cast<std::int64_t>(n));
+        return true;
+    }
+    dftracer::utils::dstd::Vector<std::int64_t> values;
+    values.reserve(n);
+    bool wide = false;
+    for (Py_ssize_t i = 0; i < items.size() && !wide; ++i) {
+        int overflow = 0;
+        const long long x =
+            PyLong_AsLongLongAndOverflow(items.item(i), &overflow);
+        if (overflow < 0) {
+            PyErr_SetString(PyExc_OverflowError,
+                            "is_in value is below the int64 range");
+            return false;
+        }
+        if (overflow > 0) wide = true;
+        if (x == -1 && PyErr_Occurred()) return false;
+        values.push_back(static_cast<std::int64_t>(x));
+    }
+    if (!wide) {
         *out = dataframe::Series::flat_i64(values.data(),
                                            static_cast<std::int64_t>(n));
         return true;
     }
-    PyErr_SetString(PyExc_TypeError,
-                    "is_in values must be a non-empty list of all ints or all "
-                    "strings");
-    return false;
+    dftracer::utils::dstd::Vector<std::uint64_t> unsigned_values;
+    unsigned_values.reserve(n);
+    for (Py_ssize_t i = 0; i < items.size(); ++i) {
+        const unsigned long long x = PyLong_AsUnsignedLongLong(items.item(i));
+        if (PyErr_Occurred()) {
+            PyErr_Clear();
+            PyErr_SetString(PyExc_OverflowError,
+                            "is_in values mix negative ints and ints above "
+                            "the int64 range, or one is above the uint64 "
+                            "range");
+            return false;
+        }
+        unsigned_values.push_back(static_cast<std::uint64_t>(x));
+    }
+    *out = dataframe::Series::flat(dataframe::TypeId::Uint64,
+                                   unsigned_values.data(),
+                                   static_cast<std::int64_t>(n));
+    return true;
 }
 
 // Rebuild a dataframe::Expr from a post-order list of (op, arg0[, arg1])

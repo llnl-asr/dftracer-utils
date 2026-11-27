@@ -2492,6 +2492,12 @@ dstd::Result<DataFrame> explode_impl(const DataFrame& b,
     std::int64_t ci = index_of(b, column);
     if (ci < 0) return not_found<"{}: no column named {}">(who, column);
     Series lst = flat_copy(b.columns[static_cast<std::size_t>(ci)]);
+    if (lst.type() == TypeId::LargeList) {
+        lst = Series{narrow_large_list(lst.handle())};
+        if (!lst.valid())
+            return invalid_argument<"{}: {} has more than 2^31 list items">(
+                who, column);
+    }
     if (lst.type() != TypeId::List)
         return invalid_argument<"{}: {} is not a List column">(who, column);
 

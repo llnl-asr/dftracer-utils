@@ -410,6 +410,11 @@ TEST_SUITE("dataframe_types_reshape") {
         for (const TypeRow& row : TYPE_ROWS) {
             INFO(dstd::String(type_name(row.id)));
             DataFrame df = frame_of("k", row.build());
+            if (row.id == TypeId::LargeList) {
+                // A LargeList explodes as the List it narrows to.
+                CHECK(df.explode("k").has_value());
+                continue;
+            }
             dftu_utils_test::expect_error(
                 df.explode("k"),
                 dftracer::utils::common::ErrorCode::InvalidArgument);

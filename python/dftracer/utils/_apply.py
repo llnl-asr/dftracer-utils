@@ -73,7 +73,13 @@ def warn_fallback(what: str, func: object, reason: str) -> None:
 
 
 def _eval_expr(expr: Expr, source: Mapping[str, Series]) -> Series:
+    from ._expr import has_column_op
+    from ._expr_ops import eval_with_column_ops
 
+    if has_column_op(expr):
+        # A whole-column op, such as the floor of `x // y`, runs before the
+        # row expression that reads it.
+        return eval_with_column_ops(expr, dict(source))
     return Columnar(expr).apply(dict(source))
 
 
@@ -143,11 +149,12 @@ def uses_identity_test(func: Callable[..., object]) -> bool:
     resolves ``is`` on the tracer object itself (never a hook), so tracing
     would fold ``x is None`` to False; the source lowering reads it as the
     null mask."""
-    from ._transpile import TranspileError, source_node
+    from ._transpile import source_node
+    from .errors import DFTUtilsTranspileError
 
     try:
         node = source_node(func)
-    except TranspileError:
+    except DFTUtilsTranspileError:
         return False
     return any(
         isinstance(op, (ast.Is, ast.IsNot))
@@ -163,13 +170,14 @@ def _transpile(
     source: Mapping[str, Series],
 ) -> tuple[Expr | None, str]:
     """Tier 2: lower the function's own source, control flow included."""
-    from ._transpile import TranspileError, transpile
+    from ._transpile import transpile
+    from .errors import DFTUtilsTranspileError
 
     int_inputs = {name: s.dtype.is_integer for name, s in source.items()}
     try:
         expr = transpile(func, columns, int_inputs)
         _check_columns(expr, source)
-    except TranspileError as e:
+    except DFTUtilsTranspileError as e:
         return None, f"not compilable: {e}"
     except trace_errors() as e:
         return None, f"{type(e).__name__}: {e}"

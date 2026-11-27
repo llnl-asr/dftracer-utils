@@ -229,11 +229,9 @@ def to_agg(spec: str | Agg) -> Agg:
 
 # The pandas aliases for the engine's one-column aggregates, as ``agg("x")``,
 # ``agg(["x", ...])``, ``agg({"col": "x"})`` and ``agg(out=("col", "x"))``
-# name them. The pandas names whose engine aggregate is a sketch (median,
-# quantile -> pct; nunique -> distinct) are NOT aliased: pandas gives the exact
-# value and the sketch an approximate one, so those are spelled out as
-# ``col("x").quantile(0.5)`` / ``.distinct()`` by the caller who accepts that,
-# or taken exactly through ``GroupBy.median() / quantile(q) / nunique()``.
+# name them. ``median`` is the engine's exact quantile at 0.5. ``nunique`` has
+# no exact engine aggregate (``distinct`` is a sketch), so it lowers to
+# NUNIQUE_OP, which the eager group-by counts exactly and a plan refuses.
 PANDAS_AGG_NAMES = {
     "count": "count_valid",
     "size": "count",
@@ -241,32 +239,28 @@ PANDAS_AGG_NAMES = {
     "kurt": "kurt_unbiased",
 }
 
+NUNIQUE_OP = "__dftu_nunique__"
 
-_PANDAS_AGG_APPROXIMATE = {
-    "median": "quantile(0.5, 'linear')",
-    "quantile": "quantile(q, 'linear')",
-    "nunique": "distinct()",
-}
+# The engine aggregate whose eligible columns a pandas name broadcasts over.
+_ELIGIBLE_AS = {"median": "mean", "nunique": "count_valid"}
 
 
 def _agg_op_name(name: str) -> str:
-    if name in ("median", "quantile"):
+    if name == "quantile":
         raise ValueError(
-            f"agg({name!r}): a quantile needs its level; spell it "
-            f"col(...).{_PANDAS_AGG_APPROXIMATE[name]}, or use the group-by method .{name}()"
+            "agg('quantile'): a quantile needs its level; spell it "
+            "col(...).quantile(q, 'linear'), or use the group-by method .quantile(q)"
         )
-    if name in _PANDAS_AGG_APPROXIMATE:
-        raise ValueError(
-            f"agg({name!r}): the engine's {_PANDAS_AGG_APPROXIMATE[name]} is a sketch "
-            f"(approximate), not the exact pandas value; call col(...).{_PANDAS_AGG_APPROXIMATE[name]} "
-            f"to use it knowingly, or the exact group-by method .{name}()"
-        )
-    return PANDAS_AGG_NAMES.get(name, name)
+    return _ELIGIBLE_AS.get(name) or PANDAS_AGG_NAMES.get(name, name)
 
 
 def _named_agg(column: str, name: str, out: str) -> Agg:
     """``(column, name)`` as an :class:`Agg` under ``out``, pandas dict / tuple
     style: ``name`` is an engine aggregate or one of its pandas aliases."""
+    if name == "median":
+        return Agg("quantile", Col(column), out, param=0.5, interpolation="midpoint")
+    if name == "nunique":
+        return Agg(NUNIQUE_OP, Col(column), out)
     op = _agg_op_name(name)
     if op == "count":
         return Agg("count", None, out)
@@ -324,7 +318,12 @@ def agg_specs_from_pandas_forms(
         raise TypeError("agg() needs at least one aggregate")
     specs: list[str | Agg] = []
     if isinstance(func, str):
-        specs.extend(reduce_specs(frame, _agg_op_name(func), keys))
+        if func in _ELIGIBLE_AS:
+            for spec in reduce_specs(frame, _agg_op_name(func), keys):
+                column = spec.split(":")[1]
+                specs.append(_named_agg(column, func, column))
+        else:
+            specs.extend(reduce_specs(frame, _agg_op_name(func), keys))
     elif isinstance(func, Agg):
         specs.append(func)
     elif isinstance(func, dict):

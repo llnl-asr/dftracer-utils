@@ -13,6 +13,7 @@ See :class:`~dftracer.utils.Series` for the column counterpart.
 
 from __future__ import annotations
 
+import ast
 import datetime
 import operator
 import pickle
@@ -21,6 +22,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Collection,
     Literal,
     Mapping,
     Optional,
@@ -76,6 +78,10 @@ if TYPE_CHECKING:
     from .dftracer_utils_ext import Scalar
 
 
+# What an `@name` of `eval` and `query` may hold: a number, a string, a bool or a
+# collection of them (a NumPy array or a Series also works).
+EvalScalar = Union[int, float, str, bool]
+EvalVariable = Union[EvalScalar, Collection[EvalScalar], "Series[Any]"]
 # Finite value sets for the viewer builder args (kept as reusable aliases so the
 # wrappers, the dask plan, and the stub share one definition).
 PhaseArg = Literal["events", "counters", "aggregated", "metadata", "any"]
@@ -264,6 +270,20 @@ def _fill_missing(frame: DataFrame, value: bool | int | float | str) -> DataFram
 def _keeps_every_row(mask: Series, rows: int) -> bool:
     """Whether the Bool Series ``mask`` is true on all ``rows`` rows."""
     return len(mask) == rows and mask.null_count == 0 and bool(mask.all())
+
+
+def _value_kind(dtype: DType) -> str | None:
+    """The comparison kind :meth:`DataFrame.eval` gives the lowering for a column:
+    the types the engine compares directly (Float16 is not one)."""
+    if dtype == DType.BOOL:
+        return "bool"
+    if dtype.is_numeric:
+        return "num"
+    return "text" if dtype.is_text else None
+
+
+def _is_key_name(name: str, frame: DataFrame) -> bool:
+    return name != "count" and ":" not in name and name in frame
 
 
 def _bound(native: _ext.DataFrame) -> DataFrame:
@@ -817,8 +837,11 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
 
     def query(
         self,
-        dsl: str | None = None,
+        expr: str | None = None,
         *,
+        duql: str | None = None,
+        local_dict: Mapping[str, EvalVariable] | None = None,
+        global_dict: Mapping[str, EvalVariable] | None = None,
         group_by: str | None = None,
         aggs: list[str] | None = None,
         select: list[str] | None = None,
@@ -826,18 +849,50 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         descending: bool = False,
         limit: int | None = None,
     ) -> DataFrame:
-        """A query plan over the batch (filter, group-by, select, sort, limit).
-        A plan that is only a predicate is the pandas ``query``: the rows it
-        keeps keep their labels, and a frame with no index is labelled by the
-        positions kept. ``dsl`` is the duql expression language, not the
-        pandas ``query`` one: there is no ``@var`` for a Python variable and no
-        backticks around a column name."""
+        """The pandas ``query``: the rows where ``expr`` is true, the same rows
+        as ``df[df.eval(expr)]``, so a row where it is null is dropped. ``expr``
+        takes the syntax of :meth:`eval`, and ``@name`` reads ``local_dict``, then ``global_dict``;
+        each one not given is the caller's locals or globals, as pandas. It must
+        be one expression that gives a Bool column, else ``TypeError``. The
+        rows kept keep their labels, and a frame with no index is labelled by
+        the positions kept.
+
+        ``duql`` is a predicate in the duql expression language instead, for
+        the duql forms such as ``cat ~ '^i'``; pass ``expr`` or ``duql``, not
+        both. ``group_by``, ``aggs``, ``select``, ``order_by``, ``descending``
+        and ``limit`` then run as a query plan on the rows kept."""
+        if expr is not None and duql is not None:
+            raise TypeError("query takes expr or duql=, not both")
+        if expr is None and (local_dict is not None or global_dict is not None):
+            raise TypeError("local_dict and global_dict apply to expr")
+        plan = not (
+            group_by is None
+            and aggs is None
+            and select is None
+            and order_by is None
+            and limit is None
+        )
+        if expr is not None:
+            mask = self._eval_source(expr, local_dict, global_dict, predicate=True)
+            assert isinstance(mask, Series)
+            if not plan:
+                kept: DataFrame = self[mask]
+                return kept
+            # The plan runs on the rows kept, as the duql= plan does: no row labels.
+            return _bound(_ext.DataFrame.filter(self, mask)).query(
+                group_by=group_by,
+                aggs=aggs,
+                select=select,
+                order_by=order_by,
+                descending=descending,
+                limit=limit,
+            )
 
         def run(f: DataFrame) -> DataFrame:
             return _bound(
                 _ext.DataFrame.query(
                     f,
-                    dsl,
+                    duql,
                     group_by=group_by,
                     aggs=aggs,
                     select=select,
@@ -847,13 +902,7 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
                 )
             )
 
-        if (
-            group_by is None
-            and aggs is None
-            and select is None
-            and order_by is None
-            and limit is None
-        ):
+        if not plan:
             return self._selecting(run, True)
         return run(self)
 
@@ -892,11 +941,15 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         *names: str | Sequence[str],
         columns: str | Sequence[str] | None = None,
         axis: int | Literal["index", "columns"] | None = None,
+        errors: Literal["raise", "ignore"] = "raise",
     ) -> DataFrame:
         """Every column except ``names`` (``columns=`` is the pandas spelling,
         which names shown columns only: an index column there is a ``KeyError``,
         while a positional name, the Polars form, may be one). ``axis`` is ``None``, ``1`` or ``"columns"``; any other value raises
-        ``ValueError`` (the frame has no row labels for ``axis=0``)."""
+        ``ValueError`` (the frame has no row labels for ``axis=0``). With
+        ``errors="ignore"`` a name with no column is skipped, as pandas."""
+        if errors not in ("raise", "ignore"):
+            raise ValueError(f"drop: errors must be 'raise' or 'ignore', not {errors!r}")
         if (
             axis is not None
             and not (axis == 1 and not isinstance(axis, bool))
@@ -912,8 +965,9 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
             dropped.update(as_names(n))
         shown = set(self.columns)
         missing = [n for n in dropped if n not in (shown if n in pandas_named else self)]
-        if missing:
+        if missing and errors == "raise":
             raise KeyError(f"drop: no column named {missing[0]!r}")
+        dropped.difference_update(missing)
         return _bound(_ext.DataFrame.select(self, *[c for c in self._names() if c not in dropped]))
 
     def _constant_column(
@@ -1986,7 +2040,13 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
             )
         )
 
-    def eval(self, expr: str) -> Series | DataFrame:
+    def eval(
+        self,
+        expr: str,
+        *,
+        local_dict: Mapping[str, EvalVariable] | None = None,
+        global_dict: Mapping[str, EvalVariable] | None = None,
+    ) -> Series | DataFrame:
         """Evaluate Python expressions over the columns (pandas ``eval``).
         ``df.eval("a / b")`` gives a Series; ``df.eval("m = a / b")`` gives a new
         frame with column ``m`` added or replaced. Several lines run in order, each
@@ -2010,21 +2070,64 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         ``isna``, ``isnull``, ``notna``, ``notnull``, ``abs``, ``clip`` (``lower``,
         ``upper`` or both), ``round`` (``decimals``), ``where`` and ``mask`` (with
         or without ``other``) and ``str.contains`` (``regex``, ``case``), with the
-        keyword spellings pandas takes; any other keyword raises, naming it. Nulls propagate as the column operators propagate them. ``&``,
+        keyword spellings pandas takes; any other keyword raises, naming it;
+        ``isin`` with a list; ``str.split`` (a separator of one character or with
+        no regex character) and ``str.rsplit`` (a separator that cannot overlap
+        itself), and ``.str[i]`` for one part, null past the end;
+        ``True`` and ``False`` in a comparison (a Bool column, or 1 and 0
+        against a number); and ``@name`` for a Python variable, a number, a
+        string, a bool or a list (a NumPy array or a Series too), read from ``local_dict``, then ``global_dict``; each
+        one not given is the caller's locals or globals, as pandas. An unknown
+        ``@name`` raises ``NameError``. Nulls propagate as the column operators
+        propagate them, as in pandas with nullable dtypes. ``&``,
         ``|`` and ``~`` combine and negate masks (comparisons), as ``and``, ``or``
         and ``not`` do. An unknown column raises ``KeyError``; anything else raises
-        ``TranspileError`` naming the first unsupported construct (``@name``,
-        attribute access, ...)."""
-        from ._transpile import NULL_COLUMN, TranspileError, eval_statements, transpile_expr
+        ``DFTUtilsTranspileError`` naming the first unsupported construct (attribute
+        access, ...)."""
+        return self._eval_source(expr, local_dict, global_dict, predicate=False)
 
-        statements = eval_statements(expr)
+    def _eval_source(
+        self,
+        expr: str,
+        local_dict: Mapping[str, Any] | None,
+        global_dict: Mapping[str, Any] | None,
+        *,
+        predicate: bool,
+    ) -> Series | DataFrame:
+        """The body of :meth:`eval` and :meth:`query`, which call it directly: a
+        dict not given is the locals or globals of their caller, read only when
+        the text has an ``@``. With ``predicate`` the text must be one expression
+        with a Bool result."""
+        from ._transpile import (
+            NULL_COLUMN,
+            eval_statements,
+            has_at,
+            resolve_at,
+            transpile_expr,
+        )
+        from .errors import DFTUtilsTranspileError
+
+        if (local_dict is None or global_dict is None) and has_at(expr):
+            caller = sys._getframe(2)
+            local_dict = caller.f_locals if local_dict is None else local_dict
+            global_dict = caller.f_globals if global_dict is None else global_dict
+        text, variables, shown = resolve_at(expr, local_dict or {}, global_dict or {})
+        statements = eval_statements(text)
         if not statements:
-            raise TranspileError("eval needs an expression")
+            raise DFTUtilsTranspileError(f"{'query' if predicate else 'eval'} needs an expression")
+        if predicate and len(statements) != 1:
+            raise TypeError("query takes one expression, not several lines")
         frame = self
-        for i, text in enumerate(statements):
+        for i, line in enumerate(statements):
             all_names = frame._names()
-            int_inputs = {c: frame[c].dtype.name.startswith(("INT", "UINT")) for c in all_names}
-            target, column_expr = transpile_expr(text, all_names, int_inputs)
+            dtypes = {c: frame[c].dtype for c in all_names}
+            int_inputs = {c: t.name.startswith(("INT", "UINT")) for c, t in dtypes.items()}
+            kinds = {c: k for c, k in ((c, _value_kind(t)) for c, t in dtypes.items()) if k}
+            if predicate and isinstance(ast.parse(line.strip()).body[0], ast.Assign):
+                raise TypeError("query takes an expression, not an assignment")
+            target, column_expr = transpile_expr(
+                line, all_names, int_inputs, variables, kinds, shown
+            )
             # `where` / `mask` without a replacement read an all-null column (the
             # expression language has no null literal); it is added for this line only.
             with_null = NULL_COLUMN in Columnar(column_expr).columns
@@ -2037,8 +2140,11 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
             )
             if target is None:
                 if i != len(statements) - 1:
-                    raise TranspileError("only the last line of eval can be an expression")
-                return column_expr.apply(work)
+                    raise DFTUtilsTranspileError("only the last line of eval can be an expression")
+                result = column_expr.apply(work)
+                if predicate and result.dtype != DType.BOOL:
+                    raise TypeError(f"query needs a Bool expression, got {result.dtype.name}")
+                return result
             frame = work.with_columns(**{target: column_expr})
             if with_null:
                 frame = frame.select(*[c for c in frame._names() if c != NULL_COLUMN])
@@ -2055,11 +2161,22 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
     def group_by(
         self,
         key: str | Series | Sequence[str | Series] | None,
-        agg: str | Agg,
+        agg: Agg | Literal["count"],
         /,
         *aggs: str | Agg,
         dropna: bool = True,
     ) -> DataFrame: ...
+    # A leading string that names a column is another key, so only the
+    # frame's columns decide whether a string-only call aggregates.
+    @overload
+    def group_by(
+        self,
+        key: str | Series | Sequence[str | Series] | None,
+        agg: str,
+        /,
+        *aggs: str | Agg,
+        dropna: bool = True,
+    ) -> DataFrame | GroupBy: ...
     def group_by(
         self,
         key: str | Series | Sequence[str | Series] | None = None,
@@ -2078,6 +2195,16 @@ class DataFrame(FramePandasMixin, FramePolarsMixin, WriteVerbs, _ext.DataFrame):
         given: list[str | Series] = (
             [] if key is None else [key] if isinstance(key, (str, Series)) else list(key)
         )
+        # Leading names that are columns are more keys, as Polars'
+        # group_by("a", "b") and the native group_by read them.
+        rest = list(aggs)
+        while rest:
+            first = rest[0]
+            if not isinstance(first, str) or not _is_key_name(first, self):
+                break
+            given.append(first)
+            rest.pop(0)
+        aggs = tuple(rest)
         if not given:
             whole = GroupBy(self, [])
             return whole.agg(*aggs) if aggs else whole

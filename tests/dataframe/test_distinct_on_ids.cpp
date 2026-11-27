@@ -4,6 +4,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <dataframe/selection_over.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
@@ -81,18 +82,6 @@ Series flat_bool() {
             bits[static_cast<std::size_t>(i >> 3)] |= 1u << (i & 7);
     const auto valid = validity_bits();
     return Series::flat(TypeId::Bool, bits.data(), N, valid.data());
-}
-
-Series selection_over(const Series& base, const Idx& idx) {
-    auto* o = new dftu_series();
-    adopt_type_from(*o, *base.handle());
-    o->encoding = Encoding::Selection;
-    o->length = static_cast<std::int64_t>(idx.size());
-    o->data = new_buffer(idx.size() * sizeof(std::int64_t));
-    std::memcpy(writable(o->data), idx.data(),
-                idx.size() * sizeof(std::int64_t));
-    o->set_child(dstd::make_shared<dftu_series>(*base.handle()));
-    return Series{o};
 }
 
 Series view_of(const Series& flat) {

@@ -17,6 +17,7 @@
 // FLAT, and checks both give the same rows.
 
 #include <bench_ok.h>
+#include <dataframe/selection_over.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
@@ -183,21 +184,6 @@ bool bench_view_inputs(std::int64_t rows) {
     return ok;
 }
 
-// A SELECTION column over `base`: row k of the result is row idx[k] of the
-// base, a negative index being a null row.
-Series selection_over_bench(const Series& base,
-                            dstd::Span<const std::int64_t> idx) {
-    auto* o = new dftu_series();
-    dftracer::utils::dataframe::adopt_type_from(*o, *base.handle());
-    o->encoding = Encoding::Selection;
-    o->length = static_cast<std::int64_t>(idx.size());
-    o->data = new_buffer(idx.size() * sizeof(std::int64_t));
-    std::memcpy(writable(o->data), idx.data(),
-                idx.size() * sizeof(std::int64_t));
-    o->set_child(dstd::make_shared<dftu_series>(*base.handle()));
-    return Series{o};
-}
-
 // group_by sum, sum, min and a mask filter on a CHUNKED and a SELECTION input,
 // each against the copy-then-read path these kernels used before they read a
 // layer in place (materialize the layer, then run the same op on FLAT).
@@ -236,8 +222,8 @@ bool bench_layout_inputs(std::int64_t rows) {
     dstd::Vector<std::int64_t> idx(static_cast<std::size_t>(rows));
     for (std::int64_t i = 0; i < rows; ++i)
         idx[static_cast<std::size_t>(i)] = (i * 7919) % rows;
-    const Series selected_k = selection_over_bench(flat_k, idx);
-    const Series selected_v = selection_over_bench(flat_v, idx);
+    const Series selected_k = selection_over(flat_k, idx);
+    const Series selected_v = selection_over(flat_v, idx);
 
     auto frame = [](const Series& key, const Series& val) {
         DataFrame df;
@@ -280,7 +266,7 @@ bool bench_layout_inputs(std::int64_t rows) {
     Case cases[] = {{"chunked", &chunked_k, &chunked_v,
                      Series{make_chunked(std::move(mask_chunks))}},
                     {"selection", &selected_k, &selected_v,
-                     selection_over_bench(flat_mask, mask_idx)}};
+                     selection_over(flat_mask, mask_idx)}};
 
     bool ok = true;
     for (Case& c : cases) {

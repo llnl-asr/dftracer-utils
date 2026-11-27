@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_FLOAT_KEY_H
 
 #include <cstdint>
+#include <cstring>
 
 namespace dftracer::utils::dataframe {
 
@@ -21,6 +22,20 @@ inline std::uint64_t canonical_float_bits(std::uint64_t bits,
     if (magnitude == 0) return 0;
     if (magnitude > inf) return inf | (std::uint64_t{1} << (mantissa - 1));
     return bits;
+}
+
+/// The canonical bits of the float of `width` bytes at `p`.
+inline std::uint64_t canonical_float_at(const void* p,
+                                        unsigned width) noexcept {
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, p, width);
+    return canonical_float_bits(bits, width);
+}
+
+/// Rewrites the float of `width` bytes at `p` as its canonical bits.
+inline void canonicalize_float(void* p, unsigned width) noexcept {
+    const std::uint64_t bits = canonical_float_at(p, width);
+    std::memcpy(p, &bits, width);
 }
 
 /// canonical_float_bits for a Float64.

@@ -71,6 +71,15 @@ bool read_width(dstd::StringView digits, unsigned& bits) {
     return true;
 }
 
+bool read_sized(dstd::StringView name, dstd::StringView prefix, Kind k,
+                Kind& kind, unsigned& bits) {
+    if (name.size() <= prefix.size() || !name.starts_with(prefix) ||
+        !read_width(name.substr(prefix.size()), bits))
+        return false;
+    kind = k;
+    return true;
+}
+
 // The kind and width of the element dtype names a list header carries.
 bool read_elem_dtype(dstd::StringView name, Kind& kind, unsigned& bits) {
     bits = 64;
@@ -87,14 +96,8 @@ bool read_elem_dtype(dstd::StringView name, Kind& kind, unsigned& bits) {
         bits = name == "float32" ? 32 : 64;
         return true;
     }
-    const auto numeric = [&](dstd::StringView prefix, Kind k) {
-        if (name.size() <= prefix.size() || !name.starts_with(prefix) ||
-            !read_width(name.substr(prefix.size()), bits))
-            return false;
-        kind = k;
-        return true;
-    };
-    return numeric("int", Kind::Int) || numeric("uint", Kind::UInt);
+    return read_sized(name, "int", Kind::Int, kind, bits) ||
+           read_sized(name, "uint", Kind::UInt, kind, bits);
 }
 
 bool names_list(const RawField& raw) {
@@ -172,18 +175,14 @@ dstd::Optional<Field> resolve(const RawField& raw) {
         if (suffixed) f.bits = 32;
         return f;
     }
-    const auto numeric = [&](dstd::StringView prefix, Kind kind) {
-        if (base.size() <= prefix.size() || !base.starts_with(prefix))
-            return false;
-        if (!read_width(base.substr(prefix.size()), f.bits)) return false;
-        f.kind = kind;
-        return true;
-    };
-    if (numeric("int", Kind::Int) || numeric("uint", Kind::UInt)) {
+    if (read_sized(base, "int", Kind::Int, f.kind, f.bits) ||
+        read_sized(base, "uint", Kind::UInt, f.kind, f.bits)) {
         f.nulls_ok = suffixed;
         return f;
     }
-    if (numeric("Int", Kind::Int) || numeric("UInt", Kind::UInt)) return f;
+    if (read_sized(base, "Int", Kind::Int, f.kind, f.bits) ||
+        read_sized(base, "UInt", Kind::UInt, f.kind, f.bits))
+        return f;
     if (base == "float16" || base == "float32" || base == "float64" ||
         base == "Float32" || base == "Float64") {
         f.kind = Kind::Float;
@@ -348,6 +347,15 @@ dstd::Result<Header> parse_header(json::Value& args) {
 
 namespace dftracer::utils::trace::table::detail {
 
+namespace {
+
+dstd::String text_disagreement(dstd::StringView key, dstd::StringView name,
+                               dstd::StringView x, dstd::StringView y) {
+    return dstd::fmt<"field {} has {} '{}' against '{}'">(name, key, x, y);
+}
+
+}  // namespace
+
 dstd::Optional<dstd::String> disagreement(const Header& a, const Header& b) {
     if (a.fields.size() != b.fields.size())
         return dstd::fmt<"{} fields against {}">(a.fields.size(),
@@ -372,16 +380,13 @@ dstd::Optional<dstd::String> disagreement(const Header& a, const Header& b) {
                 "field {} is ordered with another categories "
                 "dtype">(name);
         if (x.elem != y.elem)
-            return dstd::fmt<"field {} has elem '{}' against '{}'">(
-                name, dstd::StringView(x.elem), dstd::StringView(y.elem));
+            return text_disagreement("elem", name, x.elem, y.elem);
         if (x.elem_dtype != y.elem_dtype)
-            return dstd::fmt<"field {} has elem_dtype '{}' against '{}'">(
-                name, dstd::StringView(x.elem_dtype),
-                dstd::StringView(y.elem_dtype));
+            return text_disagreement("elem_dtype", name, x.elem_dtype,
+                                     y.elem_dtype);
         if (x.arrow_type != y.arrow_type)
-            return dstd::fmt<"field {} has arrow_type '{}' against '{}'">(
-                name, dstd::StringView(x.arrow_type),
-                dstd::StringView(y.arrow_type));
+            return text_disagreement("arrow_type", name, x.arrow_type,
+                                     y.arrow_type);
         if (x.kind != y.kind || x.bits != y.bits)
             return dstd::fmt<"field {} holds labels of another kind">(name);
     }

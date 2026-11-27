@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/group_by.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -25,10 +26,7 @@ using dftracer::utils::dataframe::offsets_of;
 using dftracer::utils::dataframe::TypeId;
 using dftracer::utils::dataframe::writable;
 
-bool is_valid(const dftu_series& v, std::int64_t i) {
-    if (!v.validity.block()) return true;
-    return (v.validity.data()[i >> 3] & (1u << (i & 7))) != 0;
-}
+using dftracer::utils::dataframe::own_valid;
 
 template <class X>
 constexpr TypeId typeid_of() {
@@ -93,7 +91,7 @@ std::int32_t hash_string_keys(
         idx;
     std::int32_t null_group = -1;
     for (std::int64_t i = 0; i < k.length; ++i) {
-        if (!is_valid(k, i)) {
+        if (!own_valid(k, i)) {
             group_of[static_cast<std::size_t>(i)] =
                 null_group_of(null_group, distinct, 0);
             continue;
@@ -107,15 +105,6 @@ std::int32_t hash_string_keys(
         group_of[static_cast<std::size_t>(i)] = it->second;
     }
     return null_group;
-}
-
-// The key bytes of row `i` of a column in any layout: the entry text of a
-// string (str_at), else the value's own bytes (key_at). False for a null row.
-inline bool key_bytes(const dftu_series& k, std::int64_t i, bool str,
-                      bool is_bool, std::size_t width,
-                      dftracer::utils::dstd::StringView& out) {
-    if (str) return dftracer::utils::dataframe::str_at(&k, i, out);
-    return dftracer::utils::dataframe::key_at(&k, i, width, is_bool, out);
 }
 
 // One range of key rows hashed on its own: the range's distinct keys in
@@ -148,11 +137,8 @@ KeyRange scan_key_range(const dftu_series& k, std::int64_t from,
     auto add = [&](StringView s, std::int64_t i) {
         String key(s.data(), s.size());
         if (is_float) {
-            std::uint64_t bits = 0;
-            std::memcpy(&bits, key.data(), width);
-            bits = dftracer::utils::dataframe::canonical_float_bits(
-                bits, static_cast<unsigned>(width));
-            std::memcpy(key.data(), &bits, width);
+            dftracer::utils::dataframe::canonicalize_float(
+                key.data(), static_cast<unsigned>(width));
         }
         auto [it, ins] = idx.try_emplace(
             std::move(key), static_cast<std::int32_t>(r.distinct.size()));
@@ -169,7 +155,8 @@ KeyRange scan_key_range(const dftu_series& k, std::int64_t from,
     const dftu_series* leaf = path.leaf();
     if (!path.ok() || leaf == nullptr) {
         for (std::int64_t i = from; i < to; ++i) {
-            if (!key_bytes(k, i, str, is_bool, width, s)) {
+            if (!dftracer::utils::dataframe::key_bytes(k, i, str, is_bool,
+                                                       width, s)) {
                 add_null(i);
                 continue;
             }
@@ -177,9 +164,8 @@ KeyRange scan_key_range(const dftu_series& k, std::int64_t from,
         }
         return r;
     }
-    const char* leaf_data =
-        leaf->data.block() ? reinterpret_cast<const char*>(leaf->data.data())
-                           : nullptr;
+    const std::uint8_t* leaf_data =
+        leaf->data.block() ? leaf->data.data() : nullptr;
     const bool leaf_const = leaf->encoding == Encoding::Constant;
     for (std::int64_t i = from; i < to; ++i) {
         std::int64_t j = 0;
@@ -191,13 +177,9 @@ KeyRange scan_key_range(const dftu_series& k, std::int64_t from,
                 have = dftracer::utils::dataframe::str_flat_at(leaf, 0, s);
             else if (str)
                 have = dftracer::utils::dataframe::str_at(leaf, j, s);
-            else if (is_bool)
-                s = StringView(dftracer::utils::dataframe::BOOL_BYTES +
-                                   ((leaf_data[j >> 3] >> (j & 7)) & 1),
-                               1);
             else
-                s = StringView(leaf_data + static_cast<std::size_t>(j) * width,
-                               width);
+                s = dftracer::utils::dataframe::leaf_key(leaf_data, j, width,
+                                                         is_bool);
         }
         if (!have) {
             add_null(i);
@@ -292,28 +274,19 @@ Groups build_groups(const dftu_series* k) {
         dftracer::utils::dstd::HashMap<dftracer::utils::dstd::String,
                                        std::int32_t>
             idx;
-        const char* data = reinterpret_cast<const char*>(k->data.data());
+        const std::uint8_t* data = k->data.data();
         for (std::int64_t i = 0; i < k->length; ++i) {
-            if (!is_valid(*k, i)) {
+            if (!own_valid(*k, i)) {
                 g.group_of[static_cast<std::size_t>(i)] =
                     null_group_of(null_group, distinct, width);
                 continue;
             }
-            dftracer::utils::dstd::String key =
-                is_bool
-                    ? dftracer::utils::dstd::String(
-                          dftracer::utils::dataframe::BOOL_BYTES +
-                              ((data[i >> 3] >> (i & 7)) & 1),
-                          1)
-                    : dftracer::utils::dstd::String(
-                          data + static_cast<std::size_t>(i) * width, width);
-            if (is_float) {
-                std::uint64_t bits = 0;
-                std::memcpy(&bits, key.data(), width);
-                bits = dftracer::utils::dataframe::canonical_float_bits(
-                    bits, static_cast<unsigned>(width));
-                std::memcpy(key.data(), &bits, width);
-            }
+            const auto kv =
+                dftracer::utils::dataframe::leaf_key(data, i, width, is_bool);
+            dftracer::utils::dstd::String key(kv.data(), kv.size());
+            if (is_float)
+                dftracer::utils::dataframe::canonicalize_float(
+                    key.data(), static_cast<unsigned>(width));
             auto [it, ins] = idx.try_emplace(
                 std::move(key), static_cast<std::int32_t>(distinct.size()));
             if (ins) distinct.push_back(it->first);
@@ -380,6 +353,19 @@ Groups build_groups(const dftu_series* k) {
     return g;
 }
 
+// A group sum wraps in two's complement, so a partial that passes the range
+// of W where the serial order does not still merges to the serial value.
+template <class W>
+inline W add_wrapping(W a, W b) {
+    if constexpr (std::is_floating_point_v<W>) {
+        return a + b;
+    } else {
+        W sum;
+        dftracer::utils::dstd::bits::add_overflow(a, b, &sum);
+        return sum;
+    }
+}
+
 // One group's running aggregate: sum/count and the first-seen min and max.
 template <class T, class W>
 struct GroupAgg {
@@ -394,20 +380,18 @@ struct GroupAgg {
         mins.assign(ng, T{});
         maxs.assign(ng, T{});
     }
-};
 
-// A group sum wraps in two's complement, so a partial that passes the range
-// of W where the serial order does not still merges to the serial value.
-template <class W>
-inline W add_wrapping(W a, W b) {
-    if constexpr (std::is_floating_point_v<W>) {
-        return a + b;
-    } else {
-        using U = std::make_unsigned_t<W>;
-        return static_cast<W>(
-            static_cast<U>(static_cast<U>(a) + static_cast<U>(b)));
+    void add(std::size_t g, T x) {
+        if (cnts[g] == 0) {
+            mins[g] = maxs[g] = x;
+        } else {
+            if (x < mins[g]) mins[g] = x;
+            if (x > maxs[g]) maxs[g] = x;
+        }
+        sums[g] = add_wrapping<W>(sums[g], static_cast<W>(x));
+        cnts[g]++;
     }
-}
+};
 
 // Fold rows [from, to) of `cells` into `acc`, one group per row.
 template <class T, class W>
@@ -419,14 +403,7 @@ void fold_rows(const dftracer::utils::dataframe::ColumnCells<T>& cells,
         const T x = cells.at(i);
         const std::size_t g =
             static_cast<std::size_t>(group_of[static_cast<std::size_t>(i)]);
-        if (acc.cnts[g] == 0) {
-            acc.mins[g] = acc.maxs[g] = x;
-        } else {
-            if (x < acc.mins[g]) acc.mins[g] = x;
-            if (x > acc.maxs[g]) acc.maxs[g] = x;
-        }
-        acc.sums[g] = add_wrapping<W>(acc.sums[g], static_cast<W>(x));
-        acc.cnts[g]++;
+        acc.add(g, x);
     }
 }
 
@@ -465,15 +442,7 @@ bool fold_rows_blocks(const dftu_series& v,
                     const T x = buf[k];
                     const std::size_t g = static_cast<std::size_t>(
                         group_of[static_cast<std::size_t>(from + k)]);
-                    if (part.cnts[g] == 0) {
-                        part.mins[g] = part.maxs[g] = x;
-                    } else {
-                        if (x < part.mins[g]) part.mins[g] = x;
-                        if (x > part.maxs[g]) part.maxs[g] = x;
-                    }
-                    part.sums[g] =
-                        add_wrapping<W>(part.sums[g], static_cast<W>(x));
-                    part.cnts[g]++;
+                    part.add(g, x);
                 }
             },
             [g_count](GroupAgg<T, W> a, const GroupAgg<T, W>& b) {

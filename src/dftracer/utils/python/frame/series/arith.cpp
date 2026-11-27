@@ -72,112 +72,73 @@ bool align_operands(Series*& a, Series*& b, dataframe::AlignedSeries& store) {
 // and the column is not (numpy's weak-scalar rule).
 enum class ScalarOp { Add, Sub, Mul, Div };
 
-PyObject* scalar_op(PyObject* self, PyObject* value, ScalarOp op) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    TypeId a_type = a->type();
-    if (PyFloat_Check(value)) {
-        double v = PyFloat_AsDouble(value);
-        if (v == -1.0 && PyErr_Occurred()) return nullptr;
-        if (op == ScalarOp::Mul)
-            return make_arith_series(
-                named_like(
-                    kernel(*a, [&] { return dataframe::mul_scalar(*a, v); }),
-                    *a),
-                a_type, TypeId::Float64);
-        if (op == ScalarOp::Div)
-            return make_arith_series(
-                named_like(
-                    kernel(*a, [&] { return dataframe::div_scalar(*a, v); }),
-                    *a),
-                a_type, TypeId::Float64);
-        return make_arith_series(
-            named_like(kernel(*a,
-                              [&] {
-                                  return dataframe::add_scalar(
-                                      *a, op == ScalarOp::Sub ? -v : v);
-                              }),
-                       *a),
-            a_type, TypeId::Float64);
-    }
-    long long v = PyLong_AsLongLong(value);
-    if (v == -1 && PyErr_Occurred()) return nullptr;
-    auto iv = static_cast<std::int64_t>(v);
+template <class T>
+PyObject* scalar_apply(Series* a, ScalarOp op, T v, TypeId out_type) {
+    const TypeId a_type = a->type();
     if (op == ScalarOp::Mul)
         return make_arith_series(
-            named_like(
-                kernel(*a, [&] { return dataframe::mul_scalar(*a, iv); }), *a),
-            a_type, TypeId::Int64);
+            named_like(kernel(*a, [&] { return dataframe::mul_scalar(*a, v); }),
+                       *a),
+            a_type, out_type);
     if (op == ScalarOp::Div)
         return make_arith_series(
-            named_like(
-                kernel(*a, [&] { return dataframe::div_scalar(*a, iv); }), *a),
-            a_type, TypeId::Int64);
+            named_like(kernel(*a, [&] { return dataframe::div_scalar(*a, v); }),
+                       *a),
+            a_type, out_type);
     return make_arith_series(
         named_like(kernel(*a,
                           [&] {
                               return dataframe::add_scalar(
-                                  *a, op == ScalarOp::Sub ? -iv : iv);
+                                  *a, op == ScalarOp::Sub ? -v : v);
                           }),
                    *a),
-        a_type, TypeId::Int64);
+        a_type, out_type);
+}
+
+PyObject* scalar_op(PyObject* self, PyObject* value, ScalarOp op) {
+    Held held_a(self);
+    Series* a = held_a.get();
+    if (!a) return nullptr;
+    if (PyFloat_Check(value)) {
+        double v = PyFloat_AsDouble(value);
+        if (v == -1.0 && PyErr_Occurred()) return nullptr;
+        return scalar_apply(a, op, v, TypeId::Float64);
+    }
+    long long v = PyLong_AsLongLong(value);
+    if (v == -1 && PyErr_Occurred()) return nullptr;
+    return scalar_apply(a, op, static_cast<std::int64_t>(v), TypeId::Int64);
+}
+
+Series add_or_concat(const Series& a, const Series& b) {
+    if (is_text(a.type()) && is_text(b.type())) return a.str_cat(b);
+    return dataframe::add(a, b);
+}
+
+template <class Fn>
+PyObject* binary_op(PyObject* self, PyObject* other, Fn fn) {
+    Held held_a(self);
+    Series* a = held_a.get();
+    Held held_b(other);
+    Series* b = held_b.get();
+    if (!a || !b) return nullptr;
+    dataframe::AlignedSeries aligned;
+    if (!align_operands(a, b, aligned)) return nullptr;
+    return make_arith_series(
+        named_like(kernel(*a, [&] { return fn(*a, *b); }), *a, *b), a->type(),
+        b->type());
 }
 
 }  // namespace
 
-PyObject* Series_add(PyObject* self, PyObject* other) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    Held held_b(other);
-    Series* b = held_b.get();
-    if (!a || !b) return nullptr;
-    dataframe::AlignedSeries aligned;
-    if (!align_operands(a, b, aligned)) return nullptr;
-    if (is_text(a->type()) && is_text(b->type()))
-        return make_arith_series(
-            named_like(kernel(*a, [&] { return a->str_cat(*b); }), *a, *b),
-            a->type(), b->type());
-    return make_arith_series(
-        named_like(kernel(*a, [&] { return dataframe::add(*a, *b); }), *a, *b),
-        a->type(), b->type());
-}
-PyObject* Series_sub(PyObject* self, PyObject* other) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    Held held_b(other);
-    Series* b = held_b.get();
-    if (!a || !b) return nullptr;
-    dataframe::AlignedSeries aligned;
-    if (!align_operands(a, b, aligned)) return nullptr;
-    return make_arith_series(
-        named_like(kernel(*a, [&] { return dataframe::sub(*a, *b); }), *a, *b),
-        a->type(), b->type());
-}
-PyObject* Series_mul(PyObject* self, PyObject* other) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    Held held_b(other);
-    Series* b = held_b.get();
-    if (!a || !b) return nullptr;
-    dataframe::AlignedSeries aligned;
-    if (!align_operands(a, b, aligned)) return nullptr;
-    return make_arith_series(
-        named_like(kernel(*a, [&] { return dataframe::mul(*a, *b); }), *a, *b),
-        a->type(), b->type());
-}
-PyObject* Series_div(PyObject* self, PyObject* other) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    Held held_b(other);
-    Series* b = held_b.get();
-    if (!a || !b) return nullptr;
-    dataframe::AlignedSeries aligned;
-    if (!align_operands(a, b, aligned)) return nullptr;
-    return make_arith_series(
-        named_like(kernel(*a, [&] { return dataframe::div(*a, *b); }), *a, *b),
-        a->type(), b->type());
-}
+#define DFTRACER_UTILS_SERIES_BINARY(name, fn)                 \
+    PyObject* Series_##name(PyObject* self, PyObject* other) { \
+        return binary_op(self, other, fn);                     \
+    }
+DFTRACER_UTILS_SERIES_BINARY(add, add_or_concat)
+DFTRACER_UTILS_SERIES_BINARY(sub, dataframe::sub)
+DFTRACER_UTILS_SERIES_BINARY(mul, dataframe::mul)
+DFTRACER_UTILS_SERIES_BINARY(div, dataframe::div)
+#undef DFTRACER_UTILS_SERIES_BINARY
 
 // floordiv / mod / pow: `other` is a Series, or a number with the optional
 // `reverse` flag (`number <op> self`).

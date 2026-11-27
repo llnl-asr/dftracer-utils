@@ -81,20 +81,9 @@ dstd::Vector<double> nonnull_values(const Series& v) {
     const std::int64_t n = v.length();
     const dftu_series& h = *v.handle();
     if (n > 0 && v.encoding() == Encoding::Flat && v.null_count() == 0) {
-        const void* src = dftu_series_data(v.handle());
-        if (src) {
-            dstd::Vector<double> out(static_cast<std::size_t>(n));
-            if (v.type() == TypeId::Float64) {
-                std::memcpy(out.data(), src,
-                            static_cast<std::size_t>(n) * sizeof(double));
-            } else if (!cast_simd(static_cast<std::int32_t>(v.type()),
-                                  static_cast<std::int32_t>(TypeId::Float64),
-                                  src, out.data(),
-                                  static_cast<std::size_t>(n))) {
-                for (std::int64_t i = 0; i < n; ++i) out[i] = read_f64(v, i);
-            }
-            return out;
-        }
+        dstd::Vector<double> out(static_cast<std::size_t>(n));
+        fill_dense(h, out.data());
+        return out;
     }
     if (v.encoding() == Encoding::Chunked) {
         // Each chunk takes the fast path of its own encoding; a per-cell walk

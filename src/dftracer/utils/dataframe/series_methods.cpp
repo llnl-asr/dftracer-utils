@@ -12,19 +12,6 @@
 // Out-of-line Series methods over the dftu_series_* C ABI.
 namespace dftracer::utils::dataframe {
 
-namespace {
-double scalar_as_double(dftu_scalar s) {
-    switch (s.kind) {
-        case DFTU_SCALAR_TAG_F64:
-            return s.value.d;
-        case DFTU_SCALAR_TAG_U64:
-            return static_cast<double>(s.value.u);
-        default:
-            return static_cast<double>(s.value.i);
-    }
-}
-}  // namespace
-
 Series Series::rename(const dstd::SharedString& name) const {
     dftu_series* out = dftu_series_share(handle_);
     if (out != nullptr) out->name = name;
@@ -165,7 +152,7 @@ dstd::Result<double> Series::mean() const {
     // when it has no valid value.
     const dstd::Result<Scalar> total_sum = sum();
     if (!total_sum) return total_sum.error();
-    const double total = scalar_as_double(*total_sum);
+    const double total = scalar_as<double>(*total_sum);
     const std::int64_t n = count();
     return n == 0 ? std::nan("") : total / static_cast<double>(n);
 }

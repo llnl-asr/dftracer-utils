@@ -97,6 +97,12 @@ bool read_elem_dtype(dstd::StringView name, Kind& kind, unsigned& bits) {
     return numeric("int", Kind::Int) || numeric("uint", Kind::UInt);
 }
 
+bool names_list(const RawField& raw) {
+    dstd::StringView base(raw.dtype);
+    base = base.substr(0, base.find('['));
+    return base == "object" && raw.elem == "list";
+}
+
 dstd::Optional<Field> resolve(const RawField& raw) {
     Field f;
     f.name = raw.name;
@@ -113,8 +119,7 @@ dstd::Optional<Field> resolve(const RawField& raw) {
         base = base.substr(0, open);
         suffixed = true;
     }
-    if (raw.has_elem_dtype && (base != "object" || raw.elem != "list"))
-        return dstd::nullopt;
+    if (raw.has_elem_dtype && !names_list(raw)) return dstd::nullopt;
     if (base == "category") {
         // Float labels may hold the text of an infinite float, as cells do.
         const dstd::StringView cats(raw.categories_dtype);
@@ -319,6 +324,10 @@ dstd::Result<Header> parse_header(json::Value& args) {
     for (const RawField& raw : raws) {
         auto field = resolve(raw);
         if (!field) {
+            if (raw.has_elem_dtype && !names_list(raw))
+                return common::make_error<
+                    "field {} is not a list, so it cannot have an "
+                    "elem_dtype">(ErrorCode::Parse, dstd::StringView(raw.name));
             if (raw.has_elem_dtype)
                 return common::make_error<
                     "field {} has the invalid elem_dtype {}, which a list "

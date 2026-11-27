@@ -292,8 +292,7 @@ void fill_null_mask(const dftu_series& c, std::uint8_t* dst) {
         } else {
             std::memset(dst, 0, static_cast<std::size_t>(n));
         }
-        if (c.encoding != dataframe::Encoding::Dictionary || !c.child() ||
-            c.child()->null_count == 0)
+        if (c.encoding != dataframe::Encoding::Dictionary || !c.rowwise_nulls())
             return;
         const auto* codes =
             reinterpret_cast<const std::int32_t*>(c.data.data());
@@ -314,8 +313,8 @@ PyObject* Series_null_bytes(PyObject* self, PyObject*) {
     Series* a = as_native<Series>(self);
     if (!a) return nullptr;
     const dftu_series* h = a->handle();
-    const bool entry_nulls = h->encoding == dataframe::Encoding::Dictionary &&
-                             h->child() && h->child()->null_count > 0;
+    const bool entry_nulls =
+        h->encoding == dataframe::Encoding::Dictionary && h->rowwise_nulls();
     if (!entry_nulls && dftu_series_null_count(h) == 0 && !h->is_chunked())
         Py_RETURN_NONE;
     PyObject* out = PyByteArray_FromStringAndSize(

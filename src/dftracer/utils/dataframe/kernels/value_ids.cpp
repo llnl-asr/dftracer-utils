@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/float_key.h>
 #include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/internal/value_ids.h>
@@ -15,8 +16,6 @@
 namespace dftracer::utils::dataframe {
 
 namespace {
-
-constexpr char BOOL_BYTES[2] = {0, 1};
 
 // Open-addressing table from a value of at most 8 bytes to its id; an empty
 // slot has id -1. Doubles at half full.
@@ -123,45 +122,7 @@ struct Builder {
 
     bool key_at(const dftu_series* c, std::int64_t i, dstd::StringView& s) {
         if (is_string) return str_at(c, i, s);
-        for (;;) {
-            if (c->validity.block() &&
-                !((c->validity.data()[i >> 3] >> (i & 7)) & 1))
-                return false;
-            switch (c->encoding) {
-                case Encoding::Dictionary:
-                    i = reinterpret_cast<const std::int32_t*>(
-                        c->data.data())[i];
-                    c = c->child().get();
-                    break;
-                case Encoding::Selection: {
-                    const std::int64_t idx =
-                        reinterpret_cast<const std::int64_t*>(
-                            c->data.data())[i];
-                    if (idx < 0) return false;
-                    i = idx;
-                    c = c->child().get();
-                    break;
-                }
-                case Encoding::Chunked: {
-                    std::int64_t local = 0;
-                    c = &c->chunk_at(i, local);
-                    i = local;
-                    break;
-                }
-                default: {
-                    const auto* d = c->data.data();
-                    if (is_bool)
-                        s = dstd::StringView(
-                            BOOL_BYTES + ((d[i >> 3] >> (i & 7)) & 1), 1);
-                    else
-                        s = dstd::StringView(
-                            reinterpret_cast<const char*>(d) +
-                                static_cast<std::size_t>(i) * width,
-                            width);
-                    return true;
-                }
-            }
-        }
+        return dataframe::key_at(c, i, width, is_bool, s);
     }
 
     std::uint64_t key_of(const std::uint8_t* d, std::int64_t i) const {

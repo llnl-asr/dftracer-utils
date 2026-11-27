@@ -4,9 +4,13 @@
 #include <dftracer/utils/dataframe/internal/field_stat_simd.h>
 #include <dftracer/utils/dataframe/kernels/field_stat.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/int128.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 #undef HWY_TARGET_INCLUDE
 #define HWY_TARGET_INCLUDE "dftracer/utils/dataframe/kernels/field_stat.cpp"
@@ -38,6 +42,7 @@ FsRaw MomentsF64Impl(const double* x, std::size_t n) {
     FsRaw r{hwy::HWY_NAMESPACE::ReduceSum(d, vs),
             hwy::HWY_NAMESPACE::ReduceMin(d, vmin),
             hwy::HWY_NAMESPACE::ReduceMax(d, vmax),
+            0,
             0,
             0,
             0,
@@ -99,12 +104,15 @@ FsRaw MomentsI64Impl(const std::int64_t* x, std::size_t n) {
     auto vmin = hwy::HWY_NAMESPACE::Set(df, x0),
          vmax = hwy::HWY_NAMESPACE::Set(df, x0);
     auto es = hwy::HWY_NAMESPACE::Zero(di);
+    auto eh = hwy::HWY_NAMESPACE::Zero(di);
     auto emin = hwy::HWY_NAMESPACE::Set(di, x[0]),
          emax = hwy::HWY_NAMESPACE::Set(di, x[0]);
     std::size_t i = 0;
     for (; i + L <= n; i += L) {
         const auto vi = hwy::HWY_NAMESPACE::LoadU(di, x + i);
         es = hwy::HWY_NAMESPACE::Add(es, vi);
+        eh =
+            hwy::HWY_NAMESPACE::Add(eh, hwy::HWY_NAMESPACE::ShiftRight<32>(vi));
         emin = hwy::HWY_NAMESPACE::Min(emin, vi);
         emax = hwy::HWY_NAMESPACE::Max(emax, vi);
         const auto v = hwy::HWY_NAMESPACE::ConvertTo(df, vi);
@@ -122,14 +130,16 @@ FsRaw MomentsI64Impl(const std::int64_t* x, std::size_t n) {
             0,
             hwy::HWY_NAMESPACE::ReduceSum(di, es),
             hwy::HWY_NAMESPACE::ReduceMin(di, emin),
-            hwy::HWY_NAMESPACE::ReduceMax(di, emax)};
+            hwy::HWY_NAMESPACE::ReduceMax(di, emax),
+            hwy::HWY_NAMESPACE::ReduceSum(di, eh)};
     for (; i < n; ++i) {
         const std::int64_t xi = x[i];
         const double v = static_cast<double>(xi);
         r.sum += v;
         if (v < r.min) r.min = v;
         if (v > r.max) r.max = v;
-        r.esum += xi;
+        static_cast<void>(dstd::bits::add_overflow(r.esum, xi, &r.esum));
+        r.ehigh += xi >> 32;
         if (xi < r.emin) r.emin = xi;
         if (xi > r.emax) r.emax = xi;
     }
@@ -208,15 +218,113 @@ void scalar_reduce(FieldStat& fs, const Series& c, std::int64_t b,
     }
     const bool is_double = is_double_decoded(t);
     const bool is_u = is_uint(t);
+    const dftu_series* h = c.handle();
     for (std::int64_t i = b; i < e; ++i) {
-        if (c.is_null(i)) continue;
+        const dftu_series* leaf = h;
+        std::int64_t j = i;
+        if (!find_leaf(leaf, j)) continue;
         if (is_double)
-            fs.add(read_f64(c, i));
+            fs.add(cell_f64(leaf, j));
         else if (is_u)
-            fs.add(read_u64(c, i));
+            fs.add(cell_u64(leaf, j));
         else
-            fs.add(read_i64(c, i));
+            fs.add(cell_i64(leaf, j));
     }
+}
+
+// The SIMD pass over `n` > 0 contiguous values, none null.
+FieldStat dense_stat(const double* x, std::size_t n) {
+    const FsRaw r = HWY_DYNAMIC_DISPATCH(MomentsF64Impl)(x, n);
+    FieldStat fs;
+    fs.n = n;
+    fs.sum = r.sum;
+    fs.shift = r.shift;
+    fs.cmean = r.cmean;
+    fs.cm2 = r.cm2;
+    fs.cm3 = r.cm3;
+    fs.cm4 = r.cm4;
+    fs.min = r.min;
+    fs.max = r.max;
+    fs.domain = FieldStatDomain::F64;
+    return fs;
+}
+
+FieldStat dense_stat(const std::int64_t* x, std::size_t n) {
+    const FsRaw r = HWY_DYNAMIC_DISPATCH(MomentsI64Impl)(x, n);
+    FieldStat fs;
+    fs.n = n;
+    fs.sum = r.sum;
+    fs.shift = r.shift;
+    fs.cmean = r.cmean;
+    fs.cm2 = r.cm2;
+    fs.cm3 = r.cm3;
+    fs.cm4 = r.cm4;
+    fs.min = r.min;
+    fs.max = r.max;
+    fs.domain = FieldStatDomain::I64;
+    fs.esum = r.esum;
+    fs.emin = r.emin;
+    fs.emax = r.emax;
+    // The exact sum is ehigh * 2^32 plus the low halves, which stay below 2^64
+    // for n < 2^32, so the wraps of esum follow from the two.
+    const dstd::int128_t one_wrap = dstd::int128_t{1} << 64;
+    const dstd::int128_t high =
+        static_cast<dstd::int128_t>(r.ehigh) * (dstd::int128_t{1} << 32);
+    fs.ecarry = static_cast<std::int64_t>((high - r.esum + one_wrap - 1) >> 64);
+    return fs;
+}
+
+// The values of the non-null rows [begin, end) of the view `v`, whose values
+// are T, packed into `out`. Returns how many there are.
+template <class T>
+std::int64_t pack_view(const dftu_series& v, std::int64_t begin,
+                       std::int64_t end, T* out) {
+    std::int64_t n = 0;
+    const dftu_series* base = v.child().get();
+    // The usual view, a filter's SELECTION over a FLAT column, is read through
+    // its two buffers.
+    if (v.encoding == Encoding::Selection && !v.validity.block() &&
+        base->encoding == Encoding::Flat) {
+        const auto* sel = reinterpret_cast<const std::int64_t*>(v.data.data());
+        const T* x = reinterpret_cast<const T*>(base->data.data());
+        const std::uint8_t* valid =
+            base->validity.block() ? base->validity.data() : nullptr;
+        for (std::int64_t i = begin; i < end; ++i) {
+            const std::int64_t j = sel[i];
+            if (j >= 0 && (!valid || ((valid[j >> 3] >> (j & 7)) & 1)))
+                out[n++] = x[j];
+        }
+        return n;
+    }
+    for (std::int64_t i = begin; i < end; ++i) {
+        T x{};
+        if constexpr (std::is_same_v<T, double>) {
+            if (try_cell_f64(&v, i, x)) out[n++] = x;
+        } else {
+            if (try_cell_i64(&v, i, x)) out[n++] = x;
+        }
+    }
+    return n;
+}
+
+// Reduces a view in blocks, so the SIMD pass runs with no copy of the column. A
+// block holding a null row adds value by value, as a FLAT column with nulls.
+template <class T>
+FieldStat view_stat(const dftu_series& v, std::int64_t begin,
+                    std::int64_t end) {
+    constexpr std::int64_t BLOCK = 1 << 11;
+    T block[BLOCK];
+    FieldStat fs;
+    for (std::int64_t at = begin; at < end; at += BLOCK) {
+        const std::int64_t rows = std::min(BLOCK, end - at);
+        const std::int64_t n = pack_view(v, at, at + rows, block);
+        if (n == rows) {
+            fs.merge(dense_stat(block, static_cast<std::size_t>(n)));
+        } else {
+            for (std::int64_t k = 0; k < n; ++k) fs.add(block[k]);
+        }
+    }
+    return fs;
 }
 
 }  // namespace
@@ -225,42 +333,30 @@ static FieldStat field_stat_reduce_serial(const Series& col, std::int64_t begin,
                                           std::int64_t end) {
     FieldStat fs;
     if (begin >= end) return fs;
-    const TypeId t = col.type();
-    const bool dense =
-        col.encoding() == Encoding::Flat && col.null_count() == 0;
-    const std::size_t n = static_cast<std::size_t>(end - begin);
-    if (dense && t == TypeId::Float64) {
-        const FsRaw r =
-            HWY_DYNAMIC_DISPATCH(MomentsF64Impl)(col.data<double>() + begin, n);
-        fs.n = n;
-        fs.sum = r.sum;
-        fs.shift = r.shift;
-        fs.cmean = r.cmean;
-        fs.cm2 = r.cm2;
-        fs.cm3 = r.cm3;
-        fs.cm4 = r.cm4;
-        fs.min = r.min;
-        fs.max = r.max;
-        fs.domain = FieldStatDomain::F64;
+    if (col.handle()->is_chunked()) {
+        // Each chunk takes its own SIMD or scalar pass over the rows in range.
+        for (std::int64_t at = begin; at < end;) {
+            std::int64_t local = 0;
+            const dftu_series& chunk = col.handle()->chunk_at(at, local);
+            const std::int64_t rows = std::min(end - at, chunk.length - local);
+            Series piece{const_cast<dftu_series*>(&chunk)};
+            fs.merge(field_stat_reduce_serial(piece, local, local + rows));
+            piece.release();
+            at += rows;
+        }
         return fs;
     }
-    if (dense && t == TypeId::Int64) {
-        const FsRaw r = HWY_DYNAMIC_DISPATCH(MomentsI64Impl)(
-            col.data<std::int64_t>() + begin, n);
-        fs.n = n;
-        fs.sum = r.sum;
-        fs.shift = r.shift;
-        fs.cmean = r.cmean;
-        fs.cm2 = r.cm2;
-        fs.cm3 = r.cm3;
-        fs.cm4 = r.cm4;
-        fs.min = r.min;
-        fs.max = r.max;
-        fs.domain = FieldStatDomain::I64;
-        fs.esum = r.esum;
-        fs.emin = r.emin;
-        fs.emax = r.emax;
-        return fs;
+    const TypeId t = col.type();
+    const bool view = col.encoding() != Encoding::Flat;
+    const bool dense = !view && col.null_count() == 0;
+    const std::size_t n = static_cast<std::size_t>(end - begin);
+    if (t == TypeId::Float64) {
+        if (view) return view_stat<double>(*col.handle(), begin, end);
+        if (dense) return dense_stat(col.data<double>() + begin, n);
+    }
+    if (t == TypeId::Int64) {
+        if (view) return view_stat<std::int64_t>(*col.handle(), begin, end);
+        if (dense) return dense_stat(col.data<std::int64_t>() + begin, n);
     }
     scalar_reduce(fs, col, begin, end);
     return fs;
@@ -268,21 +364,20 @@ static FieldStat field_stat_reduce_serial(const Series& col, std::int64_t begin,
 
 FieldStat field_stat_reduce(const Series& col, std::int64_t begin,
                             std::int64_t end) {
-    if (col.handle()->is_chunked()) {
-        const Series joined = col.materialize();
-        return field_stat_reduce(joined, begin, end);
-    }
     if (end < 0) end = col.length();
     const std::int64_t n = end - begin;
     // The per-range reduction is SIMD; for a large full-column reduction with a
     // backend, split into chunks and merge the mergeable FieldStats (central
     // moments, combined by the Chan/Pebay merge). Small n / no backend runs
-    // serial.
-    constexpr std::int64_t GRAIN = std::int64_t{1} << 18;
-    if (n <= GRAIN || !parallel_backend_installed())
+    // serial. A view also gathers each row, so it splits finer.
+    const Encoding encoding = col.encoding();
+    const bool view =
+        encoding != Encoding::Flat && encoding != Encoding::Chunked;
+    const std::int64_t grain = std::int64_t{1} << (view ? 16 : 18);
+    if (n <= grain || !parallel_backend_installed())
         return field_stat_reduce_serial(col, begin, end);
     return parallel_reduce<FieldStat>(
-        n, GRAIN, FieldStat{},
+        n, grain, FieldStat{},
         [&](std::int64_t b, std::int64_t e) {
             return field_stat_reduce_serial(col, begin + b, begin + e);
         },

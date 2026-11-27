@@ -228,6 +228,16 @@ TEST_SUITE("vec") {
             Series{dftu_series_pow_scalar(a.handle(), dataframe::i64(2), 1)};
         CHECK(rp.data<std::int64_t>()[0] == 128);
         CHECK(rp.is_null(1));  // 2 ** -7 is not an integer
+        // An integer power that leaves the int64 range wraps, as numpy does.
+        const std::int64_t base_v[4] = {2, 3, -3, 4294967296};
+        const std::int64_t exp_v[4] = {64, 40, 41, 2};
+        Series wrapped =
+            Series::flat_i64(base_v, 4).pow(Series::flat_i64(exp_v, 4));
+        REQUIRE(wrapped.valid());
+        CHECK(wrapped.data<std::int64_t>()[0] == 0);
+        CHECK(wrapped.data<std::int64_t>()[1] == -6289078614652622815);
+        CHECK(wrapped.data<std::int64_t>()[2] == 420491770248316829);
+        CHECK(wrapped.data<std::int64_t>()[3] == 0);
         const double fv[3] = {7.5, -7.5, 2.0};
         Series f = Series::flat_f64(fv, 3);
         Series fq = Series{

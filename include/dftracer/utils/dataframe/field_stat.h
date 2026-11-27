@@ -422,19 +422,21 @@ struct FieldStat {
         centre(ha, la);
         o.centre(hb, lb);
         const double delta = (hb - ha) + (lb - la);  // the difference of means
-        const double d2 = delta * delta;
-        const double nanb = na * nb;
-        const double m2 = cm2 + o.cm2 + d2 * nanb / nt;
-        const double m3 = cm3 + o.cm3 +
-                          d2 * delta * nanb * (na - nb) / (nt * nt) +
-                          3.0 * delta * (na * o.cm2 - nb * cm2) / nt;
+        const double fa = na / nt;
+        const double fb = nb / nt;
+        const double w = na * fb;                    // na * nb / nt
+        // A term takes delta one power at a time after its count factor, so no
+        // step overflows unless the term does.
+        const double m2 = cm2 + o.cm2 + w * delta * delta;
+        const double m3 = cm3 + o.cm3 + w * (fa - fb) * delta * delta * delta +
+                          3.0 * (delta * (fa * o.cm2 - fb * cm2));
         const double m4 =
             cm4 + o.cm4 +
-            d2 * d2 * nanb * (na * na - nanb + nb * nb) / (nt * nt * nt) +
-            6.0 * d2 * (na * na * o.cm2 + nb * nb * cm2) / (nt * nt) +
-            4.0 * delta * (na * o.cm3 - nb * cm3) / nt;
+            w * (fa * fa - fa * fb + fb * fb) * delta * delta * delta * delta +
+            6.0 * ((fa * fa * o.cm2 + fb * fb * cm2) * delta * delta) +
+            4.0 * (delta * (fa * o.cm3 - fb * cm3));
         shift = ha;
-        cmean = la + delta * nb / nt;
+        cmean = la + delta * fb;
         cm2 = m2;
         cm3 = m3;
         cm4 = m4;
@@ -497,12 +499,14 @@ struct CoStat {
         const double nt = na + nb;
         const double dx = (o.shx - shx) + (o.cmx - cmx);  // difference of means
         const double dy = (o.shy - shy) + (o.cmy - cmy);
-        const double w = na * nb / nt;
-        cxx += o.cxx + dx * dx * w;
-        cyy += o.cyy + dy * dy * w;
-        cxy += o.cxy + dx * dy * w;
-        cmx += dx * nb / nt;
-        cmy += dy * nb / nt;
+        // Count factors first, so a term cannot overflow before its division.
+        const double fb = nb / nt;
+        const double w = na * fb;  // na * nb / nt
+        cxx += o.cxx + w * dx * dx;
+        cyy += o.cyy + w * dy * dy;
+        cxy += o.cxy + w * dx * dy;
+        cmx += dx * fb;
+        cmy += dy * fb;
         n += o.n;
     }
 };

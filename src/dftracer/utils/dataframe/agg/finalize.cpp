@@ -476,6 +476,14 @@ static DataFrame finalize_impl(const AggState& st_in,
                     flat_temporal(kt, ku, ktz, bits.data(), ng));
             } else if (kt == TypeId::Date64) {
                 out.columns.push_back(Series::flat(kt, bits.data(), ng));
+            } else if (kt == TypeId::Bool) {
+                dstd::Vector<std::uint8_t> packed(
+                    static_cast<std::size_t>((ng + 7) / 8), 0);
+                for (std::int64_t g = 0; g < ng; ++g)
+                    if (bits[static_cast<std::size_t>(g)] != 0)
+                        packed[static_cast<std::size_t>(g >> 3)] |=
+                            static_cast<std::uint8_t>(1u << (g & 7));
+                out.columns.push_back(Series::flat(kt, packed.data(), ng));
             } else {
                 out.columns.push_back(Series::flat_i64(bits.data(), ng));
             }

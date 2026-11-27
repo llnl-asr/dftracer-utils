@@ -383,6 +383,27 @@ def test_a_float32_list_refuses_a_value_it_cannot_hold():
     assert kept.to_list() == [[math.inf, 1.5]]
 
 
+def test_a_float32_list_rounds_and_refuses_only_an_overflow():
+    rounded = Series([[16777217, 0.1, None]], dtype="list<float32>").to_list()
+    assert rounded[0][0] == 16777216.0
+    assert rounded[0][1] == pytest.approx(0.1, rel=1e-7)
+    assert rounded[0][2] is None
+    cast = Series([[16777217]], dtype="list<int32>").astype("list<float32>")
+    assert cast.to_list() == [[16777216.0]]
+    with pytest.raises(ValueError, match="float32"):
+        Series([[1e300]], dtype="list<float32>")
+    with pytest.raises(ValueError, match="float32"):
+        Series([[np.float64(1e300)]], dtype="list<float32>")
+    with pytest.raises(ValueError, match="float32"):
+        Series([np.array([1.0, 1e300])], dtype="list<float32>")
+    kept = Series([[np.int64(2**53 + 1), np.uint64(2**63 + 1)]], dtype="list<float32>")
+    assert kept.to_list() == [[2.0**53, 2.0**63]]
+    text = Series([["inf", "", "abc"]], dtype="list<string>").astype("list<float32>")
+    assert text.to_list() == [[math.inf, None, None]]
+    with pytest.raises(ValueError, match="float32"):
+        Series([["1e40", "abc"]], dtype="list<string>").astype("list<float32>")
+
+
 def test_a_null_list_keeps_the_child_in_place(tmp_path):
     rows = [[1, 2], None, [3], None, []]
     series = Series(rows, dtype="list<int32>")

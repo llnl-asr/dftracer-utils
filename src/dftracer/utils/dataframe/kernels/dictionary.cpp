@@ -226,6 +226,116 @@ dftu_series* dictionary_encode_w(const dftu_series* v) {
 
 }  // namespace dftracer::utils::dataframe
 
+namespace {
+
+// A FLAT Bool column of `values[codes[i]]`, null where `v` is null at i or
+// the entry is null. One table read per row; the table has one byte per entry.
+dftu_series* expand_bool_dictionary(const dftu_series& v,
+                                    const dftu_series& values) {
+    using namespace dftracer::utils::dataframe;
+    constexpr std::uint8_t BIT = 1;
+    constexpr std::uint8_t VALID = 2;
+    const std::int64_t n = v.length;
+    const std::uint8_t* bits =
+        values.data.block() ? values.data.data() : nullptr;
+    const std::uint8_t* entry_valid =
+        values.null_count > 0 && values.validity.block()
+            ? values.validity.data()
+            : nullptr;
+    dftracer::utils::dstd::Vector<std::uint8_t> table(
+        static_cast<std::size_t>(values.length));
+    for (std::int64_t k = 0; k < values.length; ++k) {
+        const bool bit = bits && ((bits[k >> 3] >> (k & 7)) & 1);
+        const bool valid =
+            !entry_valid || ((entry_valid[k >> 3] >> (k & 7)) & 1);
+        table[static_cast<std::size_t>(k)] =
+            static_cast<std::uint8_t>((bit ? BIT : 0) | (valid ? VALID : 0));
+    }
+    const std::uint8_t* own = v.validity.block() ? v.validity.data() : nullptr;
+    const auto* codes = reinterpret_cast<const std::int32_t*>(v.data.data());
+    const std::size_t bytes = buffer_bytes(TypeId::Bool, n);
+
+    auto* out = new dftu_series();
+    out->type = TypeId::Bool;
+    out->encoding = Encoding::Flat;
+    out->length = n;
+    out->data = new_buffer(bytes == 0 ? 1 : bytes);
+    std::memset(writable(out->data), 0, out->data.size());
+    BufferView validity;
+    if (own || entry_valid) {
+        validity = new_buffer(bytes == 0 ? 1 : bytes);
+        std::memset(writable(validity), 0, validity.size());
+    }
+    std::uint8_t* ob = writable(out->data);
+    std::uint8_t* ov = validity.block() ? writable(validity) : nullptr;
+    // Whole bytes per task (8 rows), so no two tasks write one byte.
+    const auto nbytes = static_cast<std::int64_t>(bytes);
+    out->null_count = parallel_reduce<std::int64_t>(
+        nbytes, std::int64_t{1} << 13, std::int64_t{0},
+        [&](std::int64_t b0, std::int64_t b1) {
+            std::int64_t nulls = 0;
+            for (std::int64_t i = b0 * 8; i < std::min(n, b1 * 8); ++i) {
+                if (own && !((own[i >> 3] >> (i & 7)) & 1)) {
+                    ++nulls;
+                    continue;
+                }
+                const std::uint8_t t =
+                    table[static_cast<std::size_t>(codes[i])];
+                if (!(t & VALID)) {
+                    ++nulls;
+                    continue;
+                }
+                const auto mask = static_cast<std::uint8_t>(1u << (i & 7));
+                if (t & BIT) ob[i >> 3] |= mask;
+                if (ov) ov[i >> 3] |= mask;
+            }
+            return nulls;
+        },
+        [](std::int64_t a, std::int64_t b) { return a + b; });
+    if (out->null_count > 0) out->validity = std::move(validity);
+    return out;
+}
+
+}  // namespace
+
+bool dftu_dictionary_codes_in_range(const dftu_series& v) {
+    if (v.length == 0) return true;
+    const auto entries = static_cast<std::uint32_t>(v.child()->length);
+    const auto* codes = reinterpret_cast<const std::int32_t*>(v.data.data());
+    const std::uint8_t* own =
+        v.null_count > 0 && v.validity.block() ? v.validity.data() : nullptr;
+    std::uint32_t outside = 0;
+    if (!own) {
+        for (std::int64_t i = 0; i < v.length; ++i)
+            outside |= static_cast<std::uint32_t>(codes[i]) >= entries;
+        return outside == 0;
+    }
+    for (std::int64_t i = 0; i < v.length; ++i)
+        if (((own[i >> 3] >> (i & 7)) & 1) &&
+            static_cast<std::uint32_t>(codes[i]) >= entries)
+            return false;
+    return true;
+}
+
+dftu_series* dftu_dictionary_elementwise(const dftu_series& v,
+                                         dftu_series* values) {
+    using namespace dftracer::utils::dataframe;
+    if (!values) return nullptr;
+    auto owned = adopt_series(values);
+    if (owned->encoding != Encoding::Flat || owned->length != v.child()->length)
+        return nullptr;
+    if (owned->type == TypeId::Bool) return expand_bool_dictionary(v, *owned);
+    auto* out = new dftu_series();
+    adopt_type_from(*out, *owned);
+    out->encoding = Encoding::Dictionary;
+    out->length = v.length;
+    out->null_count = v.null_count;
+    out->validity = v.validity;
+    out->data = v.data;
+    out->set_child(std::move(owned));
+    return out;
+}
+
 dftu_series* dftu_series_dictionary_encode(const dftu_series* v) {
     using namespace dftracer::utils::dataframe;
     if (!v) return nullptr;

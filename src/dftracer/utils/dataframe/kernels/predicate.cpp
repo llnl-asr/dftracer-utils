@@ -253,16 +253,19 @@ using namespace dftracer::utils::dataframe;
 
 dftu_series* dftu_series_is_nan(const dftu_series* v) {
     if (!v) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_is_nan);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_is_nan(flat_v));
     return predicate_mask(v, 0);
 }
 dftu_series* dftu_series_is_finite(const dftu_series* v) {
     if (!v) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_is_finite);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_is_finite(flat_v));
     return predicate_mask(v, 1);
 }
 dftu_series* dftu_series_is_infinite(const dftu_series* v) {
     if (!v) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_is_infinite);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_is_infinite(flat_v));
     return predicate_mask(v, 2);
 }

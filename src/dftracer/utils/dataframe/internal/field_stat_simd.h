@@ -13,7 +13,8 @@ struct FsRaw {
     // sum, min, max, then the running mean as the pair shift + cmean and the
     // central moments about it.
     double sum, min, max, shift, cmean, cm2, cm3, cm4;
-    std::int64_t esum, emin, emax;
+    // esum wraps; ehigh is the sum of each value's high 32 bits.
+    std::int64_t esum, emin, emax, ehigh;
 };
 
 }  // namespace dftracer::utils::dataframe

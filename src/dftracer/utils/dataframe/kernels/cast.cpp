@@ -409,6 +409,7 @@ dftu_series* dftu_series_cast(const dftu_series* v, dftu_dtype target) {
         }
         return dftracer::utils::dataframe::make_chunked(std::move(chunks));
     }
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_cast, target);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_cast(flat_v, target));
     using dftracer::utils::dataframe::buffer_bytes;
     using dftracer::utils::dataframe::byte_width;

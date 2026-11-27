@@ -1468,8 +1468,8 @@ enum {
  * < x instead, so each interval is closed on the right. DFTU_CUT_INNER gives a
  * null for a value outside the interior intervals and numbers the interior
  * intervals from 0 (with both flags this is pandas cut(labels=False)). A bit
- * outside the two flags returns NULL. Returns Int32; a null input row yields a
- * null bin. */
+ * outside the two flags returns NULL. Returns Int32; a null input row gives a
+ * null bin, and a null break makes the call return NULL. */
 DFTU_EXPORT dftu_series* dftu_series_cut(const dftu_series* v,
                                          const dftu_series* breaks,
                                          int32_t flags);

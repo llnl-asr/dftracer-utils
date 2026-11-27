@@ -9,9 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
-- Keep the item type of a list column in a table file.
-  `DataFrame.write_table` writes `elem_dtype` for a list of integers, floats, bools or strings, a native read gives a List column with that item type (`int32` gives an Int32 child), and `Series(..., dtype="list<int32>")` and `astype("list<T>")` build such a column with no pyarrow.
-  A list field with no `elem_dtype`, from an older file, still reads as JSON text.
+- Run string and math ops on a dictionary column once per distinct value and keep the codes, make `null_count` count null dictionary entries, and make `group_by` read a null dictionary entry as the null key, as the flat column does.
 - Make `DataFrame.query(expr)` take the pandas syntax of `DataFrame.eval` and keep the rows of `df[df.eval(expr)]`.
   Pass a duql predicate as `query(duql=...)`, which replaces the `dsl=` keyword and the positional duql text.
   A positional `not in` now keeps the null rows, as pandas does, where duql drops them.
@@ -167,8 +165,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   `Series(series, index=...)` looks the values up by the new labels and `Series.map` matches a key only when it equals the value exactly, as pandas does.
 - Add exact `nunique` and `median` to the pandas `agg` forms, such as `agg(n=("v", "nunique"))`.
   A lazy group-by refuses `nunique`, because a streaming group-by has no exact distinct count.
-- Add List columns to `write_table`, which stores each cell as a JSON array.
-  A native read gives the JSON text of each cell, and `to_pandas` gives the lists.
+- Add List columns to `write_table`, which stores each cell as a JSON array and keeps the item type of a list of integers, floats, bools or strings.
+  A native read gives a List column with that item type, such as an Int32 child for `int32`, and `Series(..., dtype="list<int32>")` and `astype("list<T>")` build such a column with no pyarrow.
+  A list field with no item type reads as JSON text.
 - Add `dftracer.utils.formats.json` and `dftracer.utils.formats.yaml`, which read and write JSON and YAML files with the native parsers.
   `read_records` reads a large file in batches of bounded memory, a `Value` reads the parsed text with no copy, `Value.mutable()` edits a record and `Writer` writes plain or gzip files.
 - Add a native row index to `DataFrame` and a native row label to `Series`, with pandas behavior.
@@ -252,6 +251,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix reductions, `group_by`, mask filters, fills, string ops, sorts and the `Series` kernels on a chunked, dictionary, constant or selection column, and read these columns without a full copy.
+  A row that is null at any layer is null, a constant string column reads as its value in place of null, `nunique` does not count a null dictionary entry and `sum`, `min`, `max` and `product` of an empty or all-null column give 0 or 1 in place of None.
+  `rank`, `duplicated`, `is_in`, `take` and `materialize` work on a constant column at any depth, a variance of very large values in a long column is no longer inf and `describe` gives the right mean of an integer column whose sum passes the int64 range.
+- Fix covariance, correlation and regression of very many rows, which could overflow before the division.
+- Fix `cut` with a null break, which gave a column of null bins.
+  The C call now returns NULL and Python raises `ValueError`, as pandas does.
 - Fix `DataFrame.eval` comparisons and `min` and `max` of two number or string columns, which gave wrong rows for two unsigned or very large integer columns and for two infinities, and refused two string columns.
 - Fix float floor division and modulo, which gave `1.0 // 0.1` as 10.0, to give 9.0 as Python and numpy do, also in `DataFrame.eval`, `query` and a traced `apply`.
   A float floor division by zero gives inf or NaN, as numpy and pandas give, in place of null, and a Uint64 column with a non-negative integer on either side stays Uint64 in place of wrapping to negative numbers or losing precision.
@@ -259,6 +264,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Fix `groupby` on a key column named `size`, which gave the row counts in place of the key values in `size()`, `nunique()` and a named `nunique` aggregate.
   `groupby("size", as_index=False).size()` raises `ValueError`, as pandas does.
 - Fix a lazy `group_by(...).agg(...)` with an output named as a group key, which silently dropped the aggregate, to raise an error.
+- Give a `quantile` or `median` of zero as `0.0` in every layout, never `-0.0`.
+- Fix `group_by` on a Bool key, which gave an Int64 key column, and the bitwise reductions of a selection, chunked or dictionary timestamp, date or duration column, which gave a value in place of raising `TypeError`.
 - Fix `Series.map` with numpy integer or float keys and on a Float16 column, which matched no row.
 - Fix `Series.quantile` next to an infinity, which gave infinity, to give NaN as numpy does.
   The median and the group quantile keep the pandas forms, so the median of `[1, inf]` is inf and of `[-1e308, 1e308]` is 0.
@@ -348,6 +355,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Fix a timestamp or duration built from a NumPy value past the year 2262, which raised `OverflowError`.
 - Fix the type of a `MultiIndex` level with missing labels, which depended on the size of the level.
 - Fix `loc` and `reindex` keys and fill values for `list` and `fixed_size_binary` labels, which took another item type; a `struct`, `map`, `fixed_size_list` or `decimal256` label now raises `TypeError`.
+- Fix `quantile` and `median` of a dictionary column, which counted null dictionary entries as values.
 
 ## [0.0.14] - 2026-10-10
 

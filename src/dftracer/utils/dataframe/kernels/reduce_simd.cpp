@@ -201,6 +201,15 @@ std::uint8_t OrMaskBytes(const std::uint8_t* data, const std::uint8_t* valid,
     return (vec_set || sacc != 0) ? 1 : 0;
 }
 
+template <class T, bool = std::is_integral_v<T>>
+struct ProductType {
+    using type = T;
+};
+template <class T>
+struct ProductType<T, true> {
+    using type = std::make_unsigned_t<T>;
+};
+
 // Lanewise running product then a horizontal fold. For i64/u64 the low-bits
 // (wrapping) multiply is associative, so the result equals the sequential
 // product exactly; for f64 the summation-style reassociation may differ in the
@@ -216,10 +225,13 @@ T prod_novalid(const T* p, std::int64_t n) {
         acc = hwy::HWY_NAMESPACE::Mul(acc, hwy::HWY_NAMESPACE::LoadU(d, p + i));
     HWY_ALIGN T buf[64];
     hwy::HWY_NAMESPACE::StoreU(acc, d, buf);
-    T r = T{1};
-    for (std::int64_t k = 0; k < lanes; ++k) r = static_cast<T>(r * buf[k]);
-    for (; i < n; ++i) r = static_cast<T>(r * p[i]);
-    return r;
+    // Integers multiply unsigned: a signed product that overflows is UB.
+    using M = typename ProductType<T>::type;
+    M r = M{1};
+    for (std::int64_t k = 0; k < lanes; ++k)
+        r = static_cast<M>(r * static_cast<M>(buf[k]));
+    for (; i < n; ++i) r = static_cast<M>(r * static_cast<M>(p[i]));
+    return static_cast<T>(r);
 }
 
 void ProdI64(const void* p, std::int64_t n, dftu_scalar* o) {

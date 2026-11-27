@@ -1112,7 +1112,10 @@ TEST_SUITE("trace::table codec") {
             const dstd::String fields[] = {field};
             write_text(path, header_line(header_json(1, fields, "\"1.0\"")) +
                                  "{\"args\":{\"v\":[1]}}\n");
-            CHECK_FALSE(read_table(path).has_value());
+            auto r = read_table(path);
+            REQUIRE_FALSE(r.has_value());
+            CHECK(dstd::StringView(r.error().c_str()).find("not a list") !=
+                  dstd::StringView::npos);
         }
     }
 

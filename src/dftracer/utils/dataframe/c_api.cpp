@@ -319,9 +319,12 @@ std::int64_t dftu_series_length(const dftu_series* col) { return col->length; }
 
 std::int64_t dftu_series_null_count(const dftu_series* col) {
     // A SELECTION view holds no count of its own; its nulls are the base's
-    // at the selected rows plus the outer-fill sentinels.
-    if (col->encoding == dftracer::utils::dataframe::Encoding::Selection &&
-        col->child()) {
+    // at the selected rows plus the outer-fill sentinels. A DICTIONARY keeps
+    // its own nulls in `null_count`; rows that point at a null entry add to it.
+    if ((col->encoding == dftracer::utils::dataframe::Encoding::Selection &&
+         col->child()) ||
+        (col->encoding == dftracer::utils::dataframe::Encoding::Dictionary &&
+         col->rowwise_nulls())) {
         std::int64_t n = 0;
         for (std::int64_t i = 0; i < col->length; ++i)
             n += dftu_series_is_null(col, i);
@@ -434,7 +437,7 @@ std::int32_t dftu_series_is_null(const dftu_series* col, std::int64_t i) {
         return 1;
     // A dictionary entry may itself be null (an Arrow import can carry one).
     if (col->encoding == dftracer::utils::dataframe::Encoding::Dictionary &&
-        col->child() && col->child()->null_count > 0)
+        col->rowwise_nulls())
         return dftu_series_is_null(
             col->child().get(),
             reinterpret_cast<const std::int32_t*>(col->data.data())[i]);
@@ -501,6 +504,14 @@ const char* dftu_series_string_at(const dftu_series* col, std::int64_t i,
                                       decoded.buffer_index)]
                         .data() +
                     decoded.offset);
+            }
+            case Encoding::Constant: {
+                dftracer::utils::dstd::StringView text;
+                if (dftu_series_is_null(col, i) ||
+                    !dftracer::utils::dataframe::str_flat_at(col, 0, text))
+                    return nullptr;
+                *len = static_cast<std::int64_t>(text.size());
+                return text.data();
             }
             case Encoding::Selection: {
                 if (!col->child() || !col->data.block()) return nullptr;

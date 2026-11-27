@@ -91,3 +91,38 @@ def test_numeric_reductions_are_unchanged():
     assert empty.mean() is None
     assert empty.min() is None
     assert empty.max() is None
+
+
+@pytest.mark.parametrize("dtype", ["int64", "uint64"])
+def test_a_column_filtered_to_nothing_reduces_as_its_copy_does(dtype):
+    from dftracer.utils import Series
+
+    kept = Series([10, 20, 30], dtype=dtype).filter(Series([False, False, False]))
+    assert len(kept) == 0
+    flat = kept.materialize()
+    assert kept.sum() == flat.sum() == 0
+    assert kept.min() == flat.min()
+    assert kept.max() == flat.max()
+    assert kept.product() == flat.product() == 1
+
+
+def test_a_bool_group_key_stays_bool():
+    from dftracer.utils import DType, Series
+
+    k = Series([True, False, True, True])
+    v = Series([1, 2, 3, 4], dtype="int64")
+    out = DataFrame.from_dict({"k": k, "v": v}).group_by("k", "sum:v")
+    assert int(out["k"].dtype) == int(DType.BOOL)
+    assert out["k"].to_list() == [True, False]
+    assert out["sum_v"].to_list() == [8, 2]
+
+
+def test_a_bitwise_reduction_of_a_temporal_selection_refuses_as_flat_does():
+    pa = pytest.importorskip("pyarrow")
+    from dftracer.utils import Series
+
+    ts = Series(pa.array([1, 2, 3], type=pa.timestamp("ns")))
+    picked = ts.filter(Series([True, True, True]))
+    for column in (ts, picked):
+        with pytest.raises(TypeError, match="integer or a bool"):
+            column.bitwise_or()

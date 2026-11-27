@@ -846,8 +846,10 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         bool (zero false, a NaN or null null). A pair the engine does not
         support raises ``TypeError`` naming both types. ``astype`` is the pandas
         name. ``"list<T>"`` (``T`` an integer, float, ``bool`` or ``string``
-        name) casts a list column to lists of ``T``; a value ``T`` cannot hold
-        exactly raises ``ValueError``."""
+        name) casts a list column to lists of ``T``. An integer ``T`` that cannot
+        hold a value raises ``ValueError``; a float ``T`` rounds as the scalar
+        cast does, and only a finite value that overflows to infinity raises
+        ``ValueError``."""
         elem = _list_element(dtype)
         if elem is not None:
             return self._cast_list(elem, cast("builtins.str", dtype))

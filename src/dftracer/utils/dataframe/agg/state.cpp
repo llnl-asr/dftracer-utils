@@ -457,10 +457,17 @@ struct PlainKey {
     std::int64_t text_size = 0;
     const std::int32_t* codes = nullptr;
     dstd::Vector<dstd::StringView> dvals;
+    // One byte per dictionary entry, 1 for a null entry; empty when none is.
+    dstd::Vector<std::uint8_t> null_entry;
     const std::uint8_t* views = nullptr;
     dstd::Vector<const char*> blob_data;
     bool is_str = false;
-    bool is_null(std::int64_t i) const { return fixed.is_null(i); }
+    bool has_nulls() const { return fixed.validity || !null_entry.empty(); }
+    bool is_null(std::int64_t i) const {
+        return fixed.is_null(i) ||
+               (!null_entry.empty() &&
+                null_entry[static_cast<std::size_t>(codes[i])]);
+    }
     bool by_ref() const { return codes || views; }
     std::int64_t offset(std::int64_t i) const {
         return off64 ? off64[i] : off32[i];
@@ -509,6 +516,17 @@ bool plain_key(const Series& c, PlainKey& out) {
                 dftu_series_string_at(child, static_cast<std::int64_t>(j), &n);
             if (p)
                 out.dvals[j] = dstd::StringView(p, static_cast<std::size_t>(n));
+        }
+        if (h.rowwise_nulls()) {
+            out.null_entry.assign(out.dvals.size(), 0);
+            bool any = false;
+            for (std::size_t j = 0; j < out.dvals.size(); ++j) {
+                const bool null =
+                    dftu_series_is_null(child, static_cast<std::int64_t>(j));
+                out.null_entry[j] = null;
+                any |= null;
+            }
+            if (!any) out.null_entry.clear();
         }
         out.is_str = true;
         out.fixed.validity = h.validity.block() ? h.validity.data() : nullptr;
@@ -700,7 +718,7 @@ bool fast_open(AggState& st, dstd::Span<const PlainKey> k,
     bool fast = any_keys;
     for (const PlainKey& kk : k) {
         fast |= kk.is_str;
-        if (kk.fixed.validity) return false;
+        if (kk.has_nulls()) return false;
     }
     if (!fast) return false;
     if (st.fast_hash.size() != static_cast<std::size_t>(st.ngroups()) ||
@@ -1303,7 +1321,7 @@ bool accumulate_plain(AggState& st, dstd::Span<const Series* const> keys,
         }
     };
     bool nulls = false;
-    for (const PlainKey& kk : k) nulls |= kk.fixed.validity != nullptr;
+    for (const PlainKey& kk : k) nulls |= kk.has_nulls();
     for (const Plain8& c : v) nulls |= c.validity != nullptr;
     const bool fast = fast_open(st, k);
     const bool dict_key = k.size() == 1 && k[0].codes != nullptr;
@@ -2050,7 +2068,7 @@ bool agg_pack_shape(AggState& st, dstd::Span<const Series* const> keys,
         !plain_shape(st, keys, values, k, v) || k.empty() || k.size() > 21)
         return false;
     for (const PlainKey& kk : k)
-        if (kk.fixed.validity) return false;
+        if (kk.has_nulls()) return false;
     out.W = key_word_count(k);
     out.strings = out.W > k.size();
     out.nf = st.nf;

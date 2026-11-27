@@ -10,14 +10,21 @@
 // optimized build (the dev preset, -O2) - a Debug build's numbers are noise.
 //
 //   dataframe_parallel_bench [rows] [groups]
+//   dataframe_parallel_bench dictionary [rows]
+//
+// The dictionary mode times to_lowercase, str_strip and str_extract over a
+// DICTIONARY String column (100 distinct values) against the same strings
+// FLAT, and checks both give the same rows.
 
 #include <bench_ok.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/field_stat.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/field_stat.h>
 #include <dftracer/utils/dataframe/kernels/stats.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -25,6 +32,7 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/clock.h>
 #include <dftracer/utils/dstd/fmt.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/thread.h>
@@ -38,6 +46,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <utility>
 
 using namespace dftracer::utils;
@@ -105,9 +114,322 @@ double time_group_by(const DataFrame& df,
     return best;
 }
 
+// Best of `reps` runs of `fn`, in milliseconds.
+template <class F>
+double best_ms(F&& fn, int reps) {
+    double best = 1e300;
+    for (int r = 0; r < reps; ++r) {
+        const auto t0 = dftracer::utils::dstd::steady_now();
+        auto out = fn();
+        const auto t1 = dftracer::utils::dstd::steady_now();
+        do_not_optimize(out);
+        best = std::min(
+            best, std::chrono::duration<double, std::milli>(t1 - t0).count());
+    }
+    return best;
+}
+
+// variance and is_unique on a CHUNKED and a SELECTION input, against the same
+// rows as one FLAT column, with the runtime backend installed.
+bool bench_view_inputs(std::int64_t rows) {
+    dftracer::utils::dstd::Vector<double> values(
+        static_cast<std::size_t>(rows));
+    for (std::int64_t i = 0; i < rows; ++i)
+        values[static_cast<std::size_t>(i)] = static_cast<double>(
+            (static_cast<std::uint64_t>(i) * 2654435761ULL) % 1000003ULL);
+    const Series flat = Series::flat_f64(values.data(), rows);
+
+    constexpr std::int64_t CHUNKS = 16;
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::SharedPtr<dftu_series>>
+        chunks;
+    for (std::int64_t k = 0; k < CHUNKS; ++k) {
+        const std::int64_t from = rows * k / CHUNKS;
+        const std::int64_t to = rows * (k + 1) / CHUNKS;
+        chunks.push_back(adopt_series(
+            Series::flat_f64(values.data() + from, to - from).release()));
+    }
+    const Series chunked{make_chunked(std::move(chunks))};
+
+    const Series keep = flat > 500000.0;
+    const Series selected = flat.filter(keep);
+
+    struct Input {
+        const char* name;
+        const Series& col;
+    };
+    const Input inputs[] = {{"chunked", chunked}, {"selection", selected}};
+    bool ok = true;
+    for (const Input& in : inputs) {
+        const Series same = in.col.materialize();
+        const double var_flat = best_ms([&] { return same.variance(); }, 5);
+        const double var_view = best_ms([&] { return in.col.variance(); }, 5);
+        const double uq_flat =
+            best_ms([&] { return same.is_unique().length(); }, 3);
+        const double uq_view =
+            best_ms([&] { return in.col.is_unique().length(); }, 3);
+        const double got = in.col.variance();
+        const double want = same.variance();
+        const bool good = std::abs(got - want) <= 1e-9 * std::abs(want) &&
+                          in.col.is_unique().length() == same.length();
+        std::printf(
+            "%s input (%lld rows, encoding %d): variance %8.2f ms (flat copy "
+            "of it %8.2f ms) | is_unique %8.2f ms (flat copy of it %8.2f ms) "
+            "correctness: %s\n",
+            in.name, static_cast<long long>(in.col.length()),
+            static_cast<int>(in.col.encoding()), var_view, var_flat, uq_view,
+            uq_flat, good ? "OK" : "MISMATCH");
+        ok = ok && good;
+    }
+    return ok;
+}
+
+// A SELECTION column over `base`: row k of the result is row idx[k] of the
+// base, a negative index being a null row.
+Series selection_over_bench(const Series& base,
+                            dstd::Span<const std::int64_t> idx) {
+    auto* o = new dftu_series();
+    dftracer::utils::dataframe::adopt_type_from(*o, *base.handle());
+    o->encoding = Encoding::Selection;
+    o->length = static_cast<std::int64_t>(idx.size());
+    o->data = new_buffer(idx.size() * sizeof(std::int64_t));
+    std::memcpy(writable(o->data), idx.data(),
+                idx.size() * sizeof(std::int64_t));
+    o->set_child(dstd::make_shared<dftu_series>(*base.handle()));
+    return Series{o};
+}
+
+// group_by sum, sum, min and a mask filter on a CHUNKED and a SELECTION input,
+// each against the copy-then-read path these kernels used before they read a
+// layer in place (materialize the layer, then run the same op on FLAT).
+bool bench_layout_inputs(std::int64_t rows) {
+    std::printf("layout inputs (build: %s)\n",
+#ifdef NDEBUG
+                "Release"
+#else
+                "Debug"
+#endif
+    );
+    const std::int64_t groups = 1000;
+    dstd::Vector<std::int64_t> k(static_cast<std::size_t>(rows));
+    dstd::Vector<std::int64_t> v(static_cast<std::size_t>(rows));
+    for (std::int64_t i = 0; i < rows; ++i) {
+        k[static_cast<std::size_t>(i)] = i % groups;
+        v[static_cast<std::size_t>(i)] = i;
+    }
+    const Series flat_k = Series::flat_i64(k.data(), rows);
+    const Series flat_v = Series::flat_i64(v.data(), rows);
+
+    constexpr std::int64_t CHUNKS = 16;
+    auto chunked_of = [&](const std::int64_t* raw) {
+        dstd::Vector<dstd::SharedPtr<dftu_series>> chunks;
+        for (std::int64_t c = 0; c < CHUNKS; ++c) {
+            const std::int64_t from = rows * c / CHUNKS;
+            const std::int64_t to = rows * (c + 1) / CHUNKS;
+            chunks.push_back(adopt_series(
+                Series::flat_i64(raw + from, to - from).release()));
+        }
+        return Series{make_chunked(std::move(chunks))};
+    };
+    const Series chunked_k = chunked_of(k.data());
+    const Series chunked_v = chunked_of(v.data());
+
+    dstd::Vector<std::int64_t> idx(static_cast<std::size_t>(rows));
+    for (std::int64_t i = 0; i < rows; ++i)
+        idx[static_cast<std::size_t>(i)] = (i * 7919) % rows;
+    const Series selected_k = selection_over_bench(flat_k, idx);
+    const Series selected_v = selection_over_bench(flat_v, idx);
+
+    auto frame = [](const Series& key, const Series& val) {
+        DataFrame df;
+        df.names = {dstd::SharedString("k"), dstd::SharedString("v")};
+        df.columns.push_back(key.share());
+        df.columns.push_back(val.share());
+        return df;
+    };
+    const DataFrame flat_df = frame(flat_k, flat_v);
+    const GroupAgg sum_agg[] = {{Agg::Sum, "v", "s", 0.0}};
+
+    dstd::Vector<std::uint8_t> bits(static_cast<std::size_t>((rows + 7) / 8),
+                                    0);
+    for (std::int64_t i = 0; i < rows; i += 2)
+        bits[static_cast<std::size_t>(i >> 3)] |=
+            static_cast<std::uint8_t>(1u << (i & 7));
+    const Series flat_mask = Series::flat(TypeId::Bool, bits.data(), rows);
+    dstd::Vector<std::int64_t> mask_idx(static_cast<std::size_t>(rows));
+    for (std::int64_t i = 0; i < rows; ++i)
+        mask_idx[static_cast<std::size_t>(i)] = i;
+
+    struct Case {
+        const char* name;
+        const Series* key;
+        const Series* val;
+        Series mask;
+    };
+    dstd::Vector<dstd::SharedPtr<dftu_series>> mask_chunks;
+    for (std::int64_t p = 0; p < 4; ++p) {
+        const std::int64_t from = rows * p / 4;
+        const std::int64_t to = rows * (p + 1) / 4;
+        dstd::Vector<std::uint8_t> part(
+            static_cast<std::size_t>((to - from + 7) / 8), 0);
+        for (std::int64_t i = from; i < to; i += 2)
+            part[static_cast<std::size_t>((i - from) >> 3)] |=
+                static_cast<std::uint8_t>(1u << (i & 7));
+        mask_chunks.push_back(adopt_series(
+            Series::flat(TypeId::Bool, part.data(), to - from).release()));
+    }
+    Case cases[] = {{"chunked", &chunked_k, &chunked_v,
+                     Series{make_chunked(std::move(mask_chunks))}},
+                    {"selection", &selected_k, &selected_v,
+                     selection_over_bench(flat_mask, mask_idx)}};
+
+    bool ok = true;
+    for (Case& c : cases) {
+        auto group = [&](const Series& key, const Series& val) {
+            const DataFrame df = frame(key, val);
+            return df.group_by("k", sum_agg);
+        };
+        const double group_in_place =
+            best_ms([&] { return group(*c.key, *c.val); }, 5);
+        const double group_old = best_ms(
+            [&] { return group(c.key->materialize(), c.val->materialize()); },
+            5);
+        auto reduce_sum = [](const dftu_series* h) {
+            return dftu_series_reduce(h, DFTU_REDUCE_SUM);
+        };
+        auto reduce_min = [](const dftu_series* h) {
+            return dftu_series_reduce(h, DFTU_REDUCE_MIN);
+        };
+        const double sum_in_place =
+            best_ms([&] { return reduce_sum(c.val->handle()); }, 5);
+        const double sum_old = best_ms(
+            [&] {
+                const Series copy = c.val->materialize();
+                return reduce_sum(copy.handle());
+            },
+            5);
+        const double min_in_place =
+            best_ms([&] { return reduce_min(c.val->handle()); }, 5);
+        const double min_old = best_ms(
+            [&] {
+                const Series copy = c.val->materialize();
+                return reduce_min(copy.handle());
+            },
+            5);
+        const double filter_in_place =
+            best_ms([&] { return flat_df.filter(c.mask); }, 5);
+        const double filter_old =
+            best_ms([&] { return flat_df.filter(c.mask.materialize()); }, 5);
+        const std::int64_t rows_in_place = flat_df.filter(c.mask).num_rows();
+        const std::int64_t rows_old =
+            flat_df.filter(c.mask.materialize()).num_rows();
+        // The group order follows first appearance, which a permuted input
+        // changes, so compare the group count and the total instead.
+        const DataFrame g_now = dftu::bench::ok(group(*c.key, *c.val));
+        const DataFrame g_want = dftu::bench::ok(group(flat_k, flat_v));
+        bool same = g_now.num_rows() == g_want.num_rows();
+        std::int64_t total_now = 0, total_want = 0;
+        for (std::int64_t i = 0; i < g_now.num_rows(); ++i)
+            total_now += g_now.column("s").data<std::int64_t>()[i];
+        for (std::int64_t i = 0; i < g_want.num_rows(); ++i)
+            total_want += g_want.column("s").data<std::int64_t>()[i];
+        same = same && total_now == total_want;
+        if (!same) std::printf("    group_by mismatch\n");
+        if (rows_in_place != rows_old)
+            std::printf("    filter rows %lld vs %lld\n",
+                        static_cast<long long>(rows_in_place),
+                        static_cast<long long>(rows_old));
+        same = same && rows_in_place == rows_old;
+        const dftu_scalar s_now = reduce_sum(c.val->handle());
+        const dftu_scalar s_want = reduce_sum(flat_v.handle());
+        if (!(s_now.kind == s_want.kind && s_now.value.i == s_want.value.i))
+            std::printf("    sum %d/%lld vs %d/%lld\n", s_now.kind,
+                        static_cast<long long>(s_now.value.i), s_want.kind,
+                        static_cast<long long>(s_want.value.i));
+        same = same && s_now.kind == s_want.kind &&
+               s_now.value.i == s_want.value.i;
+        std::printf(
+            "  %-9s group_by sum %7.2f ms (copy %7.2f ms) | sum %7.2f ms "
+            "(copy %7.2f ms) | min %7.2f ms (copy %7.2f ms) | mask filter "
+            "%7.2f ms (copy %7.2f ms) correctness: %s\n",
+            c.name, group_in_place, group_old, sum_in_place, sum_old,
+            min_in_place, min_old, filter_in_place, filter_old,
+            same ? "OK" : "MISMATCH");
+        ok = ok && same;
+    }
+    return ok;
+}
+
+int dictionary_bench(std::int64_t rows) {
+    constexpr std::int64_t DISTINCT = 100;
+    dstd::Vector<dstd::String> values;
+    for (std::int64_t k = 0; k < DISTINCT; ++k)
+        values.push_back(dstd::fmt<"  Name_{} Value-{}  ">(k, k * 7));
+    dstd::Vector<dstd::StringView> views;
+    views.reserve(static_cast<std::size_t>(rows));
+    for (std::int64_t i = 0; i < rows; ++i)
+        views.push_back(
+            values[static_cast<std::size_t>((i * 2654435761LL) % DISTINCT)]);
+    const Series flat = Series::strings(views);
+    const Series dict = flat.dictionary_encode();
+    if (dict.encoding() != Encoding::Dictionary) {
+        std::fprintf(stderr, "dictionary_encode did not give a dictionary\n");
+        return 1;
+    }
+    std::printf("dictionary elementwise: %lld rows, %lld distinct\n",
+                static_cast<long long>(rows), static_cast<long long>(DISTINCT));
+
+    struct Op {
+        const char* name;
+        Series (*run)(const Series&);
+    };
+    const Op ops[] = {
+        {"to_lowercase", [](const Series& v) { return v.to_lowercase(); }},
+        {"str_strip", [](const Series& v) { return v.str_strip(); }},
+        {"str_extract",
+         [](const Series& v) { return v.str_extract("Name_([0-9]+)", 1); }},
+    };
+    auto best_ms = [](const Series& in, Series (*run)(const Series&),
+                      bool materialize) {
+        double best = 1e300;
+        for (int r = 0; r < 5; ++r) {
+            const auto t0 = dftracer::utils::dstd::steady_now();
+            Series out = run(in);
+            if (materialize && out.encoding() != Encoding::Flat)
+                out = out.materialize();
+            const auto t1 = dftracer::utils::dstd::steady_now();
+            do_not_optimize(out.length());
+            best = std::min(
+                best,
+                std::chrono::duration<double, std::milli>(t1 - t0).count());
+        }
+        return best;
+    };
+    bool ok = true;
+    for (const Op& op : ops) {
+        const double flat_ms = best_ms(flat, op.run, false);
+        const double dict_ms = best_ms(dict, op.run, false);
+        const double mat_ms = best_ms(dict, op.run, true);
+        const Series want = op.run(flat);
+        const Series got = op.run(dict).materialize();
+        bool same = want.length() == got.length();
+        for (std::int64_t i = 0; same && i < want.length(); ++i)
+            same = want.is_null(i) == got.is_null(i) &&
+                   (want.is_null(i) || want.string_at(i) == got.string_at(i));
+        std::printf(
+            "%-14s flat %8.2f ms | dictionary %8.2f ms (%.1fx) | dictionary "
+            "+ materialize %8.2f ms | correctness: %s\n",
+            op.name, flat_ms, dict_ms, flat_ms / dict_ms, mat_ms,
+            same ? "OK" : "MISMATCH");
+        ok = ok && same;
+    }
+    return ok ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc > 1 && std::strcmp(argv[1], "dictionary") == 0)
+        return dictionary_bench(argc > 2 ? std::atoll(argv[2]) : 1'000'000);
     const std::int64_t rows = argc > 1 ? std::atoll(argv[1]) : 20'000'000;
     const std::int64_t groups = argc > 2 ? std::atoll(argv[2]) : 1000;
 
@@ -1493,6 +1815,15 @@ int main(int argc, char** argv) {
         "(%.2fx) correctness: %s\n",
         mp_eager, mp_lazy, mp_eager / mp_lazy, mp_ok ? "OK" : "MISMATCH");
     ok = ok && mp_ok;
+
+    // DFBENCH_SERIAL=1 times both sides with no backend, so the serial table
+    // compares the in-place read against the copy path on equal terms.
+    if (dftracer::utils::common::Env::get("DFBENCH_SERIAL").has_value())
+        set_parallel_backend(nullptr, nullptr);
+    else
+        install_runtime_parallel_backend();
+    ok = bench_view_inputs(rows) && ok;
+    ok = bench_layout_inputs(rows) && ok;
 
     return ok ? 0 : 1;
 }

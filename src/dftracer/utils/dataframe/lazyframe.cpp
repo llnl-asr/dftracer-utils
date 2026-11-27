@@ -392,8 +392,7 @@ class FilterCursor : public Cursor {
 class FilterMaskCursor : public Cursor {
    public:
     FilterMaskCursor(dstd::UniquePtr<Cursor> in, Series mask)
-        : in_(std::move(in)),
-          mask_(mask.is_flat() ? std::move(mask) : mask.materialize()) {}
+        : in_(std::move(in)), mask_(std::move(mask)) {}
 
     coro::CoroTask<MorselResult> next(std::int64_t max_rows) override {
         for (;;) {
@@ -432,15 +431,53 @@ class FilterMaskCursor : public Cursor {
             return invalid_argument<"filter_mask: mask shorter than input">();
         // Series::slice only supports byte-per-element FLAT types, not the
         // bit-packed Bool layout, so the sub-mask is re-packed by hand
-        // instead (same bit math as IsDupCursor's mask build).
-        const std::uint8_t* bits = mask_.data<std::uint8_t>();
+        // instead (same bit math as IsDupCursor's mask build). A null mask row
+        // selects nothing, as flat_mask_to_indices decides it.
+        const dftu_series* mk = mask_.handle();
         dstd::Vector<std::uint8_t> sub(static_cast<std::size_t>((n + 7) / 8),
                                        0);
-        for (std::int64_t i = 0; i < n; ++i) {
-            const std::int64_t p = off_ + i;
-            if ((bits[p >> 3] >> (p & 7)) & 1u)
-                sub[static_cast<std::size_t>(i >> 3)] |=
-                    static_cast<std::uint8_t>(1u << (i & 7));
+        // The mask of this morsel gathered a block at a time through the
+        // resolved layer chain, a bounded copy of at most MaskBits::CAPACITY
+        // rows, then packed into one bitmap. One block range per task, each
+        // owning whole bitmap bytes.
+        using dftracer::utils::dataframe::MaskBits;
+        using dftracer::utils::dataframe::parallel_for;
+        const MaskBits block(*mk);
+        if (block.usable()) {
+            constexpr std::int64_t CAP = MaskBits::CAPACITY;
+            const std::int64_t at = off_;
+            auto* bits = sub.data();
+            parallel_for(n, 8 * CAP, [&](std::int64_t b, std::int64_t e) {
+                alignas(64) std::uint8_t buf[(CAP + 7) / 8];
+                std::uint8_t valid[(CAP + 7) / 8];
+                for (std::int64_t from = b; from < e; from += CAP) {
+                    const std::int64_t count = std::min(CAP, e - from);
+                    block.gather(at + from, count, buf, valid);
+                    const std::size_t bytes =
+                        static_cast<std::size_t>((count + 7) / 8);
+                    if ((from & 7) == 0) {
+                        std::uint8_t* out = bits + (from >> 3);
+                        for (std::size_t i = 0; i < bytes; ++i)
+                            out[i] |= buf[i];
+                        continue;
+                    }
+                    for (std::int64_t k = 0; k < count; ++k) {
+                        if (((buf[k >> 3] >> (k & 7)) & 1) == 0) continue;
+                        const std::int64_t q = from + k;
+                        bits[static_cast<std::size_t>(q >> 3)] |=
+                            static_cast<std::uint8_t>(1u << (q & 7));
+                    }
+                }
+            });
+        } else {
+            for (std::int64_t k = 0; k < n; ++k) {
+                const std::int64_t p = off_ + k;
+                if (dftracer::utils::dataframe::cell_u64(mk, p) == 0 ||
+                    dftracer::utils::dataframe::cell_is_null(mk, p))
+                    continue;
+                sub[static_cast<std::size_t>(k >> 3)] |=
+                    static_cast<std::uint8_t>(1u << (k & 7));
+            }
         }
         off_ += n;
         Series sub_mask = Series::flat(TypeId::Bool, sub.data(), n);

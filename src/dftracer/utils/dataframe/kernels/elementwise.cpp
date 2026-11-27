@@ -971,6 +971,7 @@ using dftracer::utils::dataframe::TypeId;
 dftu_series* dftu_series_abs(const dftu_series* a) {
     // A bool is its own absolute value, as pandas gives, in any encoding.
     if (a && a->type == TypeId::Bool) return dftu_series_share(a);
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_abs);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_abs(flat_a));
 
     using namespace dftracer::utils::dataframe;
@@ -986,6 +987,7 @@ dftu_series* dftu_series_clip(const dftu_series* a, dftu_scalar lo,
                               dftu_scalar hi) {
     using namespace dftracer::utils::dataframe;
     if (!a) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_clip, lo, hi);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_clip(flat_a, lo, hi));
     if (a->encoding != Encoding::Flat || !is_numeric(a->type) ||
         a->type == TypeId::Bool)
@@ -998,6 +1000,7 @@ dftu_series* dftu_series_clip(const dftu_series* a, dftu_scalar lo,
 }
 
 dftu_series* dftu_series_round(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_round);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_round(flat_a));
 
     using namespace dftracer::utils::dataframe;
@@ -1010,6 +1013,7 @@ dftu_series* dftu_series_round(const dftu_series* a) {
 }
 
 dftu_series* dftu_series_ceil(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_ceil);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_ceil(flat_a));
 
     using namespace dftracer::utils::dataframe;
@@ -1022,6 +1026,7 @@ dftu_series* dftu_series_ceil(const dftu_series* a) {
 }
 
 dftu_series* dftu_series_floor(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_floor);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_floor(flat_a));
 
     using namespace dftracer::utils::dataframe;
@@ -1034,6 +1039,7 @@ dftu_series* dftu_series_floor(const dftu_series* a) {
 }
 
 dftu_series* dftu_series_trunc(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_trunc);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_trunc(flat_a));
 
     using namespace dftracer::utils::dataframe;
@@ -1046,6 +1052,7 @@ dftu_series* dftu_series_trunc(const dftu_series* a) {
 }
 
 dftu_series* dftu_series_sign(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_sign);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_sign(flat_a));
 
     using namespace dftracer::utils::dataframe;
@@ -1060,6 +1067,7 @@ dftu_series* dftu_series_sign(const dftu_series* a) {
 }
 
 dftu_series* dftu_series_negate(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_negate);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_negate(flat_a));
 
     using namespace dftracer::utils::dataframe;
@@ -1263,6 +1271,7 @@ dftu_series* dftu_series_pct_change(const dftu_series* a) {
 }
 
 dftu_series* dftu_series_sqrt(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_sqrt);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_sqrt(flat_a));
 
     using namespace dftracer::utils::dataframe;
@@ -1277,6 +1286,7 @@ dftu_series* dftu_series_sqrt(const dftu_series* a) {
 }
 
 dftu_series* dftu_series_exp(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_exp);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_exp(flat_a));
 
     using namespace dftracer::utils::dataframe;
@@ -1291,6 +1301,7 @@ dftu_series* dftu_series_exp(const dftu_series* a) {
 }
 
 dftu_series* dftu_series_log(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_log);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_log(flat_a));
 
     using namespace dftracer::utils::dataframe;
@@ -1307,6 +1318,7 @@ dftu_series* dftu_series_log(const dftu_series* a) {
 // log1p and expm1 stay precise for a tiny x, where log(1 + x) and exp(x) - 1
 // lose every digit; libm gives them, one value at a time.
 dftu_series* dftu_series_log1p(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_log1p);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_log1p(flat_a));
 
     using namespace dftracer::utils::dataframe;
@@ -1320,6 +1332,7 @@ dftu_series* dftu_series_log1p(const dftu_series* a) {
 }
 
 dftu_series* dftu_series_expm1(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_expm1);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_expm1(flat_a));
 
     using namespace dftracer::utils::dataframe;
@@ -1363,87 +1376,104 @@ dftu_series* math_unary(const dftu_series* a, F f) {
 }  // namespace
 
 dftu_series* dftu_series_sin(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_sin);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_sin(flat_a));
     return math_unary(a, [](auto x) { return std::sin(x); });
 }
 
 dftu_series* dftu_series_cos(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_cos);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_cos(flat_a));
     return math_unary(a, [](auto x) { return std::cos(x); });
 }
 
 dftu_series* dftu_series_tan(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_tan);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_tan(flat_a));
     return math_unary(a, [](auto x) { return std::tan(x); });
 }
 
 dftu_series* dftu_series_cot(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_cot);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_cot(flat_a));
     return math_unary(
         a, [](auto x) { return static_cast<decltype(x)>(1) / std::tan(x); });
 }
 
 dftu_series* dftu_series_arcsin(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_arcsin);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arcsin(flat_a));
     return math_unary(a, [](auto x) { return std::asin(x); });
 }
 
 dftu_series* dftu_series_arccos(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_arccos);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arccos(flat_a));
     return math_unary(a, [](auto x) { return std::acos(x); });
 }
 
 dftu_series* dftu_series_arctan(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_arctan);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arctan(flat_a));
     return math_unary(a, [](auto x) { return std::atan(x); });
 }
 
 dftu_series* dftu_series_sinh(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_sinh);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_sinh(flat_a));
     return math_unary(a, [](auto x) { return std::sinh(x); });
 }
 
 dftu_series* dftu_series_cosh(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_cosh);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_cosh(flat_a));
     return math_unary(a, [](auto x) { return std::cosh(x); });
 }
 
 dftu_series* dftu_series_tanh(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_tanh);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_tanh(flat_a));
     return math_unary(a, [](auto x) { return std::tanh(x); });
 }
 
 dftu_series* dftu_series_arcsinh(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_arcsinh);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arcsinh(flat_a));
     return math_unary(a, [](auto x) { return std::asinh(x); });
 }
 
 dftu_series* dftu_series_arccosh(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_arccosh);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arccosh(flat_a));
     return math_unary(a, [](auto x) { return std::acosh(x); });
 }
 
 dftu_series* dftu_series_arctanh(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_arctanh);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_arctanh(flat_a));
     return math_unary(a, [](auto x) { return std::atanh(x); });
 }
 
 dftu_series* dftu_series_cbrt(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_cbrt);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_cbrt(flat_a));
     return math_unary(a, [](auto x) { return std::cbrt(x); });
 }
 
 dftu_series* dftu_series_log10(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_log10);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_log10(flat_a));
     return math_unary(a, [](auto x) { return std::log10(x); });
 }
 
 dftu_series* dftu_series_erf(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_erf);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_erf(flat_a));
     return math_unary(a, [](auto x) { return std::erf(x); });
 }
 
 dftu_series* dftu_series_erfc(const dftu_series* a) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_erfc);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_erfc(flat_a));
     return math_unary(a, [](auto x) { return std::erfc(x); });
 }

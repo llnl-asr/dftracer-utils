@@ -43,20 +43,36 @@ Series bool_from_flags(dstd::Span<const char> flags) {
     return Series::flat(TypeId::Bool, packed.data(), n);
 }
 
+// radix_counts_by over the keys of `m` rows. A view walks its layers on every
+// read and the count reads each key three times, so a view's keys are first
+// read, in parallel, into one array.
+template <class Key, class KeyOf>
+dstd::Vector<std::int64_t> key_counts(std::int64_t m, bool view, KeyOf key) {
+    if (!view) return radix_counts_by<Key>(m, key);
+    dstd::Vector<Key> keys(static_cast<std::size_t>(m));
+    parallel_for(m, std::int64_t{1} << 16, [&](std::int64_t b, std::int64_t e) {
+        for (std::int64_t j = b; j < e; ++j)
+            keys[static_cast<std::size_t>(j)] = key(j);
+    });
+    return radix_counts_by<Key>(
+        m, [&](std::int64_t j) { return keys[static_cast<std::size_t>(j)]; });
+}
+
 // Per-row occurrence count of each row's own value, keyed in the column's
 // domain (nulls all share one group, counted separately). Radix-partitioned
 // over the non-null rows, mirroring the eager DataFrame dedup helpers.
 dstd::Vector<std::int64_t> count_values(const Series& v) {
     const std::int64_t n = v.length();
+    const dftu_series* h = v.handle();
     const bool is_bytes = value_domain(v.type()) == ValueDomain::Bytes;
-    const bool has_nulls = v.null_count() > 0;
-    const std::int64_t nullc = v.null_count();
+    const std::int64_t nullc = cell_null_count(*h);
+    const bool has_nulls = nullc > 0;
 
     dstd::Vector<std::int64_t> nonnull_idx;
     if (has_nulls) {
         nonnull_idx.reserve(static_cast<std::size_t>(n - nullc));
         for (std::int64_t i = 0; i < n; ++i)
-            if (!v.is_null(i)) nonnull_idx.push_back(i);
+            if (!cell_is_null(h, i)) nonnull_idx.push_back(i);
     }
     const std::int64_t m =
         has_nulls ? static_cast<std::int64_t>(nonnull_idx.size()) : n;
@@ -64,15 +80,14 @@ dstd::Vector<std::int64_t> count_values(const Series& v) {
         return has_nulls ? nonnull_idx[static_cast<std::size_t>(j)] : j;
     };
 
+    const bool view = v.encoding() != Encoding::Flat;
     dstd::Vector<std::int64_t> sub_counts =
-        is_bytes ? radix_counts_by<dstd::String>(
-                       m,
-                       [&](std::int64_t j) {
-                           return dstd::String(read_bytes(v, idx_at(j)));
-                       })
-                 : radix_counts_by<std::uint64_t>(m, [&](std::int64_t j) {
+        is_bytes ? key_counts<dstd::StringView>(
+                       m, view,
+                       [&](std::int64_t j) { return cell_bytes(h, idx_at(j)); })
+                 : key_counts<std::uint64_t>(m, view, [&](std::int64_t j) {
                        // Every NaN is one value and -0.0 is +0.0 (Polars).
-                       const double d = read_f64(v, idx_at(j));
+                       const double d = cell_f64(h, idx_at(j));
                        if (d != d) return std::uint64_t{0x7ff8000000000000ULL};
                        return std::bit_cast<std::uint64_t>(d == 0.0 ? 0.0 : d);
                    });
@@ -83,7 +98,7 @@ dstd::Vector<std::int64_t> count_values(const Series& v) {
             sub_counts[static_cast<std::size_t>(j)];
     if (has_nulls)
         for (std::int64_t i = 0; i < n; ++i)
-            if (v.is_null(i)) counts[static_cast<std::size_t>(i)] = nullc;
+            if (cell_is_null(h, i)) counts[static_cast<std::size_t>(i)] = nullc;
     return counts;
 }
 
@@ -111,7 +126,18 @@ Series duplicated_keep(const Series& v, std::int32_t keep) {
     if (keep != 0 && keep != 1) return occurrence_mask(v, false);
     if (refuse_nested_value("duplicated", v.type())) return Series{};
     ValueIds ids;
-    if (!value_ids(*v.handle(), ids)) return Series{};
+    const Encoding encoding = v.encoding();
+    const dftu_series& h = *v.handle();
+    if (has_constant_layer(h) ||
+        ((encoding == Encoding::Selection || encoding == Encoding::Chunked) &&
+         !is_string_column(h))) {
+        // One copy: value_ids reads no CONSTANT layer and numbers only a FLAT
+        // column of numbers in parallel.
+        const Series flat = v.materialize();
+        if (!flat.valid() || !value_ids(*flat.handle(), ids)) return Series{};
+    } else if (!value_ids(*v.handle(), ids)) {
+        return Series{};
+    }
     const std::int64_t n = v.length();
     dstd::Vector<std::int64_t> last;
     if (keep == 1) {
@@ -235,11 +261,12 @@ Series is_in_integers(const Series& v, const Series& values) {
     const bool v_unsigned = int_kind(v.type()) == IntKind::Unsigned;
     const bool vals_unsigned = int_kind(values.type()) == IntKind::Unsigned;
     const bool vals_float = is_float_type(values.type());
-    const bool vals_null = values.null_count() > 0;
+    const dftu_series* vh = v.handle();
+    const dftu_series* mh = values.handle();
     for (std::int64_t j = 0; j < values.length(); ++j) {
-        if (vals_null && values.is_null(j)) continue;
+        if (cell_is_null(mh, j)) continue;
         if (vals_float) {
-            const double d = read_f64(values, j);
+            const double d = cell_f64(mh, j);
             if (!(d >= -TWO_POW_63 && d < TWO_POW_64) || std::floor(d) != d)
                 continue;
             if (d < 0)
@@ -249,27 +276,28 @@ Series is_in_integers(const Series& v, const Series& values) {
             continue;
         }
         if (vals_unsigned) {
-            non_negative.insert(read_u64(values, j));
+            non_negative.insert(cell_u64(mh, j));
             continue;
         }
-        const std::int64_t x = read_i64(values, j);
+        const std::int64_t x = cell_i64(mh, j);
         if (x < 0)
             negative.insert(x);
         else
             non_negative.insert(static_cast<std::uint64_t>(x));
     }
     const std::int64_t n = v.length();
-    const bool has_nulls = v.null_count() > 0;
     dstd::Vector<char> flags(static_cast<std::size_t>(n), 0);
     constexpr std::int64_t GRAIN = 1 << 15;
     auto probe = [&](std::int64_t b, std::int64_t e) {
         for (std::int64_t i = b; i < e; ++i) {
-            if (has_nulls && v.is_null(i)) continue;
+            const dftu_series* leaf = vh;
+            std::int64_t j = i;
+            if (!find_leaf(leaf, j)) continue;
             bool hit;
             if (v_unsigned) {
-                hit = non_negative.count(read_u64(v, i)) > 0;
+                hit = non_negative.count(cell_u64(leaf, j)) > 0;
             } else {
-                const std::int64_t x = read_i64(v, i);
+                const std::int64_t x = cell_i64(leaf, j);
                 hit =
                     x < 0
                         ? negative.count(x) > 0
@@ -285,28 +313,22 @@ Series is_in_integers(const Series& v, const Series& values) {
     return bool_from_flags(flags);
 }
 
-Series is_in_impl(const Series& v_in, const Series& values_in) {
-    if (refuse_nested_value("is_in", v_in.type())) return Series{};
+Series is_in_impl(const Series& v, const Series& values) {
+    if (refuse_nested_value("is_in", v.type())) return Series{};
     // FLAT Float64 with a small needle set: SIMD broadcast-compare.
     {
-        const std::int64_t n = v_in.length();
+        const std::int64_t n = v.length();
         dstd::Vector<std::uint8_t> packed(static_cast<std::size_t>((n + 7) / 8),
                                           0);
-        if (is_in_f64_simd(*v_in.handle(), *values_in.handle(), packed.data()))
+        if (is_in_f64_simd(*v.handle(), *values.handle(), packed.data()))
             return Series::flat(TypeId::Bool, packed.data(), n);
     }
-    if (is_string_column(*v_in.handle()) &&
-        is_string_column(*values_in.handle()))
-        return is_in_strings(*v_in.handle(), *values_in.handle());
-    // read_bytes only sees a FLAT column's buffers, so a sliced or dictionary
-    // needle would otherwise read empty and match nothing.
-    auto flatten = [](const Series& c) {
-        return c.encoding() == Encoding::Flat
-                   ? c.share()
-                   : Series{dftu_series_materialize(c.handle())};
-    };
-    const Series v = flatten(v_in);
-    const Series values = flatten(values_in);
+    // is_in_strings reads through str_at, which reads no CONSTANT layer; the
+    // byte path below does.
+    if (is_string_column(*v.handle()) && is_string_column(*values.handle()) &&
+        !has_constant_layer(*v.handle()) &&
+        !has_constant_layer(*values.handle()))
+        return is_in_strings(*v.handle(), *values.handle());
     const IntKind v_int = int_kind(v.type());
     const IntKind vals_int = int_kind(values.type());
     if (v_int != IntKind::None &&
@@ -314,10 +336,11 @@ Series is_in_impl(const Series& v_in, const Series& values_in) {
         return is_in_integers(v, values);
     const bool is_bytes = value_domain(v.type()) == ValueDomain::Bytes;
     const bool v_float = is_float_type(v.type());
+    const dftu_series* vh = v.handle();
+    const dftu_series* mh = values.handle();
     dstd::HashSet<std::uint64_t> num_set;
-    dstd::HashSet<dstd::String> str_set;
+    dstd::HashSet<dstd::StringView> str_set;  // views into `values`
     const std::int64_t m = values.length();
-    const bool vals_null = values.null_count() > 0;
     const ValueDomain vals_domain = value_domain(values.type());
     // A fixed-width byte row only means the same value in a needle column of
     // the same type and width.
@@ -326,35 +349,36 @@ Series is_in_impl(const Series& v_in, const Series& values_in) {
                              narrow_varwidth_type(v.type()) == TypeId::Binary ||
                              values.data_type() == v.data_type());
     for (std::int64_t j = 0; j < m; ++j) {
-        if (vals_null && values.is_null(j)) continue;
+        if (cell_is_null(mh, j)) continue;
         if (is_bytes) {
-            if (vals_bytes) str_set.insert(dstd::String(read_bytes(values, j)));
+            if (vals_bytes) str_set.insert(cell_bytes(mh, j));
         } else if (v_float && vals_int == IntKind::Unsigned) {
             // An integer needle matches a float row only when the double
             // holds it exactly.
-            const std::uint64_t x = read_u64(values, j);
+            const std::uint64_t x = cell_u64(mh, j);
             const double d = static_cast<double>(x);
             if (d < TWO_POW_64 && static_cast<std::uint64_t>(d) == x)
                 num_set.insert(number_key(d));
         } else if (v_float && vals_int == IntKind::Signed) {
-            const std::int64_t x = read_i64(values, j);
+            const std::int64_t x = cell_i64(mh, j);
             const double d = static_cast<double>(x);
             if (d < TWO_POW_63 && static_cast<std::int64_t>(d) == x)
                 num_set.insert(number_key(d));
         } else if (vals_domain == ValueDomain::Numeric) {
-            num_set.insert(number_key(read_f64(values, j)));
+            num_set.insert(number_key(cell_f64(mh, j)));
         }
     }
     const std::int64_t n = v.length();
-    const bool has_nulls = v.null_count() > 0;
     dstd::Vector<char> flags(static_cast<std::size_t>(n), 0);
     constexpr std::int64_t GRAIN = 1 << 15;
     auto probe = [&](std::int64_t b, std::int64_t e) {
         for (std::int64_t i = b; i < e; ++i) {
-            if (has_nulls && v.is_null(i)) continue;
+            const dftu_series* leaf = vh;
+            std::int64_t j = i;
+            if (!find_leaf(leaf, j)) continue;
             const bool hit =
-                is_bytes ? str_set.count(dstd::String(read_bytes(v, i))) > 0
-                         : num_set.count(number_key(read_f64(v, i))) > 0;
+                is_bytes ? str_set.count(cell_bytes(leaf, j)) > 0
+                         : num_set.count(number_key(cell_f64(leaf, j))) > 0;
             flags[static_cast<std::size_t>(i)] = hit ? 1 : 0;
         }
     };
@@ -441,7 +465,6 @@ using dftracer::utils::dataframe::Series;
 
 dftu_series* dftu_series_is_unique(const dftu_series* v) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_is_unique);
     Series c = borrow(v);
     Series r = dftracer::utils::dataframe::occurrence_mask(c, true);
     c.release();
@@ -449,7 +472,6 @@ dftu_series* dftu_series_is_unique(const dftu_series* v) {
 }
 dftu_series* dftu_series_is_duplicated(const dftu_series* v) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_is_duplicated);
     Series c = borrow(v);
     Series r = dftracer::utils::dataframe::occurrence_mask(c, false);
     c.release();
@@ -457,7 +479,6 @@ dftu_series* dftu_series_is_duplicated(const dftu_series* v) {
 }
 dftu_series* dftu_series_duplicated(const dftu_series* v, std::int32_t keep) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_duplicated, keep);
     Series c = borrow(v);
     Series r = dftracer::utils::dataframe::duplicated_keep(c, keep);
     c.release();

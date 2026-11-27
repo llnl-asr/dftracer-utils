@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/label_index.h>
 #include <dftracer/utils/dataframe/kernels/cast.h>
@@ -647,13 +648,13 @@ dstd::Result<Series> fill_rows(Series taken, dstd::Span<const std::int64_t> pos,
     std::int64_t missing = 0;
     for (const std::int64_t p : pos) missing += p < 0 ? 1 : 0;
     if (base.null_count() == missing && base.type() == value.type()) {
-        const Series flat =
-            value.is_flat() ? value.share() : value.materialize();
         Series quick;
         if (base.type() == TypeId::Int64)
-            quick = base.fillna(flat.data<std::int64_t>()[0]);
+            quick = base.fillna(
+                dftracer::utils::dataframe::cell_i64(value.handle(), 0));
         else if (base.type() == TypeId::Float64)
-            quick = base.fillna(flat.data<double>()[0]);
+            quick = base.fillna(
+                dftracer::utils::dataframe::cell_f64(value.handle(), 0));
         if (quick.valid() && quick.type() == base.type()) return quick;
     }
     const dstd::Vector<std::int64_t> zeros(pos.size(), 0);
@@ -674,10 +675,11 @@ Series widen_gained(Series taken, const Series& original) {
 
 dstd::Vector<std::int64_t> positions_of(const Series& column) {
     const Series settled = column.fillna(std::int64_t{-1});
-    const Series flat =
-        settled.is_flat() ? settled.share() : settled.materialize();
-    const auto* d = flat.data<std::int64_t>();
-    return dstd::Vector<std::int64_t>(d, d + flat.length());
+    dstd::Vector<std::int64_t> out(static_cast<std::size_t>(settled.length()));
+    for (std::int64_t i = 0; i < settled.length(); ++i)
+        out[static_cast<std::size_t>(i)] =
+            dftracer::utils::dataframe::cell_i64(settled.handle(), i);
+    return out;
 }
 
 struct LabelJoin {
@@ -694,21 +696,24 @@ struct LabelJoin {
 // is sorted, Inner and Left keep the order of `a`.
 dstd::Optional<LabelJoin> merge_join_int64(const Level& la, const Level& lb,
                                            JoinHow how) {
-    const Series a =
-        la.column.is_flat() ? la.column.share() : la.column.materialize();
-    const Series b =
-        lb.column.is_flat() ? lb.column.share() : lb.column.materialize();
+    const Series a = la.column.share();
+    const Series b = lb.column.share();
     if (a.type() != TypeId::Int64 || b.type() != TypeId::Int64 ||
-        a.null_count() > 0 || b.null_count() > 0)
+        dftracer::utils::dataframe::cell_null_count(*a.handle()) > 0 ||
+        dftracer::utils::dataframe::cell_null_count(*b.handle()) > 0)
         return dstd::nullopt;
-    const std::int64_t* x = a.data<std::int64_t>();
-    const std::int64_t* y = b.data<std::int64_t>();
     const std::int64_t na = a.length();
     const std::int64_t nb = b.length();
+    auto x = [&](std::int64_t i) {
+        return dftracer::utils::dataframe::cell_i64(a.handle(), i);
+    };
+    auto y = [&](std::int64_t j) {
+        return dftracer::utils::dataframe::cell_i64(b.handle(), j);
+    };
     for (std::int64_t i = 1; i < na; ++i)
-        if (x[i - 1] >= x[i]) return dstd::nullopt;
+        if (x(i - 1) >= x(i)) return dstd::nullopt;
     for (std::int64_t j = 1; j < nb; ++j)
-        if (y[j - 1] >= y[j]) return dstd::nullopt;
+        if (y(j - 1) >= y(j)) return dstd::nullopt;
     LabelJoin out;
     dstd::Vector<std::int64_t> labels;
     std::int64_t i = 0;
@@ -719,8 +724,8 @@ dstd::Optional<LabelJoin> merge_join_int64(const Level& la, const Level& lb,
         std::iota(out.left.begin(), out.left.end(), std::int64_t{0});
         out.right.assign(static_cast<std::size_t>(na), -1);
         for (; i < na; ++i) {
-            while (j < nb && y[j] < x[i]) ++j;
-            if (j < nb && y[j] == x[i])
+            while (j < nb && y(j) < x(i)) ++j;
+            if (j < nb && y(j) == x(i))
                 out.right[static_cast<std::size_t>(i)] = j;
         }
         out.levels.push_back(a.share());
@@ -728,22 +733,22 @@ dstd::Optional<LabelJoin> merge_join_int64(const Level& la, const Level& lb,
     }
     const bool outer = how == JoinHow::Outer;
     while (i < na || j < nb) {
-        if (j >= nb || (i < na && x[i] < y[j])) {
+        if (j >= nb || (i < na && x(i) < y(j))) {
             if (outer) {
-                labels.push_back(x[i]);
+                labels.push_back(x(i));
                 out.left.push_back(i);
                 out.right.push_back(-1);
             }
             ++i;
-        } else if (i >= na || y[j] < x[i]) {
+        } else if (i >= na || y(j) < x(i)) {
             if (outer) {
-                labels.push_back(y[j]);
+                labels.push_back(y(j));
                 out.left.push_back(-1);
                 out.right.push_back(j);
             }
             ++j;
         } else {
-            labels.push_back(x[i]);
+            labels.push_back(x(i));
             out.left.push_back(i);
             out.right.push_back(j);
             ++i;

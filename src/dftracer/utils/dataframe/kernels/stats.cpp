@@ -4,10 +4,11 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_f64
 #include <dftracer/utils/dataframe/internal/quantile_lerp.h>
+#include <dftracer/utils/dataframe/internal/string_reader.h>  // is_string_column
 #include <dftracer/utils/dataframe/internal/value_ids.h>
-#include <dftracer/utils/dataframe/kernels/cast.h>          // cast_simd
-#include <dftracer/utils/dataframe/kernels/field_stat.h>    // field_stat_reduce
-#include <dftracer/utils/dataframe/kernels/filter.h>        // take
+#include <dftracer/utils/dataframe/kernels/cast.h>            // cast_simd
+#include <dftracer/utils/dataframe/kernels/field_stat.h>  // field_stat_reduce
+#include <dftracer/utils/dataframe/kernels/filter.h>      // take
 #include <dftracer/utils/dataframe/kernels/sort.h>  // argsort, parallel_packed_sort
 #include <dftracer/utils/dataframe/kernels/stats.h>
 #include <dftracer/utils/dataframe/parallel.h>
@@ -31,41 +32,6 @@
 namespace dftracer::utils::dataframe {
 
 namespace {
-
-// Cell `i` of `c` as a double: CHUNKED, CONSTANT, DICTIONARY and SELECTION
-// layers are walked down to the FLAT column that holds the value, so no layer
-// is copied flat first. The caller tests `is_null` first, which also covers a
-// SELECTION's -1 and a null dictionary entry.
-double cell_f64(const dftu_series* c, std::int64_t i) {
-    for (;;) {
-        if (c->is_chunked()) {
-            std::int64_t local = 0;
-            c = &c->chunk_at(i, local);
-            i = local;
-        } else if (c->encoding == Encoding::Constant) {
-            // The one value read as a one-row FLAT handle on the same buffer.
-            dftu_series one(*c);
-            one.encoding = Encoding::Flat;
-            one.length = 1;
-            Series leaf{&one};
-            const double d = read_f64(leaf, 0);
-            leaf.release();
-            return d;
-        } else if (c->encoding == Encoding::Dictionary) {
-            i = reinterpret_cast<const std::int32_t*>(c->data.data())[i];
-            c = c->child().get();
-        } else if (c->encoding == Encoding::Selection) {
-            i = reinterpret_cast<const std::int64_t*>(c->data.data())[i];
-            c = c->child().get();
-        } else {
-            break;
-        }
-    }
-    Series leaf{const_cast<dftu_series*>(c)};
-    const double d = read_f64(leaf, i);
-    leaf.release();
-    return d;
-}
 
 // Every cell of `c`, a column with no null, as a double into `dst`.
 void fill_dense(const dftu_series& c, double* dst) {
@@ -113,7 +79,8 @@ void fill_dense_parallel(const dftu_series& h, double* dst) {
 // path stays scalar.
 dstd::Vector<double> nonnull_values(const Series& v) {
     const std::int64_t n = v.length();
-    if (n > 0 && v.null_count() == 0 && v.encoding() == Encoding::Flat) {
+    const dftu_series& h = *v.handle();
+    if (n > 0 && v.encoding() == Encoding::Flat && v.null_count() == 0) {
         const void* src = dftu_series_data(v.handle());
         if (src) {
             dstd::Vector<double> out(static_cast<std::size_t>(n));
@@ -132,14 +99,14 @@ dstd::Vector<double> nonnull_values(const Series& v) {
     if (v.encoding() == Encoding::Chunked) {
         // Each chunk takes the fast path of its own encoding; a per-cell walk
         // would search the chunk starts for every row.
-        const dftu_series& h = *v.handle();
-        if (v.null_count() == 0) {
+        const std::int64_t nulls = cell_null_count(h);
+        if (nulls == 0) {
             dstd::Vector<double> out(static_cast<std::size_t>(n));
             fill_dense_parallel(h, out.data());
             return out;
         }
         dstd::Vector<double> out;
-        out.reserve(static_cast<std::size_t>(n - v.null_count()));
+        out.reserve(static_cast<std::size_t>(n - nulls));
         for (const auto& piece : h.nested) {
             Series chunk{piece.series.get()};
             const dstd::Vector<double> part = nonnull_values(chunk);
@@ -149,19 +116,21 @@ dstd::Vector<double> nonnull_values(const Series& v) {
         return out;
     }
     if (v.encoding() == Encoding::Constant) {
-        if (n == 0 || v.null_count() == n) return {};
-        return dstd::Vector<double>(static_cast<std::size_t>(n),
-                                    cell_f64(v.handle(), 0));
+        const std::int64_t present = n - cell_null_count(h);
+        if (present == 0) return {};
+        std::int64_t first = 0;
+        while (cell_is_null(&h, first)) ++first;
+        return dstd::Vector<double>(static_cast<std::size_t>(present),
+                                    cell_f64(&h, first));
     }
     // Nulls, or a view: compact per chunk in parallel, then stitch. A flat
     // Float64 / Int64 column reads its buffers directly; the rest goes
     // through the generic cell readers.
-    const bool has_nulls = v.null_count() > 0;
     const bool layered = v.encoding() != Encoding::Flat;
+    const bool has_nulls = !layered && v.null_count() > 0;
     constexpr std::int64_t GRAIN = std::int64_t{1} << 16;
     const std::int64_t chunks = (n + GRAIN - 1) / GRAIN;
     dstd::Vector<dstd::Vector<double>> parts(static_cast<std::size_t>(chunks));
-    const dftu_series& h = *v.handle();
     const std::uint8_t* valid =
         h.encoding == Encoding::Flat && h.validity.block() ? h.validity.data()
                                                            : nullptr;
@@ -187,7 +156,8 @@ dstd::Vector<double> nonnull_values(const Series& v) {
         }
         for (std::int64_t i = b; i < e; ++i) {
             if (layered) {
-                if (!v.is_null(i)) out.push_back(cell_f64(&h, i));
+                double x = 0.0;
+                if (try_cell_f64(&h, i, x)) out.push_back(x);
             } else if (!has_nulls || !v.is_null(i)) {
                 out.push_back(read_f64(v, i));
             }
@@ -209,12 +179,27 @@ dstd::Vector<double> nonnull_values(const Series& v) {
     return out;
 }
 
+// A reader of `v` for a serial scan: row `i` into `x`, false for a null row. A
+// FLAT column tests its bitmap only when it holds a null, and any other layout
+// is walked once per row.
+auto present_rows(const Series& v) {
+    const bool flat = v.encoding() == Encoding::Flat;
+    const bool has_nulls = flat && v.null_count() > 0;
+    return [&v, h = v.handle(), flat, has_nulls](std::int64_t i, double& x) {
+        if (!flat) return try_cell_f64(h, i, x);
+        if (has_nulls && v.is_null(i)) return false;
+        x = cell_f64(h, i);
+        return true;
+    };
+}
+
 bool equal_at(const Series& v, std::int64_t a, std::int64_t b) {
+    const dftu_series* h = v.handle();
     switch (value_domain(v.type())) {
         case ValueDomain::Bytes:
-            return read_bytes(v, a) == read_bytes(v, b);
+            return cell_bytes(h, a) == cell_bytes(h, b);
         case ValueDomain::Numeric:
-            return read_f64(v, a) == read_f64(v, b);
+            return cell_f64(h, a) == cell_f64(h, b);
         case ValueDomain::None:
             dstd::fatal(
                 dstd::fmt<"column type '{}' has no comparable per-row value "
@@ -236,20 +221,28 @@ bool refuse_non_numeric(dstd::StringView op, TypeId t) {
     return true;
 }
 
+// Whether `v`, reduced to `fs`, has too few valid rows for a variance. The
+// rows are counted only below two values, as a count walks a view again.
+bool too_few_for_spread(const Series& v, const FieldStat& fs, bool sample) {
+    if (fs.n >= 2) return false;
+    const std::int64_t n = v.length() - cell_null_count(*v.handle());
+    return n == 0 || (sample && n < 2);
+}
+
 }  // namespace
 
 double variance(const Series& v, bool sample) {
     if (refuse_non_numeric("variance", v.type())) return 0.0;
-    if (const auto n = v.length() - v.null_count(); n == 0 || (sample && n < 2))
-        return std::nan("");
-    return field_stat_reduce(v, 0, v.length()).variance(sample);
+    const FieldStat fs = field_stat_reduce(v, 0, v.length());
+    if (too_few_for_spread(v, fs, sample)) return std::nan("");
+    return fs.variance(sample);
 }
 
 double stddev(const Series& v, bool sample) {
     if (refuse_non_numeric("stddev", v.type())) return 0.0;
-    if (const auto n = v.length() - v.null_count(); n == 0 || (sample && n < 2))
-        return std::nan("");
-    return field_stat_reduce(v, 0, v.length()).stddev(sample);
+    const FieldStat fs = field_stat_reduce(v, 0, v.length());
+    if (too_few_for_spread(v, fs, sample)) return std::nan("");
+    return fs.stddev(sample);
 }
 
 double skewness(const Series& v) {
@@ -395,6 +388,10 @@ double quantile(const Series& v, double q) {
 
 namespace {
 
+// -0.0 and 0.0 rank equal, so which one a rank gives depends on the order the
+// values arrived in; every quantile reports the zero as 0.0.
+double positive_zero(double d) { return d == 0.0 ? 0.0 : d; }
+
 double between_ranks(double a, double b, double frac, Interpolation interp,
                      QuantileForm form) {
     const bool midpoint = interp == Interpolation::Midpoint;
@@ -406,11 +403,14 @@ double between_ranks(double a, double b, double frac, Interpolation interp,
 
 }  // namespace
 
-double quantile(const Series& v, double q, Interpolation interp,
-                QuantileForm form) {
+namespace {
+
+double quantile_by_rank(const Series& v, double q, Interpolation interp,
+                        QuantileForm form) {
     if (refuse_non_numeric("quantile", v.type()) || std::isnan(q))
         return std::nan("");
-    const auto n = static_cast<std::size_t>(v.length() - v.null_count());
+    const std::int64_t nulls = cell_null_count(*v.handle());
+    const auto n = static_cast<std::size_t>(v.length() - nulls);
     if (n == 0) return std::nan("");
     double pos = std::clamp(q, 0.0, 1.0) * static_cast<double>(n - 1);
     std::size_t lo = static_cast<std::size_t>(pos);
@@ -439,7 +439,7 @@ double quantile(const Series& v, double q, Interpolation interp,
     // read in place still gets one buffer of its non-null values; with no
     // nulls it is filled in parallel with no zero fill first.
     if (two_ranks && n > (std::size_t{1} << 18) &&
-        parallel_backend_installed() && v.null_count() == 0 &&
+        parallel_backend_installed() && nulls == 0 &&
         v.encoding() != Encoding::Flat) {
         Scratch<double> dense(n);
         fill_dense_parallel(*v.handle(), dense.data());
@@ -455,8 +455,17 @@ double quantile(const Series& v, double q, Interpolation interp,
     return quantile_of(x, q, interp, is_float, form);
 }
 
-double quantile_of(dstd::Vector<double>& x, double q, Interpolation interp,
-                   bool may_have_nan, QuantileForm form) {
+}  // namespace
+
+double quantile(const Series& v, double q, Interpolation interp,
+                QuantileForm form) {
+    return positive_zero(quantile_by_rank(v, q, interp, form));
+}
+
+namespace {
+
+double quantile_ranked(dstd::Vector<double>& x, double q, Interpolation interp,
+                       bool may_have_nan, QuantileForm form) {
     const std::size_t n = x.size();
     if (n == 0 || std::isnan(q)) return std::nan("");
     const double pos = std::clamp(q, 0.0, 1.0) * static_cast<double>(n - 1);
@@ -505,6 +514,13 @@ double quantile_of(dstd::Vector<double>& x, double q, Interpolation interp,
     return std::nan("");
 }
 
+}  // namespace
+
+double quantile_of(dstd::Vector<double>& x, double q, Interpolation interp,
+                   bool may_have_nan, QuantileForm form) {
+    return positive_zero(quantile_ranked(x, q, interp, may_have_nan, form));
+}
+
 double median(const Series& v) {
     return quantile(v, 0.5, Interpolation::Midpoint, QuantileForm::PandasGroup);
 }
@@ -512,7 +528,8 @@ double median(const Series& v) {
 std::int64_t nunique(const Series& v) {
     if (v.length() == 0) return 0;
     if (refuse_nested_value("nunique", v.type())) return 0;
-    return unique(v).length() - (v.null_count() > 0 ? 1 : 0);
+    // One null counts once: a null dictionary entry is a null row too.
+    return unique(v).length() - (cell_null_count(*v.handle()) > 0 ? 1 : 0);
 }
 
 // The first row of every distinct value, ascending: one null row stands for
@@ -540,17 +557,27 @@ Series unique(const Series& v, bool maintain_order) {
 Series rank(const Series& v, RankMethod method, bool descending, bool pct) {
     const std::int64_t n = v.length();
     if (refuse_nested_value("rank", v.type())) return Series{};
+    const Encoding encoding = v.encoding();
+    if (encoding != Encoding::Flat &&
+        (encoding == Encoding::Chunked || !is_string_column(*v.handle()) ||
+         has_constant_layer(*v.handle()))) {
+        // One copy: argsort sorts a flat buffer, so the ties read it too.
+        const Series flat = v.materialize();
+        return flat.valid() ? rank(flat, method, descending, pct) : Series{};
+    }
+    const dftu_series* h = v.handle();
+    const std::int64_t nulls = cell_null_count(*h);
+    const bool has_nulls = nulls > 0;
     // A float NaN is missing like a null: rank the present rows alone (so the
     // pct divisor counts neither) and give the missing rows a null rank.
     if (v.type() == TypeId::Float64 || v.type() == TypeId::Float32 ||
         v.type() == TypeId::Float16) {
-        const bool nulls = v.null_count() > 0;
         dstd::Vector<std::int64_t> keep;
         keep.reserve(static_cast<std::size_t>(n));
         bool has_nan = false;
         for (std::int64_t i = 0; i < n; ++i) {
-            if (nulls && v.is_null(i)) continue;
-            if (std::isnan(read_f64(v, i))) {
+            if (has_nulls && cell_is_null(h, i)) continue;
+            if (std::isnan(cell_f64(h, i))) {
                 has_nan = true;
                 continue;
             }
@@ -572,17 +599,16 @@ Series rank(const Series& v, RankMethod method, bool descending, bool pct) {
         }
     }
     dstd::Vector<double> ranks(static_cast<std::size_t>(n), std::nan(""));
-    Series order = argsort(v, descending);  // nulls sort last
+    const Series order = argsort(v, descending);  // nulls sort last
     const std::int64_t* idx = order.data<std::int64_t>();
-    const bool has_nulls = v.null_count() > 0;
     std::int64_t k = 0, dense = 0;
     while (k < n) {
         std::int64_t i = idx[k];
-        if (has_nulls && v.is_null(i)) break;  // nulls keep a NaN rank
+        if (has_nulls && cell_is_null(h, i)) break;  // nulls keep a NaN rank
         std::int64_t j = k + 1;
         while (j < n) {
             std::int64_t ij = idx[j];
-            if (has_nulls && v.is_null(ij)) break;
+            if (has_nulls && cell_is_null(h, ij)) break;
             if (!equal_at(v, i, ij)) break;
             ++j;
         }
@@ -616,16 +642,16 @@ Series rank(const Series& v, RankMethod method, bool descending, bool pct) {
         // the largest value ranks 1.0.
         const double divisor = method == RankMethod::Dense
                                    ? static_cast<double>(dense)
-                                   : static_cast<double>(n - v.null_count());
+                                   : static_cast<double>(n - nulls);
         for (std::int64_t i = 0; i < n; ++i)
-            if (!has_nulls || !v.is_null(i))
+            if (!has_nulls || !cell_is_null(h, i))
                 ranks[static_cast<std::size_t>(i)] /= divisor;
     }
     // A null value has a null rank (pandas and polars both), not a NaN.
     if (!has_nulls) return Series::flat(TypeId::Float64, ranks.data(), n);
     dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
     for (std::int64_t i = 0; i < n; ++i)
-        if (!v.is_null(i))
+        if (!cell_is_null(h, i))
             valid[static_cast<std::size_t>(i >> 3)] |=
                 static_cast<std::uint8_t>(1u << (i & 7));
     return Series::flat(TypeId::Float64, ranks.data(), n, valid.data());
@@ -635,17 +661,49 @@ namespace {
 
 // pandas min_periods = window: a window holding a null gives a null. Clears
 // the valid bit of every row within `window` of a null input.
-void null_windows(const Series& v, std::int64_t window,
+void null_windows(const Series& v, std::int64_t nulls, std::int64_t window,
                   dstd::Vector<std::uint8_t>& valid) {
-    if (v.null_count() == 0) return;
+    if (nulls == 0) return;
     const std::int64_t n = v.length();
     std::int64_t last_null = -window;
     for (std::int64_t i = 0; i < n; ++i) {
-        if (v.is_null(i)) last_null = i;
+        if (cell_is_null(v.handle(), i)) last_null = i;
         if (i - last_null < window)
             valid[static_cast<std::size_t>(i >> 3)] &=
                 static_cast<std::uint8_t>(~(1u << (i & 7)));
     }
+}
+
+// Every row of `v` as a double, with `nulls` set to its null rows: one copy,
+// as the windows index a plain array. A null row is 0, since a NaN or an inf
+// under it would stay in a running sum past its window.
+Scratch<double> window_values(const Series& v, std::int64_t& nulls) {
+    const dftu_series& h = *v.handle();
+    Scratch<double> out(static_cast<std::size_t>(h.length));
+    const bool bulk = h.encoding == Encoding::Flat || h.is_chunked();
+    if (bulk) {
+        nulls = cell_null_count(h);
+        if (nulls == 0) {
+            if (h.is_chunked())
+                fill_dense_parallel(h, out.data());
+            else
+                fill_dense(h, out.data());
+            return out;
+        }
+    }
+    nulls = parallel_reduce<std::int64_t>(
+        h.length, std::int64_t{1} << 16, 0,
+        [&](std::int64_t b, std::int64_t e) {
+            std::int64_t missing = 0;
+            for (std::int64_t i = b; i < e; ++i) {
+                double x = 0.0;
+                missing += !try_cell_f64(&h, i, x);
+                out[static_cast<std::size_t>(i)] = x;
+            }
+            return missing;
+        },
+        [](std::int64_t a, std::int64_t b) { return a + b; });
+    return out;
 }
 
 }  // namespace
@@ -675,24 +733,15 @@ Series rolling(const Series& v, std::int64_t window, RollingOp op) {
                 static_cast<std::uint8_t>(1u << (i & 7));
     }
 
-    // The values as doubles: a dense Float64 column is read in place, any
-    // other widened once (SIMD cast for the dense case), so the window loop
-    // indexes a plain array.
-    dstd::Vector<double> vals;
+    // A dense FLAT Float64 column is read in place.
+    std::int64_t nulls = 0;
+    Scratch<double> vals;
     const double* p = nullptr;
-    if (n > 0 && v.null_count() == 0 && v.encoding() == Encoding::Flat &&
-        v.type() == TypeId::Float64) {
+    if (n > 0 && v.encoding() == Encoding::Flat &&
+        v.type() == TypeId::Float64 && v.null_count() == 0) {
         p = v.data<double>();
-    } else if (n > 0 && v.null_count() == 0 && v.encoding() == Encoding::Flat) {
-        vals = nonnull_values(v);
-        p = vals.data();
     } else {
-        // A null row is 0: the value under it can be anything, and a NaN or
-        // an inf there would stay in the running sum past its window.
-        vals.resize(static_cast<std::size_t>(n));
-        for (std::int64_t i = 0; i < n; ++i)
-            vals[static_cast<std::size_t>(i)] =
-                v.is_null(i) ? 0.0 : read_f64(v, i);
+        vals = window_values(v, nulls);
         p = vals.data();
     }
 
@@ -753,7 +802,7 @@ Series rolling(const Series& v, std::int64_t window, RollingOp op) {
             }
         });
     }
-    null_windows(v, window, valid);
+    null_windows(v, nulls, window, valid);
     res->null_count = 0;
     for (std::int64_t i = 0; i < n; ++i)
         if (!((valid[static_cast<std::size_t>(i >> 3)] >> (i & 7)) & 1))
@@ -828,14 +877,8 @@ Series rolling_window(const Series& v, std::int64_t window, Agg agg,
                 static_cast<std::uint8_t>(1u << (i & 7));
     }
 
-    dstd::Vector<double> vals;
-    if (n > 0 && v.null_count() == 0 && v.encoding() == Encoding::Flat) {
-        vals = nonnull_values(v);
-    } else {
-        vals.resize(static_cast<std::size_t>(n));
-        for (std::int64_t i = 0; i < n; ++i)
-            vals[static_cast<std::size_t>(i)] = read_f64(v, i);
-    }
+    std::int64_t nulls = 0;
+    const Scratch<double> vals = window_values(v, nulls);
     const double* p = vals.data();
 
     const std::int64_t begin = std::min<std::int64_t>(window - 1, n);
@@ -862,7 +905,7 @@ Series rolling_window(const Series& v, std::int64_t window, Agg agg,
             out[static_cast<std::size_t>(i)] = agg(buf);
         }
     }
-    null_windows(v, window, valid);
+    null_windows(v, nulls, window, valid);
     return Series::flat(TypeId::Float64, out.data(), n, valid.data());
 }
 
@@ -897,7 +940,9 @@ Series rolling_median(const Series& v, std::int64_t window) {
 Series rolling_quantile(const Series& v, std::int64_t window, double q) {
     return rolling_window(
         v, window,
-        [q](dstd::Vector<double>& w) { return quantile_sorted(w, q); },
+        [q](dstd::Vector<double>& w) {
+            return positive_zero(quantile_sorted(w, q));
+        },
         "rolling_quantile");
 }
 
@@ -1011,8 +1056,9 @@ Series ewm_mean(const Series& v, double alpha) {
     if (n == 0) return Series::flat(TypeId::Float64, out.data(), n);
     const double decay = 1.0 - alpha;
     constexpr std::int64_t GRAIN = 1 << 14;
-    if (v.null_count() == 0 && parallel_backend_installed() && n > GRAIN &&
-        alpha > 0.0) {
+    const dftu_series* h = v.handle();
+    if (parallel_backend_installed() && n > GRAIN && alpha > 0.0 &&
+        cell_null_count(*h) == 0) {
         // w_sum[i] = sum_{k=0}^{i} decay^k, a closed form per index, so
         // mean[i] = mean[i-1] * (1 - 1 / w_sum[i]) + x[i] / w_sum[i] is an
         // affine scan with an index-only coefficient.
@@ -1029,20 +1075,20 @@ Series ewm_mean(const Series& v, double alpha) {
                 return 1.0 - 1.0 / w_sum[static_cast<std::size_t>(i)];
             },
             [&](std::int64_t i) {
-                return i == 0 ? read_f64(v, 0)
-                              : read_f64(v, i) /
+                return i == 0 ? cell_f64(h, 0)
+                              : cell_f64(h, i) /
                                     w_sum[static_cast<std::size_t>(i)];
             },
             out, aprod);
         return Series::flat(TypeId::Float64, out.data(), n);
     }
     dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
-    const bool has_nulls = v.null_count() > 0;
+    const auto read = present_rows(v);
     double w_sum = 0.0, mean = 0.0;
     for (std::int64_t i = 0; i < n; ++i) {
         w_sum *= decay;
-        if (!has_nulls || !v.is_null(i)) {
-            const double x = read_f64(v, i);
+        double x = 0.0;
+        if (read(i, x)) {
             w_sum += 1.0;
             mean = w_sum == 1.0 ? x : mean + (x - mean) / w_sum;
         }
@@ -1064,12 +1110,11 @@ Series ewm_std(const Series& v, double alpha) {
     // The variance is unchanged by a shift, so run the recurrences on the
     // values minus the first valid one: a running mean of values near 1e9 would
     // lose the digits of a spread of 1 in a single double.
+    const dftu_series* h = v.handle();
+    const auto read = present_rows(v);
     double x0 = 0.0;
     for (std::int64_t i = 0; i < n; ++i)
-        if (v.null_count() == 0 || !v.is_null(i)) {
-            x0 = read_f64(v, i);
-            break;
-        }
+        if (read(i, x0)) break;
     // Incremental reliability-weight EW variance: at step i observation j
     // carries weight decay^(i-j). w_sum tracks the total weight, w2_sum the
     // sum of squared weights, and s the weighted sum of squared deviations;
@@ -1078,8 +1123,8 @@ Series ewm_std(const Series& v, double alpha) {
     constexpr std::int64_t GRAIN = 1 << 14;
     // decay == 1 (alpha == 0) breaks the closed-form geometric sum below
     // (division by 1 - decay); that case is rare enough to just run serial.
-    if (v.null_count() == 0 && parallel_backend_installed() && n > GRAIN &&
-        alpha > 0.0) {
+    if (parallel_backend_installed() && n > GRAIN && alpha > 0.0 &&
+        cell_null_count(*h) == 0) {
         // w_sum[i] and w2_sum[i] solve the same two recurrences as below but
         // depend only on i, not on any row's value, so each index is a
         // closed-form geometric sum computable independently in parallel:
@@ -1107,8 +1152,8 @@ Series ewm_std(const Series& v, double alpha) {
                 return 1.0 - 1.0 / w_sum[static_cast<std::size_t>(i)];
             },
             [&](std::int64_t i) {
-                return i == 0 ? (read_f64(v, 0) - x0)
-                              : (read_f64(v, i) - x0) /
+                return i == 0 ? (cell_f64(h, 0) - x0)
+                              : (cell_f64(h, i) - x0) /
                                     w_sum[static_cast<std::size_t>(i)];
             },
             mean, aprod);
@@ -1119,7 +1164,7 @@ Series ewm_std(const Series& v, double alpha) {
             n, GRAIN, decay,
             [&](std::int64_t i) {
                 if (i == 0) return 0.0;
-                const double x = (read_f64(v, i) - x0);
+                const double x = (cell_f64(h, i) - x0);
                 const double delta = x - mean[static_cast<std::size_t>(i - 1)];
                 return delta * (x - mean[static_cast<std::size_t>(i)]);
             },
@@ -1142,14 +1187,14 @@ Series ewm_std(const Series& v, double alpha) {
     }
     // The serial scan, null-aware: a null row decays the weights, adds no
     // observation and repeats the previous std.
-    const bool has_nulls = v.null_count() > 0;
     double w_sum = 0.0, w2_sum = 0.0, mean = 0.0, s = 0.0;
     bool have = false;
     for (std::int64_t i = 0; i < n; ++i) {
         w_sum *= decay;
         w2_sum *= decay * decay;
-        if (!has_nulls || !v.is_null(i)) {
-            const double x = (read_f64(v, i) - x0);
+        double x = 0.0;
+        if (read(i, x)) {
+            x -= x0;
             w_sum += 1.0;
             w2_sum += 1.0;
             if (w_sum == 1.0) {
@@ -1202,14 +1247,13 @@ Series cut_with(const Series& v, dstd::Span<const T> edges, bool right,
     const std::int64_t nb = static_cast<std::int64_t>(edges.size());
     dstd::Vector<std::int32_t> out(static_cast<std::size_t>(n), -1);
     dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
-    const bool has_nulls = v.null_count() > 0;
     std::int64_t at = 0;
     bool have_prev = false;
     T prev{};
     std::uint8_t acc = 0;
     for (std::int64_t i = 0; i < n; ++i) {
-        if (!(has_nulls && v.is_null(i))) {
-            const T x = read(v, i);
+        T x{};
+        if (read(i, x)) {
             if (have_prev && x >= prev) {
                 if (right)
                     while (at < nb && edges[static_cast<std::size_t>(at)] < x)
@@ -1253,30 +1297,45 @@ Series cut(const Series& v, const Series& breaks, std::int32_t flags) {
     const bool right = (flags & DFTU_CUT_RIGHT) != 0;
     const bool inner = (flags & DFTU_CUT_INNER) != 0;
     const std::int64_t nb = breaks.length();
+    const dftu_series* h = v.handle();
+    const dftu_series* bh = breaks.handle();
+    // pandas takes only increasing edges, so a null edge is refused.
+    if (cell_null_count(*bh) > 0) {
+        DFTRACER_UTILS_LOG_ERROR("cut: a break is null");
+        return Series{};
+    }
     if (exact_int_column(v) && exact_int_column(breaks)) {
+        // A copy of the breaks: the binary search needs them sorted.
         dstd::Vector<std::int64_t> edges(static_cast<std::size_t>(nb));
         for (std::int64_t k = 0; k < nb; ++k)
-            edges[static_cast<std::size_t>(k)] = read_i64(breaks, k);
+            edges[static_cast<std::size_t>(k)] = cell_i64(bh, k);
         std::sort(edges.begin(), edges.end());
         const dstd::Span<const std::int64_t> span(edges.data(), edges.size());
         if (physical_type(v.type()) == TypeId::Int64 &&
             v.encoding() == Encoding::Flat) {
             const std::int64_t* raw = v.data<std::int64_t>();
-            return cut_with(
-                v, span, right, inner,
-                [raw](const Series&, std::int64_t i) { return raw[i]; });
+            const std::uint8_t* valid =
+                h->validity.block() ? h->validity.data() : nullptr;
+            return cut_with(v, span, right, inner,
+                            [raw, valid](std::int64_t i, std::int64_t& x) {
+                                x = raw[i];
+                                return !valid ||
+                                       ((valid[i >> 3] >> (i & 7)) & 1);
+                            });
         }
-        return cut_with(
-            v, span, right, inner,
-            [](const Series& c, std::int64_t i) { return read_i64(c, i); });
+        return cut_with(v, span, right, inner,
+                        [h](std::int64_t i, std::int64_t& x) {
+                            return try_cell_i64(h, i, x);
+                        });
     }
+    // A copy of the breaks: the binary search needs them sorted.
     dstd::Vector<double> edges(static_cast<std::size_t>(nb));
     for (std::int64_t k = 0; k < nb; ++k)
-        edges[static_cast<std::size_t>(k)] = read_f64(breaks, k);
+        edges[static_cast<std::size_t>(k)] = cell_f64(bh, k);
     std::sort(edges.begin(), edges.end());
     const dstd::Span<const double> span(edges.data(), edges.size());
-    return cut_with(v, span, right, inner, [](const Series& c, std::int64_t i) {
-        return read_f64(c, i);
+    return cut_with(v, span, right, inner, [h](std::int64_t i, double& x) {
+        return try_cell_f64(h, i, x);
     });
 }
 
@@ -1295,10 +1354,10 @@ Series qcut(const Series& v, std::int32_t q) {
     const std::int64_t n = v.length();
     dstd::Vector<std::int32_t> out(static_cast<std::size_t>(n), -1);
     dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
-    const bool has_nulls = v.null_count() > 0;
+    const dftu_series* h = v.handle();
     for (std::int64_t i = 0; i < n; ++i) {
-        if (has_nulls && v.is_null(i)) continue;
-        const double x = read_f64(v, i);
+        double x = 0.0;
+        if (!try_cell_f64(h, i, x)) continue;
         auto it = std::upper_bound(edges.begin(), edges.end(), x);
         out[static_cast<std::size_t>(i)] =
             static_cast<std::int32_t>(it - edges.begin());
@@ -1315,9 +1374,12 @@ Series search_sorted(const Series& v, const Series& values, bool right) {
     // is never read.
     using Key = dstd::Pair<bool, double>;
     const auto key = [](const Series& s, std::int64_t i) {
-        return s.is_null(i) ? Key{true, 0.0} : Key{false, read_f64(s, i)};
+        double x = 0.0;
+        const bool present = try_cell_f64(s.handle(), i, x);
+        return Key{!present, x};
     };
     const std::int64_t n = v.length();
+    // A copy of `v` as keys: the binary searches index one plain array.
     dstd::Vector<Key> self(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i)
         self[static_cast<std::size_t>(i)] = key(v, i);
@@ -1336,28 +1398,26 @@ Series search_sorted(const Series& v, const Series& values, bool right) {
 Series interpolate(const Series& v) {
     if (refuse_non_numeric("interpolate", v.type())) return Series{};
     const std::int64_t n = v.length();
+    const dftu_series* h = v.handle();
+    // Fast path: no nulls -> a plain widening copy.
+    if (cell_null_count(*h) == 0) {
+        const dstd::Vector<double> widened = nonnull_values(v);
+        return Series::flat(TypeId::Float64, widened.data(), n);
+    }
     dstd::Vector<double> out(static_cast<std::size_t>(n), 0.0);
     dstd::Vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
     auto mark = [&](std::int64_t i) {
         valid[static_cast<std::size_t>(i >> 3)] |=
             static_cast<std::uint8_t>(1u << (i & 7));
     };
-    const bool has_nulls = v.null_count() > 0;
-    // Fast path: no nulls -> a plain widening copy.
-    if (!has_nulls) {
-        for (std::int64_t i = 0; i < n; ++i) {
-            out[static_cast<std::size_t>(i)] = read_f64(v, i);
-            mark(i);
-        }
-        return Series::flat(TypeId::Float64, out.data(), n, valid.data());
-    }
     // Collect anchors (non-null rows) first; the null runs between
     // consecutive anchors are then independent of each other, so they can be
     // filled in parallel once the anchor list (and its values) is known.
     dstd::Vector<std::int64_t> anchors;
     for (std::int64_t i = 0; i < n; ++i) {
-        if (v.is_null(i)) continue;
-        out[static_cast<std::size_t>(i)] = read_f64(v, i);
+        double x = 0.0;
+        if (!try_cell_f64(h, i, x)) continue;
+        out[static_cast<std::size_t>(i)] = x;
         mark(i);
         anchors.push_back(i);
     }
@@ -1416,7 +1476,6 @@ Series interpolate(const Series& v) {
 
 double dftu_series_variance(const dftu_series* v, std::int32_t sample) {
     if (!v) return 0.0;
-    DFTU_FLAT_INPUT(v, dftu_series_variance, sample);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     double r = dftracer::utils::dataframe::variance(c, sample != 0);
     c.release();
@@ -1424,7 +1483,6 @@ double dftu_series_variance(const dftu_series* v, std::int32_t sample) {
 }
 double dftu_series_stddev(const dftu_series* v, std::int32_t sample) {
     if (!v) return 0.0;
-    DFTU_FLAT_INPUT(v, dftu_series_stddev, sample);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     double r = dftracer::utils::dataframe::stddev(c, sample != 0);
     c.release();
@@ -1432,7 +1490,6 @@ double dftu_series_stddev(const dftu_series* v, std::int32_t sample) {
 }
 double dftu_series_skewness(const dftu_series* v) {
     if (!v) return 0.0;
-    DFTU_FLAT_INPUT(v, dftu_series_skewness);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     double r = dftracer::utils::dataframe::skewness(c);
     c.release();
@@ -1440,7 +1497,6 @@ double dftu_series_skewness(const dftu_series* v) {
 }
 double dftu_series_kurtosis(const dftu_series* v) {
     if (!v) return 0.0;
-    DFTU_FLAT_INPUT(v, dftu_series_kurtosis);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     double r = dftracer::utils::dataframe::kurtosis(c);
     c.release();
@@ -1448,7 +1504,6 @@ double dftu_series_kurtosis(const dftu_series* v) {
 }
 double dftu_series_skewness_unbiased(const dftu_series* v) {
     if (!v) return 0.0;
-    DFTU_FLAT_INPUT(v, dftu_series_skewness_unbiased);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     double r = dftracer::utils::dataframe::skewness_unbiased(c);
     c.release();
@@ -1456,7 +1511,6 @@ double dftu_series_skewness_unbiased(const dftu_series* v) {
 }
 double dftu_series_kurtosis_unbiased(const dftu_series* v) {
     if (!v) return 0.0;
-    DFTU_FLAT_INPUT(v, dftu_series_kurtosis_unbiased);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     double r = dftracer::utils::dataframe::kurtosis_unbiased(c);
     c.release();
@@ -1507,7 +1561,6 @@ dftu_series* dftu_series_unique_nulls(const dftu_series* v,
 dftu_series* dftu_series_rank(const dftu_series* v, dftu_rank_method method,
                               std::int32_t flags) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_rank, method, flags);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series r = dftracer::utils::dataframe::rank(
         c, static_cast<dftracer::utils::dataframe::RankMethod>(method),
@@ -1519,7 +1572,6 @@ dftu_series* dftu_series_rank(const dftu_series* v, dftu_rank_method method,
 dftu_series* dftu_series_rolling(const dftu_series* v, std::int64_t window,
                                  dftu_rolling_op op) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_rolling, window, op);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series r = dftracer::utils::dataframe::rolling(
         c, window, static_cast<dftracer::utils::dataframe::RollingOp>(op));
@@ -1529,7 +1581,6 @@ dftu_series* dftu_series_rolling(const dftu_series* v, std::int64_t window,
 dftu_series* dftu_series_rolling_var(const dftu_series* v,
                                      std::int64_t window) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_rolling_var, window);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series r =
         dftracer::utils::dataframe::rolling_var(c, window);
@@ -1539,7 +1590,6 @@ dftu_series* dftu_series_rolling_var(const dftu_series* v,
 dftu_series* dftu_series_rolling_std(const dftu_series* v,
                                      std::int64_t window) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_rolling_std, window);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series r =
         dftracer::utils::dataframe::rolling_std(c, window);
@@ -1549,7 +1599,6 @@ dftu_series* dftu_series_rolling_std(const dftu_series* v,
 dftu_series* dftu_series_rolling_median(const dftu_series* v,
                                         std::int64_t window) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_rolling_median, window);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series r =
         dftracer::utils::dataframe::rolling_median(c, window);
@@ -1559,7 +1608,6 @@ dftu_series* dftu_series_rolling_median(const dftu_series* v,
 dftu_series* dftu_series_rolling_quantile(const dftu_series* v,
                                           std::int64_t window, double q) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_rolling_quantile, window, q);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series r =
         dftracer::utils::dataframe::rolling_quantile(c, window, q);
@@ -1568,7 +1616,6 @@ dftu_series* dftu_series_rolling_quantile(const dftu_series* v,
 }
 dftu_series* dftu_series_ewm_mean(const dftu_series* v, double alpha) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_ewm_mean, alpha);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series r =
         dftracer::utils::dataframe::ewm_mean(c, alpha);
@@ -1577,7 +1624,6 @@ dftu_series* dftu_series_ewm_mean(const dftu_series* v, double alpha) {
 }
 dftu_series* dftu_series_ewm_std(const dftu_series* v, double alpha) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_ewm_std, alpha);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series r =
         dftracer::utils::dataframe::ewm_std(c, alpha);
@@ -1587,14 +1633,6 @@ dftu_series* dftu_series_ewm_std(const dftu_series* v, double alpha) {
 dftu_series* dftu_series_cut(const dftu_series* v, const dftu_series* breaks,
                              std::int32_t flags) {
     if (!v || !breaks) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_cut, breaks, flags);
-    if (breaks->encoding != dftracer::utils::dataframe::Encoding::Flat) {
-        dftu_series* flat = dftu_series_materialize(breaks);
-        if (!flat) return nullptr;
-        dftu_series* r = dftu_series_cut(v, flat, flags);
-        dftu_series_free(flat);
-        return r;
-    }
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series b{const_cast<dftu_series*>(breaks)};
     dftracer::utils::dataframe::Series r =
@@ -1605,7 +1643,6 @@ dftu_series* dftu_series_cut(const dftu_series* v, const dftu_series* breaks,
 }
 dftu_series* dftu_series_qcut(const dftu_series* v, std::int32_t q) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_qcut, q);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series r =
         dftracer::utils::dataframe::qcut(c, q);
@@ -1620,14 +1657,6 @@ dftu_series* dftu_series_search_sorted_side(const dftu_series* v,
                                             const dftu_series* values,
                                             std::int32_t right) {
     if (!v || !values) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_search_sorted_side, values, right);
-    if (values->encoding != dftracer::utils::dataframe::Encoding::Flat) {
-        dftu_series* flat = dftu_series_materialize(values);
-        if (!flat) return nullptr;
-        dftu_series* r = dftu_series_search_sorted_side(v, flat, right);
-        dftu_series_free(flat);
-        return r;
-    }
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series q{const_cast<dftu_series*>(values)};
     dftracer::utils::dataframe::Series r =
@@ -1638,7 +1667,6 @@ dftu_series* dftu_series_search_sorted_side(const dftu_series* v,
 }
 dftu_series* dftu_series_interpolate(const dftu_series* v) {
     if (!v) return nullptr;
-    DFTU_FLAT_INPUT(v, dftu_series_interpolate);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     dftracer::utils::dataframe::Series r =
         dftracer::utils::dataframe::interpolate(c);

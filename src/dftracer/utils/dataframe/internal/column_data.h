@@ -118,6 +118,14 @@ struct dftu_series : dftracer::utils::dstd::HeapObject {
     bool is_chunked() const noexcept {
         return encoding == dftracer::utils::dataframe::Encoding::Chunked;
     }
+    /// A DICTIONARY whose values column is FLAT.
+    bool is_flat_dictionary() const noexcept {
+        return encoding == dftracer::utils::dataframe::Encoding::Dictionary &&
+               child() &&
+               child()->encoding ==
+                   dftracer::utils::dataframe::Encoding::Flat &&
+               (length == 0 || data.block());
+    }
     /// CHUNKED: the chunk holding row `i`; `local` gets the row inside it.
     const dftu_series& chunk_at(std::int64_t i, std::int64_t& local) const {
         const auto* starts = reinterpret_cast<const std::int64_t*>(data.data());
@@ -151,12 +159,13 @@ struct dftu_series : dftracer::utils::dstd::HeapObject {
     bool json() const noexcept { return params.is_json(type); }
     /// Whether a row's nullness needs `dftu_series_is_null` rather than the
     /// own bitmap: a SELECTION, a CHUNKED column with nulls, or a DICTIONARY
-    /// with null entries.
+    /// whose values column has nulls or itself needs row-wise nulls.
     bool rowwise_nulls() const noexcept {
         return encoding == dftracer::utils::dataframe::Encoding::Selection ||
                (is_chunked() && null_count > 0) ||
                (encoding == dftracer::utils::dataframe::Encoding::Dictionary &&
-                child() && child()->null_count > 0);
+                child() &&
+                (child()->null_count > 0 || child()->rowwise_nulls()));
     }
     /// Set `type` first: a parameter the type does not use is ignored.
     void set_time_unit(dftracer::utils::dataframe::TimeUnit unit) noexcept {
@@ -307,6 +316,37 @@ dftu_series* dftu_map_chunks(const dftu_series& v, F&& fn) {
             return ::dftu_map_chunks(*(v), [&](const dftu_series* c_) { \
                 return fn(c_, ##__VA_ARGS__);                           \
             });                                                         \
+    } while (0)
+
+/// The column that `values`, an elementwise op's result over the values of
+/// the FLAT-valued DICTIONARY `v`, gives `v`: a DICTIONARY that shares `v`'s
+/// code buffer and validity bitmap over `values`, typed as `values`. Its
+/// `null_count` stays `v`'s own nulls; a null entry in `values` is seen through
+/// `rowwise_nulls` and `dftu_series_null_count`. A Bool `values` is expanded
+/// to a FLAT Bool column through the codes in one pass, since mask readers
+/// take FLAT input. Takes ownership of `values`; null when `values` is null,
+/// not FLAT or not as long as the values of `v`.
+dftu_series* dftu_dictionary_elementwise(const dftu_series& v,
+                                         dftu_series* values);
+
+/// Whether every non-null row of the DICTIONARY `v` holds a code inside its
+/// values column. The wrap and the Bool expansion read codes unchecked.
+bool dftu_dictionary_codes_in_range(const dftu_series& v);
+
+/// The seam for an op whose output row i reads only input row i and has one
+/// value per input value: on a DICTIONARY over a FLAT values column, the entry
+/// runs once on the values and the result keeps the codes (see
+/// @ref dftu_dictionary_elementwise). A code outside the values on a valid row
+/// gives null, as materializing would. Placed after the argument checks,
+/// before DFTU_FLAT_OPERAND. `fn` is the entry itself, `...` its remaining
+/// arguments.
+#define DFTU_DICTIONARY_ELEMENTWISE(v, fn, ...)                           \
+    do {                                                                  \
+        if ((v) && (v)->is_flat_dictionary()) {                           \
+            if (!::dftu_dictionary_codes_in_range(*(v))) return {};       \
+            return ::dftu_dictionary_elementwise(                         \
+                *(v), fn((v)->child().get() __VA_OPT__(, ) __VA_ARGS__)); \
+        }                                                                 \
     } while (0)
 
 /// A kernel that reads a column's buffers takes FLAT input. Placed first in a

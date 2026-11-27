@@ -658,21 +658,25 @@ dftu_series* dftu_series_div(const dftu_series* a, const dftu_series* b) {
     return dftracer::utils::dataframe::div_columns(a, b);
 }
 dftu_series* dftu_series_add_scalar(const dftu_series* a, dftu_scalar s) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_add_scalar, s);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_add_scalar(flat_a, s));
 
     return dftracer::utils::dataframe::add_scalar_col(a, s);
 }
 dftu_series* dftu_series_sub_scalar(const dftu_series* a, dftu_scalar s) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_sub_scalar, s);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_sub_scalar(flat_a, s));
 
     return dftracer::utils::dataframe::sub_scalar_col(a, s);
 }
 dftu_series* dftu_series_mul_scalar(const dftu_series* a, dftu_scalar s) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_mul_scalar, s);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_mul_scalar(flat_a, s));
 
     return dftracer::utils::dataframe::mul_scalar_col(a, s);
 }
 dftu_series* dftu_series_div_scalar(const dftu_series* a, dftu_scalar s) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_div_scalar, s);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_div_scalar(flat_a, s));
 
     return dftracer::utils::dataframe::div_scalar_col(a, s);

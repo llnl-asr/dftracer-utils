@@ -23,8 +23,10 @@ inline int compare_doubles(double a, double b) noexcept {
 
 /// A column resolved once for typed per-row reads, so a kernel's inner loop
 /// does pointer arithmetic instead of a call per cell. Holds its own reference
-/// to the (materialized) column. Numeric types read as Signed, Unsigned or
-/// Float by their physical layout; String and Binary read as Bytes.
+/// to the column in its own layout: FLAT reads its buffers, any other layer
+/// reads through the shared cell reader. Numeric types read as Signed,
+/// Unsigned or Float by their physical layout; String and Binary read as
+/// Bytes.
 class ColumnReader {
    public:
     enum class Kind : std::uint8_t { Signed, Unsigned, Float, Bytes };
@@ -46,9 +48,9 @@ class ColumnReader {
     TypeId type() const noexcept { return type_; }
     std::int64_t size() const noexcept { return length_; }
 
-    bool is_null(std::int64_t i) const noexcept {
-        return validity_ != nullptr && !((validity_[i >> 3] >> (i & 7)) & 1);
-    }
+    /// Whether row `i` is null, in any layout (a null dictionary entry or a
+    /// SELECTION -1 included).
+    bool is_null(std::int64_t i) const noexcept;
 
     /// Whether row `i` is null, or a NaN of a Float column: a value that no
     /// order or range can place.
@@ -82,6 +84,7 @@ class ColumnReader {
     TypeId type_ = TypeId::Int64;
     TypeId physical_ = TypeId::Int64;
     std::int64_t length_ = 0;
+    bool flat_ = false;
     const std::uint8_t* data_ = nullptr;
     const std::uint8_t* validity_ = nullptr;
     const std::int32_t* off32_ = nullptr;

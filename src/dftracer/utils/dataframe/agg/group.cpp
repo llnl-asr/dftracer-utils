@@ -66,6 +66,15 @@ bool by_ref(const Series& c) {
            (c.type() == TypeId::String || c.type() == TypeId::Binary);
 }
 
+// A column the drivers below read as it is: FLAT, or a by-reference view the
+// accumulator takes without a copy.
+bool in_place_keep(const Series& c) {
+    return c.encoding() == Encoding::Flat ||
+           ((c.encoding() == Encoding::Dictionary ||
+             c.encoding() == Encoding::View) &&
+            (c.type() == TypeId::String || c.type() == TypeId::Binary));
+}
+
 Series flat_or_ref(const Series& c, bool key) {
     return c.encoding() == Encoding::Flat || (key && by_ref(c))
                ? c.share()
@@ -1439,6 +1448,12 @@ dstd::Result<DataFrame> group_agg_impl(dstd::Span<const Series* const> keys,
                 dstd::Result<Series> j = join_chunks(*c);
                 if (!j) return j.error();
                 joined.push_back(std::move(*j));
+                c = &joined.back();
+            }
+            // One gather of the whole column here, in place of one per driver
+            // below: the accumulator reads FLAT columns.
+            if (c && !in_place_keep(*c)) {
+                joined.push_back(flat_or_ref(*c, false));
                 c = &joined.back();
             }
             out.push_back(c);

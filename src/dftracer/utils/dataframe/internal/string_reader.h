@@ -45,6 +45,28 @@ inline bool is_string_column(const dftu_series& v) {
     return n == TypeId::String || n == TypeId::Binary;
 }
 
+/// Row `row` of a FLAT or CONSTANT String/Binary(/Large) column, with no
+/// validity test. False when the column holds no offsets.
+inline bool str_flat_at(const dftu_series* c, std::int64_t row,
+                        dstd::StringView& out) {
+    if (!c->offsets.block()) return false;
+    const char* d = c->data.block()
+                        ? reinterpret_cast<const char*>(c->data.data())
+                        : nullptr;
+    if (c->wide_offsets()) {
+        const auto* off =
+            reinterpret_cast<const std::int64_t*>(c->offsets.data());
+        out = dstd::StringView(
+            d + off[row], static_cast<std::size_t>(off[row + 1] - off[row]));
+    } else {
+        const auto* off =
+            reinterpret_cast<const std::int32_t*>(c->offsets.data());
+        out = dstd::StringView(
+            d + off[row], static_cast<std::size_t>(off[row + 1] - off[row]));
+    }
+    return true;
+}
+
 /// Row `i` of a String/Binary(/Large) column in any encoding, read in place.
 /// Returns false for a null row (own bitmap, a Selection outer-fill index, or
 /// a null entry below a Dictionary or Selection). `out` points into the
@@ -56,27 +78,10 @@ inline bool str_at(const dftu_series* c, std::int64_t i,
             !((c->validity.data()[i >> 3] >> (i & 7)) & 1))
             return false;
         switch (c->encoding) {
-            case Encoding::Flat: {
-                const char* d =
-                    c->data.block()
-                        ? reinterpret_cast<const char*>(c->data.data())
-                        : nullptr;
-                if (!c->offsets.block()) return false;
-                if (c->wide_offsets()) {
-                    const auto* off = reinterpret_cast<const std::int64_t*>(
-                        c->offsets.data());
-                    out = dstd::StringView(
-                        d + off[i],
-                        static_cast<std::size_t>(off[i + 1] - off[i]));
-                } else {
-                    const auto* off = reinterpret_cast<const std::int32_t*>(
-                        c->offsets.data());
-                    out = dstd::StringView(
-                        d + off[i],
-                        static_cast<std::size_t>(off[i + 1] - off[i]));
-                }
-                return true;
-            }
+            case Encoding::Flat:
+            case Encoding::Constant:
+                return str_flat_at(c, c->encoding == Encoding::Constant ? 0 : i,
+                                   out);
             case Encoding::View: {
                 const std::uint8_t* view = c->data.data() + i * 16;
                 const DecodedView decoded = decode_view(view);

@@ -602,15 +602,19 @@ def _is_span(value: object) -> bool:
 
 def _refuse_float32_overflow(items: list[object], child: Series) -> None:
     """``ValueError`` when a finite item became an infinity in the float32
-    ``child``."""
+    ``child``; any other rounding is kept, as the scalar cast and pandas do."""
     import numpy as np
 
     got = np.asarray(child._values_buffer())
-    if not np.isinf(got).any():
+    infinite = np.flatnonzero(np.isinf(got)).tolist()
+    if not infinite:
         return
-    given = np.array([0.0 if missing(v) else v for v in items], dtype=np.float64)
-    if (np.isinf(got) & ~np.isinf(given)).any():
-        raise ValueError("a value does not fit float32")
+    null = child.is_null().to_list()
+    for i in infinite:
+        if null[i]:
+            continue
+        if not np.isinf(np.float64(cast("Any", items[i]))):
+            raise ValueError("a value does not fit float32")
 
 
 def _list_like(values: Sequence[object], like: Series) -> Series:

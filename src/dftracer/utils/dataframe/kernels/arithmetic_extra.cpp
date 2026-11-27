@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/float_divmod.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/parallel.h>
@@ -78,14 +79,16 @@ double mod_d(double a, double b) {
 
 bool pow_i(std::int64_t a, std::int64_t b, std::int64_t& out) {
     if (b < 0) return false;
-    std::int64_t r = 1;
-    std::int64_t base = a;
+    // Unsigned products wrap as numpy's int64 power does, with no signed
+    // overflow.
+    std::uint64_t r = 1;
+    std::uint64_t base = static_cast<std::uint64_t>(a);
     while (b > 0) {
         if (b & 1) r *= base;
         b >>= 1;
         if (b) base *= base;
     }
-    out = r;
+    out = static_cast<std::int64_t>(r);
     return true;
 }
 
@@ -325,26 +328,17 @@ dftu_series* extra_scalar(const dftu_series* a, dftu_scalar s, ExtraOp op,
 // -1 when there is none (take keeps that null).
 dftu_series* fill_along(const dftu_series* in, bool forward) {
     if (!in) return nullptr;
-    if (in->null_count == 0) return dftu_series_share(in);
-    dftu_series* v = dftu_series_materialize(in);
-    if (!v) return nullptr;
-    const std::int64_t n = v->length;
+    if (dftracer::utils::dataframe::cell_null_count(*in) == 0)
+        return dftu_series_share(in);
+    const std::int64_t n = in->length;
     dstd::Vector<std::int64_t> idx(static_cast<std::size_t>(n), -1);
     std::int64_t last = -1;
-    if (forward) {
-        for (std::int64_t i = 0; i < n; ++i) {
-            if (is_valid(*v, i)) last = i;
-            idx[static_cast<std::size_t>(i)] = last;
-        }
-    } else {
-        for (std::int64_t i = n - 1; i >= 0; --i) {
-            if (is_valid(*v, i)) last = i;
-            idx[static_cast<std::size_t>(i)] = last;
-        }
+    for (std::int64_t k = 0; k < n; ++k) {
+        const std::int64_t i = forward ? k : n - 1 - k;
+        if (!dftracer::utils::dataframe::cell_is_null(in, i)) last = i;
+        idx[static_cast<std::size_t>(i)] = last;
     }
-    dftu_series* out = dftu_series_take(v, idx.data(), n);
-    dftu_series_free(v);
-    return out;
+    return dftu_series_take(in, idx.data(), n);
 }
 
 }  // namespace
@@ -386,6 +380,7 @@ dftu_series* dftu_series_pow(const dftu_series* a, const dftu_series* b) {
 }
 dftu_series* dftu_series_floordiv_scalar(const dftu_series* a, dftu_scalar s,
                                          std::int32_t reverse) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_floordiv_scalar, s, reverse);
     DFTU_FLAT_OPERAND(a, flat_a,
                       dftu_series_floordiv_scalar(flat_a, s, reverse));
 
@@ -394,6 +389,7 @@ dftu_series* dftu_series_floordiv_scalar(const dftu_series* a, dftu_scalar s,
 }
 dftu_series* dftu_series_mod_scalar(const dftu_series* a, dftu_scalar s,
                                     std::int32_t reverse) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_mod_scalar, s, reverse);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_mod_scalar(flat_a, s, reverse));
 
     return dftracer::utils::dataframe::extra_scalar(
@@ -401,18 +397,15 @@ dftu_series* dftu_series_mod_scalar(const dftu_series* a, dftu_scalar s,
 }
 dftu_series* dftu_series_pow_scalar(const dftu_series* a, dftu_scalar s,
                                     std::int32_t reverse) {
+    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_pow_scalar, s, reverse);
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_pow_scalar(flat_a, s, reverse));
 
     return dftracer::utils::dataframe::extra_scalar(
         a, s, dftracer::utils::dataframe::ExtraOp::Pow, reverse != 0);
 }
 dftu_series* dftu_series_ffill(const dftu_series* v) {
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_ffill(flat_v));
-
     return dftracer::utils::dataframe::fill_along(v, true);
 }
 dftu_series* dftu_series_bfill(const dftu_series* v) {
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_bfill(flat_v));
-
     return dftracer::utils::dataframe::fill_along(v, false);
 }

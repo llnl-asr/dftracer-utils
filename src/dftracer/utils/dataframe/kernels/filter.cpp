@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/filter_simd.h>
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
 #include <dftracer/utils/dataframe/internal/scalar.h>
@@ -208,42 +209,125 @@ BufferView flat_mask_to_indices(const dftu_series& mask, std::int64_t& count) {
 
 }  // namespace
 
+// The rows a mask in any layout selects, packed into one bitmap: a null row
+// selects none. The scan needs packed bits, so a block of the layer's rows is
+// gathered at a time (a bit-for-bit copy for a bitmap chain) and its bytes are
+// ORed into the bitmap; a range covers whole blocks and so owns its bytes.
+template <class Block>
+void bits_of_blocks(const Block& block, std::int64_t n, std::uint8_t* bits) {
+    using dftracer::utils::dataframe::parallel_for;
+    constexpr std::int64_t CAP = Block::CAPACITY;
+    parallel_for(n, 8 * CAP, [&](std::int64_t b, std::int64_t e) {
+        alignas(64) std::uint8_t buf[(CAP + 7) / 8];
+        std::uint8_t valid[(CAP + 7) / 8];
+        for (std::int64_t from = b; from < e; from += CAP) {
+            const std::int64_t count = std::min(CAP, e - from);
+            block.gather(from, count, buf, valid);
+            std::uint8_t* out = bits + (from >> 3);
+            const std::size_t bytes = static_cast<std::size_t>((count + 7) / 8);
+            for (std::size_t i = 0; i < bytes; ++i) out[i] |= buf[i];
+        }
+    });
+}
+
+BufferView layered_mask_to_indices(const dftu_series& mask,
+                                   std::int64_t& count) {
+    using dftracer::utils::dataframe::MaskBits;
+    const std::int64_t n = mask.length;
+    const auto bytes = static_cast<std::size_t>((n + 7) / 8);
+    dstd::Vector<std::uint8_t> bits(bytes, 0);
+    const MaskBits block(mask);
+    if (!block.usable()) {
+        for (std::int64_t i = 0; i < n; ++i) {
+            if (cell_u64(&mask, i) == 0 || cell_is_null(&mask, i)) continue;
+            bits[static_cast<std::size_t>(i >> 3)] |=
+                static_cast<std::uint8_t>(1u << (i & 7));
+        }
+        return mask_to_indices(bits.data(), n, count);
+    }
+    bits_of_blocks(block, n, bits.data());
+    return mask_to_indices(bits.data(), n, count);
+}
+
 BufferView mask_to_indices(const dftu_series& mask, std::int64_t& count) {
+    using dftracer::utils::dataframe::MaskBits;
     if (!mask.is_chunked()) {
         if (mask.encoding == Encoding::Flat)
             return flat_mask_to_indices(mask, count);
-        const auto flat = adopt_series(dftu_series_materialize(&mask));
-        return flat_mask_to_indices(*flat, count);
+        return layered_mask_to_indices(mask, count);
     }
+    // The index list is built once from one bitmap: a list per chunk costs a
+    // copy of every index. A task owns a range of rows that starts on a
+    // multiple of 64, so its bitmap bytes are its own whatever the chunk
+    // boundaries are.
     const auto* starts =
         reinterpret_cast<const std::int64_t*>(mask.data.data());
+    const std::int64_t n = mask.length;
     const std::size_t k = mask.nested.size();
-    dstd::Vector<BufferView> parts(k);
-    dstd::Vector<std::int64_t> counts(k + 1, 0);
-    parallel_for(
-        static_cast<std::int64_t>(k), 1, [&](std::int64_t b, std::int64_t e) {
-            for (std::int64_t c = b; c < e; ++c) {
-                const auto i = static_cast<std::size_t>(c);
-                parts[i] =
-                    mask_to_indices(*mask.nested[i].series, counts[i + 1]);
+    dstd::Vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8), 0);
+    constexpr std::int64_t CAP = MaskBits::CAPACITY;
+    parallel_for(n, 64 * CAP, [&](std::int64_t b, std::int64_t e) {
+        alignas(64) std::uint8_t buf[(CAP + 7) / 8];
+        std::uint8_t valid[(CAP + 7) / 8];
+        auto i = static_cast<std::size_t>(
+            std::upper_bound(starts, starts + k, b) - starts);
+        for (i = i == 0 ? 0 : i - 1; i < k && starts[i] < e; ++i) {
+            const dftu_series& chunk = *mask.nested[i].series;
+            const std::int64_t lo = std::max(b, starts[i]) - starts[i];
+            const std::int64_t hi =
+                std::min(e, starts[i] + chunk.length) - starts[i];
+            if (lo >= hi) continue;
+            const MaskBits block(chunk);
+            if (!block.usable()) {
+                for (std::int64_t j = lo; j < hi; ++j) {
+                    if (cell_u64(&chunk, j) == 0 || cell_is_null(&chunk, j))
+                        continue;
+                    const std::int64_t p = starts[i] + j;
+                    bits[static_cast<std::size_t>(p >> 3)] |=
+                        static_cast<std::uint8_t>(1u << (p & 7));
+                }
+                continue;
             }
-        });
-    for (std::size_t i = 0; i < k; ++i) counts[i + 1] += counts[i];
-    count = counts[k];
-    auto out =
-        new_buffer(static_cast<std::size_t>(count) * sizeof(std::int64_t));
-    auto* dst = reinterpret_cast<std::int64_t*>(writable(out));
-    parallel_for(
-        static_cast<std::int64_t>(k), 1, [&](std::int64_t b, std::int64_t e) {
-            for (std::int64_t c = b; c < e; ++c) {
-                const auto i = static_cast<std::size_t>(c);
-                const auto* src =
-                    reinterpret_cast<const std::int64_t*>(parts[i].data());
-                for (std::int64_t j = 0; j < counts[i + 1] - counts[i]; ++j)
-                    dst[counts[i] + j] = src[j] + starts[i];
+            // A FLAT chunk with no nulls is its own bit source: no gather.
+            const std::uint8_t* own =
+                chunk.encoding == Encoding::Flat && !chunk.validity.block()
+                    ? chunk.data.data()
+                    : nullptr;
+            // Pieces end on a multiple of CAP in the chunk, so every piece
+            // after the first starts on a byte boundary.
+            for (std::int64_t from = lo; from < hi;) {
+                const std::int64_t count =
+                    std::min(hi, (from / CAP + 1) * CAP) - from;
+                const std::uint8_t* in = buf;
+                if (own != nullptr && (from & 7) == 0)
+                    in = own + (from >> 3);
+                else
+                    block.gather(from, count, buf, valid);
+                const std::int64_t bytes = (count + 7) / 8;
+                const std::int64_t p = starts[i] + from;
+                const unsigned shift = static_cast<unsigned>(p & 7);
+                std::uint8_t* out = bits.data() + (p >> 3);
+                std::int64_t t = 0;
+                if (shift == 0) {
+                    const std::int64_t whole = count >> 3;
+                    for (; t < whole; ++t) out[t] |= in[t];
+                }
+                for (; t < bytes; ++t) {
+                    std::uint8_t v = in[t];
+                    if (t == bytes - 1 && (count & 7) != 0)
+                        v &= static_cast<std::uint8_t>((1u << (count & 7)) - 1);
+                    out[t] |= static_cast<std::uint8_t>(v << shift);
+                    // Only a set bit moves into the next byte, and it is a row
+                    // of this task, so the byte is this task's too.
+                    const auto carry =
+                        static_cast<std::uint8_t>(v >> (8 - shift));
+                    if (shift != 0 && carry != 0) out[t + 1] |= carry;
+                }
+                from += count;
             }
-        });
-    return out;
+        }
+    });
+    return mask_to_indices(bits.data(), n, count);
 }
 
 Series mask_index_column(const Series& mask) {
@@ -606,6 +690,21 @@ static dftu_series* gather_bool(const dftu_series& base, const Idx* idx,
     return out;
 }
 
+// Gather `n` rows of a CONSTANT `v` into a FLAT column: its one value, or a
+// null for a negative index or a null row of `v`.
+template <class Idx>
+static dftu_series* gather_constant(const dftu_series& v, const Idx* idx,
+                                    std::int64_t n) {
+    dftracer::utils::dstd::Vector<std::int64_t> at(static_cast<std::size_t>(n));
+    for (std::int64_t i = 0; i < n; ++i)
+        at[static_cast<std::size_t>(i)] =
+            idx[i] >= 0 && !dftracer::utils::dataframe::cell_is_null(&v, idx[i])
+                ? 0
+                : -1;
+    const dftu_series one = dftracer::utils::dataframe::constant_row(v);
+    return gather_column(one, at.data(), n);
+}
+
 // The chunks of a CHUNKED column joined into one column: FLAT, or for text the
 // view or dictionary layout concat gives.
 static dftu_series* rechunk(const dftu_series& v) {
@@ -615,7 +714,12 @@ static dftu_series* rechunk(const dftu_series& v) {
     dftracer::utils::dstd::Vector<const Series*> parts;
     parts.reserve(v.nested.size());
     for (const dftu_nested& c : v.nested) {
-        owned.emplace_back(dftu_series_share(c.series.get()));
+        // The text join reads no CONSTANT layer, so such a chunk is expanded.
+        owned.emplace_back(
+            dftracer::utils::dataframe::has_constant_layer(*c.series)
+                ? dftu_series_materialize(c.series.get())
+                : dftu_series_share(c.series.get()));
+        if (!owned.back().valid()) return nullptr;
         parts.push_back(&owned.back());
     }
     dftracer::utils::dstd::Result<dftracer::utils::dataframe::Series> joined =
@@ -1014,6 +1118,8 @@ static dftu_series* gather_column(const dftu_series& base, const Idx* idx,
         if (!one) return nullptr;
         return gather_column(*one, idx, n, &info);
     }
+    if (base.encoding == Encoding::Constant)
+        return gather_constant(base, idx, n);
     if (base.encoding == Encoding::Selection && base.child()) {
         const auto resolved = resolve_through(base, idx, n);
         return gather_column(
@@ -1195,6 +1301,13 @@ dftu_series* dftu_series_materialize(const dftu_series* v) {
         return flat;
     }
     if (v->encoding == Encoding::View) return materialize_view(*v, v->type);
+    if (v->encoding == Encoding::Constant) {
+        dftracer::utils::dstd::Vector<std::int64_t> every(
+            static_cast<std::size_t>(v->length));
+        for (std::int64_t i = 0; i < v->length; ++i)
+            every[static_cast<std::size_t>(i)] = i;
+        return gather_constant(*v, every.data(), v->length);
+    }
     if ((v->encoding != Encoding::Selection &&
          v->encoding != Encoding::Dictionary) ||
         !v->child())

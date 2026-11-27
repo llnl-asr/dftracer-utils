@@ -77,61 +77,22 @@ bool is_string_kind(TypeId t) {
     return n == TypeId::String || n == TypeId::Binary;
 }
 
-// A VIEW or CHUNKED column, or a DICTIONARY over a non-FLAT base, is read
-// through its FLAT copy.
-bool needs_flat_copy(const dftu_series& v) {
-    return v.encoding == Encoding::View || v.is_chunked() ||
-           (v.encoding == Encoding::Dictionary && v.child() &&
-            v.child()->encoding != Encoding::Flat);
-}
-
-// Per-row byte reader over a String/Binary(/Large) column that transparently
-// resolves a DICTIONARY input (row i -> dictionary entry codes[i]). Reads its
-// offsets at width `Off`. Nullness comes from the top-level validity bitmap
-// in both encodings.
-template <class Off>
+// Per-row byte reader over a String/Binary(/Large) column: every layer
+// resolves through str_at, which gives the row's bytes and the nulls of every
+// layer.
 class RowReader {
    public:
     explicit RowReader(const dftu_series* v) : v_(v) {
-        if (!is_string_kind(v->type)) return;
-        if (needs_flat_copy(*v)) {
-            own_ = adopt_series(dftu_series_materialize(v));
-            if (!own_) return;
-            v_ = v = own_.get();
-        }
-        if (v->encoding == Encoding::Flat && offsets_of<Off>(*v).block() &&
-            v->data.block()) {
-            off_ = reinterpret_cast<const Off*>(offsets_of<Off>(*v).data());
-            data_ = reinterpret_cast<const char*>(v->data.data());
-            ok_ = true;
-        } else if (v->encoding == Encoding::Dictionary && v->child() &&
-                   offsets_of<Off>(*v->child()).block() &&
-                   v->child()->data.block() && v->data.block()) {
-            off_ = reinterpret_cast<const Off*>(
-                offsets_of<Off>(*v->child()).data());
-            data_ = reinterpret_cast<const char*>(v->child()->data.data());
-            codes_ = reinterpret_cast<const std::int32_t*>(v->data.data());
-            ok_ = true;
-        }
+        ok_ = is_string_kind(v->type);
     }
     bool ok() const { return ok_; }
-    bool is_null(std::int64_t i) const {
-        if (!v_->validity.block()) return false;
-        const std::uint8_t* bm = v_->validity.data();
-        return ((bm[i >> 3] >> (i & 7)) & 1) == 0;
-    }
-    dftracer::utils::dstd::StringView at(std::int64_t i) const {
-        std::int64_t k = codes_ ? codes_[i] : i;
-        return dftracer::utils::dstd::StringView(
-            data_ + off_[k], static_cast<std::size_t>(off_[k + 1] - off_[k]));
+    /// The bytes of row `i`; false for a null row at any layer.
+    bool at(std::int64_t i, dftracer::utils::dstd::StringView& out) const {
+        return dftracer::utils::dataframe::str_at(v_, i, out);
     }
 
    private:
-    dftracer::utils::dstd::SharedPtr<dftu_series> own_;
     const dftu_series* v_;
-    const Off* off_ = nullptr;
-    const char* data_ = nullptr;
-    const std::int32_t* codes_ = nullptr;
     bool ok_ = false;
 };
 
@@ -232,7 +193,7 @@ void window_offsets(const dftu_series& v, dftu_series& out, std::int64_t lo) {
 template <class Off>
 dftu_series* ascii_fold_w(const dftu_series* v, std::uint8_t lo,
                           std::uint8_t hi, int add) {
-    RowReader<Off> r(v);
+    RowReader r(v);
     if (!r.ok()) return nullptr;
     if (v->encoding == Encoding::Flat) {
         auto* out = new dftu_series();
@@ -259,8 +220,9 @@ dftu_series* ascii_fold_w(const dftu_series* v, std::uint8_t lo,
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> parts(
         static_cast<std::size_t>(v->length));
     for (std::int64_t i = 0; i < v->length; ++i) {
-        if (r.is_null(i)) continue;
-        dftracer::utils::dstd::String s(r.at(i));
+        dftracer::utils::dstd::StringView sv;
+        if (!r.at(i, sv)) continue;
+        dftracer::utils::dstd::String s(sv);
         for (char& c : s)
             if (static_cast<std::uint8_t>(c) >= lo &&
                 static_cast<std::uint8_t>(c) <= hi)
@@ -281,13 +243,14 @@ dftu_series* ascii_fold(const dftu_series* v, std::uint8_t lo, std::uint8_t hi,
 // through as null. Output is always narrow (see make_string).
 template <class Off, class Fn>
 dftu_series* string_transform_w(const dftu_series* v, Fn fn) {
-    RowReader<Off> r(v);
+    RowReader r(v);
     if (!r.ok()) return nullptr;
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> parts(
         static_cast<std::size_t>(v->length));
+    dftracer::utils::dstd::StringView sv;
     for (std::int64_t i = 0; i < v->length; ++i) {
-        if (r.is_null(i)) continue;
-        parts[static_cast<std::size_t>(i)] = fn(r.at(i));
+        if (!r.at(i, sv)) continue;
+        parts[static_cast<std::size_t>(i)] = fn(sv);
     }
     return make_string(v, parts);
 }
@@ -354,7 +317,7 @@ template <class Off>
 dftu_series* regex_replace_w(const dftu_series* v,
                              const duql::CompiledPattern& re,
                              const duql::Substitution& sub) {
-    RowReader<Off> r(v);
+    RowReader r(v);
     if (!r.ok()) return nullptr;
     const std::size_t n = static_cast<std::size_t>(v->length);
     dftracer::utils::dstd::Vector<std::int32_t> offsets(n + 1, 0);
@@ -364,9 +327,8 @@ dftu_series* regex_replace_w(const dftu_series* v,
     bool any_null = false;
     for (std::size_t i = 0; i < n; ++i) {
         bool hit = false;
-        if (!r.is_null(static_cast<std::int64_t>(i))) {
-            const dftracer::utils::dstd::StringView s =
-                r.at(static_cast<std::int64_t>(i));
+        dftracer::utils::dstd::StringView s;
+        if (r.at(static_cast<std::int64_t>(i), s)) {
             if (duql::regex_replace(re, sub, s, buf) !=
                 duql::MatchResult::Limit) {
                 data.append(buf);
@@ -460,7 +422,7 @@ namespace {
 template <class Off>
 dftu_series* str_extract_w(const dftu_series* v,
                            const duql::CompiledPattern& re, std::size_t group) {
-    RowReader<Off> r(v);
+    RowReader r(v);
     if (!r.ok()) return nullptr;
     const std::size_t n = static_cast<std::size_t>(v->length);
     dftracer::utils::dstd::Vector<std::int32_t> offsets(n + 1, 0);
@@ -469,9 +431,8 @@ dftu_series* str_extract_w(const dftu_series* v,
     bool any_null = false;
     for (std::size_t i = 0; i < n; ++i) {
         bool hit = false;
-        if (!r.is_null(static_cast<std::int64_t>(i))) {
-            const dftracer::utils::dstd::StringView s =
-                r.at(static_cast<std::int64_t>(i));
+        dftracer::utils::dstd::StringView s;
+        if (r.at(static_cast<std::int64_t>(i), s)) {
             dftracer::utils::dstd::StringView m;
             if (duql::extract(re, s, group, m) == duql::MatchResult::Yes) {
                 data.append(m);
@@ -496,6 +457,8 @@ dftu_series* dftu_series_str_extract(const dftu_series* v, const char* pattern,
                                      std::int32_t pattern_size,
                                      std::int64_t group) {
     if (!v || !pattern || group < 0) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_extract, pattern,
+                                pattern_size, group);
     DFTU_FLAT_OPERAND(
         v, flat_v,
         dftu_series_str_extract(flat_v, pattern, pattern_size, group));
@@ -517,6 +480,8 @@ dftu_series* dftu_series_str_regex_replace(const dftu_series* v,
                                            const char* to,
                                            std::int32_t to_size) {
     if (!v || !pattern || !to) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_regex_replace, pattern,
+                                pattern_size, to, to_size);
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_regex_replace(flat_v, pattern,
                                                     pattern_size, to, to_size));
@@ -607,20 +572,22 @@ dftu_series* dftu_series_str_find(const dftu_series* v, const char* needle,
 namespace {
 template <class Off>
 dftu_series* fnv1a_w(const dftu_series* v) {
-    RowReader<Off> r(v);
+    RowReader r(v);
     if (!r.ok()) return nullptr;
     dftracer::utils::dstd::Vector<std::uint64_t> vals(
         static_cast<std::size_t>(v->length), 0);
+    dftracer::utils::dstd::StringView sv;
     for (std::int64_t i = 0; i < v->length; ++i) {
-        if (r.is_null(i)) continue;
+        if (!r.at(i, sv)) continue;
         vals[static_cast<std::size_t>(i)] =
-            dftracer::utils::dstd::hash::fnv1a_hash(r.at(i));
+            dftracer::utils::dstd::hash::fnv1a_hash(sv);
     }
     return make_u64(v, vals, nullptr);
 }
 }  // namespace
 
 dftu_series* dftu_series_fnv1a(const dftu_series* v) {
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_fnv1a);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_fnv1a(flat_v));
 
     return is_wide_offset_type(v->type) ? fnv1a_w<std::int64_t>(v)
@@ -630,7 +597,7 @@ dftu_series* dftu_series_fnv1a(const dftu_series* v) {
 namespace {
 template <class Off>
 dftu_series* hex64_parse_w(const dftu_series* v) {
-    RowReader<Off> r(v);
+    RowReader r(v);
     if (!r.ok()) return nullptr;
     dftracer::utils::dstd::Vector<std::uint64_t> vals(
         static_cast<std::size_t>(v->length), 0);
@@ -639,8 +606,8 @@ dftu_series* hex64_parse_w(const dftu_series* v) {
     std::int64_t nulls = 0;
     for (std::int64_t i = 0; i < v->length; ++i) {
         dftracer::utils::dstd::Optional<std::uint64_t> parsed;
-        if (!r.is_null(i))
-            parsed = dftracer::utils::dstd::hash::parse_hex64(r.at(i));
+        dftracer::utils::dstd::StringView sv;
+        if (r.at(i, sv)) parsed = dftracer::utils::dstd::hash::parse_hex64(sv);
         if (!parsed) {
             ++nulls;
             continue;
@@ -656,6 +623,7 @@ dftu_series* hex64_parse_w(const dftu_series* v) {
 }  // namespace
 
 dftu_series* dftu_series_hex64_parse(const dftu_series* v) {
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_hex64_parse);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_hex64_parse(flat_v));
 
     return is_wide_offset_type(v->type) ? hex64_parse_w<std::int64_t>(v)
@@ -700,18 +668,21 @@ dftu_series* dftu_series_hex64_format(const dftu_series* v) {
 }
 
 dftu_series* dftu_series_to_lowercase(const dftu_series* v) {
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_to_lowercase);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_to_lowercase(flat_v));
 
     return ascii_fold(v, 'A', 'Z', 32);
 }
 
 dftu_series* dftu_series_to_uppercase(const dftu_series* v) {
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_to_uppercase);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_to_uppercase(flat_v));
 
     return ascii_fold(v, 'a', 'z', -32);
 }
 
 dftu_series* dftu_series_str_strip(const dftu_series* v) {
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_strip);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_strip(flat_v));
 
     return string_transform(v, [](dftracer::utils::dstd::StringView s) {
@@ -719,6 +690,7 @@ dftu_series* dftu_series_str_strip(const dftu_series* v) {
     });
 }
 dftu_series* dftu_series_str_lstrip(const dftu_series* v) {
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_lstrip);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_lstrip(flat_v));
 
     return string_transform(v, [](dftracer::utils::dstd::StringView s) {
@@ -726,6 +698,7 @@ dftu_series* dftu_series_str_lstrip(const dftu_series* v) {
     });
 }
 dftu_series* dftu_series_str_rstrip(const dftu_series* v) {
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_rstrip);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_rstrip(flat_v));
 
     return string_transform(v, [](dftracer::utils::dstd::StringView s) {
@@ -736,6 +709,8 @@ dftu_series* dftu_series_str_rstrip(const dftu_series* v) {
 dftu_series* dftu_series_str_replace(const dftu_series* v, const char* pat,
                                      std::int32_t pat_size, const char* repl,
                                      std::int32_t repl_size) {
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_replace, pat, pat_size, repl,
+                                repl_size);
     DFTU_FLAT_OPERAND(
         v, flat_v,
         dftu_series_str_replace(flat_v, pat, pat_size, repl, repl_size));
@@ -752,6 +727,8 @@ dftu_series* dftu_series_str_replace_all(const dftu_series* v, const char* pat,
                                          std::int32_t pat_size,
                                          const char* repl,
                                          std::int32_t repl_size) {
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_replace_all, pat, pat_size,
+                                repl, repl_size);
     DFTU_FLAT_OPERAND(
         v, flat_v,
         dftu_series_str_replace_all(flat_v, pat, pat_size, repl, repl_size));
@@ -773,14 +750,15 @@ namespace {
 // holds the parts `fn(row)` yields, a null input row a null list.
 template <class Off, class Fn>
 dftu_series* list_transform_w(const dftu_series* v, Fn fn) {
-    RowReader<Off> r(v);
+    RowReader r(v);
     if (!r.ok()) return nullptr;
 
     dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> all_parts;
     dftracer::utils::dstd::Vector<std::int32_t> list_off(
         static_cast<std::size_t>(v->length + 1), 0);
+    dftracer::utils::dstd::StringView sv;
     for (std::int64_t i = 0; i < v->length; ++i) {
-        if (!r.is_null(i)) fn(r.at(i), all_parts);
+        if (r.at(i, sv)) fn(sv, all_parts);
         if (!fits_int32_offsets(all_parts.size())) return nullptr;
         list_off[static_cast<std::size_t>(i + 1)] =
             static_cast<std::int32_t>(all_parts.size());
@@ -1626,6 +1604,7 @@ std::int64_t count_literal(dftracer::utils::dstd::StringView s,
 dftu_series* dftu_series_str_slice(const dftu_series* v, std::int64_t start,
                                    std::int64_t length) {
     if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_slice, start, length);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_slice(flat_v, start, length));
     return slice_impl(v, start, length);
 }
@@ -1633,6 +1612,7 @@ dftu_series* dftu_series_str_slice(const dftu_series* v, std::int64_t start,
 dftu_series* dftu_series_str_pad_start(const dftu_series* v, std::int64_t width,
                                        char fill) {
     if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_pad_start, width, fill);
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_pad_start(flat_v, width, fill));
     return pad_impl(v, width, fill, 0);
@@ -1640,17 +1620,20 @@ dftu_series* dftu_series_str_pad_start(const dftu_series* v, std::int64_t width,
 dftu_series* dftu_series_str_pad_end(const dftu_series* v, std::int64_t width,
                                      char fill) {
     if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_pad_end, width, fill);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_pad_end(flat_v, width, fill));
     return pad_impl(v, width, fill, 1);
 }
 dftu_series* dftu_series_str_center(const dftu_series* v, std::int64_t width,
                                     char fill) {
     if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_center, width, fill);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_center(flat_v, width, fill));
     return pad_impl(v, width, fill, 2);
 }
 dftu_series* dftu_series_str_zfill(const dftu_series* v, std::int64_t width) {
     if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_zfill, width);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_zfill(flat_v, width));
     return zfill_impl(v, width);
 }
@@ -1691,6 +1674,7 @@ dftu_series* dftu_series_str_rfind(const dftu_series* v, const char* needle,
 
 dftu_series* dftu_series_str_case(const dftu_series* v, std::int32_t op) {
     if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_case, op);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_case(flat_v, op));
     switch (static_cast<dftu_str_case>(op)) {
         case DFTU_STR_CAPITALIZE:
@@ -1723,6 +1707,7 @@ dftu_series* dftu_series_str_remove_prefix(const dftu_series* v,
                                            const char* prefix,
                                            std::int32_t len) {
     if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_remove_prefix, prefix, len);
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_remove_prefix(flat_v, prefix, len));
     return remove_affix_impl(v,
@@ -1735,6 +1720,7 @@ dftu_series* dftu_series_str_remove_suffix(const dftu_series* v,
                                            const char* suffix,
                                            std::int32_t len) {
     if (!v || !is_string_kind(v->type)) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_remove_suffix, suffix, len);
     DFTU_FLAT_OPERAND(v, flat_v,
                       dftu_series_str_remove_suffix(flat_v, suffix, len));
     return remove_affix_impl(v,
@@ -1745,6 +1731,7 @@ dftu_series* dftu_series_str_remove_suffix(const dftu_series* v,
 
 dftu_series* dftu_series_str_repeat(const dftu_series* v, std::int64_t n) {
     if (!v || !is_string_kind(v->type) || n < 0) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_repeat, n);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_repeat(flat_v, n));
     return repeat_impl(v, n);
 }
@@ -1919,7 +1906,7 @@ bool is_ascii_row(dftracer::utils::dstd::StringView s) {
 // `fn` returns false to make the row null. A null input row stays null.
 template <class Off, class Fn>
 dftu_series* transform_rows_w(const dftu_series* v, Fn& fn) {
-    RowReader<Off> r(v);
+    RowReader r(v);
     if (!r.ok()) return nullptr;
     const std::size_t n = static_cast<std::size_t>(v->length);
     dftracer::utils::dstd::Vector<std::int32_t> offsets(n + 1, 0);
@@ -1929,8 +1916,8 @@ dftu_series* transform_rows_w(const dftu_series* v, Fn& fn) {
     bool any_null = false;
     for (std::size_t i = 0; i < n; ++i) {
         bool hit = false;
-        if (!r.is_null(static_cast<std::int64_t>(i)) &&
-            fn(r.at(static_cast<std::int64_t>(i)), buf)) {
+        dftracer::utils::dstd::StringView sv;
+        if (r.at(static_cast<std::int64_t>(i), sv) && fn(sv, buf)) {
             data.append(buf);
             hit = true;
             if (!fits_int32_offsets(data.size())) return nullptr;
@@ -1983,28 +1970,20 @@ struct StringRows {
 
 template <class Off>
 bool read_rows_w(const dftu_series* s, StringRows& out) {
-    RowReader<Off> r(s);
+    RowReader r(s);
     if (!r.ok()) return false;
     for (std::int64_t i = 0; i < s->length; ++i) {
-        const bool is_null = r.is_null(i);
+        dftracer::utils::dstd::StringView sv;
+        const bool is_null = !r.at(i, sv);
         out.nulls.push_back(is_null);
         out.rows.emplace_back(is_null ? dftracer::utils::dstd::StringView()
-                                      : r.at(i));
+                                      : sv);
     }
     return true;
 }
 
 bool read_rows(const dftu_series* s, StringRows& out) {
     if (s->length == 0) return true;
-    dftu_series* flat = nullptr;
-    const auto free_flat = dftracer::utils::dstd::defer([&] {
-        if (flat) dftu_series_free(flat);
-    });
-    if (s->encoding != Encoding::Flat) {
-        flat = dftu_series_materialize(s);
-        if (!flat) return false;
-        s = flat;
-    }
     return is_wide_offset_type(s->type) ? read_rows_w<std::int64_t>(s, out)
                                         : read_rows_w<std::int32_t>(s, out);
 }
@@ -2296,6 +2275,7 @@ dftu_series* dftu_series_str_normalize(const dftu_series* v,
         default:
             return nullptr;
     }
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_normalize, form);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_normalize(flat_v, form));
     const auto opts = static_cast<utf8proc_option_t>(options);
     dftracer::utils::dstd::Vector<utf8proc_int32_t> cps;
@@ -2329,6 +2309,7 @@ dftu_series* dftu_series_str_translate(const dftu_series* v,
                                        const dftu_series* from,
                                        const dftu_series* to) {
     if (!is_utf8_string(v) || !from || !to) return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_translate, from, to);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_translate(flat_v, from, to));
     TranslateTable table;
     if (!build_translate_table(from, to, table)) return nullptr;
@@ -2365,6 +2346,7 @@ dftu_series* dftu_series_str_wrap(const dftu_series* v, std::int64_t width,
         DFTU_WRAP_BREAK_ON_HYPHENS;
     if (!is_utf8_string(v) || width < 1 || (flags & ~ALL_FLAGS) != 0)
         return nullptr;
+    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_str_wrap, width, flags);
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_str_wrap(flat_v, width, flags));
     Wrapper wrapper(width, flags);
     dftracer::utils::dstd::Vector<std::uint32_t> cps;

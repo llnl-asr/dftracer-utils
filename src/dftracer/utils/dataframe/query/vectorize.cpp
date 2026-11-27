@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/query/vectorize.h>
 #include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/fatal.h>
@@ -1218,8 +1219,10 @@ dataframe::Series flat_of(const dataframe::Series& s) {
 
 dstd::Optional<std::int64_t> int_at(const dataframe::Series& s,
                                     std::int64_t r) {
-    if (s.is_null(r)) return dstd::nullopt;
-    return s.data<std::int64_t>()[r];
+    std::int64_t v = 0;
+    if (!dftracer::utils::dataframe::try_cell_i64(s.handle(), r, v))
+        return dstd::nullopt;
+    return v;
 }
 
 std::int64_t clamp_at(std::int64_t i, std::int64_t size) {
@@ -1230,9 +1233,9 @@ std::int64_t clamp_at(std::int64_t i, std::int64_t size) {
 dataframe::Series slice_column(dstd::Span<const dataframe::Series> args) {
     auto p = list_parts(args[0]);
     const std::int64_t n = args[0].length();
-    const dataframe::Series from = args[1].cast(TypeId::Int64).materialize();
+    const dataframe::Series from = args[1].cast(TypeId::Int64);
     const dataframe::Series to =
-        args.size() > 2 ? args[2].cast(TypeId::Int64).materialize()
+        args.size() > 2 ? args[2].cast(TypeId::Int64)
                         : dataframe::Series::nulls(TypeId::Int64, n);
     dstd::Vector<std::int64_t> offsets{0};
     dstd::Vector<std::int64_t> take;

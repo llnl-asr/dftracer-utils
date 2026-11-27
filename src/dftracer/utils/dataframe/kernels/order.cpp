@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dstd/fatal.h>
 #include <dftracer/utils/dstd/fmt.h>
@@ -53,9 +54,7 @@ bool ColumnReader::supports(TypeId t) noexcept {
     return kind_of(t).has_value();
 }
 
-ColumnReader::ColumnReader(const Series& column)
-    : column_(column.encoding() == Encoding::Flat ? column.share()
-                                                  : column.materialize()) {
+ColumnReader::ColumnReader(const Series& column) : column_(column.share()) {
     type_ = column_.type();
     const auto kind = kind_of(type_);
     if (!kind)
@@ -68,6 +67,8 @@ ColumnReader::ColumnReader(const Series& column)
     physical_ = physical_type(type_);
     const dftu_series& h = *column_.handle();
     length_ = h.length;
+    flat_ = h.encoding == Encoding::Flat;
+    if (!flat_) return;
     data_ = h.data.block() ? h.data.data() : nullptr;
     validity_ = h.validity.block() ? h.validity.data() : nullptr;
     if (kind_ == Kind::Bytes) {
@@ -84,6 +85,7 @@ ColumnReader::ColumnReader(const ColumnReader& other)
       type_(other.type_),
       physical_(other.physical_),
       length_(other.length_),
+      flat_(other.flat_),
       data_(other.data_),
       validity_(other.validity_),
       off32_(other.off32_),
@@ -94,8 +96,15 @@ ColumnReader& ColumnReader::operator=(const ColumnReader& other) {
     return *this;
 }
 
+bool ColumnReader::is_null(std::int64_t i) const noexcept {
+    if (flat_)
+        return validity_ != nullptr && !((validity_[i >> 3] >> (i & 7)) & 1);
+    return cell_is_null(column_.handle(), i);
+}
+
 std::int64_t ColumnReader::get_int(std::int64_t i) const noexcept {
     const auto at = static_cast<std::size_t>(i);
+    if (!flat_) return cell_i64(column_.handle(), i);
     switch (physical_) {
         case TypeId::Bool:
             return (data_[at >> 3] >> (at & 7)) & 1;
@@ -112,6 +121,7 @@ std::int64_t ColumnReader::get_int(std::int64_t i) const noexcept {
 
 std::uint64_t ColumnReader::get_uint(std::int64_t i) const noexcept {
     const auto at = static_cast<std::size_t>(i);
+    if (!flat_) return cell_u64(column_.handle(), i);
     switch (physical_) {
         case TypeId::Uint8:
             return reinterpret_cast<const std::uint8_t*>(data_)[at];
@@ -131,6 +141,7 @@ double ColumnReader::get_double(std::int64_t i) const noexcept {
         case Kind::Unsigned:
             return static_cast<double>(get_uint(i));
         default:
+            if (!flat_) return cell_f64(column_.handle(), i);
             if (physical_ == TypeId::Float32)
                 return static_cast<double>(reinterpret_cast<const float*>(
                     data_)[static_cast<std::size_t>(i)]);
@@ -141,6 +152,7 @@ double ColumnReader::get_double(std::int64_t i) const noexcept {
 
 dstd::StringView ColumnReader::get_bytes(std::int64_t i) const noexcept {
     const auto at = static_cast<std::size_t>(i);
+    if (!flat_) return cell_bytes(column_.handle(), i);
     const char* d = reinterpret_cast<const char*>(data_);
     if (off64_ != nullptr)
         return dstd::StringView(

@@ -136,6 +136,10 @@ def test_comparing_with_none_matches_pandas():
     assert (named == None).name == "n"  # noqa: E711
 
 
-def test_a_series_can_be_searched_for_in_a_list_holding_none():
+def test_the_truth_of_a_series_is_ambiguous_as_in_pandas():
+    # `s in [None, s]` compares s == None first, a mask, whose truth pandas
+    # refuses too; `s is` keeps the identity search.
     s = _ints()
-    assert s in [None, s]
+    with pytest.raises(ValueError, match="ambiguous"):
+        s in [None, s]  # noqa: B015
+    assert any(x is s for x in [None, s])

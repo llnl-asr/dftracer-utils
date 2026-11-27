@@ -713,10 +713,15 @@ def test_arrow_types_that_cannot_be_rebuilt_are_refused(tmp_path):
     path = str(tmp_path / "a.pfw")
     odd = pd.DataFrame({"d": pd.array([pa.scalar(1, pa.int8())], dtype=pd.ArrowDtype(pa.int8()))})
     save_table(odd, path, name="t")
-    for dtype in (pa.list_(pa.int64()), pa.timestamp("ns")):
-        frame = pd.DataFrame({"d": pd.Series([None], dtype=pd.ArrowDtype(dtype))})
-        with pytest.raises(TypeError):
-            save_table(frame, path, name="t")
+    frame = pd.DataFrame({"d": pd.Series([None], dtype=pd.ArrowDtype(pa.timestamp("ns")))})
+    with pytest.raises(TypeError):
+        save_table(frame, path, name="t")
+    # A list column is stored as JSON arrays: the values come back, as object lists.
+    lists = pd.DataFrame(
+        {"d": pd.Series([[1, 2], None], dtype=pd.ArrowDtype(pa.list_(pa.int64())))}
+    )
+    save_table(lists, path, name="t")
+    assert TraceViewer(path).collect().to_pandas()["d"].tolist() == [[1, 2], None]
 
 
 def test_dfanalyzer_reads_our_files_and_we_read_theirs(tmp_path):

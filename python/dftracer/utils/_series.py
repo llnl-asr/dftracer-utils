@@ -16,6 +16,8 @@ import builtins
 import datetime
 import json
 import math
+import numbers
+import struct
 from typing import (
     TYPE_CHECKING,
     Callable,
@@ -142,6 +144,7 @@ def _resolve_dtype(dtype: str | int | DType | type) -> int:
 
 
 _R = TypeVar("_R", bound="Scalar")
+_K = TypeVar("_K")
 
 
 def require_utf8(op: str, encoding: str) -> None:
@@ -234,6 +237,77 @@ class _OpsAccessor:
         return call
 
 
+def _map_key(key: object, dtype: DType) -> object:
+    """``key`` as a value of ``dtype`` that equals it exactly, or ``_NO_KEY``
+    when no value of ``dtype`` matches it as a pandas lookup does."""
+    if isinstance(key, bool):
+        return key if dtype == DType.BOOL else _NO_KEY
+    # numpy scalars register as numbers.Integral and numbers.Real.
+    if isinstance(key, numbers.Integral):
+        key = int(key)
+    elif isinstance(key, numbers.Real):
+        key = float(key)
+    if isinstance(key, (int, float)):
+        narrow = _NARROW_FLOAT_FORMATS.get(dtype)
+        if not dtype.is_numeric and narrow is None:
+            return _NO_KEY
+        if dtype.is_float or narrow is not None:
+            try:
+                as_float = float(key)
+                if narrow is not None:
+                    as_float = struct.unpack(narrow, struct.pack(narrow, as_float))[0]
+            except OverflowError:
+                return _NO_KEY
+            return as_float if as_float == key else _NO_KEY
+        if isinstance(key, float) and not key.is_integer():
+            return _NO_KEY
+        as_int = int(key)
+        limits = dtype.int_range
+        if limits is not None and not limits[0] <= as_int <= limits[1]:
+            return _NO_KEY
+        return as_int
+    if isinstance(key, str):
+        return key if dtype.is_text else _NO_KEY
+    if dtype.is_text or dtype.is_numeric or dtype == DType.BOOL:
+        return _NO_KEY
+    return key
+
+
+_NO_KEY = object()
+_NARROW_FLOAT_FORMATS = {DType.FLOAT16: "e", DType.FLOAT32: "f"}
+
+
+def _map_values(s: Series, mapping: Mapping[_K, _R]) -> Series:
+    from ._dataframe import DataFrame
+
+    keys: list[object] = []
+    values: list[object] = []
+    missing_value: object = None
+    has_missing = False
+    for key, value in mapping.items():
+        if key is None or (isinstance(key, float) and key != key):
+            missing_value, has_missing = value, True
+            continue
+        exact = _map_key(key, s.dtype)
+        if exact is not _NO_KEY:
+            keys.append(exact)
+            values.append(value)
+    column = positional(s)
+    typed = Series.from_list(values + [missing_value] if has_missing else values)
+    key_series = Series.from_list(keys).astype(s.dtype) if keys else column.head(0)
+    table = DataFrame({"key": key_series, "value": typed.head(len(values))})
+    # A left join keeps the left row order, which this relies on.
+    out = DataFrame({"key": column}).merge(table, on="key", how="left")["value"]
+    if has_missing:
+        gap = column.is_null()
+        if s.dtype.is_float:
+            gap = gap | column.is_nan().fill_null(False)
+        fill = typed.take(gap.cast(DType.INT64) * 0 + len(values))
+        out = drop_levels(out).mask(drop_levels(gap), drop_levels(fill))
+    out = out.rename(s.name)
+    return out if not names_of(s) else out.set_axis(s.index)
+
+
 class Series(SeriesPandasMixin, _ext.Series[T_co]):
     """A typed column: SIMD ops from the native engine plus Arrow/NumPy conversion.
 
@@ -247,7 +321,10 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
     constructor; an Arrow array (anything with ``__arrow_c_array__``) imports
     zero-copy with its own type, so an empty or all-null one keeps it;
     ``Series(series)`` shares the values of another Series. ``name=`` names the
-    Series (see :attr:`name`); without it a Series keeps its own name."""
+    Series (see :attr:`name`); without it a Series keeps its own name.
+    ``index=`` gives the row labels: a sequence or an array takes them by
+    position, while a Series is looked up by them (a label it does not have
+    gives null), as pandas."""
 
     __slots__ = ()
 
@@ -259,6 +336,8 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         data: Series[Scalar] | Sequence[object] = (),
         name: builtins.str | None = None,
         dtype: DType | int | builtins.str | pa.DataType | None = None,
+        *,
+        index: Sequence[object] | None = None,
     ) -> Series[Scalar]:
         if cls is not Series:
             raise TypeError(
@@ -286,6 +365,10 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
             out = Series.from_list(list(data), dtype)
         if name is not None:
             out.name = name
+        if index is not None:
+            # A Series is looked up by the new labels, as pandas does; other
+            # data takes them by position.
+            out = out.reindex(index) if isinstance(data, Series) else out.set_axis(index)
         return out
 
     # Only the checkers read these overloads; the runtime __init__ has nothing
@@ -296,6 +379,8 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         data: Sequence[bool],
         name: builtins.str | None = None,
         dtype: DType | int | builtins.str | pa.DataType | None = None,
+        *,
+        index: Sequence[object] | None = None,
     ) -> None: ...
     @overload
     def __init__(
@@ -303,6 +388,8 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         data: Sequence[int],
         name: builtins.str | None = None,
         dtype: DType | int | builtins.str | pa.DataType | None = None,
+        *,
+        index: Sequence[object] | None = None,
     ) -> None: ...
     @overload
     def __init__(
@@ -310,6 +397,8 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         data: Sequence[float],
         name: builtins.str | None = None,
         dtype: DType | int | builtins.str | pa.DataType | None = None,
+        *,
+        index: Sequence[object] | None = None,
     ) -> None: ...
     @overload
     def __init__(
@@ -317,6 +406,8 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         data: Sequence[builtins.str],
         name: builtins.str | None = None,
         dtype: DType | int | builtins.str | pa.DataType | None = None,
+        *,
+        index: Sequence[object] | None = None,
     ) -> None: ...
     @overload
     def __init__(
@@ -324,12 +415,16 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         data: Series[Scalar] | Sequence[object] = (),
         name: builtins.str | None = None,
         dtype: DType | int | builtins.str | pa.DataType | None = None,
+        *,
+        index: Sequence[object] | None = None,
     ) -> None: ...
     def __init__(
         self,
         data: Series[Scalar] | Sequence[object] = (),
         name: builtins.str | None = None,
         dtype: DType | int | builtins.str | pa.DataType | None = None,
+        *,
+        index: Sequence[object] | None = None,
     ) -> None:
         pass
 
@@ -657,9 +752,25 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
 
         return cast("Series[_R]", apply_series(self, func, "Series.apply"))
 
-    def map(self, func: Callable[[T_co], _R]) -> Series[_R]:
+    @overload
+    def map(self, func: Mapping[_K, _R]) -> Series[_R]: ...
+    @overload
+    def map(self, func: Callable[[T_co], _R]) -> Series[_R]: ...
+    def map(self, func: Callable[[T_co], _R] | Mapping[_K, _R]) -> Series[_R]:
         """``func`` over each element; the pandas ``Series.map`` spelling of
-        :meth:`apply`."""
+        :meth:`apply`. A mapping maps each value to its entry, null where it
+        has none, as pandas; the lookup is a native left join, not a Python
+        loop. A key matches a value only when they are equal (``1.5`` never
+        matches ``1``); a ``None`` or NaN key maps the null and NaN rows. A
+        dict subclass with ``__missing__``, such as ``defaultdict``, is looked
+        up per element so its default applies, as pandas."""
+        if isinstance(func, Mapping):
+            if hasattr(type(func), "__missing__"):
+                # Its default is a Python call per key, null rows included.
+                lookup = cast("Mapping[object, _R]", func)
+                out = Series.from_list([lookup[v] for v in self.to_list()]).rename(self.name)
+                return cast("Series[_R]", out if not names_of(self) else out.set_axis(self.index))
+            return cast("Series[_R]", _map_values(self, func))
         from ._apply import apply_series
 
         return cast("Series[_R]", apply_series(self, func, "Series.map"))
@@ -747,6 +858,14 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         if keep_shape and not keep_equal:
             left, right = left.where(mask), right.where(mask)
         return frame.with_column("self", left).with_column("other", right)
+
+    def __bool__(self) -> NoReturn:
+        raise ValueError(
+            "The truth value of a Series is ambiguous. Use a.empty, a.item(), a.any() or a.all()."
+        )
+
+    def __abs__(self) -> Self:
+        return self.abs()
 
     def __and__(self, other: Series) -> Series[bool]:
         return self.logical(_LOGICAL_AND, other)
@@ -861,7 +980,35 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         the cumulative kernels."""
         return _Expanding(self)
 
-    def cut(self, breaks: Series, right: bool = False, outer: bool = True) -> Series[int]:
+    @overload
+    def cut(
+        self,
+        breaks: Series,
+        right: bool = False,
+        outer: bool = True,
+        *,
+        labels: Literal[False] | None = None,
+        include_lowest: bool = False,
+    ) -> Series[int]: ...
+    @overload
+    def cut(
+        self,
+        breaks: Series,
+        right: bool = False,
+        outer: bool = True,
+        *,
+        labels: Sequence[builtins.str],
+        include_lowest: bool = False,
+    ) -> Series[builtins.str]: ...
+    def cut(
+        self,
+        breaks: Series,
+        right: bool = False,
+        outer: bool = True,
+        *,
+        labels: Sequence[builtins.str] | Literal[False] | None = None,
+        include_lowest: bool = False,
+    ) -> Series[int] | Series[builtins.str]:
         """Bin each value by the ascending ``breaks``. By default the intervals are
         ``[a, b)`` and the bin is the count of breaks at or below the value
         (0 to ``len(breaks)``). ``right=True`` closes each interval on the right,
@@ -870,9 +1017,26 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         equals ``pandas.cut(labels=False)``. A null value gives a null bin. Integer,
         Bool and temporal values with integer ``breaks`` compare exactly as 64-bit
         integers; with float values or float breaks the comparison is in doubles,
-        as pandas does."""
+        as pandas does.
+
+        ``labels`` names the interior intervals, one string each, as
+        ``pandas.cut(labels=[...])``; with them (or ``labels=False``) ``outer`` is
+        off. ``include_lowest`` puts a value equal to the first break in the
+        first interval when ``right`` closes the intervals on the right."""
+        if labels is not None:
+            outer = False
+            if isinstance(labels, bool) and labels:
+                raise ValueError("cut: labels must be False, None or a sequence of names")
+            if labels is not False and len(labels) != len(breaks) - 1:
+                raise ValueError("Bin labels must be one fewer than the number of bin edges")
         flags = (1 if right else 0) | (0 if outer else 2)
-        return super().cut(breaks, flags)
+        bins: Series[int] = super().cut(breaks, flags)
+        if include_lowest and right and len(breaks):
+            lowest = self.eq(cast("_Scalar", breaks.item(0))).fill_null(False)
+            bins = cast("Series[int]", bins.mask(lowest, bins.full_like(0 if not outer else 1)))
+        if labels is None or labels is False:
+            return bins
+        return bins.map(dict(enumerate(labels)))
 
     def where(self, cond: Series, other: Series | int | float | None = None) -> Series[Scalar]:
         """This value where ``cond`` is true, else ``other`` (pandas

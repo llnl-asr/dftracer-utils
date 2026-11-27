@@ -634,7 +634,7 @@ DataFrame.mean | python-semantics | frame method written in Python over native c
 DataFrame.mean_horizontal | python-semantics | polars spelling written over native calls
 DataFrame.median | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.melt | python-semantics | frame method written in Python over native calls
-DataFrame.memory_usage | display | memory_usage describes the frame as text
+DataFrame.memory_usage | python-semantics | pandas container API on the frame, written over native calls
 DataFrame.merge | python-semantics | frame method written in Python over native calls
 DataFrame.min | python-semantics | frame method written in Python over native calls
 DataFrame.min_horizontal | python-semantics | polars spelling written over native calls

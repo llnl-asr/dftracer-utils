@@ -12,6 +12,8 @@ derives from ``RuntimeError``. A task handle re-raises the original typed error
 
 .. autoexception:: dftracer.utils.errors.DFTUtilsValueError
 
+.. autoexception:: dftracer.utils.errors.DFTUtilsTranspileError
+
 .. autoexception:: dftracer.utils.errors.DFTUtilsNotFoundError
 
 .. autoexception:: dftracer.utils.errors.DFTUtilsIOError

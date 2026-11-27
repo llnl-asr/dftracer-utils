@@ -28,6 +28,10 @@ Series str_pattern(const Series& v, const duql::CompiledPattern& p);
 Series str_regex_replace(const Series& v, const duql::CompiledPattern& p,
                          const duql::Substitution& sub);
 
+/// Each row of a String column with @p piece before it (@p before) or after
+/// it; a null row stays null. Invalid for a column that is not a string.
+Series str_affix(const Series& v, dstd::StringView piece, bool before);
+
 }  // namespace dftracer::utils::dataframe
 
 #endif  // DFTRACER_UTILS_DATAFRAME_KERNELS_STRING_OPS_H

@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make `DataFrame.query(expr)` take the pandas syntax of `DataFrame.eval` and keep the rows of `df[df.eval(expr)]`.
+  Pass a duql predicate as `query(duql=...)`, which replaces the `dsl=` keyword and the positional duql text.
+  A positional `not in` now keeps the null rows, as pandas does, where duql drops them.
+- Make `DataFrame.memory_usage` return a Series of bytes labelled by column, with an `"Index"` row unless `index=False`, as pandas.
+- Make `bool(series)` raise `ValueError`, as pandas does, and make `Series.items()` and `keys()` give the row labels.
+- Rename `TranspileError` to `DFTUtilsTranspileError`, a `DFTUtilsValueError` in `dftracer.utils.errors`.
+- Make `isin` take floats, bools, an empty list and integers above the int64 range, and compare integers with integers or floats exactly, as pandas does, so a float needle `2.0**53` does not match the integer `2**53 + 1`.
 - Change the index, cache and store formats, so each index made by an earlier version is built again on first use.
   Every string is hashed with XXH3-64 and every value in a bloom filter or posting list is hashed by its type, so `args.size == 42` finds a column of `42.0`.
   A zone map keeps typed bounds and counts nulls and NaNs.
@@ -152,6 +159,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `isin`, `str.split(sep).str[i]`, `True` and `False` and `@name` variables to `DataFrame.eval` and `DataFrame.query`, with the pandas `local_dict=` and `global_dict=` keywords.
+- Add `abs(series)`, `+` on string Series, `Series(data, index=...)`, `Series.map` with a mapping, `cut(labels=..., include_lowest=...)` and `drop(errors="ignore")`.
+  `Series(series, index=...)` looks the values up by the new labels and `Series.map` matches a key only when it equals the value exactly, as pandas does.
+- Add exact `nunique` and `median` to the pandas `agg` forms, such as `agg(n=("v", "nunique"))`.
+  A lazy group-by refuses `nunique`, because a streaming group-by has no exact distinct count.
+- Add List columns to `write_table`, which stores each cell as a JSON array.
+  A native read gives the JSON text of each cell, and `to_pandas` gives the lists.
 - Add `dftracer.utils.formats.json` and `dftracer.utils.formats.yaml`, which read and write JSON and YAML files with the native parsers.
   `read_records` reads a large file in batches of bounded memory, a `Value` reads the parsed text with no copy, `Value.mutable()` edits a record and `Writer` writes plain or gzip files.
 - Add a native row index to `DataFrame` and a native row label to `Series`, with pandas behavior.
@@ -235,6 +249,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `DataFrame.eval` comparisons and `min` and `max` of two number or string columns, which gave wrong rows for two unsigned or very large integer columns and for two infinities, and refused two string columns.
+- Fix float floor division and modulo, which gave `1.0 // 0.1` as 10.0, to give 9.0 as Python and numpy do, also in `DataFrame.eval`, `query` and a traced `apply`.
+  A float floor division by zero gives inf or NaN, as numpy and pandas give, in place of null, and a Uint64 column with a non-negative integer on either side stays Uint64 in place of wrapping to negative numbers or losing precision.
+- Fix the exact median and quantile of more than 2^18 values, which read the wrong rank when the two middle values were far apart.
+- Fix `groupby` on a key column named `size`, which gave the row counts in place of the key values in `size()`, `nunique()` and a named `nunique` aggregate.
+  `groupby("size", as_index=False).size()` raises `ValueError`, as pandas does.
+- Fix a lazy `group_by(...).agg(...)` with an output named as a group key, which silently dropped the aggregate, to raise an error.
+- Fix `Series.map` with numpy integer or float keys and on a Float16 column, which matched no row.
+- Fix `Series.quantile` next to an infinity, which gave infinity, to give NaN as numpy does.
+  The median and the group quantile keep the pandas forms, so the median of `[1, inf]` is inf and of `[-1e308, 1e308]` is 0.
+- Fix `group_by("host", "time_range")` on a frame and a lazy frame, which grouped by the first key only and dropped null keys of the first; every leading column name is now a key, as Polars reads it.
+- Fix scalar assignment to an existing column, and a `loc` assignment with a row mask, which needed numpy.
 - Fix nested columns of several Arrow batches or files in lazy `explode` with a memory budget, `head_by` on a struct key and `dftracer_view` output of list and struct fields, which crashed.
 - Fix `Series.child` and `Series.num_children` on a nested column of several batches or after a `filter`, which gave no children.
 - Fix a dictionary or selection over a nested column whose null rows hold unused codes, which failed to materialize.

@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from dftracer.utils import DataFrame, col, lit
-from dftracer.utils._transpile import TranspileError
+from dftracer.utils.errors import DFTUtilsTranspileError
 
 
 def _frame():
@@ -61,7 +61,7 @@ def test_unary_operators():
 
 
 def test_a_power_with_a_column_exponent_is_an_error():
-    with pytest.raises(TranspileError, match="constant exponent"):
+    with pytest.raises(DFTUtilsTranspileError, match="constant exponent"):
         _frame().eval("a ** b")
 
 
@@ -245,7 +245,7 @@ def test_a_call_that_is_not_supported_is_an_error():
     d = _frame()
     # `a.abs()` is a supported method now (change eval-method-calls), so it is no longer in this list
     for bad in ("open(a)", "sqrt(a)", "isna(a)", "__import__('os')", "print(a)"):
-        with pytest.raises(TranspileError):
+        with pytest.raises(DFTUtilsTranspileError):
             d.eval(bad)
 
 
@@ -271,7 +271,7 @@ def test_several_lines_see_the_lines_before_them():
 
 
 def test_an_expression_before_the_last_line_is_an_error():
-    with pytest.raises(TranspileError, match="only the last line"):
+    with pytest.raises(DFTUtilsTranspileError, match="only the last line"):
         _frame().eval("a + 1\nm = a")
 
 
@@ -279,17 +279,17 @@ def test_unsupported_text_names_the_cause():
     d = _frame()
     with pytest.raises(KeyError, match="nope"):
         d.eval("a + nope")
-    with pytest.raises(TranspileError, match="@name"):
-        d.eval("a + @k")
-    with pytest.raises(TranspileError, match="Attribute|attribute"):
+    with pytest.raises(NameError, match="'k'"):
+        d.eval("a + @k", local_dict={}, global_dict={})
+    with pytest.raises(DFTUtilsTranspileError, match="Attribute|attribute"):
         d.eval("a.dtype")
-    with pytest.raises(TranspileError, match="indexed"):
+    with pytest.raises(DFTUtilsTranspileError, match="indexed"):
         d.eval("a[0]")
-    with pytest.raises(TranspileError, match="constants"):
+    with pytest.raises(DFTUtilsTranspileError, match="constants"):
         d.eval("2 * 3")
-    with pytest.raises(TranspileError):
+    with pytest.raises(DFTUtilsTranspileError):
         d.eval("a == None")
-    with pytest.raises(TranspileError, match="eval needs"):
+    with pytest.raises(DFTUtilsTranspileError, match="eval needs"):
         d.eval("  ")
     with pytest.raises(SyntaxError):
         d.eval("a +")
@@ -305,7 +305,7 @@ def test_safe_no_code_or_names_outside_the_columns_are_reachable(tmp_path):
         "(lambda: 1)()",
         "().__class__.__mro__",
     ):
-        with pytest.raises((TranspileError, KeyError)):
+        with pytest.raises((DFTUtilsTranspileError, KeyError)):
             d.eval(evil)
     assert not marker.exists()
     for name in ("os", "len", "__builtins__"):

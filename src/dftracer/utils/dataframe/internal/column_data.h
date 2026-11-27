@@ -13,6 +13,7 @@
 #include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
+#include <climits>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -223,9 +224,51 @@ inline dftu_series* make_chunked(
     return out;
 }
 
+/// A flat LargeList as a List over the same child and validity, its offsets
+/// narrowed to 32 bits, so the List kernels serve both. Null when `v` is not
+/// a flat LargeList or its offsets pass INT32_MAX. The offsets are a copy of
+/// n + 1 integers; the child is shared.
+inline dftu_series* narrow_large_list(const dftu_series* v) {
+    if (!v || v->type != TypeId::LargeList || v->encoding != Encoding::Flat ||
+        !v->child())
+        return nullptr;
+    const std::int64_t* wide = dftu_series_offsets64(v);
+    if (!wide) return nullptr;
+    const std::int64_t n = v->length;
+    if (wide[0] < 0 || wide[n] > INT32_MAX) return nullptr;
+    auto* out = new dftu_series();
+    out->type = TypeId::List;
+    out->encoding = Encoding::Flat;
+    out->length = n;
+    out->null_count = v->null_count;
+    out->validity = v->validity;
+    out->offsets =
+        new_buffer(static_cast<std::size_t>(n + 1) * sizeof(std::int32_t));
+    auto* narrow = reinterpret_cast<std::int32_t*>(writable(out->offsets));
+    for (std::int64_t i = 0; i <= n; ++i)
+        narrow[i] = static_cast<std::int32_t>(wide[i]);
+    out->set_child(adopt_series(dftu_series_share(v->child().get())));
+    return out;
+}
+
 }  // namespace dataframe
 }  // namespace utils
 }  // namespace dftracer
+
+/// Runs `call` on the List form of a LargeList `v` (see @ref narrow_large_list)
+/// and returns its result; null for a LargeList past 32-bit offsets.
+#define DFTU_LIST_OPERAND(v, narrow, call)                                  \
+    do {                                                                    \
+        if ((v) &&                                                          \
+            (v)->type == ::dftracer::utils::dataframe::TypeId::LargeList) { \
+            dftu_series* narrow =                                           \
+                ::dftracer::utils::dataframe::narrow_large_list(v);         \
+            if (!narrow) return {};                                         \
+            auto result_ = call;                                            \
+            dftu_series_free(narrow);                                       \
+            return result_;                                                 \
+        }                                                                   \
+    } while (0)
 
 /// The per-chunk results of a row-wise kernel as one CHUNKED column (joined
 /// when their types differ). Takes ownership of `parts`.

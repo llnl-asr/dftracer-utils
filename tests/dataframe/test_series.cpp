@@ -237,6 +237,12 @@ TEST_SUITE("vec") {
         Series fm =
             Series{dftu_series_mod_scalar(f.handle(), dataframe::i64(2), 0)};
         CHECK(fm.data<double>()[1] == doctest::Approx(0.5));
+        // Python's float floor division: 1.0 // 0.1 is 9.0, not floor(10.0).
+        const double tenth[2] = {1.0, 0.5};
+        Series tq = Series{dftu_series_floordiv_scalar(
+            Series::flat_f64(tenth, 2).handle(), dataframe::f64(0.1), 0)};
+        CHECK(tq.data<double>()[0] == 9.0);
+        CHECK(tq.data<double>()[1] == 4.0);
         CHECK(dftu_series_floordiv(a.handle(), f.handle()) ==
               nullptr);  // length
         CHECK(Series::strings(dftu_utils_test::span_of<dstd::StringView>({"x"}))
@@ -2265,6 +2271,26 @@ TEST_SUITE("vec") {
         CHECK(dataframe::quantile(fc, 0.5) == 1.5);
         CHECK(std::isnan(dataframe::quantile(fc, 1.0)));
         CHECK(dataframe::quantile(fc, 0.0) == -2.5);
+
+        // numpy's lerp from the nearer end: [1, inf] at 0.95 is inf - inf.
+        const double inf = std::numeric_limits<double>::infinity();
+        dstd::Vector<double> edge{1.0, inf};
+        Series ec = Series::flat_f64(edge.data(), 2);
+        CHECK(std::isnan(dataframe::quantile(ec, 0.95)));
+        CHECK(dataframe::quantile(ec, 0.25) == inf);
+        // The median is the mean of the two middle values, as numpy's.
+        CHECK(dataframe::median(ec) == inf);
+        dstd::Vector<double> wide{-1e308, 1e308};
+        CHECK(dataframe::median(Series::flat_f64(wide.data(), 2)) == 0.0);
+        // pandas' group quantile: a + (b - a) * t, and a at a whole rank.
+        dstd::Vector<double> g{1.0, inf};
+        CHECK(dataframe::quantile_of(g, 0.95, Interpolation::Linear, true,
+                                     dataframe::QuantileForm::PandasGroup) ==
+              inf);
+        dstd::Vector<double> g0{1.0, inf};
+        CHECK(dataframe::quantile_of(g0, 0.0, Interpolation::Linear, true,
+                                     dataframe::QuantileForm::PandasGroup) ==
+              1.0);
     }
 
     TEST_CASE("exp/log/sign/clip follow IEEE on zero, negatives, inf and NaN") {
@@ -2429,6 +2455,18 @@ TEST_SUITE("vec") {
         CHECK(u_upper.data<std::uint64_t>()[0] == 0);
         Series u_both = dataframe::clip(uc, to_scalar(-inf), to_scalar(inf));
         CHECK(u_both.data<std::uint64_t>()[2] == u64max);
+    }
+
+    TEST_CASE("median and quantile read a CONSTANT column in place") {
+        const std::int64_t seven = 7;
+        Series one = Series::flat_i64(&seven, 1);
+        auto* c = new dftu_series(*one.handle());
+        c->encoding = Encoding::Constant;
+        c->length = 5;
+        Series constant{c};
+        REQUIRE(constant.encoding() == Encoding::Constant);
+        CHECK(constant.median() == 7.0);
+        CHECK(dataframe::quantile(constant, 0.3) == 7.0);
     }
 
     TEST_CASE("an empty column has no min or max and a NaN mean and spread") {
@@ -3388,6 +3426,49 @@ TEST_SUITE("vec") {
             const bool want = (x == 1.0 || x == 4.0 || x == 6.0);
             CHECK(mask_bit(fm, i) == want);
         }
+    }
+
+    TEST_CASE("is_in on integers is exact above 2^53 and keeps signs apart") {
+        // 2^63 and 2^63 + 1 are one double; the integer path tells them apart.
+        const std::uint64_t big = std::uint64_t{1} << 63;
+        dstd::Vector<std::uint64_t> v{big, big + 1, 7, 0};
+        Series c = Series::flat(TypeId::Uint64, v.data(), 4);
+        dstd::Vector<std::uint64_t> needle{big + 1};
+        Series m = c.is_in(Series::flat(TypeId::Uint64, needle.data(), 1));
+        CHECK_FALSE(mask_bit(m, 0));
+        CHECK(mask_bit(m, 1));
+        CHECK_FALSE(mask_bit(m, 2));
+        // An Int64 needle -1 is not Uint64 2^64 - 1; 7 matches across types.
+        dstd::Vector<std::int64_t> mixed{-1, 7};
+        Series s = c.is_in(Series::flat_i64(mixed.data(), 2));
+        CHECK_FALSE(mask_bit(s, 0));
+        CHECK(mask_bit(s, 2));
+        dstd::Vector<std::uint64_t> top{~std::uint64_t{0}};
+        dstd::Vector<std::int64_t> neg{-1, 3};
+        Series signed_col = Series::flat_i64(neg.data(), 2);
+        Series t =
+            signed_col.is_in(Series::flat(TypeId::Uint64, top.data(), 1));
+        CHECK_FALSE(mask_bit(t, 0));
+        CHECK_FALSE(mask_bit(t, 1));
+    }
+
+    TEST_CASE("is_in across integers and floats matches only exact values") {
+        // 2^53 + 1 rounds to the double 2^53, which must not match it.
+        const std::uint64_t two53 = std::uint64_t{1} << 53;
+        dstd::Vector<std::uint64_t> u{two53 + 1, two53, 3};
+        Series uc = Series::flat(TypeId::Uint64, u.data(), 3);
+        dstd::Vector<double> d{9007199254740992.0, 3.5, -1.0};
+        Series m = uc.is_in(Series::flat_f64(d.data(), 3));
+        CHECK_FALSE(mask_bit(m, 0));
+        CHECK(mask_bit(m, 1));
+        CHECK_FALSE(mask_bit(m, 2));
+        // A float column takes an integer needle only when a double holds it.
+        dstd::Vector<double> f{9007199254740992.0, 2.0};
+        Series fc = Series::flat_f64(f.data(), 2);
+        dstd::Vector<std::int64_t> ints{9007199254740993LL, 2};
+        Series k = fc.is_in(Series::flat_i64(ints.data(), 2));
+        CHECK_FALSE(mask_bit(k, 0));
+        CHECK(mask_bit(k, 1));
     }
 
     TEST_CASE("A2 sort / head / tail / reverse") {

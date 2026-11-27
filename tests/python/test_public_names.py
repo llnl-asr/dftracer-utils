@@ -164,7 +164,7 @@ def test_all_names_dtype_and_not_modules_or_other_areas():
 
 def test_every_error_derives_from_dftutils_error():
     errors = [n for n in dft.errors.__all__ if n.startswith("DFTUtils") and n.endswith("Error")]
-    assert len(errors) == 11
+    assert len(errors) == 12
     assert len(errors) == len(dft.errors.__all__)
     for name in errors:
         assert issubclass(getattr(dft.errors, name), dft.errors.DFTUtilsError)

@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from dftracer.utils import DataFrame
-from dftracer.utils._transpile import TranspileError
+from dftracer.utils.errors import DFTUtilsTranspileError
 
 # derived_metrics and layer conditions of the analyzer's shipped presets
 POSIX = [
@@ -205,18 +205,18 @@ def test_a_literal_substring_match():
 
 def test_an_unknown_keyword_is_named():
     d = DataFrame.from_dict({"a": [1.0]})
-    with pytest.raises(TranspileError, match="side"):
+    with pytest.raises(DFTUtilsTranspileError, match="side"):
         d.eval("a.clip(lower=0, side=1)")
-    with pytest.raises(TranspileError, match="lower"):
+    with pytest.raises(DFTUtilsTranspileError, match="lower"):
         d.eval("a.clip(0, lower=1)")
-    with pytest.raises(TranspileError, match="bound"):
+    with pytest.raises(DFTUtilsTranspileError, match="bound"):
         d.eval("a.clip()")
 
 
 def test_a_method_without_an_engine_form_is_named():
     d = DataFrame.from_dict({"proc_name": ["app#host#1#2"]})
-    with pytest.raises(TranspileError, match="split"):
-        d.eval('proc_name.str.split("#").str[1]')
+    with pytest.raises(DFTUtilsTranspileError, match="split"):
+        d.eval('proc_name.str.split("#", n=1).str[1]')
 
 
 def test_round_matches_numpy_on_halves():

@@ -36,6 +36,8 @@ _KINDS = (None, "events", "records")
 # The dtype a streamed column gets in a records header. The plan does not say
 # whether a column holds a null, so the nullable dtype keeps a null apart from
 # a NaN and never refuses one.
+_LISTS = (DType.LIST, DType.LARGE_LIST)
+
 _RECORD_DTYPES = {
     DType.BOOL: "boolean",
     DType.STRING: "object",
@@ -224,6 +226,9 @@ def _schema_header(
         if field is not None and _carried_fits(field, dtype):
             out.append(dict(field))
             continue
+        if dtype in _LISTS:
+            out.append({"name": column, "dtype": "object", "elem": "list"})
+            continue
         text = _RECORD_DTYPES.get(dtype)
         if text is None:
             raise TypeError(
@@ -248,6 +253,8 @@ def _carried_fits(field: Mapping[str, Any], dtype: DType) -> bool:
     text = full.split("[", 1)[0]
     if text == "category":
         return dtype in _CATEGORY_TYPES
+    if text == "object" and field.get("elem") == "list" and dtype in _LISTS:
+        return True
     if text in ("object", "str", "string", "large_string"):
         return dtype.is_text
     if text in ("bool", "boolean"):

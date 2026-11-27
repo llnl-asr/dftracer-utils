@@ -446,11 +446,17 @@ class SeriesPandasMixin(LabelAlignMixin, LevelsMixin, TimeIndexMixin):
     def array(self) -> pa.Array:
         return self._s().to_arrow()
 
-    def items(self) -> Iterator[tuple[int, object]]:
-        return enumerate(self._s().to_list())
+    def items(self) -> Iterator[tuple[object, object]]:
+        """``(label, value)`` pairs; the label is the position for a Series
+        with no labels and a tuple for several levels, as pandas."""
+        return zip(self.keys(), self._s().to_list())
 
-    def keys(self) -> list[int]:
-        return list(range(len(self._s())))
+    def keys(self) -> list[object]:
+        s = self._s()
+        if not names_of(s):
+            return list(range(len(s)))
+        levels: list[list[object]] = [list(level.to_list()) for level in levels_of(s)]
+        return levels[0] if len(levels) == 1 else list(zip(*levels))
 
     def get(self, key: object, default: object = None) -> object:
         """The value or rows ``loc`` finds for the label ``key``, ``default``

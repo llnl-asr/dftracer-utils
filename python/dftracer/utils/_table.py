@@ -305,6 +305,8 @@ def _prepare_native(df: DataFrame, name: str, meta: Meta | None) -> Header:
             field["dtype"] = "boolean" if nulls else "bool"
         elif t.is_text:
             field["dtype"] = "object"
+        elif t in (DType.LIST, DType.LARGE_LIST):
+            field.update(dtype="object", elem="list")
         else:
             raise TypeError(
                 f"column {col!r} has the type {t.name.lower()}, which a table cannot store"
@@ -342,7 +344,7 @@ def _write_header(
                     own["meta"] = meta
                 return own, _raw_columns(own)
     header = _prepare_native(df, name or stem, meta)
-    return header, []
+    return header, _raw_columns(header)
 
 
 # -- decoding ---------------------------------------------------------------
@@ -491,13 +493,31 @@ def _kind(t: DType) -> str:
     return "s" if t.is_text else ""
 
 
+# The numpy and pandas nullable dtype names: the native family each restores
+# from, and whether a null fits (a numpy float holds it as NaN).
+_PLAIN_FITS: dict[str, tuple[str, bool]] = {
+    **{f"{p}int{b}": ("i", False) for p in ("", "u") for b in (8, 16, 32, 64)},
+    **{f"{p}Int{b}": ("i", True) for p in ("", "U") for b in (8, 16, 32, 64)},
+    "float32": ("f", True),
+    "float64": ("f", True),
+    "Float32": ("f", True),
+    "Float64": ("f", True),
+    "bool": ("b", False),
+    "boolean": ("b", True),
+}
+
+
 def _fits(name: str, native: Series, field: dict[str, Any]) -> bool:
     """Whether the column's current type is one the header's dtype restores
     from, so that restoring it cannot wrap, truncate or turn a null into a
-    value."""
-    np, pd = _pandas_libs()
+    value. The plain dtype names need no pandas, so a frame a table read gave
+    writes back without it."""
     kind = _kind(DType(native.type))
     dtype = str(field["dtype"])
+    plain = _PLAIN_FITS.get(dtype) if "arrow_type" not in field else None
+    if plain is not None:
+        family, nulls_ok = plain
+        return kind == family and (nulls_ok or not native.null_count)
     if dtype == "category":
         labels = field.get("categories") or []
         float_labels = str(field.get("categories_dtype") or "").startswith("float")
@@ -506,6 +526,7 @@ def _fits(name: str, native: Series, field: dict[str, Any]) -> bool:
         return kind in "sif" and kind != ""
     if dtype == "object":
         return kind == "s"
+    np, pd = _pandas_libs()
     resolved = _resolved(name, field)
     if isinstance(resolved, pd.StringDtype):
         return kind == "s"

@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/internal/errors.h>
 #include <dftracer/utils/dataframe/internal/frame_index.h>
+#include <dftracer/utils/dataframe/internal/quantile_lerp.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/kernels/running.h>
 #include <dftracer/utils/dataframe/ops/ops_common.h>
@@ -960,8 +961,8 @@ dstd::Result<Series> frame_quantile(const FrameCtx& c, const Series& column,
                     const std::int32_t lo = static_cast<std::int32_t>(pos);
                     const double frac = pos - static_cast<double>(lo);
                     out.set(r, lo + 1 >= n ? at(lo + 1)
-                                           : at(lo + 1) * (1.0 - frac) +
-                                                 at(lo + 2) * frac);
+                                           : quantile_lerp(at(lo + 1),
+                                                           at(lo + 2), frac));
                 }
             });
     }

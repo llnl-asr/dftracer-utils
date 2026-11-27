@@ -80,7 +80,7 @@ series.explode#1[S] | engine | [error] ours raised DFTUtilsValueError: explode: 
 series.agg#2[I] | shape | [type] ours DataFrame (frame), library Series (series)
 series.agg#2[F] | shape | [type] ours DataFrame (frame), library Series (series)
 series.rolling#1[F] | semantics | [values] <dftracer_utils_ext.Rolling object at 0x11441f930> vs Rolling [window=2,center=False,method=single]
-series.rfloordiv#1[F] | semantics | [values] [1.0, None, 0.0, -1.0, 0.0, None] vs [1.0, None, 0.0, -1.0, 0.0, inf]
+series.rdivmod#1[F] | semantics | rdivmod by a float zero gives inf in the quotient, as rfloordiv does; pandas' rdivmod gives NaN there while its rfloordiv gives inf
 series.rpow#1[I] | semantics | [raises] pandas raised ValueError, ours returned
 series.add#3[I] | keyword | [error] ours raised TypeError: Series.add() got an unexpected keyword argument 'fill_value'
 series.add#3[F] | keyword | [error] ours raised TypeError: Series.add() got an unexpected keyword argument 'fill_value'
@@ -168,7 +168,7 @@ frame.agg#3[N] | shape | [type] ours DataFrame (frame), library Series (series)
 frame.aggregate#1[N] | shape | [type] ours DataFrame (frame), library Series (series)
 frame.sample#1[N] | semantics | [values] a: [3, 2] vs [3, None]
 frame.pivot_table#1[G] | keyword | [error] ours raised TypeError: DataFrame.pivot_table() missing 1 required positional argument: 'columns'
-frame.memory_usage#1[N] | shape | memory_usage gives a one-row frame of the Arrow buffer bytes per column, not a Series with an Index entry, and takes no index keyword
+frame.memory_usage#1[N] | semantics | memory_usage counts the engine's buffer bytes per column (validity bitmaps and string offsets too), not the pandas block bytes
 frame.info#1[N] | semantics | [values] DataFrame: 5 rows, 2 columns   a: int64, 4 present, 41 bytes   b: float64, 4 present, 41 bytes memory: 82 bytes vs None
 frame.to_string#1[N] | semantics | [values]    a    b    1  1.5 <NA>  NaN    3  3.0    2 -2.5    2  3.0 vs       a     b 0     1   1.5 1  <NA>  <NA> 2     3   3.0 3     2  -2.5 4     2   3.0
 frame.to_html#1[N] | semantics | [values] <table border="1" class="dataframe">   <thead>     <tr style="text-align: right;">       <th>a</th>       <th>b</th>     </tr>   </thead>   <tbody>     <tr>       <td>1</td>       <td>1.5</td

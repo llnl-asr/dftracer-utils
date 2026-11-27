@@ -79,16 +79,16 @@ def test_keyword_calls_give_the_positional_results(instances):
     df = instances["DataFrame"]
     assert df.column_index(name="b") == df.column_index("b") == 1
     assert df.partition_id(keys="a", n_parts=2).to_list() == df.partition_id("a", 2).to_list()
-    assert df.query(dsl="a > 1").to_dict() == df.query("a > 1").to_dict()
+    assert df.query(duql="a > 1").to_dict() == df.query("a > 1").to_dict()
     assert df.query(select=["a"], order_by="a", descending=True).to_dict() == {"a": [3, 2, 1]}
 
 
-def test_query_takes_every_old_keyword_name(instances):
+def test_query_takes_every_plan_keyword_name(instances):
     # DataFrame.query is a Python method since a predicate-only query labels
     # its rows (pandas), so it is not in OLD_KEYWORDS, which needs a native one.
     df = instances["DataFrame"]
     out = df.query(
-        dsl="a > 1",
+        duql="a > 1",
         group_by=None,
         aggs=None,
         select=None,

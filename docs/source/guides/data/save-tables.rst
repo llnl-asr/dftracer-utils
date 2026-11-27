@@ -41,6 +41,11 @@ works on it directly:
    busy = profile.filter(profile["calls"] > 2)
    per_proc = profile.group_by("proc").sum()
 
+A List column is stored as the JSON array of each cell. ``collect()`` gives the
+JSON text of each cell as a string, and ``to_pandas()`` gives the lists back. A
+list element must be a string, a number, a bool or null; a NaN or infinite float
+element is refused.
+
 Get the exact pandas frame
 --------------------------
 

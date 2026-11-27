@@ -187,7 +187,9 @@ def test_frame_conveniences():
     assert DataFrame({"a": pa.array([None, None], pa.int64())}).first_valid_index() is None
     assert _d(df.sort_index(ascending=False))["a"] == [4, None, 2, 1]
     assert _d(df.set_index("b").sort_index())["b"] == [-2.5, 1.5, 3.5, 4.0]
-    assert _d(df.memory_usage())["a"][0] > 0
+    usage = df.memory_usage()
+    assert usage.index.to_list() == ["Index", *df.columns] and usage["a"] > 0
+    assert df.memory_usage(index=False, deep=True).index.to_list() == df.columns
     assert _d(df.combine_first(DataFrame({"a": [9, 9, 9, 9]})))["a"] == [1, 2, 9, 4]
     d2 = df.copy()
     d2.update(DataFrame({"a": [None, 7, 8, None]}))
@@ -382,7 +384,8 @@ def test_floordiv_mod_pow_ffill_bfill_match_python_and_pandas():
     f = Series([7.5, -7.5, 2.0])
     assert (f // 2).to_list() == [3.0, -4.0, 1.0] and (f % 2).to_list() == [1.5, 0.5, 0.0]
     assert (f**0.5).to_list()[0] == pytest.approx(7.5**0.5)
-    assert (f // Series([2.0, 2.0, 0.0])).to_list() == [3.0, -4.0, None]
+    # A float floor division by zero is inf, as numpy and pandas give.
+    assert (f // Series([2.0, 2.0, 0.0])).to_list() == [3.0, -4.0, math.inf]
     assert (s // Series([2, 2, 2, 2])).to_list() == [3, -4, None, 2]
     assert (Series([2, 3]) ** Series([3, -1])).to_list() == [8, None]
     assert (Series([1, 4]) ** 0.5).to_list() == [1.0, 2.0]
@@ -987,8 +990,10 @@ def test_groupby_prod_cumprod_median_quantile_match_pandas():
     assert _d(holes.group_by("k").median()) == {"k": ["x", "y"], "v": [None, 2.0]}
     with pytest.raises(ValueError):
         g.quantile(1.5)
-    with pytest.raises(ValueError, match="group-by method"):
-        g.agg("median")
+    # The pandas name is the exact median, as the method gives.
+    assert _d(g.agg("median")) == _d(g.median())
+    with pytest.raises(ValueError, match="needs its level"):
+        g.agg("quantile")
     # describe now carries the exact quartiles.
     ours = _d(g.describe())
     theirs = pg.describe()

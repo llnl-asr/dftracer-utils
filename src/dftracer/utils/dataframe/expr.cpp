@@ -8,6 +8,7 @@
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/internal/expr_windows.h>
 #include <dftracer/utils/dataframe/internal/fingerprint.h>
+#include <dftracer/utils/dataframe/internal/float_divmod.h>
 #include <dftracer/utils/dataframe/internal/scalar.h>     // scalar_as
 #include <dftracer/utils/dataframe/kernels/string_ops.h>  // str_pattern
 #include <dftracer/utils/dataframe/parallel.h>
@@ -1280,7 +1281,9 @@ class Compiler {
                 Val a = as_col(a0, "is_in");
                 if (!n->values.valid())
                     return fail("expr: is_in needs a values column");
-                if (value_domain(a.type) != value_domain(n->values.type()))
+                // No value matches nothing, whatever type the empty list has.
+                if (n->values.length() > 0 &&
+                    value_domain(a.type) != value_domain(n->values.type()))
                     return fail(
                         dstd::fmt<
                             "expr: is_in over a {} column needs {} values, got "
@@ -1592,7 +1595,8 @@ class Compiler {
 
     // The element type of a List operand, which must be known.
     DataType as_list(const Val& v, dstd::StringView who) {
-        if (v.is_scalar || v.type != TypeId::List ||
+        if (v.is_scalar ||
+            (v.type != TypeId::List && v.type != TypeId::LargeList) ||
             v.full.fields.size() != 1) {
             fail(dstd::fmt<"expr: {} needs a List column with a known element "
                            "type, got {}">(
@@ -1702,7 +1706,8 @@ class Compiler {
                         type_name(elem.id)));
             return col_val(emit_str_fn(n, a0.slot, -1), TypeId::String);
         }
-        if (fn == StrFn::Get && !a0.is_scalar && a0.type == TypeId::List) {
+        if (fn == StrFn::Get && !a0.is_scalar &&
+            (a0.type == TypeId::List || a0.type == TypeId::LargeList)) {
             const DataType elem = as_list(a0, "get");
             return {false,
                     emit(OpListGet, a0.slot, -1, 0, n->scalar),
@@ -2499,7 +2504,7 @@ dftracer::utils::dstd::Optional<double> dbl_arith(ArithOp op, double a,
             return of_double(a / b);
         case ArithOp::FloorDiv:
             if (b == 0) return dftracer::utils::dstd::nullopt;
-            return of_double(std::floor(a / b));
+            return of_double(float_floordiv(a, b));
         case ArithOp::Mod: {
             if (b == 0) return dftracer::utils::dstd::nullopt;
             double rem = std::fmod(a, b);
@@ -3287,6 +3292,8 @@ struct ListParts {
 dftracer::utils::dstd::Optional<ListParts> list_parts(const Series& s) {
     ListParts p;
     p.list = flat_view(s);
+    if (p.list.type() == TypeId::LargeList)
+        p.list = Series{narrow_large_list(p.list.handle())};
     const dftu_series* h = p.list.handle();
     if (!h || h->type != TypeId::List || !h->offsets.block() || !h->child())
         return dftracer::utils::dstd::nullopt;

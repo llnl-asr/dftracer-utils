@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/float_divmod.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/types.h>
@@ -12,9 +13,12 @@
 #include <type_traits>
 
 // floordiv, mod and pow (Python semantics: floor toward -inf, a remainder with
-// the divisor's sign, a zero divisor null), ffill / bfill, and the String ->
-// number parse cast. Scalar loops over Int64 or Float64: the operands are
-// widened to Int64 when both are integral, else to Float64.
+// the divisor's sign; a zero divisor is null, except that a float floor
+// division by zero gives numpy's and pandas' inf or NaN), ffill / bfill, and
+// the String -> number parse cast. Scalar loops over Int64, Uint64 or Float64:
+// the operands are widened to Uint64 when one is Uint64 and the other unsigned,
+// to Int64 when both are integral, else to Float64, as numpy does (Uint64 with
+// a signed integer is Float64).
 
 namespace dftracer::utils::dataframe {
 
@@ -85,10 +89,21 @@ bool pow_i(std::int64_t a, std::int64_t b, std::int64_t& out) {
     return true;
 }
 
-// The operands as two flat columns of one type: Int64 when both are integral
-// (and the op keeps integers), else Float64. Returns the working type.
-TypeId common_type(TypeId a, TypeId b) {
-    if (integral(a) && integral(b)) return TypeId::Int64;
+bool is_signed_int(TypeId t) {
+    return t == TypeId::Int8 || t == TypeId::Int16 || t == TypeId::Int32 ||
+           t == TypeId::Int64;
+}
+
+// The working type of two operands: Uint64 for two unsigned integers when
+// one is Uint64, Int64 for other integers (when the op keeps integers), else
+// Float64.
+TypeId common_type(TypeId a, TypeId b, ExtraOp op) {
+    if (integral(a) && integral(b)) {
+        const bool wide = a == TypeId::Uint64 || b == TypeId::Uint64;
+        if (!wide || op == ExtraOp::Pow) return TypeId::Int64;
+        return is_signed_int(a) || is_signed_int(b) ? TypeId::Float64
+                                                    : TypeId::Uint64;
+    }
     return TypeId::Float64;
 }
 
@@ -154,7 +169,14 @@ void run_extra(const dftu_series& fa, dftu_series& out, std::int64_t n,
                 }
                 const T x = pa[i];
                 const T y = bv(i);
-                if constexpr (std::is_same_v<T, std::int64_t>) {
+                if constexpr (std::is_same_v<T, std::uint64_t>) {
+                    // Pow never reaches Uint64 (common_type widens it to
+                    // Int64), and a positive divisor floors as it truncates.
+                    if (y == 0 || op == ExtraOp::Pow)
+                        null_at(i);
+                    else
+                        po[i] = op == ExtraOp::FloorDiv ? x / y : x % y;
+                } else if constexpr (std::is_same_v<T, std::int64_t>) {
                     switch (op) {
                         case ExtraOp::FloorDiv:
                             if (y == 0)
@@ -175,12 +197,10 @@ void run_extra(const dftu_series& fa, dftu_series& out, std::int64_t n,
                 } else {
                     switch (op) {
                         case ExtraOp::FloorDiv:
-                            if (y == 0.0)
-                                null_at(i);
-                            else
-                                po[i] = std::floor(x / y);
+                            po[i] = y == 0.0 ? x / y : float_floordiv(x, y);
                             break;
                         case ExtraOp::Mod:
+                            // pandas' NaN here is its missing value.
                             if (y == 0.0)
                                 null_at(i);
                             else
@@ -204,7 +224,7 @@ dftu_series* extra_binop(const dftu_series* a, const dftu_series* b,
     if (!a || !b || a->length != b->length) return nullptr;
     if (!is_arithmetic_type(a->type) || !is_arithmetic_type(b->type))
         return nullptr;
-    const TypeId t = common_type(a->type, b->type);
+    const TypeId t = common_type(a->type, b->type, op);
     dftu_series* fa = to(a, t);
     dftu_series* fb = to(b, t);
     if (!fa || !fb) {
@@ -219,6 +239,12 @@ dftu_series* extra_binop(const dftu_series* a, const dftu_series* b,
     if (t == TypeId::Int64) {
         const auto* pb = reinterpret_cast<const std::int64_t*>(fb->data.data());
         run_extra<std::int64_t>(
+            *fa, *out, n, op, true, [pb](std::int64_t i) { return pb[i]; },
+            [fb](std::int64_t i) { return !is_valid(*fb, i); });
+    } else if (t == TypeId::Uint64) {
+        const auto* pb =
+            reinterpret_cast<const std::uint64_t*>(fb->data.data());
+        run_extra<std::uint64_t>(
             *fa, *out, n, op, true, [pb](std::int64_t i) { return pb[i]; },
             [fb](std::int64_t i) { return !is_valid(*fb, i); });
     } else {
@@ -240,9 +266,14 @@ dftu_series* extra_scalar(const dftu_series* a, dftu_scalar s, ExtraOp op,
     if (!a || !is_arithmetic_type(a->type)) return nullptr;
     if (s.kind != DFTU_SCALAR_TAG_F64 && s.kind != DFTU_SCALAR_TAG_I64)
         return nullptr;
-    const TypeId t = s.kind == DFTU_SCALAR_TAG_I64 && integral(a->type)
-                         ? TypeId::Int64
-                         : TypeId::Float64;
+    const bool int_scalar = s.kind == DFTU_SCALAR_TAG_I64 && integral(a->type);
+    // A Uint64 column keeps its type over a non-negative integer, as numpy.
+    const bool wide =
+        int_scalar && a->type == TypeId::Uint64 && op != ExtraOp::Pow;
+    const TypeId t = !int_scalar      ? TypeId::Float64
+                     : !wide          ? TypeId::Int64
+                     : s.value.i >= 0 ? TypeId::Uint64
+                                      : TypeId::Float64;
     dftu_series* fa = to(a, t);
     if (!fa) return nullptr;
     const std::int64_t n = a->length;
@@ -251,13 +282,24 @@ dftu_series* extra_scalar(const dftu_series* a, dftu_scalar s, ExtraOp op,
         // scalar op column: the column is the divisor, so the broadcast
         // column form applies.
         dftu_series* b = broadcast(s, n);
-        dftu_series* r = extra_binop(b, fa, op);
+        if (b && t == TypeId::Uint64) {
+            dftu_series* wide_b = to(b, t);
+            dftu_series_free(b);
+            b = wide_b;
+        }
+        dftu_series* r = b ? extra_binop(b, fa, op) : nullptr;
         dftu_series_free(b);
         dftu_series_free(fa);
         dftu_series_free(out);
         return r;
     }
-    if (t == TypeId::Int64) {
+    if (t == TypeId::Uint64) {
+        const auto y = static_cast<std::uint64_t>(s.value.i);
+        const bool may_null = static_cast<bool>(fa->validity.block()) || y == 0;
+        run_extra<std::uint64_t>(
+            *fa, *out, n, op, may_null, [y](std::int64_t) { return y; },
+            [](std::int64_t) { return false; });
+    } else if (t == TypeId::Int64) {
         const std::int64_t y = s.value.i;
         const bool may_null = static_cast<bool>(fa->validity.block()) ||
                               y == 0 || op == ExtraOp::Pow;
@@ -268,8 +310,8 @@ dftu_series* extra_scalar(const dftu_series* a, dftu_scalar s, ExtraOp op,
         const double y = s.kind == DFTU_SCALAR_TAG_F64
                              ? s.value.d
                              : static_cast<double>(s.value.i);
-        const bool may_null =
-            static_cast<bool>(fa->validity.block()) || y == 0.0;
+        const bool may_null = static_cast<bool>(fa->validity.block()) ||
+                              (y == 0.0 && op == ExtraOp::Mod);
         run_extra<double>(
             *fa, *out, n, op, may_null, [y](std::int64_t) { return y; },
             [](std::int64_t) { return false; });

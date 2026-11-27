@@ -1009,7 +1009,7 @@ def test_query_string_filter():
     assert wr["dur"] == [150, 200, 300]
 
     # Patterns run on the columns.
-    assert batch.query("cat ~ '^i'").reset_index(drop=True).to_arrow().to_pydict()["dur"] == [
+    assert batch.query(duql="cat ~ '^i'").reset_index(drop=True).to_arrow().to_pydict()["dur"] == [
         50,
         200,
         80,
@@ -1017,7 +1017,7 @@ def test_query_string_filter():
 
     # A predicate with no columnar lowering raises the typed query error.
     with pytest.raises(DFTUtilsDuqlError):
-        batch.query("any(cat) == 'io'")
+        batch.query(duql="any(cat) == 'io'")
 
     # Query plan: where + select + order by + limit in one call.
     plan = (

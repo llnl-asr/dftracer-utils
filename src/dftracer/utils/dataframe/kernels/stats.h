@@ -34,8 +34,16 @@ double kurtosis_unbiased(const Series& v);
 /// above every number.
 double quantile(const Series& v, double q);
 
+/// Which formula places a quantile between two ranks. `Numpy` is numpy's
+/// `_lerp` (Series.quantile). `PandasGroup` is pandas' group quantile and
+/// median: a whole rank is the value itself, linear is `a + (b - a) * t` and
+/// midpoint is `(a + b) / 2`, so `[1, inf]` at 0.95 is inf and the median of
+/// `[-1e308, 1e308]` is 0. Only linear and midpoint differ between them.
+enum class QuantileForm { Numpy, PandasGroup };
+
 /// The q-th quantile with @p interp choosing the result between two ranks.
-double quantile(const Series& v, double q, Interpolation interp);
+double quantile(const Series& v, double q, Interpolation interp,
+                QuantileForm form = QuantileForm::Numpy);
 
 /// The q-th quantile of @p values, which are reordered and may hold NaN (ranked
 /// above every number). NaN for no value or a NaN @p q; @p q is clamped to
@@ -43,9 +51,11 @@ double quantile(const Series& v, double q, Interpolation interp);
 /// the values came from an integer column. The merged state of the exact
 /// quantile aggregate finishes through this.
 double quantile_of(dstd::Vector<double>& values, double q, Interpolation interp,
-                   bool may_have_nan = true);
+                   bool may_have_nan = true,
+                   QuantileForm form = QuantileForm::Numpy);
 
-/// The median (quantile 0.5).
+/// The median as numpy and pandas give it: the middle value, or the mean of
+/// the two middle values.
 double median(const Series& v);
 
 /// Number of distinct non-null values.

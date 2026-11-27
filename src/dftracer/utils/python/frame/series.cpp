@@ -662,8 +662,8 @@ PyMethodDef Series_methods[] = {
          (core::kw_pair<"floordiv", Series_floordiv, "other", "reverse">)),
      METH_VARARGS | METH_KEYWORDS,
      "floordiv(other, reverse=False) -> a // other (a Series or a number; "
-     "reverse computes other // a), Python's floor rule; a zero divisor is "
-     "null."},
+     "reverse computes other // a), Python's floor rule; an integer zero "
+     "divisor is null, a float zero gives inf or NaN as numpy."},
     {"mod",
      DFTU_PYCFUNCTION((core::kw_pair<"mod", Series_mod, "other", "reverse">)),
      METH_VARARGS | METH_KEYWORDS,

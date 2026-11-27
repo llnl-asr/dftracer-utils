@@ -5343,6 +5343,14 @@ LazyFrame LazyFrame::group_by(dstd::Vector<dstd::String> keys,
                               dstd::Vector<GroupAgg> aggs,
                               dstd::Vector<AggDynSpec> dyn,
                               dstd::String dyn_prefix) const {
+    for (const GroupAgg& a : aggs)
+        for (const dstd::String& k : keys)
+            if (!a.out.empty() && a.out == k)
+                return failed(
+                    invalid_argument<"group_by: the output name {} is a group "
+                                     "key; give the aggregate another name">(
+                        a.out)
+                        .error());
     auto ops = ops_;
     ops.push_back(dstd::make_shared<LazyOp>(
         LazyOp{GroupByOp{std::move(keys), std::move(aggs), std::move(dyn),

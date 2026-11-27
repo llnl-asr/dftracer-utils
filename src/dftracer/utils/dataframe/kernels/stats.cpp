@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/field_stat.h>            // FieldStat
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_f64
+#include <dftracer/utils/dataframe/internal/quantile_lerp.h>
 #include <dftracer/utils/dataframe/internal/value_ids.h>
 #include <dftracer/utils/dataframe/kernels/cast.h>          // cast_simd
 #include <dftracer/utils/dataframe/kernels/field_stat.h>    // field_stat_reduce
@@ -31,6 +32,80 @@ namespace dftracer::utils::dataframe {
 
 namespace {
 
+// Cell `i` of `c` as a double: CHUNKED, CONSTANT, DICTIONARY and SELECTION
+// layers are walked down to the FLAT column that holds the value, so no layer
+// is copied flat first. The caller tests `is_null` first, which also covers a
+// SELECTION's -1 and a null dictionary entry.
+double cell_f64(const dftu_series* c, std::int64_t i) {
+    for (;;) {
+        if (c->is_chunked()) {
+            std::int64_t local = 0;
+            c = &c->chunk_at(i, local);
+            i = local;
+        } else if (c->encoding == Encoding::Constant) {
+            // The one value read as a one-row FLAT handle on the same buffer.
+            dftu_series one(*c);
+            one.encoding = Encoding::Flat;
+            one.length = 1;
+            Series leaf{&one};
+            const double d = read_f64(leaf, 0);
+            leaf.release();
+            return d;
+        } else if (c->encoding == Encoding::Dictionary) {
+            i = reinterpret_cast<const std::int32_t*>(c->data.data())[i];
+            c = c->child().get();
+        } else if (c->encoding == Encoding::Selection) {
+            i = reinterpret_cast<const std::int64_t*>(c->data.data())[i];
+            c = c->child().get();
+        } else {
+            break;
+        }
+    }
+    Series leaf{const_cast<dftu_series*>(c)};
+    const double d = read_f64(leaf, i);
+    leaf.release();
+    return d;
+}
+
+// Every cell of `c`, a column with no null, as a double into `dst`.
+void fill_dense(const dftu_series& c, double* dst) {
+    const std::int64_t len = c.length;
+    if (c.encoding == Encoding::Flat && c.data.block()) {
+        if (c.type == TypeId::Float64) {
+            std::memcpy(dst, c.data.data(),
+                        static_cast<std::size_t>(len) * sizeof(double));
+            return;
+        }
+        if (cast_simd(static_cast<std::int32_t>(c.type),
+                      static_cast<std::int32_t>(TypeId::Float64), c.data.data(),
+                      dst, static_cast<std::size_t>(len)))
+            return;
+    }
+    for (std::int64_t i = 0; i < len; ++i) dst[i] = cell_f64(&c, i);
+}
+
+// Every cell of `h`, a non-FLAT column with no null, as a double into `dst`:
+// chunks fill their own slices in parallel, other layers in row ranges.
+void fill_dense_parallel(const dftu_series& h, double* dst) {
+    if (h.is_chunked()) {
+        const auto* starts =
+            reinterpret_cast<const std::int64_t*>(h.data.data());
+        parallel_for(static_cast<std::int64_t>(h.nested.size()), 1,
+                     [&](std::int64_t b, std::int64_t e) {
+                         for (std::int64_t k = b; k < e; ++k)
+                             fill_dense(
+                                 *h.nested[static_cast<std::size_t>(k)].series,
+                                 dst + starts[k]);
+                     });
+        return;
+    }
+    parallel_for(h.length, std::int64_t{1} << 16,
+                 [&](std::int64_t b, std::int64_t e) {
+                     for (std::int64_t i = b; i < e; ++i)
+                         dst[i] = cell_f64(&h, i);
+                 });
+}
+
 // Non-null values as doubles (moment/quantile stats are numeric). The dense
 // (no-null, FLAT) case is a straight widen-to-double over a contiguous buffer,
 // so it goes through the SIMD cast fast path (memcpy for Float64, one
@@ -54,10 +129,35 @@ dstd::Vector<double> nonnull_values(const Series& v) {
             return out;
         }
     }
+    if (v.encoding() == Encoding::Chunked) {
+        // Each chunk takes the fast path of its own encoding; a per-cell walk
+        // would search the chunk starts for every row.
+        const dftu_series& h = *v.handle();
+        if (v.null_count() == 0) {
+            dstd::Vector<double> out(static_cast<std::size_t>(n));
+            fill_dense_parallel(h, out.data());
+            return out;
+        }
+        dstd::Vector<double> out;
+        out.reserve(static_cast<std::size_t>(n - v.null_count()));
+        for (const auto& piece : h.nested) {
+            Series chunk{piece.series.get()};
+            const dstd::Vector<double> part = nonnull_values(chunk);
+            chunk.release();
+            out.insert(out.end(), part.begin(), part.end());
+        }
+        return out;
+    }
+    if (v.encoding() == Encoding::Constant) {
+        if (n == 0 || v.null_count() == n) return {};
+        return dstd::Vector<double>(static_cast<std::size_t>(n),
+                                    cell_f64(v.handle(), 0));
+    }
     // Nulls, or a view: compact per chunk in parallel, then stitch. A flat
     // Float64 / Int64 column reads its buffers directly; the rest goes
     // through the generic cell readers.
     const bool has_nulls = v.null_count() > 0;
+    const bool layered = v.encoding() != Encoding::Flat;
     constexpr std::int64_t GRAIN = std::int64_t{1} << 16;
     const std::int64_t chunks = (n + GRAIN - 1) / GRAIN;
     dstd::Vector<dstd::Vector<double>> parts(static_cast<std::size_t>(chunks));
@@ -85,8 +185,13 @@ dstd::Vector<double> nonnull_values(const Series& v) {
             }
             return;
         }
-        for (std::int64_t i = b; i < e; ++i)
-            if (!has_nulls || !v.is_null(i)) out.push_back(read_f64(v, i));
+        for (std::int64_t i = b; i < e; ++i) {
+            if (layered) {
+                if (!v.is_null(i)) out.push_back(cell_f64(&h, i));
+            } else if (!has_nulls || !v.is_null(i)) {
+                out.push_back(read_f64(v, i));
+            }
+        }
     });
     dstd::Vector<std::size_t> at(parts.size() + 1, 0);
     for (std::size_t c = 0; c < parts.size(); ++c)
@@ -242,11 +347,13 @@ dstd::Pair<double, double> two_order_statistics(const T* x, std::size_t n,
     }
     const std::size_t present = start[BUCKETS];
     if (lo >= present) return {std::nan(""), std::nan("")};
-    // The bucket holding `lo`, and the next one when `lo + 1` spills over.
+    // The bucket holding `lo` and the one holding `lo + 1`, which may lie
+    // past empty buckets.
     std::size_t b0 = 0;
     while (start[b0 + 1] <= lo) ++b0;
-    const std::size_t b1 =
-        (lo + 1 < present && lo + 1 >= start[b0 + 1]) ? b0 + 1 : b0;
+    std::size_t b1 = b0;
+    if (lo + 1 < present)
+        while (start[b1 + 1] <= lo + 1) ++b1;
     if (start[b1 + 1] - start[b0] > n / 4) return {std::nan(""), std::nan("")};
     dstd::Vector<dstd::Vector<T>> parts(chunks);
     parallel_for(
@@ -286,7 +393,21 @@ double quantile(const Series& v, double q) {
     return quantile(v, q, Interpolation::Linear);
 }
 
-double quantile(const Series& v, double q, Interpolation interp) {
+namespace {
+
+double between_ranks(double a, double b, double frac, Interpolation interp,
+                     QuantileForm form) {
+    const bool midpoint = interp == Interpolation::Midpoint;
+    if (form == QuantileForm::PandasGroup)
+        return group_quantile_lerp(a, b, frac, midpoint);
+    // Even at a whole rank, as numpy: [1, inf] at 0 is 1 + inf * 0.
+    return quantile_lerp(a, b, midpoint ? (frac == 0.0 ? 0.0 : 0.5) : frac);
+}
+
+}  // namespace
+
+double quantile(const Series& v, double q, Interpolation interp,
+                QuantileForm form) {
     if (refuse_non_numeric("quantile", v.type()) || std::isnan(q))
         return std::nan("");
     const auto n = static_cast<std::size_t>(v.length() - v.null_count());
@@ -295,11 +416,12 @@ double quantile(const Series& v, double q, Interpolation interp) {
     std::size_t lo = static_cast<std::size_t>(pos);
     double frac = pos - static_cast<double>(lo);
     if (lo + 1 >= n) frac = 0.0;
-    const bool linear = interp == Interpolation::Linear;
+    const bool two_ranks =
+        interp == Interpolation::Linear || interp == Interpolation::Midpoint;
     // A flat Float64 / Int64 column is read in place, nulls skipped by the
     // bitmap; the bucket pass copies only the bucket the position falls in.
-    if (linear && n > (std::size_t{1} << 18) && parallel_backend_installed() &&
-        v.encoding() == Encoding::Flat &&
+    if (two_ranks && n > (std::size_t{1} << 18) &&
+        parallel_backend_installed() && v.encoding() == Encoding::Flat &&
         (v.type() == TypeId::Float64 || v.type() == TypeId::Int64)) {
         const auto total = static_cast<std::size_t>(v.length());
         const std::uint8_t* validity = v.handle()->validity.block()
@@ -311,31 +433,46 @@ double quantile(const Series& v, double q, Interpolation interp) {
                           : two_order_statistics(v.data<std::int64_t>(), total,
                                                  validity, lo, sortable_i64);
         if (!std::isnan(a))
-            return frac == 0.0 ? a : a * (1.0 - frac) + b * frac;
+            return between_ranks(a, lo + 1 < n ? b : a, frac, interp, form);
+    }
+    // The bucket pass and the select need one flat working array, so a column
+    // read in place still gets one buffer of its non-null values; with no
+    // nulls it is filled in parallel with no zero fill first.
+    if (two_ranks && n > (std::size_t{1} << 18) &&
+        parallel_backend_installed() && v.null_count() == 0 &&
+        v.encoding() != Encoding::Flat) {
+        Scratch<double> dense(n);
+        fill_dense_parallel(*v.handle(), dense.data());
+        auto [a, b] =
+            two_order_statistics(dense.data(), n, nullptr, lo, sortable_key);
+        if (!std::isnan(a))
+            return between_ranks(a, lo + 1 < n ? b : a, frac, interp, form);
     }
     dstd::Vector<double> x = nonnull_values(v);
     const bool is_float = v.type() == TypeId::Float64 ||
                           v.type() == TypeId::Float32 ||
                           v.type() == TypeId::Float16;
-    return quantile_of(x, q, interp, is_float);
+    return quantile_of(x, q, interp, is_float, form);
 }
 
 double quantile_of(dstd::Vector<double>& x, double q, Interpolation interp,
-                   bool may_have_nan) {
+                   bool may_have_nan, QuantileForm form) {
     const std::size_t n = x.size();
     if (n == 0 || std::isnan(q)) return std::nan("");
     const double pos = std::clamp(q, 0.0, 1.0) * static_cast<double>(n - 1);
     const auto lo = static_cast<std::size_t>(pos);
     double frac = pos - static_cast<double>(lo);
     if (lo + 1 >= n) frac = 0.0;
-    const bool linear = interp == Interpolation::Linear;
+    const bool two_ranks =
+        interp == Interpolation::Linear || interp == Interpolation::Midpoint;
     // The selection keys a NaN above every number and gives up when a rank
     // falls among the NaN cells, so it needs no scan for one.
-    if (linear && n > (std::size_t{1} << 18) && parallel_backend_installed()) {
+    if (two_ranks && n > (std::size_t{1} << 18) &&
+        parallel_backend_installed()) {
         auto [a, b] =
             two_order_statistics(x.data(), n, nullptr, lo, sortable_key);
         if (!std::isnan(a))
-            return frac == 0.0 ? a : a * (1.0 - frac) + b * frac;
+            return between_ranks(a, lo + 1 < n ? b : a, frac, interp, form);
     }
     // NaN ranks above every number: sort the numbers and let the ranks past
     // them read NaN, so the sort never compares a NaN.
@@ -355,8 +492,8 @@ double quantile_of(dstd::Vector<double>& x, double q, Interpolation interp,
     };
     switch (interp) {
         case Interpolation::Linear:
-            return frac == 0.0 ? rank(lo)
-                               : rank(lo) * (1.0 - frac) + rank(hi) * frac;
+        case Interpolation::Midpoint:
+            return between_ranks(rank(lo), rank(hi), frac, interp, form);
         case Interpolation::Nearest:
             return rank(
                 std::min(static_cast<std::size_t>(std::round(pos)), n - 1));
@@ -364,13 +501,13 @@ double quantile_of(dstd::Vector<double>& x, double q, Interpolation interp,
             return rank(lo);
         case Interpolation::Higher:
             return rank(frac == 0.0 ? lo : hi);
-        case Interpolation::Midpoint:
-            return frac == 0.0 ? rank(lo) : (rank(lo) + rank(hi)) / 2.0;
     }
     return std::nan("");
 }
 
-double median(const Series& v) { return quantile(v, 0.5); }
+double median(const Series& v) {
+    return quantile(v, 0.5, Interpolation::Midpoint, QuantileForm::PandasGroup);
+}
 
 std::int64_t nunique(const Series& v) {
     if (v.length() == 0) return 0;
@@ -642,7 +779,7 @@ double quantile_sorted(dstd::Vector<double>& x, double q) {
     std::size_t lo = static_cast<std::size_t>(pos);
     double frac = pos - static_cast<double>(lo);
     if (lo + 1 >= n) return x[lo];
-    return x[lo] * (1.0 - frac) + x[lo + 1] * frac;
+    return quantile_lerp(x[lo], x[lo + 1], frac);
 }
 
 // Sample variance of a scratch window (divide by n-1); 0 for fewer than 2.
@@ -750,7 +887,10 @@ Series rolling_std(const Series& v, std::int64_t window) {
 Series rolling_median(const Series& v, std::int64_t window) {
     return rolling_window(
         v, window,
-        [](dstd::Vector<double>& w) { return quantile_sorted(w, 0.5); },
+        [](dstd::Vector<double>& w) {
+            return quantile_of(w, 0.5, Interpolation::Midpoint, true,
+                               QuantileForm::PandasGroup);
+        },
         "rolling_median");
 }
 
@@ -1324,7 +1464,6 @@ double dftu_series_kurtosis_unbiased(const dftu_series* v) {
 }
 double dftu_series_quantile(const dftu_series* v, double q) {
     if (!v) return 0.0;
-    DFTU_FLAT_INPUT(v, dftu_series_quantile, q);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     double r = dftracer::utils::dataframe::quantile(c, q);
     c.release();
@@ -1335,7 +1474,6 @@ double dftu_series_quantile_interp(const dftu_series* v, double q,
     if (!v) return 0.0;
     if (interp < DFTU_INTERP_LINEAR || interp > DFTU_INTERP_MIDPOINT)
         return std::nan("");
-    DFTU_FLAT_INPUT(v, dftu_series_quantile_interp, q, interp);
     dftracer::utils::dataframe::Series c{const_cast<dftu_series*>(v)};
     double r = dftracer::utils::dataframe::quantile(
         c, q, static_cast<dftracer::utils::dataframe::Interpolation>(interp));

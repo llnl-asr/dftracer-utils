@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 
 namespace dftracer::utils::dataframe {
@@ -197,6 +198,93 @@ std::uint64_t number_key(double x) {
     return canonical_f64_bits(std::bit_cast<std::uint64_t>(x));
 }
 
+enum class IntKind { None, Signed, Unsigned };
+
+IntKind int_kind(TypeId t) {
+    switch (t) {
+        case TypeId::Bool:
+        case TypeId::Int8:
+        case TypeId::Int16:
+        case TypeId::Int32:
+        case TypeId::Int64:
+            return IntKind::Signed;
+        case TypeId::Uint8:
+        case TypeId::Uint16:
+        case TypeId::Uint32:
+        case TypeId::Uint64:
+            return IntKind::Unsigned;
+        default:
+            return IntKind::None;
+    }
+}
+
+bool is_float_type(TypeId t) {
+    return t == TypeId::Float32 || t == TypeId::Float64;
+}
+
+// 2^63 and 2^64 as doubles, the ends of the int64 and uint64 ranges.
+constexpr double TWO_POW_63 = 9223372036854775808.0;
+constexpr double TWO_POW_64 = 18446744073709551616.0;
+
+// Integers on both sides compare exactly: a double key would merge values
+// above 2^53, such as 2^63 and 2^63 + 1 in a Uint64 column. A float needle
+// against an integer column matches only the integer it equals exactly.
+Series is_in_integers(const Series& v, const Series& values) {
+    dstd::HashSet<std::uint64_t> non_negative;
+    dstd::HashSet<std::int64_t> negative;
+    const bool v_unsigned = int_kind(v.type()) == IntKind::Unsigned;
+    const bool vals_unsigned = int_kind(values.type()) == IntKind::Unsigned;
+    const bool vals_float = is_float_type(values.type());
+    const bool vals_null = values.null_count() > 0;
+    for (std::int64_t j = 0; j < values.length(); ++j) {
+        if (vals_null && values.is_null(j)) continue;
+        if (vals_float) {
+            const double d = read_f64(values, j);
+            if (!(d >= -TWO_POW_63 && d < TWO_POW_64) || std::floor(d) != d)
+                continue;
+            if (d < 0)
+                negative.insert(static_cast<std::int64_t>(d));
+            else
+                non_negative.insert(static_cast<std::uint64_t>(d));
+            continue;
+        }
+        if (vals_unsigned) {
+            non_negative.insert(read_u64(values, j));
+            continue;
+        }
+        const std::int64_t x = read_i64(values, j);
+        if (x < 0)
+            negative.insert(x);
+        else
+            non_negative.insert(static_cast<std::uint64_t>(x));
+    }
+    const std::int64_t n = v.length();
+    const bool has_nulls = v.null_count() > 0;
+    dstd::Vector<char> flags(static_cast<std::size_t>(n), 0);
+    constexpr std::int64_t GRAIN = 1 << 15;
+    auto probe = [&](std::int64_t b, std::int64_t e) {
+        for (std::int64_t i = b; i < e; ++i) {
+            if (has_nulls && v.is_null(i)) continue;
+            bool hit;
+            if (v_unsigned) {
+                hit = non_negative.count(read_u64(v, i)) > 0;
+            } else {
+                const std::int64_t x = read_i64(v, i);
+                hit =
+                    x < 0
+                        ? negative.count(x) > 0
+                        : non_negative.count(static_cast<std::uint64_t>(x)) > 0;
+            }
+            flags[static_cast<std::size_t>(i)] = hit ? 1 : 0;
+        }
+    };
+    if (parallel_backend_installed() && n > GRAIN)
+        parallel_for(n, GRAIN, probe);
+    else
+        probe(0, n);
+    return bool_from_flags(flags);
+}
+
 Series is_in_impl(const Series& v_in, const Series& values_in) {
     if (refuse_nested_value("is_in", v_in.type())) return Series{};
     // FLAT Float64 with a small needle set: SIMD broadcast-compare.
@@ -219,7 +307,13 @@ Series is_in_impl(const Series& v_in, const Series& values_in) {
     };
     const Series v = flatten(v_in);
     const Series values = flatten(values_in);
+    const IntKind v_int = int_kind(v.type());
+    const IntKind vals_int = int_kind(values.type());
+    if (v_int != IntKind::None &&
+        (vals_int != IntKind::None || is_float_type(values.type())))
+        return is_in_integers(v, values);
     const bool is_bytes = value_domain(v.type()) == ValueDomain::Bytes;
+    const bool v_float = is_float_type(v.type());
     dstd::HashSet<std::uint64_t> num_set;
     dstd::HashSet<dstd::String> str_set;
     const std::int64_t m = values.length();
@@ -235,6 +329,18 @@ Series is_in_impl(const Series& v_in, const Series& values_in) {
         if (vals_null && values.is_null(j)) continue;
         if (is_bytes) {
             if (vals_bytes) str_set.insert(dstd::String(read_bytes(values, j)));
+        } else if (v_float && vals_int == IntKind::Unsigned) {
+            // An integer needle matches a float row only when the double
+            // holds it exactly.
+            const std::uint64_t x = read_u64(values, j);
+            const double d = static_cast<double>(x);
+            if (d < TWO_POW_64 && static_cast<std::uint64_t>(d) == x)
+                num_set.insert(number_key(d));
+        } else if (v_float && vals_int == IntKind::Signed) {
+            const std::int64_t x = read_i64(values, j);
+            const double d = static_cast<double>(x);
+            if (d < TWO_POW_63 && static_cast<std::int64_t>(d) == x)
+                num_set.insert(number_key(d));
         } else if (vals_domain == ValueDomain::Numeric) {
             num_set.insert(number_key(read_f64(values, j)));
         }

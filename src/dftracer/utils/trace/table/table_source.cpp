@@ -976,6 +976,8 @@ coro::CoroTask<MorselResult> TableCursor::next(std::int64_t max_rows) {
 }
 
 dataframe::DataType type_of(const detail::Field& f) {
+    if (f.kind == Kind::List)
+        return dataframe::list_of(dataframe::scalar(detail::element_type(f)));
     return dataframe::scalar(detail::column_type(f));
 }
 

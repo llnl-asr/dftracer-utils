@@ -187,7 +187,9 @@ def test_a_claimed_header_that_is_wrong_raises_and_never_reads_as_a_trace(tmp_pa
     save_table(pd.DataFrame({"a": [1]}), path, name="t")
     text = open(path).read()
     bad = tmp_path / "v.pfw"
-    bad.write_text(text.replace('"format_version":"1.0"', '"format_version":"2.0"', 1))
+    bad.write_text(
+        text.replace(f'"format_version":"{ext.TABLE_FORMAT_VERSION}"', '"format_version":"2.0"', 1)
+    )
     assert bad.read_text() != text
     with pytest.raises(ext.DFTUtilsError, match="format_version"):
         TraceViewer(str(bad))
@@ -933,7 +935,11 @@ def test_a_broken_table_among_traces_raises_and_is_never_read_as_a_trace(tmp_pat
     text = open(table).read()
     os.remove(table)
     (tmp_path / "v.pfw.gz").write_bytes(
-        gzip.compress(text.replace('"format_version":"1.0"', '"format_version":"2.0"', 1).encode())
+        gzip.compress(
+            text.replace(
+                f'"format_version":"{ext.TABLE_FORMAT_VERSION}"', '"format_version":"2.0"', 1
+            ).encode()
+        )
     )
     with pytest.raises(ext.DFTUtilsError, match="format_version"):
         discover_trace_files(tmp_path)

@@ -43,11 +43,13 @@ struct ReadOptions {
 
 /// A decoded table. A column has one type for its header dtype: Int64 for the
 /// signed integers, Uint64, Float64, Bool, and String for string, object and
-/// category dtypes whose labels are strings. A column with elem set, an object
-/// column of arrays, holds the JSON text of each cell; so does a category of
-/// mixed labels. A category of integers is Int64 and of numbers Float64, as
-/// is one whose categories_dtype is a float, whose labels may be the text of
-/// an infinite float. A null cell is null; NaN is a float value.
+/// category dtypes whose labels are strings. A column with elem "list" and an
+/// elem_dtype is a List column of that element type. A column with elem set
+/// and no elem_dtype, an object column of arrays, holds the JSON text of each
+/// cell; so does a category of mixed labels. A category of integers is Int64
+/// and of numbers Float64, as is one whose categories_dtype is a float, whose
+/// labels may be the text of an infinite float. A null cell is null; NaN is a
+/// float value.
 struct Table {
     dataframe::DataFrame frame;
     dstd::String header_json;  ///< the args object of the header record

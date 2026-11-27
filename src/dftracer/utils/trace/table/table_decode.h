@@ -40,7 +40,12 @@ struct Buffer {
 
 /// The engine type a field decodes to: the integer width and Float32 the
 /// header names, Float64 for the other floats, Int64 for category labels.
+/// A List field decodes to a List column.
 dataframe::TypeId column_type(const Field& field);
+
+/// The type of the elements of a List field: the integer width, Float32 or
+/// Float64, Bool or String that its elem_dtype names.
+dataframe::TypeId element_type(const Field& field);
 
 /// The rows of a run of lines, as columns.
 struct Decoded {

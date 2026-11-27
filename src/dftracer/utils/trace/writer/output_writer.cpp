@@ -146,9 +146,53 @@ bool kind_accepts(const Field& f, TypeId t, bool raw) {
         case Kind::String:
             return is_string_type(t) && !raw;
         case Kind::Raw:
+        case Kind::List:
             return is_string_type(t) && raw;
     }
     return false;
+}
+
+// The pandas-style dtype name a list header gives its elements, or null for a
+// type a list cannot hold.
+const char* element_dtype_name(TypeId t) {
+    switch (t) {
+        case TypeId::Bool:
+            return "bool";
+        case TypeId::Int8:
+            return "int8";
+        case TypeId::Int16:
+            return "int16";
+        case TypeId::Int32:
+            return "int32";
+        case TypeId::Int64:
+            return "int64";
+        case TypeId::Uint8:
+            return "uint8";
+        case TypeId::Uint16:
+            return "uint16";
+        case TypeId::Uint32:
+            return "uint32";
+        case TypeId::Uint64:
+            return "uint64";
+        case TypeId::Float32:
+            return "float32";
+        case TypeId::Float64:
+            return "float64";
+        case TypeId::String:
+        case TypeId::LargeString:
+            return "string";
+        default:
+            return nullptr;
+    }
+}
+
+// The element dtype name of a List or LargeList column, or null.
+const char* list_element_name(const dataframe::Series& column) {
+    const TypeId t = column.type();
+    if ((t != TypeId::List && t != TypeId::LargeList) ||
+        column.num_children() != 1)
+        return nullptr;
+    return element_dtype_name(column.child(0).type());
 }
 
 template <class T>
@@ -253,13 +297,17 @@ dstd::Result<dataframe::Series> list_json(const dataframe::Series& list,
         } else {
             json::Writer w(data);
             w.begin_array();
-            for (std::int64_t j = off[i]; j < off[i + 1]; ++j)
-                if (!write_element(w, child, j))
-                    return common::make_error<
-                        "row {}, column {}: a list element is NaN, infinite "
-                        "or of a type a table cannot store">(
-                        ErrorCode::InvalidArgument, i, name);
+            bool stored = true;
+            for (std::int64_t j = off[i]; stored && j < off[i + 1]; ++j)
+                stored = write_element(w, child, j);
+            // Close the array first: the writer checks it is closed when it
+            // is destroyed.
             w.end_array();
+            if (!stored)
+                return common::make_error<
+                    "row {}, column {}: a list element is NaN, infinite "
+                    "or of a type a table cannot store">(
+                    ErrorCode::InvalidArgument, i, name);
         }
         if (data.size() > static_cast<std::size_t>(INT32_MAX))
             return common::make_error<
@@ -775,6 +823,7 @@ dstd::Result<void> OutputWriter::Impl::prepare_header_from(
     for (std::size_t i = 0; i < ncols; ++i) {
         const TypeId type = batch->columns[i].type();
         const char* dtype = nullptr;
+        const char* list_elem = nullptr;
         switch (type) {
             case TypeId::Bool:
                 dtype = "boolean";
@@ -813,6 +862,16 @@ dstd::Result<void> OutputWriter::Impl::prepare_header_from(
             case TypeId::LargeString:
                 dtype = "object";
                 break;
+            case TypeId::List:
+            case TypeId::LargeList:
+                dtype = "object";
+                list_elem = list_element_name(batch->columns[i]);
+                if (!list_elem)
+                    return common::make_error<
+                        "column {} is a list of a type a table cannot "
+                        "store">(ErrorCode::InvalidArgument,
+                                 dstd::StringView(batch->names[i]));
+                break;
             default:
                 return common::make_error<
                     "column {} has a type a table cannot store">(
@@ -824,6 +883,10 @@ dstd::Result<void> OutputWriter::Impl::prepare_header_from(
         json::append_json_escaped(fields, dstd::StringView(batch->names[i]));
         fields += "\",\"dtype\":\"";
         fields += dtype;
+        if (list_elem) {
+            fields += "\",\"elem\":\"list\",\"elem_dtype\":\"";
+            fields += list_elem;
+        }
         fields += "\"}";
     }
     fields += ']';
@@ -894,9 +957,18 @@ dstd::Result<void> OutputWriter::Impl::prepare_batch(
                     "{} in the frame">(ErrorCode::InvalidArgument, i,
                                        dstd::StringView(header.fields[i].name),
                                        name);
-            bool raw = false;
+            const Field& field = header.fields[i];
+            bool raw = field.kind == Kind::List;
             for (const dstd::String& r : opts.raw_columns)
                 if (dstd::StringView(r) == name) raw = true;
+            if (field.kind == Kind::List) {
+                const char* elem = list_element_name(batch.columns[i]);
+                if (!elem || dstd::StringView(field.elem_dtype) != elem)
+                    return common::make_error<
+                        "column {} is not a list of {}, the element dtype of "
+                        "its header field">(ErrorCode::InvalidArgument, name,
+                                            dstd::StringView(field.elem_dtype));
+            }
             auto c = prepare_column(batch, i, raw);
             if (!c) return c.error();
             if (!kind_accepts(header.fields[i], c->type, c->raw))

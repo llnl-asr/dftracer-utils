@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dataframe/internal/buffers.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dstd/file.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -8,6 +10,7 @@
 #include <dftracer/utils/fileio/compress/gzip_member_reader.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/json/value.h>
+#include <dftracer/utils/json/value_access.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/index/gzip/gzip_member_scanner.h>
 #include <dftracer/utils/trace/table/table_decode.h>
@@ -15,6 +18,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -425,7 +429,7 @@ bool is_blank(dstd::StringView line) {
 }
 
 bool parse_u64(dstd::StringView text, std::uint64_t& out) {
-    if (text.empty()) return false;
+    if (text.empty() || (text.size() > 1 && text[0] == '0')) return false;
     std::uint64_t n = 0;
     for (const char c : text) {
         if (c < '0' || c > '9') return false;
@@ -464,6 +468,15 @@ struct StringPart {
     dstd::Vector<std::uint32_t> sizes;
 };
 
+// The elements of one List field in a part, flat and in row order. Strings
+// are collected like the cells of a String field.
+struct ListPart {
+    dstd::Vector<std::uint64_t> words;  ///< one per element, numeric kinds
+    dstd::Vector<std::uint8_t> valid;  ///< one per element, 1 for a present one
+    StringPart strings;                ///< the elements of a String list
+    dstd::Vector<std::uint32_t> counts;  ///< the length of each row's list
+};
+
 struct Chunk {
     dstd::StringView range;
     std::size_t first_row = 0;
@@ -471,22 +484,78 @@ struct Chunk {
     std::size_t row_base = 0;        ///< added to a row an error names
     dstd::Optional<dstd::Error> error;
     dstd::Vector<StringPart> parts;  ///< one per String or Raw wanted field
+    dstd::Vector<ListPart> lists;    ///< one per List wanted field
 };
 
 constexpr double NAN_VALUE = std::bit_cast<double>(0x7ff8000000000000ull);
 constexpr std::size_t NOT_WANTED = static_cast<std::size_t>(-1);
+
+// The word of one cell of an Int, UInt, Float or Bool kind, or why it is not
+// one.
+const char* read_word(Kind kind, unsigned bits, json::Value& v,
+                      std::uint64_t& word) {
+    switch (kind) {
+        case Kind::Int: {
+            const auto n = v.as_int();
+            if (!n) return "not an integer";
+            if (bits < 64) {
+                const std::int64_t lim = std::int64_t{1} << (bits - 1);
+                if (*n < -lim || *n >= lim) return "outside the integer dtype";
+            }
+            word = static_cast<std::uint64_t>(*n);
+            return nullptr;
+        }
+        case Kind::UInt: {
+            std::uint64_t n = 0;
+            if (!parse_u64(v.raw(), n)) return "not an unsigned integer";
+            if (bits < 64 && n >> bits != 0) return "outside the integer dtype";
+            word = n;
+            return nullptr;
+        }
+        case Kind::Float: {
+            double d = 0;
+            if (v.type() == json::Value::Type::String) {
+                const auto s = v.as_string();
+                if (s && *s == "NaN")
+                    d = NAN_VALUE;
+                else if (s && *s == "Infinity")
+                    d = std::numeric_limits<double>::infinity();
+                else if (s && *s == "-Infinity")
+                    d = -std::numeric_limits<double>::infinity();
+                else
+                    return "not a float";
+            } else {
+                const auto n = v.as_double();
+                if (!n) return "not a float";
+                d = *n;
+            }
+            word = std::bit_cast<std::uint64_t>(d);
+            return nullptr;
+        }
+        case Kind::Bool: {
+            const auto b = v.as_bool();
+            if (!b) return "not a boolean";
+            word = *b ? 1 : 0;
+            return nullptr;
+        }
+        default:
+            return "not a number";
+    }
+}
 
 class RowParser {
    public:
     RowParser(const Header& header, dstd::Span<const std::size_t> wanted,
               dstd::Span<const std::size_t> position,
               dstd::Vector<Column>& columns,
-              dstd::Span<const std::size_t> part_of, dstd::StringView padded)
+              dstd::Span<const std::size_t> part_of,
+              dstd::Span<const std::size_t> list_of, dstd::StringView padded)
         : header_(header),
           wanted_(wanted),
           position_(position),
           columns_(columns),
           part_of_(part_of),
+          list_of_(list_of),
           limit_(padded.data() + padded.size()),
           stamp_(header.fields.size(), 0) {
         for (std::size_t i = 0; i < header.fields.size(); ++i)
@@ -502,6 +571,8 @@ class RowParser {
         chunk_ = &chunk;
         for (std::size_t p = 0; p < chunk.parts.size(); ++p)
             chunk.parts[p].sizes.reserve(chunk.rows);
+        for (std::size_t p = 0; p < chunk.lists.size(); ++p)
+            chunk.lists[p].counts.reserve(chunk.rows);
         std::size_t row = chunk.first_row;
         const std::size_t stop = chunk.first_row + chunk.rows;
         for_each_line(chunk.range, [&](dstd::StringView line) {
@@ -547,8 +618,68 @@ class RowParser {
         columns_[pos].valid[row] = 1;
     }
 
+    bool read_list(const Field& f, std::size_t pos, std::size_t row,
+                   json::Value& v) {
+        const dstd::StringView name(f.name);
+        if (v.type() != json::Value::Type::Array)
+            return fail(row, "not a JSON array", name);
+        ListPart& part = chunk_->lists[list_of_[pos]];
+        const bool text = f.elem_kind == Kind::String;
+        std::uint32_t count = 0;
+        const char* why = nullptr;
+        v.for_each_element([&](json::Value e) {
+            if (why) return;
+            ++count;
+            if (e.type() == json::Value::Type::Null) {
+                if (e.raw() != "null") {
+                    why = "not a JSON value";
+                    return;
+                }
+                if (text)
+                    part.strings.sizes.push_back(0);
+                else
+                    part.words.push_back(0);
+                part.valid.push_back(0);
+                return;
+            }
+            if (text) {
+                const auto s = e.as_string();
+                if (!s) {
+                    why = "not a string";
+                    return;
+                }
+                part.strings.bytes.append(s->data(), s->size());
+                part.strings.sizes.push_back(
+                    static_cast<std::uint32_t>(s->size()));
+            } else {
+                std::uint64_t word = 0;
+                why = read_word(f.elem_kind, f.bits, e, word);
+                if (why) return;
+                if (f.elem_kind == Kind::Float) {
+                    const double d = std::bit_cast<double>(word);
+                    if (!std::isfinite(d) ||
+                        (f.bits == 32 &&
+                         !std::isfinite(static_cast<float>(d)))) {
+                        why = "not a finite float of the dtype";
+                        return;
+                    }
+                }
+                part.words.push_back(word);
+            }
+            part.valid.push_back(1);
+        });
+        if (!why && json::detail::ValueAccess::broken(v))
+            why = "not valid JSON";
+        if (why) return fail(row, why, name);
+        part.counts.push_back(count);
+        columns_[pos].valid[row] = 1;
+        return true;
+    }
+
     void put_null(std::size_t pos, std::size_t row) {
-        if (part_of_[pos] != NOT_WANTED)
+        if (list_of_[pos] != NOT_WANTED)
+            chunk_->lists[list_of_[pos]].counts.push_back(0);
+        else if (part_of_[pos] != NOT_WANTED)
             chunk_->parts[part_of_[pos]].sizes.push_back(0);
         else
             columns_[pos].words[row] = 0;
@@ -570,51 +701,14 @@ class RowParser {
         }
         Column& c = columns_[pos];
         switch (f.kind) {
-            case Kind::Int: {
-                const auto n = v.as_int();
-                if (!n) return fail(row, "not an integer", name);
-                if (f.bits < 64) {
-                    const std::int64_t lim = std::int64_t{1} << (f.bits - 1);
-                    if (*n < -lim || *n >= lim)
-                        return fail(row, "outside the integer dtype", name);
-                }
-                c.words[row] = static_cast<std::uint64_t>(*n);
-                break;
-            }
-            case Kind::UInt: {
-                const dstd::StringView text = v.raw();
-                std::uint64_t n = 0;
-                if (!parse_u64(text, n))
-                    return fail(row, "not an unsigned integer", name);
-                if (f.bits < 64 && n >> f.bits != 0)
-                    return fail(row, "outside the integer dtype", name);
-                c.words[row] = n;
-                break;
-            }
-            case Kind::Float: {
-                double d = 0;
-                if (type == json::Value::Type::String) {
-                    const auto s = v.as_string();
-                    if (s && *s == "NaN")
-                        d = NAN_VALUE;
-                    else if (s && *s == "Infinity")
-                        d = std::numeric_limits<double>::infinity();
-                    else if (s && *s == "-Infinity")
-                        d = -std::numeric_limits<double>::infinity();
-                    else
-                        return fail(row, "not a float", name);
-                } else {
-                    const auto n = v.as_double();
-                    if (!n) return fail(row, "not a float", name);
-                    d = *n;
-                }
-                c.words[row] = std::bit_cast<std::uint64_t>(d);
-                break;
-            }
+            case Kind::Int:
+            case Kind::UInt:
+            case Kind::Float:
             case Kind::Bool: {
-                const auto b = v.as_bool();
-                if (!b) return fail(row, "not a boolean", name);
-                c.words[row] = *b ? 1 : 0;
+                std::uint64_t word = 0;
+                if (const char* why = read_word(f.kind, f.bits, v, word))
+                    return fail(row, why, name);
+                c.words[row] = word;
                 break;
             }
             case Kind::String: {
@@ -626,6 +720,8 @@ class RowParser {
             case Kind::Raw:
                 put_part(pos, row, v.raw());
                 return true;
+            case Kind::List:
+                return read_list(f, pos, row, v);
         }
         c.valid[row] = 1;
         return true;
@@ -641,6 +737,7 @@ class RowParser {
         const auto stamp = static_cast<std::uint32_t>(++tick_);
         std::size_t hits = 0;
         std::size_t expect = 0;
+        std::size_t last = nfields;
         bool ok = true;
         args->for_each_member([&](dstd::StringView key, json::Value v) {
             if (!ok) return;
@@ -655,9 +752,15 @@ class RowParser {
             if (stamp_[col] == stamp) return;
             stamp_[col] = stamp;
             ++hits;
+            last = col;
             ok = read_cell(col, pos, row, v);
         });
         if (!ok) return false;
+        if (json::detail::ValueAccess::broken(*args))
+            return last == nfields
+                       ? fail(row, "not valid JSON")
+                       : fail(row, "not valid JSON after the field",
+                              dstd::StringView(header_.fields[last].name));
         if (hits != wanted_.size()) {
             for (const std::size_t i : wanted_)
                 if (stamp_[i] != stamp)
@@ -672,6 +775,7 @@ class RowParser {
     dstd::Span<const std::size_t> position_;
     dstd::Vector<Column>& columns_;
     dstd::Span<const std::size_t> part_of_;
+    dstd::Span<const std::size_t> list_of_;
     const char* limit_;
     json::Document doc_;
     dstd::Vector<std::uint32_t> stamp_;
@@ -723,7 +827,136 @@ Series number_column(TypeId type, const std::uint64_t* words, std::size_t n,
     }
 }
 
+struct Validity {
+    dstd::Vector<std::uint8_t> bits;
+    const std::uint8_t* data = nullptr;  ///< null when every cell is present
+};
+
+Validity validity_of(dstd::Span<const std::uint8_t> flags, std::size_t n) {
+    Validity v;
+    bool any_null = false;
+    for (std::size_t r = 0; r < n && !any_null; ++r) any_null = flags[r] == 0;
+    if (any_null) {
+        v.bits.resize((n + 7) / 8);
+        pack_bits(flags.data(), n, v.bits.data());
+        v.data = v.bits.data();
+    }
+    return v;
+}
+
+Series numeric_series(TypeId type, Column& c, std::size_t n) {
+    const Validity validity = validity_of(c.valid, n);
+    if (type != TypeId::Bool)
+        return number_column(type, c.words.data(), n, validity.data);
+    for (std::size_t r = 0; r < n; ++r) c.valid[r] = c.words[r] != 0;
+    dstd::Vector<std::uint8_t> packed((n + 7) / 8);
+    pack_bits(c.valid.data(), n, packed.data());
+    return Series::flat(type, packed.data(), static_cast<std::int64_t>(n),
+                        validity.data);
+}
+
+// The cells of `parts`, in order, as one String column of `n` rows.
+dstd::Result<Series> string_series(dstd::Span<const StringPart* const> parts,
+                                   dstd::Span<const std::uint8_t> flags,
+                                   std::size_t n) {
+    std::size_t bytes = 0;
+    for (const StringPart* part : parts) bytes += part->bytes.size();
+    if (bytes > static_cast<std::size_t>(INT32_MAX))
+        return common::make_error(ErrorCode::InvalidArgument,
+                                  "a string column holds more than 2 GiB");
+    const Validity validity = validity_of(flags, n);
+    dstd::Vector<std::int32_t> offsets(n + 1);
+    dstd::Vector<char> data(bytes);
+    std::size_t row = 0;
+    std::size_t at = 0;
+    for (const StringPart* part : parts) {
+        if (!part->bytes.empty())
+            std::memcpy(data.data() + at, part->bytes.data(),
+                        part->bytes.size());
+        for (const std::uint32_t size : part->sizes) {
+            offsets[row] = static_cast<std::int32_t>(at);
+            at += size;
+            ++row;
+        }
+    }
+    offsets[n] = static_cast<std::int32_t>(at);
+    return Series(dftu_series_new_string(
+        static_cast<dftu_dtype>(TypeId::String), offsets.data(), data.data(),
+        static_cast<std::int64_t>(n), validity.data));
+}
+
+// A List column from the list parts of every chunk. `rows` holds which rows
+// are present; the elements are copied once into one child column.
+dstd::Result<Series> list_series(dstd::Span<const Chunk> chunks, std::size_t at,
+                                 const Field& field, const Column& rows,
+                                 std::size_t nrows) {
+    std::size_t total = 0;
+    for (const Chunk& ch : chunks) total += ch.lists[at].valid.size();
+    if (total > static_cast<std::size_t>(INT32_MAX))
+        return common::make_error(ErrorCode::InvalidArgument,
+                                  "a list column holds more than 2^31 items");
+    dstd::Vector<std::int32_t> offsets(nrows + 1);
+    std::size_t row = 0;
+    std::size_t run = 0;
+    for (const Chunk& ch : chunks)
+        for (const std::uint32_t count : ch.lists[at].counts) {
+            offsets[row++] = static_cast<std::int32_t>(run);
+            run += count;
+        }
+    offsets[nrows] = static_cast<std::int32_t>(run);
+
+    Column elems;
+    elems.valid.resize(total);
+    std::size_t put = 0;
+    for (const Chunk& ch : chunks) {
+        const ListPart& part = ch.lists[at];
+        if (!part.valid.empty())
+            std::memcpy(elems.valid.data() + put, part.valid.data(),
+                        part.valid.size());
+        put += part.valid.size();
+    }
+    const TypeId type = element_type(field);
+    dstd::Result<Series> child = Series();
+    if (type == TypeId::String) {
+        dstd::Vector<const StringPart*> parts;
+        for (const Chunk& ch : chunks) parts.push_back(&ch.lists[at].strings);
+        child = string_series(parts, elems.valid, total);
+    } else {
+        elems.words.resize(total);
+        put = 0;
+        for (const Chunk& ch : chunks) {
+            const ListPart& part = ch.lists[at];
+            if (!part.words.empty())
+                std::memcpy(elems.words.data() + put, part.words.data(),
+                            part.words.size() * sizeof(std::uint64_t));
+            put += part.words.size();
+        }
+        child = numeric_series(type, elems, total);
+    }
+    if (!child) return child.error();
+    Series list = Series::list(offsets, std::move(*child));
+    const Validity present = validity_of(rows.valid, nrows);
+    if (present.data) {
+        // The null rows hold empty ranges, so the validity bitmap alone makes
+        // them null and the child is not copied again.
+        dftu_series* handle = list.handle();
+        handle->validity = dataframe::new_buffer(present.bits.size());
+        std::memcpy(dataframe::writable(handle->validity), present.data,
+                    present.bits.size());
+        for (std::size_t r = 0; r < nrows; ++r)
+            handle->null_count += rows.valid[r] == 0;
+    }
+    return list;
+}
+
 }  // namespace
+
+TypeId element_type(const Field& field) {
+    Field elem;
+    elem.kind = field.elem_kind;
+    elem.bits = field.bits;
+    return column_type(elem);
+}
 
 TypeId column_type(const Field& field) {
     switch (field.kind) {
@@ -741,6 +974,8 @@ TypeId column_type(const Field& field) {
             return field.bits == 32 ? TypeId::Float32 : TypeId::Float64;
         case Kind::Bool:
             return TypeId::Bool;
+        case Kind::List:
+            return TypeId::List;
         default:
             return TypeId::String;
     }
@@ -813,22 +1048,30 @@ dstd::Result<Decoded> decode_lines(const Header& header,
 
     dstd::Vector<Column> columns(ncols);
     dstd::Vector<std::size_t> part_of(ncols, NOT_WANTED);
+    dstd::Vector<std::size_t> list_of(ncols, NOT_WANTED);
     std::size_t nparts_strings = 0;
+    std::size_t nparts_lists = 0;
     for (std::size_t k = 0; k < ncols; ++k) {
         columns[k].valid.resize(nrows);
-        if (column_type(header.fields[wanted[k]]) == TypeId::String)
+        const TypeId type = column_type(header.fields[wanted[k]]);
+        if (type == TypeId::String)
             part_of[k] = nparts_strings++;
+        else if (type == TypeId::List)
+            list_of[k] = nparts_lists++;
         else
             columns[k].words.resize(nrows);
     }
-    for (Chunk& c : chunks) c.parts.resize(nparts_strings);
+    for (Chunk& c : chunks) {
+        c.parts.resize(nparts_strings);
+        c.lists.resize(nparts_lists);
+    }
 
     const dstd::StringView padded(body, body_size + PADDING);
     auto parsed =
         rt.parallel_for(static_cast<std::int64_t>(nparts), 1,
                         [&](std::int64_t first, std::int64_t last) {
                             RowParser parser(header, wanted, position, columns,
-                                             part_of, padded);
+                                             part_of, list_of, padded);
                             for (std::int64_t i = first; i < last; ++i)
                                 parser.run(chunks[static_cast<std::size_t>(i)]);
                         });
@@ -846,58 +1089,28 @@ dstd::Result<Decoded> decode_lines(const Header& header,
             for (std::int64_t k = first; k < last; ++k) {
                 const auto i = static_cast<std::size_t>(k);
                 Column& c = columns[i];
-                const TypeId type = column_type(header.fields[wanted[i]]);
-                dstd::Vector<std::uint8_t> bits((nrows + 7) / 8);
-                bool any_null = false;
-                for (std::size_t r = 0; r < nrows && !any_null; ++r)
-                    any_null = c.valid[r] == 0;
-                const std::uint8_t* validity = nullptr;
-                if (any_null) {
-                    pack_bits(c.valid.data(), nrows, bits.data());
-                    validity = bits.data();
-                }
-                if (type == TypeId::Bool) {
-                    for (std::size_t r = 0; r < nrows; ++r)
-                        c.valid[r] = c.words[r] != 0;
-                    dstd::Vector<std::uint8_t> packed((nrows + 7) / 8);
-                    pack_bits(c.valid.data(), nrows, packed.data());
-                    out.columns[i] = Series::flat(
-                        type, packed.data(), static_cast<std::int64_t>(nrows),
-                        validity);
-                } else if (type != TypeId::String) {
-                    out.columns[i] =
-                        number_column(type, c.words.data(), nrows, validity);
-                } else {
-                    const std::size_t p = part_of[i];
-                    std::size_t bytes = 0;
-                    for (const Chunk& ch : chunks)
-                        bytes += ch.parts[p].bytes.size();
-                    if (bytes > static_cast<std::size_t>(INT32_MAX)) {
-                        errors[i].emplace(
-                            ErrorCode::InvalidArgument,
-                            "a string column holds more than 2 GiB");
+                const Field& field = header.fields[wanted[i]];
+                const TypeId type = column_type(field);
+                if (type == TypeId::List) {
+                    auto list =
+                        list_series(chunks, list_of[i], field, c, nrows);
+                    if (!list) {
+                        errors[i] = list.error();
                         continue;
                     }
-                    dstd::Vector<std::int32_t> offsets(nrows + 1);
-                    dstd::Vector<char> data(bytes);
-                    std::size_t row = 0;
-                    std::size_t at = 0;
-                    for (const Chunk& ch : chunks) {
-                        const StringPart& part = ch.parts[p];
-                        if (!part.bytes.empty())
-                            std::memcpy(data.data() + at, part.bytes.data(),
-                                        part.bytes.size());
-                        for (const std::uint32_t size : part.sizes) {
-                            offsets[row] = static_cast<std::int32_t>(at);
-                            at += size;
-                            ++row;
-                        }
+                    out.columns[i] = std::move(*list);
+                } else if (type == TypeId::String) {
+                    dstd::Vector<const StringPart*> parts;
+                    for (const Chunk& ch : chunks)
+                        parts.push_back(&ch.parts[part_of[i]]);
+                    auto text = string_series(parts, c.valid, nrows);
+                    if (!text) {
+                        errors[i] = text.error();
+                        continue;
                     }
-                    offsets[nrows] = static_cast<std::int32_t>(at);
-                    out.columns[i] = Series(dftu_series_new_string(
-                        static_cast<dftu_dtype>(TypeId::String), offsets.data(),
-                        data.data(), static_cast<std::int64_t>(nrows),
-                        validity));
+                    out.columns[i] = std::move(*text);
+                } else {
+                    out.columns[i] = numeric_series(type, c, nrows);
                 }
                 if (!out.columns[i].valid())
                     errors[i].emplace(ErrorCode::Internal,

@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/fmt.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/json/value.h>
 #include <dftracer/utils/trace/table/table_codec.h>
+#include <dftracer/utils/trace/table/table_header.h>
 #include <dftracer/utils/trace/writer/trace_writer.h>
 #include <doctest/doctest.h>
 #include <task_result.h>
@@ -229,6 +232,71 @@ dstd::String header_line(dstd::StringView args) {
 
 common::ErrorCode code_of(const dstd::Error& e) {
     return common::errorcode_of(e);
+}
+
+using Item = dstd::Optional<std::int32_t>;
+using Row = dstd::Optional<dstd::Vector<Item>>;
+
+dstd::Vector<std::uint8_t> pack(dstd::Span<const std::uint8_t> flags) {
+    dstd::Vector<std::uint8_t> bits((flags.size() + 7) / 8, 0);
+    for (std::size_t i = 0; i < flags.size(); ++i)
+        if (flags[i]) bits[i / 8] |= static_cast<std::uint8_t>(1u << (i % 8));
+    return bits;
+}
+
+// A List<Int32> column from rows, a null Row being a null list.
+Series int32_lists(dstd::Span<const Row> rows) {
+    dstd::Vector<std::int32_t> values;
+    dstd::Vector<std::uint8_t> item_valid;
+    dstd::Vector<std::int32_t> offsets{0};
+    dstd::Vector<std::uint8_t> row_valid;
+    for (const Row& row : rows) {
+        row_valid.push_back(row.has_value());
+        if (row)
+            for (const Item& item : *row) {
+                values.push_back(item.value_or(0));
+                item_valid.push_back(item.has_value());
+            }
+        offsets.push_back(static_cast<std::int32_t>(values.size()));
+    }
+    const auto item_bits = pack(item_valid);
+    Series child = Series::flat(TypeId::Int32, values.data(),
+                                static_cast<std::int64_t>(values.size()),
+                                item_bits.data());
+    Series list = Series::list(offsets, std::move(child));
+    const auto row_bits = pack(row_valid);
+    const Series mask = Series::flat(TypeId::Bool, row_bits.data(),
+                                     static_cast<std::int64_t>(rows.size()));
+    return list.where(mask, dataframe::null_column_like(
+                                list, static_cast<std::int64_t>(rows.size())));
+}
+
+dstd::Vector<Row> read_int32_lists(const Series& column) {
+    const Series list = column.materialize();
+    const Series child = list.child(0).materialize();
+    const std::int32_t* offsets = dftu_series_offsets(list.handle());
+    dstd::Vector<Row> rows;
+    for (std::int64_t i = 0; i < list.length(); ++i) {
+        if (list.is_null(i)) {
+            rows.emplace_back(dstd::nullopt);
+            continue;
+        }
+        dstd::Vector<Item> items;
+        for (std::int32_t j = offsets[i]; j < offsets[i + 1]; ++j)
+            items.push_back(child.is_null(j)
+                                ? Item()
+                                : Item(child.values<std::int32_t>()[j]));
+        rows.emplace_back(std::move(items));
+    }
+    return rows;
+}
+
+dstd::String list_header(dstd::StringView name, dstd::StringView elem_dtype,
+                         std::size_t nrows) {
+    const dstd::String fields[] = {field_json(
+        name, "object",
+        dstd::fmt<"\"elem\":\"list\",\"elem_dtype\":\"{}\"">(elem_dtype))};
+    return header_json(nrows, fields, "\"1.0\"");
 }
 
 }  // namespace
@@ -693,6 +761,28 @@ TEST_SUITE("trace::table codec") {
         CHECK(back.string_at(2) == "[null,\"c\"]");
     }
 
+    TEST_CASE("a List column with a NaN element is refused, not aborted") {
+        TestEnvironment env(0);
+        const double items[] = {1.0, std::nan("")};
+        Series child = Series::flat_f64(items, 2);
+        const std::int32_t offsets[] = {0, 2};
+        Series list = Series::list(offsets, std::move(child));
+        DataFrame frame;
+        frame.names.push_back(dstd::SharedString("xs"));
+        frame.columns.push_back(std::move(list));
+        const dstd::String fields[] = {
+            field_json("xs", "object", "\"elem\":\"list\"")};
+        const dstd::StringView raw[] = {"xs"};
+        WriteOptions options;
+        options.raw_columns = raw;
+        options.compress = false;
+        const dstd::String path = env.dir() + "/nan_list.pfw";
+        auto written =
+            write_table(frame, path, header_json(1, fields), options);
+        REQUIRE_FALSE(written.has_value());
+        CHECK(code_of(written.error()) == common::ErrorCode::InvalidArgument);
+    }
+
     TEST_CASE("a List column with a dictionary child writes its values") {
         TestEnvironment env(0);
         // [["x", "y"], ["x"]], the items dictionary-encoded
@@ -796,5 +886,278 @@ TEST_SUITE("trace::table codec") {
         auto r = write_table(sample.frame, path, header, plain_options());
         REQUIRE_FALSE(r.has_value());
         CHECK(code_of(r.error()) == common::ErrorCode::InvalidArgument);
+    }
+
+    TEST_CASE("a list with an elem_dtype reads as a native List of that type") {
+        TestEnvironment env(0);
+        const dstd::Vector<Row> rows = {dstd::Vector<Item>{1, 2}, dstd::nullopt,
+                                        dstd::Vector<Item>{},
+                                        dstd::Vector<Item>{Item(), 5}};
+        DataFrame frame;
+        frame.names.push_back(dstd::SharedString("v"));
+        frame.columns.push_back(int32_lists(rows));
+        const dstd::String path = env.dir() + "/typed.pfw";
+        WriteOptions options;
+        options.compress = false;
+        dftu_utils_test::ok(
+            write_table(frame, path, list_header("v", "int32", 4), options));
+        const dstd::String text = read_text(path);
+        CHECK(text.find("\"elem_dtype\":\"int32\"") != dstd::String::npos);
+        auto t = dftu_utils_test::ok(read_table(path));
+        const Series& back = t.frame.columns[0];
+        REQUIRE(back.type() == TypeId::List);
+        CHECK(back.child(0).type() == TypeId::Int32);
+        CHECK(back.is_null(1));
+        CHECK_FALSE(back.is_null(2));
+        CHECK(read_int32_lists(back) == rows);
+        CHECK(back.null_count() == 1);
+        CHECK(back.child(0).length() == 4);
+    }
+
+    TEST_CASE("typed lists decode the same across parts and members") {
+        TestEnvironment env(0);
+        dstd::Vector<Row> rows;
+        for (std::int32_t i = 0; i < 200; ++i) {
+            if (i % 7 == 3) {
+                rows.emplace_back(dstd::nullopt);
+                continue;
+            }
+            dstd::Vector<Item> items;
+            for (std::int32_t j = 0; j < i % 5; ++j)
+                items.push_back(j == 2 ? Item() : Item(i * 10 + j));
+            rows.emplace_back(std::move(items));
+        }
+        DataFrame frame;
+        frame.names.push_back(dstd::SharedString("v"));
+        frame.columns.push_back(int32_lists(rows));
+        const dstd::String path = env.dir() + "/many.pfw.gz";
+        WriteOptions options;
+        options.member_size = 512;
+        dftu_utils_test::ok(
+            write_table(frame, path, list_header("v", "int32", 200), options));
+        for (const std::size_t parts :
+             {std::size_t{1}, std::size_t{3}, std::size_t{16}}) {
+            ReadOptions read;
+            read.parts = parts;
+            auto t = dftu_utils_test::ok(read_table(path, read));
+            CHECK(read_int32_lists(t.frame.columns[0]) == rows);
+        }
+    }
+
+    TEST_CASE(
+        "string, bool, float and unsigned lists keep their element type") {
+        TestEnvironment env(0);
+        const dstd::StringView text_items[] = {"a", "", "b\"q"};
+        const std::uint8_t text_valid[1] = {0b101};
+        const std::int32_t text_offsets[] = {0, 2, 2, 3};
+        const std::uint8_t flags[1] = {0b011};
+        const bool bool_valid_bits[] = {true, true, false};
+        const auto bool_valid = bitmap(bool_valid_bits);
+        const std::int32_t bool_offsets[] = {0, 1, 3, 3};
+        const float floats[] = {1.5f, -2.0f, 0.25f};
+        const std::int32_t float_offsets[] = {0, 3, 3, 3};
+        const std::uint8_t bytes[] = {0, 255, 7};
+        const std::int32_t byte_offsets[] = {0, 0, 2, 3};
+        DataFrame frame;
+        frame.names.push_back(dstd::SharedString("s"));
+        frame.columns.push_back(Series::list(
+            text_offsets, Series::strings(text_items, text_valid)));
+        frame.names.push_back(dstd::SharedString("b"));
+        frame.columns.push_back(Series::list(
+            bool_offsets,
+            Series::flat(TypeId::Bool, flags, 3, bool_valid.data())));
+        frame.names.push_back(dstd::SharedString("f"));
+        frame.columns.push_back(Series::list(
+            float_offsets, Series::flat(TypeId::Float32, floats, 3)));
+        frame.names.push_back(dstd::SharedString("u"));
+        frame.columns.push_back(
+            Series::list(byte_offsets, Series::flat(TypeId::Uint8, bytes, 3)));
+        const dstd::String fields[] = {
+            field_json("s", "object",
+                       "\"elem\":\"list\",\"elem_dtype\":\"string\""),
+            field_json("b", "object",
+                       "\"elem\":\"list\",\"elem_dtype\":\"bool\""),
+            field_json("f", "object",
+                       "\"elem\":\"list\",\"elem_dtype\":\"float32\""),
+            field_json("u", "object",
+                       "\"elem\":\"list\",\"elem_dtype\":\"uint8\"")};
+        const dstd::String path = env.dir() + "/kinds.pfw";
+        WriteOptions options;
+        options.compress = false;
+        dftu_utils_test::ok(write_table(
+            frame, path, header_json(3, fields, "\"1.0\""), options));
+        auto t = dftu_utils_test::ok(read_table(path));
+        const TypeId want[] = {TypeId::String, TypeId::Bool, TypeId::Float32,
+                               TypeId::Uint8};
+        for (std::size_t c = 0; c < 4; ++c) {
+            CAPTURE(c);
+            REQUIRE(t.frame.columns[c].type() == TypeId::List);
+            CHECK(t.frame.columns[c].child(0).type() == want[c]);
+            CHECK(t.frame.columns[c].length() == 3);
+        }
+        const Series text = t.frame.columns[0].child(0).materialize();
+        CHECK(text.string_at(0) == "a");
+        CHECK(text.is_null(1));
+        CHECK(text.string_at(2) == "b\"q");
+        const Series b = t.frame.columns[1].child(0).materialize();
+        CHECK(b.is_null(2));
+        CHECK((b.values<std::uint8_t>()[0] & 0b011) == 0b011);
+        const Series f = t.frame.columns[2].child(0).materialize();
+        CHECK(f.values<float>()[1] == -2.0f);
+        const Series u = t.frame.columns[3].child(0).materialize();
+        CHECK(u.values<std::uint8_t>()[1] == 255);
+    }
+
+    TEST_CASE("a list field with no elem_dtype still reads as JSON text") {
+        TestEnvironment env(0);
+        const dstd::String fields[] = {
+            field_json("v", "object", "\"elem\":\"list\"")};
+        const dstd::String path = env.dir() + "/old.pfw";
+        write_text(path, header_line(header_json(2, fields, "\"1.0\"")) +
+                             "{\"args\":{\"v\":[1,2]}}\n"
+                             "{\"args\":{\"v\":null}}\n");
+        auto t = dftu_utils_test::ok(read_table(path));
+        REQUIRE(t.frame.columns[0].type() == TypeId::String);
+        CHECK(t.frame.columns[0].string_at(0) == "[1,2]");
+        CHECK(t.frame.columns[0].is_null(1));
+    }
+
+    TEST_CASE("the reader refuses a typed list cell that does not fit") {
+        TestEnvironment env(0);
+        const dstd::String path = env.dir() + "/bad.pfw";
+        const auto read_cell = [&](dstd::StringView dtype,
+                                   dstd::StringView cell) {
+            dstd::String text = header_line(list_header("v", dtype, 1));
+            text += "{\"args\":{\"v\":";
+            text += cell;
+            text += "}}\n";
+            write_text(path, text);
+            return read_table(path);
+        };
+        CHECK(read_cell("int8", "[1,2]").has_value());
+        CHECK_FALSE(read_cell("int8", "[200]").has_value());
+        CHECK_FALSE(read_cell("int8", "[\"1\"]").has_value());
+        CHECK_FALSE(read_cell("int8", "[1.5]").has_value());
+        CHECK_FALSE(read_cell("int8", "7").has_value());
+        CHECK_FALSE(read_cell("string", "[1]").has_value());
+        CHECK_FALSE(read_cell("bool", "[0]").has_value());
+        CHECK_FALSE(read_cell("uint8", "[-1]").has_value());
+        CHECK_FALSE(read_cell("int8", "[[1]]").has_value());
+        auto unknown = read_cell("decimal", "[1]");
+        REQUIRE_FALSE(unknown.has_value());
+        CHECK(code_of(unknown.error()) == common::ErrorCode::Parse);
+    }
+
+    TEST_CASE(
+        "a malformed list cell is an error that names the row and field") {
+        TestEnvironment env(0);
+        const dstd::String path = env.dir() + "/malformed.pfw";
+        const struct {
+            const char* dtype;
+            const char* cell;
+        } bad[] = {{"int32", "[1 2]"},
+                   {"int32", "[1]junk"},
+                   {"int32", "[1,2"},
+                   {"uint64", "[01]"},
+                   {"int32", "[01]"},
+                   {"float32", "[3.5e38]"},
+                   {"float64", "[1e999]"},
+                   {"float64", "[\"NaN\"]"},
+                   {"float64", "[\"Infinity\",\"-Infinity\"]"},
+                   {"string", "[\"a\" \"b\"]"},
+                   {"bool", "[true false]"}};
+        for (const auto& c : bad) {
+            CAPTURE(dstd::StringView(c.cell));
+            dstd::String text = header_line(list_header("v", c.dtype, 2));
+            text += "{\"args\":{\"v\":[]}}\n{\"args\":{\"v\":";
+            text += c.cell;
+            text += "}}\n";
+            write_text(path, text);
+            auto r = read_table(path);
+            REQUIRE_FALSE(r.has_value());
+            CHECK(code_of(r.error()) == common::ErrorCode::Parse);
+            const dstd::StringView why(r.error().c_str());
+            CHECK(why.find("row 1") != dstd::StringView::npos);
+            CHECK(why.find("v") != dstd::StringView::npos);
+        }
+        dstd::String ok = header_line(list_header("v", "uint64", 1));
+        ok += "{\"args\":{\"v\":[0,10]}}\n";
+        write_text(path, ok);
+        CHECK(read_table(path).has_value());
+    }
+
+    TEST_CASE(
+        "an elem_dtype that is present must be a valid list element name") {
+        TestEnvironment env(0);
+        const dstd::String path = env.dir() + "/inv.pfw";
+        const char* values[] = {"34", "null", "\"\"", "\"int33\"", "true"};
+        for (const char* value : values) {
+            CAPTURE(dstd::StringView(value));
+            const dstd::String fields[] = {field_json(
+                "v", "object",
+                dstd::fmt<"\"elem\":\"list\",\"elem_dtype\":{}">(value))};
+            write_text(path, header_line(header_json(1, fields, "\"1.0\"")) +
+                                 "{\"args\":{\"v\":[1]}}\n");
+            auto r = read_table(path);
+            REQUIRE_FALSE(r.has_value());
+            CHECK(code_of(r.error()) == common::ErrorCode::Parse);
+            CHECK(dstd::StringView(r.error().c_str()).find("elem_dtype") !=
+                  dstd::StringView::npos);
+        }
+        const dstd::String not_list[] = {
+            field_json("v", "int64", "\"elem_dtype\":\"int32\""),
+            field_json("v", "object",
+                       "\"elem\":\"set\",\"elem_dtype\":\"int32\"")};
+        for (const dstd::String& field : not_list) {
+            const dstd::String fields[] = {field};
+            write_text(path, header_line(header_json(1, fields, "\"1.0\"")) +
+                                 "{\"args\":{\"v\":[1]}}\n");
+            CHECK_FALSE(read_table(path).has_value());
+        }
+    }
+
+    TEST_CASE("the writer refuses a list that is not of the header's element") {
+        TestEnvironment env(0);
+        const dstd::Vector<Row> rows = {dstd::Vector<Item>{1}};
+        DataFrame frame;
+        frame.names.push_back(dstd::SharedString("v"));
+        frame.columns.push_back(int32_lists(rows));
+        const dstd::String path = env.dir() + "/m.pfw";
+        WriteOptions options;
+        options.compress = false;
+        CHECK(write_table(frame, path, list_header("v", "int32", 1), options)
+                  .has_value());
+        auto wide =
+            write_table(frame, path, list_header("v", "int64", 1), options);
+        REQUIRE_FALSE(wide.has_value());
+        CHECK(code_of(wide.error()) == common::ErrorCode::InvalidArgument);
+        DataFrame flat;
+        flat.names.push_back(dstd::SharedString("v"));
+        flat.columns.push_back(Series::flat(TypeId::Int32, nullptr, 0));
+        CHECK_FALSE(
+            write_table(flat, path, list_header("v", "int32", 0), options)
+                .has_value());
+    }
+
+    TEST_CASE("parts with another elem_dtype do not merge") {
+        json::Document doc;
+        const auto parse = [&](dstd::StringView elem_dtype) {
+            const dstd::String text = list_header("v", elem_dtype, 1);
+            auto root = doc.parse(text);
+            REQUIRE(root.has_value());
+            auto h = detail::parse_header(*root);
+            REQUIRE(h.has_value());
+            return std::move(*h);
+        };
+        const auto a = parse("int32");
+        const auto b = parse("int32");
+        const auto c = parse("int64");
+        CHECK_FALSE(detail::disagreement(a, b).has_value());
+        const auto why = detail::disagreement(a, c);
+        REQUIRE(why.has_value());
+        CHECK(why->find("elem_dtype") != dstd::String::npos);
+        CHECK(a.fields[0].kind == detail::Kind::List);
+        CHECK(a.fields[0].elem_kind == detail::Kind::Int);
+        CHECK(a.fields[0].bits == 32);
     }
 }

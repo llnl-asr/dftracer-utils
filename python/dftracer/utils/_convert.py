@@ -11,6 +11,7 @@ Arrow-backed column, which only its own Arrow export can read.
 
 from __future__ import annotations
 
+import collections.abc
 import datetime
 import functools
 import re
@@ -599,6 +600,19 @@ def _is_span(value: object) -> bool:
     return getattr(getattr(value, "dtype", None), "kind", None) == "m"
 
 
+def _refuse_float32_overflow(items: list[object], child: Series) -> None:
+    """``ValueError`` when a finite item became an infinity in the float32
+    ``child``."""
+    import numpy as np
+
+    got = np.asarray(child._values_buffer())
+    if not np.isinf(got).any():
+        return
+    given = np.array([0.0 if missing(v) else v for v in items], dtype=np.float64)
+    if (np.isinf(got) & ~np.isinf(given)).any():
+        raise ValueError("a value does not fit float32")
+
+
 def _list_like(values: Sequence[object], like: Series) -> Series:
     """``values`` (each a sequence or null) as a List or LargeList column whose
     items take the type of ``like``'s items, built natively from the flattened
@@ -611,7 +625,9 @@ def _list_like(values: Sequence[object], like: Series) -> Series:
     for i, row in enumerate(values):
         if missing(row):
             valid[i] = False
-        elif isinstance(row, (str, bytes, bytearray)) or not hasattr(row, "__len__"):
+        elif isinstance(row, (str, bytes, bytearray, collections.abc.Mapping)) or not hasattr(
+            row, "__len__"
+        ):
             raise TypeError(f"{row!r} is not a list")
         else:
             items.extend(cast("Sequence[object]", row))
@@ -620,6 +636,8 @@ def _list_like(values: Sequence[object], like: Series) -> Series:
         child = values_like(items, like.child(0))
     except OverflowError as exc:
         raise ValueError(str(exc)) from None
+    if DType(like.child(0).type) == DType.FLOAT32 and len(items):
+        _refuse_float32_overflow(items, child)
     ends_column = cast("Series[int]", _ext._series_from_numpy(np.array(ends, dtype=np.int64), None))
     out = _ext._series_list_of(child, ends_column)
     if not valid.all():

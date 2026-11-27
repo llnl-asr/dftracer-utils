@@ -29,16 +29,21 @@ enum class Kind : std::uint8_t {
     Bool,    ///< Bool
     String,  ///< a JSON string, read as String
     Raw,     ///< any JSON value, kept as its JSON text in a String column
+    List,    ///< a JSON array of one element dtype, read as a List column
 };
 
 struct Field {
     dstd::String name;
     Kind kind = Kind::String;
-    unsigned bits = 64;    ///< width of an integer or float dtype
+    /// Width of an integer or float dtype; of the element for a List.
+    unsigned bits = 64;
+    /// The element kind of a List: Int, UInt, Float, Bool or String.
+    Kind elem_kind = Kind::String;
     bool nulls_ok = true;  ///< false for a numpy integer or bool dtype
     // What parts of one table must share, as the header spells it.
     dstd::String dtype;
     dstd::String elem;
+    dstd::String elem_dtype;
     dstd::String arrow_type;
     bool ordered = false;
     // The category labels as JSON text, in header order, and their dtype.
@@ -54,15 +59,15 @@ struct Header {
 };
 
 /// The reason two headers cannot be parts of one table, or none when they can:
-/// the fields must agree on name, dtype, ordered, elem, arrow_type and the
-/// kind the reader decodes, in order, and the index names must be equal.
-/// Ordered categories must also have the same labels in the same order, and
-/// the same categories_dtype; unordered ones may differ (they are unified).
+/// the fields must agree on name, dtype, ordered, elem, elem_dtype, arrow_type
+/// and the kind the reader decodes, in order, and the index names must be
+/// equal. Ordered categories must also have the same labels in the same order,
+/// and the same categories_dtype; unordered ones may differ (they are unified).
 dstd::Optional<dstd::String> disagreement(const Header& a, const Header& b);
 
 /// Reads the args object of a header record. Refuses another format, an
-/// unknown format_version, a missing nrows or fields, and a dtype the codec
-/// does not carry. Ignores unknown keys.
+/// unknown format_version, a missing nrows or fields, and a dtype or list
+/// elem_dtype the codec does not carry. Ignores unknown keys.
 dstd::Result<Header> parse_header(json::Value& args);
 
 }  // namespace dftracer::utils::trace::table::detail

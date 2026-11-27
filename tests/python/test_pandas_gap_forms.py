@@ -204,8 +204,12 @@ def test_write_table_stores_list_columns(tmp_path):
     path = os.fspath(tmp_path / "t")
     df.write_table(path, name="t", options=TraceWriteOptions(build_index=False))
     back = TraceViewer(path).collect()
-    # A native read keeps each list cell as its JSON text.
-    assert back["tags"].to_list() == ['["x","y"]', "[]", None]
+    # A native read keeps each list column as a list of its element type.
+    assert back["tags"].dtype == DType.LIST
+    assert back["tags"].child(0).dtype == DType.STRING
+    assert back["n"].child(0).dtype == DType.INT64
+    assert back["tags"].to_list() == [["x", "y"], [], None]
+    assert back["n"].to_list() == [[1, 2], [3], [None]]
     restored = back.to_pandas()
     assert restored["tags"].tolist() == [["x", "y"], [], None]
     assert restored["n"].tolist() == [[1, 2], [3], [None]]
@@ -213,6 +217,261 @@ def test_write_table_stores_list_columns(tmp_path):
         DataFrame({"f": [[math.nan]]}).write_table(
             os.fspath(tmp_path / "bad"), name="b", options=TraceWriteOptions(build_index=False)
         )
+
+
+_TYPED_LISTS = [
+    ("list<int32>", [[1, None], [], None, [-7]], DType.INT32, "int32"),
+    ("list<float32>", [[1.5, None], None, [], [0.25]], DType.FLOAT32, "float32"),
+    ("list<string>", [["a", None], [], None, ['b"c']], DType.STRING, "string"),
+    ("list<bool>", [[True, None], None, [False], []], DType.BOOL, "bool"),
+    ("list<uint8>", [[0, 255], [], [None], None], DType.UINT8, "uint8"),
+]
+
+
+@pytest.mark.parametrize("dtype,rows,child,elem", _TYPED_LISTS, ids=[t[0] for t in _TYPED_LISTS])
+def test_typed_list_columns_round_trip_through_a_table(tmp_path, dtype, rows, child, elem):
+    frame = DataFrame({"i": list(range(len(rows))), "v": Series(rows, dtype=dtype)})
+    assert frame["v"].dtype == DType.LIST
+    assert frame["v"].child(0).dtype == child
+    path = os.fspath(tmp_path / "t")
+    frame.write_table(path, name="t", options=TraceWriteOptions(build_index=False))
+    header = [f for f in _header_fields(path) if f["name"] == "v"][0]
+    assert header == {"name": "v", "dtype": "object", "elem": "list", "elem_dtype": elem}
+    back = TraceViewer(path).collect()
+    assert back["v"].dtype == DType.LIST
+    assert back["v"].child(0).dtype == child
+    assert back["v"].to_list() == rows
+    assert back["v"].null_count == sum(r is None for r in rows)
+    assert back.to_pandas()["v"].tolist() == rows
+    # the carried header still describes the frame, so to_pandas restores it exactly
+    from dftracer.utils import _table
+
+    assert _table._exact_pandas(back, back._table_header) is not None
+    again = os.fspath(tmp_path / "again")
+    back.write_table(again, name="t", options=TraceWriteOptions(build_index=False))
+    assert TraceViewer(again).collect()["v"].to_list() == rows
+
+
+def _header_fields(path):
+    import gzip
+    import json
+
+    for name in sorted(os.listdir(path)):
+        full = os.path.join(path, name)
+        if os.path.isfile(full) and name.endswith((".gz", ".pfw")):
+            opener = gzip.open if name.endswith(".gz") else open
+            with opener(full, "rt") as handle:
+                return json.loads(handle.readline())["args"]["fields"]
+    raise AssertionError(f"no table file in {path}")
+
+
+def _write_raw_rows(path, fields_json, texts, version="1.0"):
+    """A table file with the given header fields (JSON text) and rows (JSON
+    texts), written byte for byte."""
+    import gzip
+
+    path.mkdir()
+    head = '{"name":"dftu.table","cat":"dftu","pid":0,"tid":0,"ts":0,"ph":4,"args":'
+    args = (
+        '{"format":"dftu.table","format_version":"%s","table":"t","nrows":%d,'
+        '"index":[],"index_names":[],"fields":%s,"meta":{}}' % (version, len(texts), fields_json)
+    )
+    row = '{"name":"r","cat":"dftu","pid":0,"tid":0,"ts":0,"ph":3,"args":'
+    with gzip.open(path / "t.pfw.gz", "wt") as handle:
+        handle.write(head + args + "}\n")
+        for text in texts:
+            handle.write(row + text + "}\n")
+
+
+def _list_field(elem, name="v"):
+    return '[{"name":"%s","dtype":"object","elem":"list","elem_dtype":"%s"}]' % (name, elem)
+
+
+def test_an_empty_table_result_keeps_every_column(tmp_path):
+    from dftracer.utils import col
+
+    opts = TraceWriteOptions(build_index=False)
+    full = DataFrame({"i": [1, 2], "v": Series([[1], [2, 3]], dtype="list<int32>")})
+    path = os.fspath(tmp_path / "full")
+    full.write_table(path, name="t", options=opts)
+    filtered = TraceViewer(path).filter(col("i") > 5).collect()
+    assert filtered.columns == ["i", "v"] and len(filtered) == 0
+    assert filtered["v"].dtype == DType.LIST and filtered["v"].child(0).dtype == DType.INT32
+    empty = DataFrame({"i": Series([], dtype="int32"), "v": Series([], dtype="list<int32>")})
+    path = os.fspath(tmp_path / "empty")
+    empty.write_table(path, name="t", options=opts)
+    viewer = TraceViewer(path)
+    back = viewer.collect()
+    assert list(viewer.schema) == ["i", "v"] and back.columns == ["i", "v"]
+    assert back["i"].dtype == DType.INT32
+    assert back["v"].child(0).dtype == DType.INT32
+    assert len(back.to_pandas()) == 0
+
+
+_BAD_CELLS = [
+    ("int32", "[1 2]"),
+    ("int32", "[1]junk"),
+    ("int32", "[1,]"),
+    ("int32", "[1,2"),
+    ("uint64", "[01]"),
+    ("int32", "[01]"),
+    ("float32", "[3.5e38]"),
+    ("float64", "[1e999]"),
+    ("float64", '["NaN"]'),
+    ("float64", '["Infinity","-Infinity"]'),
+    ("string", '["a" "b"]'),
+    ("bool", "[true false]"),
+]
+
+
+@pytest.mark.parametrize("elem,cell", _BAD_CELLS)
+def test_a_malformed_list_cell_is_a_load_error_that_names_the_column(tmp_path, elem, cell):
+    path = tmp_path / "bad"
+    _write_raw_rows(path, _list_field(elem), ['{"v":[]}', '{"v":' + cell + "}"])
+    with pytest.raises(Exception, match=r"row 1.*\bv\b"):
+        TraceViewer(os.fspath(path)).collect()
+
+
+def test_a_well_formed_list_cell_with_zero_and_decimals_reads(tmp_path):
+    fields = (
+        '[{"name":"u","dtype":"object","elem":"list","elem_dtype":"uint64"},'
+        '{"name":"f","dtype":"object","elem":"list","elem_dtype":"float32"}]'
+    )
+    path = tmp_path / "ok"
+    _write_raw_rows(path, fields, ['{"u":[0,10],"f":[0.5,-3.4e38]}'])
+    back = TraceViewer(os.fspath(path)).collect()
+    assert back["u"].to_list() == [[0, 10]] and back["f"].child(0).dtype == DType.FLOAT32
+
+
+@pytest.mark.parametrize("value", ["34", "null", '""', '"int33"', '"list"', "true"])
+def test_an_invalid_elem_dtype_refuses_the_header(tmp_path, value):
+    fields = '[{"name":"v","dtype":"object","elem":"list","elem_dtype":%s}]' % value
+    path = tmp_path / "t"
+    _write_raw_rows(path, fields, ['{"v":[1]}'])
+    with pytest.raises(Exception, match="elem_dtype"):
+        TraceViewer(os.fspath(path)).collect()
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        '[{"name":"v","dtype":"int64","elem_dtype":"int32"}]',
+        '[{"name":"v","dtype":"object","elem":"set","elem_dtype":"int32"}]',
+        '[{"name":"v","dtype":"object","elem_dtype":"int32"}]',
+    ],
+)
+def test_elem_dtype_is_refused_on_a_field_that_is_not_a_list(tmp_path, fields):
+    path = tmp_path / "t"
+    _write_raw_rows(path, fields, ['{"v":[1]}'])
+    with pytest.raises(Exception, match="elem_dtype"):
+        TraceViewer(os.fspath(path)).collect()
+
+
+def test_list_dtype_refuses_large_string_and_a_mapping_row():
+    with pytest.raises(ValueError, match="unknown dtype name"):
+        Series([["a"]], dtype="list<large_string>")
+    with pytest.raises(TypeError, match="not a list"):
+        Series([{2: "a"}], dtype="list<int32>")
+
+
+def test_a_float32_list_refuses_a_value_it_cannot_hold():
+    with pytest.raises(ValueError, match="float32"):
+        Series([[1e40]]).cast("list<float32>")
+    with pytest.raises(ValueError, match="float32"):
+        Series([[1.0, 1e40]], dtype="list<float32>")
+    kept = Series([[math.inf, 1.5]], dtype="list<float32>")
+    assert kept.to_list() == [[math.inf, 1.5]]
+
+
+def test_a_null_list_keeps_the_child_in_place(tmp_path):
+    rows = [[1, 2], None, [3], None, []]
+    series = Series(rows, dtype="list<int32>")
+    assert series.null_count == 2 and series.to_list() == rows
+    path = os.fspath(tmp_path / "t")
+    DataFrame({"v": series}).write_table(
+        path, name="t", options=TraceWriteOptions(build_index=False)
+    )
+    back = TraceViewer(path).collect()["v"]
+    assert back.null_count == 2 and back.to_list() == rows and back.child(0).length == 3
+
+
+def test_a_list_header_without_elem_dtype_reads_as_text(tmp_path):
+    import gzip
+    import json
+
+    path = tmp_path / "old"
+    path.mkdir()
+    args = {
+        "format": "dftu.table",
+        "format_version": "1.0",
+        "table": "t",
+        "nrows": 2,
+        "index": [],
+        "index_names": [],
+        "fields": [{"name": "v", "dtype": "object", "elem": "list"}],
+        "meta": {},
+    }
+    lines = [
+        {"name": "dftu.table", "cat": "dftu", "pid": 0, "tid": 0, "ts": 0, "ph": 4, "args": args}
+    ]
+    for cell in ([1, 2], None):
+        lines.append(
+            {"name": "r", "cat": "dftu", "pid": 0, "tid": 0, "ts": 0, "ph": 3, "args": {"v": cell}}
+        )
+    with gzip.open(path / "t.pfw.gz", "wt") as handle:
+        handle.write("".join(json.dumps(line, separators=(",", ":")) + "\n" for line in lines))
+    back = TraceViewer(os.fspath(path)).collect()
+    assert back["v"].dtype == DType.STRING
+    assert back["v"].to_list() == ["[1,2]", None]
+    assert back.to_pandas()["v"].tolist() == [[1, 2], None]
+
+
+def test_list_dtype_builds_a_narrow_child_without_pyarrow():
+    body = """
+    import sys
+    from dftracer.utils import DType, Series
+    s = Series([[1], [], None, [None, 3]], dtype="list<int32>")
+    assert s.dtype == DType.LIST and s.child(0).dtype == DType.INT32
+    assert s.to_list() == [[1], [], None, [None, 3]]
+    t = Series.from_list([["a"], None], dtype="List<String>")
+    assert t.child(0).dtype == DType.STRING and t.to_list() == [["a"], None]
+    c = Series([[1, 2], None], name="x").astype("list<int8>")
+    assert c.child(0).dtype == DType.INT8 and c.to_list() == [[1, 2], None] and c.name == "x"
+    assert "pyarrow" not in sys.modules
+    """
+    out = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(body)], capture_output=True, text=True
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+
+
+def test_list_dtype_refuses_what_it_cannot_hold():
+    with pytest.raises(ValueError, match="unknown dtype name"):
+        Series([[1]], dtype="list<decimal>")
+    with pytest.raises(ValueError, match="unknown dtype name"):
+        Series([[1]], dtype="list<list<int32>>")
+    with pytest.raises(ValueError):
+        Series([[300]], dtype="list<int8>")
+    with pytest.raises(TypeError):
+        Series([1, 2]).astype("list<int32>")
+    with pytest.raises(TypeError, match="not a list"):
+        Series(["ab"], dtype="list<string>")
+
+
+def test_parts_with_other_list_element_types_do_not_merge(tmp_path):
+    path = os.fspath(tmp_path / "t")
+    opts = TraceWriteOptions(build_index=False)
+    DataFrame({"v": Series([[1]], dtype="list<int32>")}).write_table(path, name="t", options=opts)
+    other = os.fspath(tmp_path / "u")
+    DataFrame({"v": Series([[1]], dtype="list<int64>")}).write_table(other, name="t", options=opts)
+    merged = os.fspath(tmp_path / "both")
+    os.mkdir(merged)
+    for src, tag in ((path, "a"), (other, "b")):
+        for name in os.listdir(src):
+            if name.endswith((".gz", ".pfw")):
+                os.rename(os.path.join(src, name), os.path.join(merged, tag + name))
+    with pytest.raises(Exception, match="elem_dtype"):
+        TraceViewer(merged).collect()
 
 
 _NO_NUMPY = """
@@ -575,7 +834,7 @@ def test_reverse_uint64_floordiv_and_mod_stay_exact():
 
 def test_map_matches_float16_keys():
     pa = pytest.importorskip("pyarrow")
-    s = Series(pa.array([1.0, 1.5], type=pa.float16()))
+    s = Series(pa.array(np.array([1.0, 1.5], dtype=np.float16)))
     assert s.map({1.0: "hit", 1.5: "half"}).to_list() == ["hit", "half"]
     assert s.map({1.0001: "near"}).to_list() == [None, None]
 

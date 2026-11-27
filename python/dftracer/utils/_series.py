@@ -51,6 +51,7 @@ from ._convert import (
     pandas_to_native,
     polars_to_native,
     temporal_from_values,
+    values_like,
 )
 from ._enums import (
     DT_UNIT_CODES,
@@ -141,6 +142,29 @@ def _resolve_dtype(dtype: str | int | DType | type) -> int:
         "astype: dtype must be a DType, an int code, a dtype name, a Python type "
         f"(str, int, float, bool) or a NumPy type that names a supported dtype; got {dtype!r}"
     )
+
+
+def _list_element(dtype: object) -> DType | None:
+    """The element type of a ``list<T>`` dtype name (``T`` an integer, float,
+    ``bool`` or ``string`` name), ``None`` for any other dtype. ``ValueError``
+    for a ``list<...>`` whose element is not one of those."""
+    if not isinstance(dtype, str):
+        return None
+    text = dtype.strip().lower()
+    if not (text.startswith("list<") and text.endswith(">")):
+        return None
+    elem = DType(_resolve_dtype(text[5:-1].strip()))
+    if not (elem.is_integer or elem.is_float or elem in (DType.BOOL, DType.STRING)):
+        raise ValueError(f"unknown dtype name: {dtype!r}")
+    return elem
+
+
+def _typed_list_like(elem: DType) -> Series:
+    """A one-row list column with no items whose items are of type ``elem``:
+    the model ``values_like`` builds a list column from."""
+    items = _ext._series_from_list([], int(elem))
+    ends = cast("Series[int]", _ext._series_from_list([0]))
+    return _ext._series_list_of(items, ends)
 
 
 _R = TypeVar("_R", bound="Scalar")
@@ -348,6 +372,8 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         if isinstance(data, Series):
             if dtype is None:
                 out = data.share()
+            elif _list_element(dtype) is not None:
+                out = data.cast(cast("builtins.str", dtype))
             else:
                 kind, unit, zone = _list_dtype(dtype)
                 if unit and int(kind) != int(data.dtype):
@@ -507,6 +533,9 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         values = list(values)
         kind_args: tuple[int, ...] = ()
         if dtype is not None:
+            elem = _list_element(dtype)
+            if elem is not None:
+                return values_like(values, _typed_list_like(elem))
             kind, unit, zone = _list_dtype(dtype)
             if unit:
                 return temporal_from_values(values, kind, unit, zone)
@@ -816,7 +845,12 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
         ``true`` / ``false``); integers and floats cast to
         bool (zero false, a NaN or null null). A pair the engine does not
         support raises ``TypeError`` naming both types. ``astype`` is the pandas
-        name."""
+        name. ``"list<T>"`` (``T`` an integer, float, ``bool`` or ``string``
+        name) casts a list column to lists of ``T``; a value ``T`` cannot hold
+        exactly raises ``ValueError``."""
+        elem = _list_element(dtype)
+        if elem is not None:
+            return self._cast_list(elem, cast("builtins.str", dtype))
         target = _resolve_dtype(dtype)
         out = super()._cast(target)
         if int(target) == int(DType.STRING) and int(self.dtype) == int(DType.BOOL):
@@ -824,6 +858,15 @@ class Series(SeriesPandasMixin, _ext.Series[T_co]):
                 out
             ).capitalize()  # the engine says true/false; Python says True/False
         return out
+
+    def _cast_list(self, elem: DType, name: builtins.str) -> Series[Scalar]:
+        if int(self.dtype) not in (int(DType.LIST), int(DType.LARGE_LIST)):
+            raise TypeError(f"cannot cast a {self.dtype.name.lower()} column to {name}")
+        # The native cast has no list form, so the rows pass through Python lists.
+        out = values_like(self.to_list(), _typed_list_like(elem))
+        out.name = self.name
+        names = names_of(self)
+        return with_levels(out, names, levels_of(self)) if names else out
 
     def compare_series(self, other: Series, op: int) -> Series[bool]:
         """Row by row against ``other`` (``op`` a ``_CMP_*`` code): a Bool

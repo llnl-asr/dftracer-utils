@@ -477,7 +477,7 @@ class TraceViewer(SinkVerbs, LazyOps, _ext.TraceViewer):
         plan = self.lazy()
         frame = plan.collect(batch_size)
         if self._is_table() and frame.num_rows == 0 and not frame._names():
-            typed = _typed_empty(plan.schema)
+            typed = _typed_empty(plan.schema, self._header)
             if typed is not None:
                 frame = typed
         header = self._header

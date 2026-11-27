@@ -19,6 +19,8 @@ struct RawField {
     dstd::String name;
     dstd::String dtype;
     dstd::String elem;
+    dstd::String elem_dtype;
+    bool has_elem_dtype = false;  ///< the key is there, whatever its value
     dstd::String arrow_type;
     bool ordered = false;
     Labels labels = Labels::Str;
@@ -69,11 +71,38 @@ bool read_width(dstd::StringView digits, unsigned& bits) {
     return true;
 }
 
+// The kind and width of the element dtype names a list header carries.
+bool read_elem_dtype(dstd::StringView name, Kind& kind, unsigned& bits) {
+    bits = 64;
+    if (name == "bool") {
+        kind = Kind::Bool;
+        return true;
+    }
+    if (name == "string") {
+        kind = Kind::String;
+        return true;
+    }
+    if (name == "float32" || name == "float64") {
+        kind = Kind::Float;
+        bits = name == "float32" ? 32 : 64;
+        return true;
+    }
+    const auto numeric = [&](dstd::StringView prefix, Kind k) {
+        if (name.size() <= prefix.size() || !name.starts_with(prefix) ||
+            !read_width(name.substr(prefix.size()), bits))
+            return false;
+        kind = k;
+        return true;
+    };
+    return numeric("int", Kind::Int) || numeric("uint", Kind::UInt);
+}
+
 dstd::Optional<Field> resolve(const RawField& raw) {
     Field f;
     f.name = raw.name;
     f.dtype = raw.dtype;
     f.elem = raw.elem;
+    f.elem_dtype = raw.elem_dtype;
     f.arrow_type = raw.arrow_type;
     f.ordered = raw.ordered;
     f.categories = raw.categories;
@@ -84,6 +113,8 @@ dstd::Optional<Field> resolve(const RawField& raw) {
         base = base.substr(0, open);
         suffixed = true;
     }
+    if (raw.has_elem_dtype && (base != "object" || raw.elem != "list"))
+        return dstd::nullopt;
     if (base == "category") {
         // Float labels may hold the text of an infinite float, as cells do.
         const dstd::StringView cats(raw.categories_dtype);
@@ -109,6 +140,12 @@ dstd::Optional<Field> resolve(const RawField& raw) {
         return f;
     }
     if (base == "object") {
+        if (raw.has_elem_dtype) {
+            f.kind = Kind::List;
+            if (!read_elem_dtype(raw.elem_dtype, f.elem_kind, f.bits))
+                return dstd::nullopt;
+            return f;
+        }
         f.kind = raw.elem.empty() ? Kind::String : Kind::Raw;
         return f;
     }
@@ -241,6 +278,12 @@ dstd::Result<Header> parse_header(json::Value& args) {
                         }
                     } else if (fk == "elem") {
                         if (auto s = x.as_string()) raw.elem = dstd::String(*s);
+                    } else if (fk == "elem_dtype") {
+                        raw.has_elem_dtype = true;
+                        if (auto s = x.as_string())
+                            raw.elem_dtype = dstd::String(*s);
+                        else
+                            raw.elem_dtype = dstd::String(x.raw());
                     } else if (fk == "arrow_type") {
                         if (auto s = x.as_string())
                             raw.arrow_type = dstd::String(*s);
@@ -275,10 +318,18 @@ dstd::Result<Header> parse_header(json::Value& args) {
                                   "table header lacks nrows or fields");
     for (const RawField& raw : raws) {
         auto field = resolve(raw);
-        if (!field)
+        if (!field) {
+            if (raw.has_elem_dtype)
+                return common::make_error<
+                    "field {} has the invalid elem_dtype {}, which a list "
+                    "field must name as int8 to int64, uint8 to uint64, "
+                    "float32, float64, bool or string">(
+                    ErrorCode::Parse, dstd::StringView(raw.name),
+                    dstd::StringView(raw.elem_dtype));
             return common::make_error<"field {} has the unsupported dtype {}">(
                 ErrorCode::Parse, dstd::StringView(raw.name),
                 dstd::StringView(raw.dtype));
+        }
         h.fields.push_back(std::move(*field));
     }
     return h;
@@ -314,6 +365,10 @@ dstd::Optional<dstd::String> disagreement(const Header& a, const Header& b) {
         if (x.elem != y.elem)
             return dstd::fmt<"field {} has elem '{}' against '{}'">(
                 name, dstd::StringView(x.elem), dstd::StringView(y.elem));
+        if (x.elem_dtype != y.elem_dtype)
+            return dstd::fmt<"field {} has elem_dtype '{}' against '{}'">(
+                name, dstd::StringView(x.elem_dtype),
+                dstd::StringView(y.elem_dtype));
         if (x.arrow_type != y.arrow_type)
             return dstd::fmt<"field {} has arrow_type '{}' against '{}'">(
                 name, dstd::StringView(x.arrow_type),

@@ -17,7 +17,7 @@ import math
 import os
 import re
 import types
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Tuple, Union, cast
 
 from . import dftracer_utils_ext as _ext
 from ._convert import (
@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     Column = Union["np.ndarray[Any, Any]", "pd.api.extensions.ExtensionArray", "pd.Series"]
     Dtype = Union["np.dtype[Any]", "pd.api.extensions.ExtensionDtype"]
 
+_LIST_TYPES = (DType.LIST, DType.LARGE_LIST)
 _FLOAT_TEXT = {"NaN": math.nan, "Infinity": math.inf, "-Infinity": -math.inf}
 _INT64_MAX = 2**63 - 1
 
@@ -273,6 +274,28 @@ def _column(frame: DataFrame, name: str) -> Series:
     return _ext.DataFrame.__getitem__(frame, name)
 
 
+def _item_dtype(native: Series) -> str | None:
+    """The header name of the items of a list column: ``int8`` .. ``uint64``,
+    ``float32``, ``float64``, ``bool`` or ``string``; None for items a table
+    cannot store."""
+    t = DType(flat(native).child(0).type)
+    if t.is_integer or t in (DType.FLOAT32, DType.FLOAT64):
+        return t.name.lower()
+    if t == DType.BOOL:
+        return "bool"
+    return "string" if t.is_text else None
+
+
+def _list_elem_dtype(name: str, native: Series) -> str:
+    item = _item_dtype(native)
+    if item is None:
+        t = DType(flat(native).child(0).type)
+        raise TypeError(
+            f"column {name!r} is a list of {t.name.lower()}, which a table cannot store"
+        )
+    return item
+
+
 def _prepare_native(df: DataFrame, name: str, meta: Meta | None) -> Header:
     """The header of a dftracer.utils frame, from its native column types. A
     column keeps its width; one that holds a null takes the nullable dtype, so
@@ -305,8 +328,8 @@ def _prepare_native(df: DataFrame, name: str, meta: Meta | None) -> Header:
             field["dtype"] = "boolean" if nulls else "bool"
         elif t.is_text:
             field["dtype"] = "object"
-        elif t in (DType.LIST, DType.LARGE_LIST):
-            field.update(dtype="object", elem="list")
+        elif t in _LIST_TYPES:
+            field.update(dtype="object", elem="list", elem_dtype=_list_elem_dtype(col, native))
         else:
             raise TypeError(
                 f"column {col!r} has the type {t.name.lower()}, which a table cannot store"
@@ -525,6 +548,8 @@ def _fits(name: str, native: Series, field: dict[str, Any]) -> bool:
             return kind == "s"
         return kind in "sif" and kind != ""
     if dtype == "object":
+        if field.get("elem") == "list" and field.get("elem_dtype"):
+            return DType(native.type) in _LIST_TYPES and _item_dtype(native) == field["elem_dtype"]
         return kind == "s"
     np, pd = _pandas_libs()
     resolved = _resolved(name, field)
@@ -555,6 +580,11 @@ def _restore(name: str, native: Series, field: dict[str, Any], set_type: SetType
         elem = field.get("elem")
         if not elem:
             return pd.Series(texts(native), dtype=object)
+        if elem == "list" and field.get("elem_dtype"):
+            out = np.empty(native.length, dtype=object)
+            for i, items in enumerate(native.to_list()):
+                out[i] = items
+            return pd.Series(out, dtype=object)
         make: SetType = list if elem == "list" else set_type
         out = np.empty(native.length, dtype=object)
         for i, t in enumerate(texts(native)):
@@ -744,14 +774,27 @@ def _with_header(frame: DataFrame, header: Header) -> DataFrame:
     return frame
 
 
-def _typed_empty(schema: dict[str, DType]) -> DataFrame | None:
+def _typed_empty(schema: dict[str, DType], header: Header | None = None) -> DataFrame | None:
     """A frame of no rows with the columns of ``schema``, or None when a dtype is
-    not one a table reads. A streamed plan that filters every row out sends no
+    not one a table reads. A list column takes its item type from the ``header``
+    field of that name. A streamed plan that filters every row out sends no
     morsel, so its collect has no columns of its own."""
-    kinds = (DType.BOOL, DType.INT64, DType.UINT64, DType.FLOAT64, DType.STRING)
-    if not schema or any(t not in kinds for t in schema.values()):
+    if not schema:
         return None
-    columns = [_ext._series_from_list([], int(t)) for t in schema.values()]
+    fields = {str(f["name"]): f for f in (header or {}).get("fields", [])}
+    columns = []
+    for name, t in schema.items():
+        if t in _LIST_TYPES:
+            try:
+                items = DType[str(fields[name]["elem_dtype"]).upper()]
+            except KeyError:
+                return None
+            ends = cast("Series[int]", _ext._series_from_list([], int(DType.INT64)))
+            columns.append(_ext._series_list_of(_ext._series_from_list([], int(items)), ends))
+        elif t.is_integer or t.is_float or t in (DType.BOOL, DType.STRING):
+            columns.append(_ext._series_from_list([], int(t)))
+        else:
+            return None
     return DataFrame(_ext._dataframe_from_columns(list(schema), columns))
 
 

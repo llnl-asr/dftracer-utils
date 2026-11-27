@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Keep the item type of a list column in a table file.
+  `DataFrame.write_table` writes `elem_dtype` for a list of integers, floats, bools or strings, a native read gives a List column with that item type (`int32` gives an Int32 child), and `Series(..., dtype="list<int32>")` and `astype("list<T>")` build such a column with no pyarrow.
+  A list field with no `elem_dtype`, from an older file, still reads as JSON text.
 - Make `DataFrame.query(expr)` take the pandas syntax of `DataFrame.eval` and keep the rows of `df[df.eval(expr)]`.
   Pass a duql predicate as `query(duql=...)`, which replaces the `dsl=` keyword and the positional duql text.
   A positional `not in` now keeps the null rows, as pandas does, where duql drops them.

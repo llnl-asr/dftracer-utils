@@ -641,7 +641,7 @@ def test_a_stream_held_by_a_slow_consumer_stays_bounded_by_the_budget(tmp_path):
 _COLLECT_SCRIPT = textwrap.dedent(
     """
     import resource, sys
-    from dftracer.utils import DataFrame
+    from dftracer.utils import DataFrame, col
     from dftracer.utils.trace import TraceViewer
     path, budget = sys.argv[1:3]
     def peak():
@@ -651,15 +651,18 @@ _COLLECT_SCRIPT = textwrap.dedent(
             return next(int(l.split()[1]) for l in status if l.startswith("VmHWM:")) * 1024
     DataFrame.from_dict({"i": [1]}).to_pandas()
     before = peak()
-    rows = len(TraceViewer(path).lazy().memory_budget(int(budget)).collect())
+    plan = TraceViewer(path).lazy().memory_budget(int(budget))
+    rows = len(plan.filter(col("name") == "no such event").collect())
     print(rows, before, peak())
     """
 )
 
 # A unit holds read buffers, a batch of parsed events and row builders however
 # small its span, so many small units in flight pass the budget unless each is
-# admitted by that fixed cost.
-_SMALL_UNIT_PEAK_FACTOR = 4
+# admitted by that fixed cost. The budget bounds the scan, not the frame it
+# builds, so the child collects a filter that matches no row and the peak is the
+# scan alone.
+_SMALL_UNIT_PEAK_FACTOR = 2
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="peak memory is read with resource")
@@ -676,8 +679,9 @@ def test_a_collect_of_small_units_stays_bounded_by_the_budget(tmp_path):
         check=True,
     ).stdout.split()
     count, before, after = int(got[0]), int(got[1]), int(got[2])
-    assert count == rows
+    assert count == 0
     assert 4_000 * line_size < _SINK_BUDGET // 32
+    assert rows * line_size > 8 * _SINK_BUDGET
     assert after - before < _SMALL_UNIT_PEAK_FACTOR * _SINK_BUDGET
 
 

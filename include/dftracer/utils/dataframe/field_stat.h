@@ -310,7 +310,7 @@ struct FieldStat {
     /// matching kernels/stats.cpp so the two surfaces agree.
     /// The mean. Over an integer field it divides the exact 128-bit sum, so a
     /// column of 1.7e18 nanosecond values keeps its digits; the double `sum`
-    /// loses them (about 1.5e6 ns off over a million rows).
+    /// loses them.
     double mean() const {
         if (n == 0) return 0.0;
         if (domain == FieldStatDomain::F64) return sum / static_cast<double>(n);

@@ -1868,8 +1868,7 @@ bool same_value(double a, double b) {
 
 // A moment of `rows` values against another reduction of them or its known
 // value: within a relative 1e-12. A long sum is only rows * epsilon close to
-// the exact moment (the FLAT pass is 6e-12 off at 600000 rows), so a long
-// column takes that bound.
+// the exact moment, so a long column takes that bound.
 bool close_to(double got, double want, std::int64_t rows) {
     const double bound =
         std::max(1e-12, static_cast<double>(rows) *

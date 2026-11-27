@@ -68,12 +68,6 @@ struct MomentSums {
     }
 };
 
-// The second pass is about the mean of the first. It also sums the deviations,
-// so cm2 gets the corrected two-pass term (sum d)^2 / n that removes the
-// rounding error of the mean itself. A raw power-sum pass cancels when the mean
-// is large next to the spread. The first pass's mean is off by e = (sum d) / n:
-// take the moments about the true mean, shift + e, with the exact corrections
-// for that offset.
 inline auto LoadAsF64(const hwy::HWY_NAMESPACE::ScalableTag<double> df,
                       const double* p) {
     return hwy::HWY_NAMESPACE::LoadU(df, p);
@@ -85,6 +79,12 @@ inline auto LoadAsF64(const hwy::HWY_NAMESPACE::ScalableTag<double> df,
     return hwy::HWY_NAMESPACE::ConvertTo(df, hwy::HWY_NAMESPACE::LoadU(di, p));
 }
 
+// The second pass is about the mean of the first. It also sums the deviations,
+// so cm2 gets the corrected two-pass term (sum d)^2 / n that removes the
+// rounding error of the mean itself. A raw power-sum pass cancels when the mean
+// is large next to the spread. The first pass's mean is off by e = (sum d) / n:
+// take the moments about the true mean, shift + e, with the exact corrections
+// for that offset.
 template <class D, class T>
 void CentralMoments(D d, FsRaw& r, const T* x, std::size_t n) {
     const std::size_t L = hwy::HWY_NAMESPACE::Lanes(d);

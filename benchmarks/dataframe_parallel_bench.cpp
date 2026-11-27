@@ -1802,9 +1802,11 @@ int main(int argc, char** argv) {
         mp_eager, mp_lazy, mp_eager / mp_lazy, mp_ok ? "OK" : "MISMATCH");
     ok = ok && mp_ok;
 
-    // DFBENCH_SERIAL=1 times both sides with no backend, so the serial table
-    // compares the in-place read against the copy path on equal terms.
-    if (dftracer::utils::common::Env::get("DFBENCH_SERIAL").has_value())
+    // DFTRACER_UTILS_BENCH_SERIAL=1 times both sides with no backend, so the
+    // serial table compares the in-place read against the copy path on equal
+    // terms.
+    if (dftracer::utils::common::Env::get("DFTRACER_UTILS_BENCH_SERIAL")
+            .has_value())
         set_parallel_backend(nullptr, nullptr);
     else
         install_runtime_parallel_backend();

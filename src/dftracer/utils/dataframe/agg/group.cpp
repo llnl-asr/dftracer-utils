@@ -940,9 +940,9 @@ dstd::Result<dstd::Optional<DataFrame>> group_agg_by_key_hash(
     auto none = [] { return Maybe(dstd::Optional<DataFrame>()); };
     // Threshold set from benchmarks/groupby_analyzer_bench.py; below it the
     // single state wins. Up to 4 * AGG_GRAIN rows the lanes win until the
-    // groups are estimated at LANE_MANY_GROUPS (about 10000); above, until a
-    // probe shows MANY_GROUPS (2048). A group sees its rows in row order, so
-    // the bits do not depend on the frame size or the thread count.
+    // groups are estimated at LANE_MANY_GROUPS; above, until a probe shows
+    // MANY_GROUPS. A group sees its rows in row order, so the bits do not
+    // depend on the frame size or the thread count.
     constexpr std::int64_t MIN_ROWS = AGG_GRAIN;
     const std::int64_t n = in_keys.empty() ? 0 : in_keys[0]->length();
     if (n <= MIN_ROWS || agg_specs_serial(specs)) return none();

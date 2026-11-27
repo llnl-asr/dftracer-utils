@@ -157,28 +157,18 @@ bool kind_accepts(const Field& f, TypeId t, bool raw) {
 const char* element_dtype_name(TypeId t) {
     switch (t) {
         case TypeId::Bool:
-            return "bool";
         case TypeId::Int8:
-            return "int8";
         case TypeId::Int16:
-            return "int16";
         case TypeId::Int32:
-            return "int32";
         case TypeId::Int64:
-            return "int64";
         case TypeId::Uint8:
-            return "uint8";
         case TypeId::Uint16:
-            return "uint16";
         case TypeId::Uint32:
-            return "uint32";
         case TypeId::Uint64:
-            return "uint64";
         case TypeId::Float32:
-            return "float32";
         case TypeId::Float64:
-            return "float64";
         case TypeId::String:
+            return dataframe::type_name(t);
         case TypeId::LargeString:
             return "string";
         default:

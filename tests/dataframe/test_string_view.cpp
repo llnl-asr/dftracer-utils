@@ -4,6 +4,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <dataframe/selection_over.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/c_api.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -348,14 +349,7 @@ TEST_SUITE("string view") {
         int released = 0;
         Series base = make_view(SAMPLE, &released);
         const std::int64_t idx[4] = {8, -1, 3, 1};
-        auto* s = new dftu_series();
-        s->type = TypeId::String;
-        s->encoding = Encoding::Selection;
-        s->length = 4;
-        s->data = new_buffer(sizeof(idx));
-        std::memcpy(writable(s->data), idx, sizeof(idx));
-        s->set_child(dstd::make_shared<dftu_series>(*base.handle()));
-        Series sel{s};
+        Series sel = selection_over(base, idx);
         const Rows expected = {SAMPLE[8], Row(), SAMPLE[3], SAMPLE[1]};
         CHECK(rows_of(sel) == expected);
         CHECK(rows_of(sel.materialize()) == expected);
@@ -569,18 +563,6 @@ Series make_large(const Rows& rows, bool binary = false) {
     return Series{w};
 }
 
-Series make_selection(const Series& base, dstd::Vector<std::int64_t> idx) {
-    auto* s = new dftu_series();
-    s->type = base.type();
-    s->encoding = Encoding::Selection;
-    s->length = static_cast<std::int64_t>(idx.size());
-    s->data = new_buffer(idx.size() * sizeof(std::int64_t));
-    std::memcpy(writable(s->data), idx.data(),
-                idx.size() * sizeof(std::int64_t));
-    s->set_child(dstd::make_shared<dftu_series>(*base.handle()));
-    return Series{s};
-}
-
 bool blobs_hold(const Series& s, const BufferView& b) {
     for (const auto& x : *s.handle()->blobs)
         if (x.data() == b.data()) return true;
@@ -639,7 +621,7 @@ TEST_SUITE("string view concat") {
     TEST_CASE("a selection part resolves its rows and nulls") {
         int released = 0;
         Series base = make_view(SAMPLE, &released);
-        Series sel = make_selection(base, {8, -1, 3, 1});
+        Series sel = selection_over(base, {8, -1, 3, 1});
         Series f = make_flat({Row("tail")});
         Series out = dftu_utils_test::ok(concat_columns(
             dftu_utils_test::span_of<const dftracer::utils::dataframe::Series*>(

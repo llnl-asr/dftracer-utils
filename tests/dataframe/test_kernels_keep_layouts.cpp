@@ -5,6 +5,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <dataframe/selection_over.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
@@ -86,18 +87,6 @@ Series view_of(const Rows& rows) {
     ViewBuilder b;
     b.append_column(*flat.handle());
     return b.finish(TypeId::String, false);
-}
-
-Series selection_over(const Series& base, const Idx& idx) {
-    auto* o = new dftu_series();
-    adopt_type_from(*o, *base.handle());
-    o->encoding = Encoding::Selection;
-    o->length = static_cast<std::int64_t>(idx.size());
-    o->data = new_buffer(idx.size() * sizeof(std::int64_t));
-    std::memcpy(writable(o->data), idx.data(),
-                idx.size() * sizeof(std::int64_t));
-    o->set_child(dstd::make_shared<dftu_series>(*base.handle()));
-    return Series{o};
 }
 
 // A DICTIONARY column of `type` over `values`, with an Arrow bitmap of the

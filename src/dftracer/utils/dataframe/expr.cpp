@@ -989,16 +989,13 @@ Val unknown_val() {
     return {false, -1, TypeId::Unknown, {}, scalar(TypeId::Unknown)};
 }
 
-double scalar_to_double(dftu_scalar s) {
-    if (s.kind == DFTU_SCALAR_TAG_I64) return static_cast<double>(s.value.i);
-    if (s.kind == DFTU_SCALAR_TAG_U64) return static_cast<double>(s.value.u);
-    return s.value.d;
-}
-
 dftu_scalar to_f64_scalar(dftu_scalar s) {
     dftu_scalar r{};
     r.kind = DFTU_SCALAR_TAG_F64;
-    r.value.d = scalar_to_double(s);
+    const bool numeric = s.kind == DFTU_SCALAR_TAG_I64 ||
+                         s.kind == DFTU_SCALAR_TAG_U64 ||
+                         s.kind == DFTU_SCALAR_TAG_F64;
+    r.value.d = numeric ? scalar_as<double>(s) : s.value.d;
     return r;
 }
 
@@ -1994,7 +1991,7 @@ class Compiler {
                        b.kind == DFTU_SCALAR_TAG_F64;
         dftu_scalar r{};
         if (f) {
-            double x = scalar_to_double(a), y = scalar_to_double(b);
+            double x = scalar_as<double>(a), y = scalar_as<double>(b);
             r.kind = DFTU_SCALAR_TAG_F64;
             r.value.d = op == 0   ? x + y
                         : op == 1 ? x - y

@@ -34,11 +34,7 @@ using dftracer::utils::dataframe::writable;
 
 namespace {
 
-bool is_valid(const dftu_series& v, std::int64_t i) {
-    if (!v.validity.block()) return true;
-    const std::uint8_t* bm = v.validity.data();
-    return (bm[i >> 3] & (1u << (i & 7))) != 0;
-}
+using dftracer::utils::dataframe::own_valid;
 
 // Compare in the column's own type domain; the scalar is converted to the
 // column type T, so 64-bit integers are exact.
@@ -48,7 +44,7 @@ void select_gt(const dftu_series& v, dftu_scalar threshold,
     const T* p = reinterpret_cast<const T*>(v.data.data());
     const T t = scalar_as<T>(threshold);
     for (std::int64_t i = 0; i < v.length; ++i) {
-        if (is_valid(v, i) && p[i] > t) sel.push_back(i);
+        if (own_valid(v, i) && p[i] > t) sel.push_back(i);
     }
 }
 
@@ -209,43 +205,11 @@ BufferView flat_mask_to_indices(const dftu_series& mask, std::int64_t& count) {
 
 }  // namespace
 
-// The rows a mask in any layout selects, packed into one bitmap: a null row
-// selects none. The scan needs packed bits, so a block of the layer's rows is
-// gathered at a time (a bit-for-bit copy for a bitmap chain) and its bytes are
-// ORed into the bitmap; a range covers whole blocks and so owns its bytes.
-template <class Block>
-void bits_of_blocks(const Block& block, std::int64_t n, std::uint8_t* bits) {
-    using dftracer::utils::dataframe::parallel_for;
-    constexpr std::int64_t CAP = Block::CAPACITY;
-    parallel_for(n, 8 * CAP, [&](std::int64_t b, std::int64_t e) {
-        alignas(64) std::uint8_t buf[(CAP + 7) / 8];
-        std::uint8_t valid[(CAP + 7) / 8];
-        for (std::int64_t from = b; from < e; from += CAP) {
-            const std::int64_t count = std::min(CAP, e - from);
-            block.gather(from, count, buf, valid);
-            std::uint8_t* out = bits + (from >> 3);
-            const std::size_t bytes = static_cast<std::size_t>((count + 7) / 8);
-            for (std::size_t i = 0; i < bytes; ++i) out[i] |= buf[i];
-        }
-    });
-}
-
 BufferView layered_mask_to_indices(const dftu_series& mask,
                                    std::int64_t& count) {
-    using dftracer::utils::dataframe::MaskBits;
     const std::int64_t n = mask.length;
-    const auto bytes = static_cast<std::size_t>((n + 7) / 8);
-    dstd::Vector<std::uint8_t> bits(bytes, 0);
-    const MaskBits block(mask);
-    if (!block.usable()) {
-        for (std::int64_t i = 0; i < n; ++i) {
-            if (cell_u64(&mask, i) == 0 || cell_is_null(&mask, i)) continue;
-            bits[static_cast<std::size_t>(i >> 3)] |=
-                static_cast<std::uint8_t>(1u << (i & 7));
-        }
-        return mask_to_indices(bits.data(), n, count);
-    }
-    bits_of_blocks(block, n, bits.data());
+    dstd::Vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8), 0);
+    dftracer::utils::dataframe::mask_row_bits(mask, 0, n, bits.data());
     return mask_to_indices(bits.data(), n, count);
 }
 
@@ -1404,7 +1368,7 @@ namespace {
 
 // A null condition is false (SQL CASE: a NULL test takes the ELSE arm).
 bool mask_bit(const dftu_series& m, std::int64_t i) {
-    if (!is_valid(m, i)) return false;
+    if (!own_valid(m, i)) return false;
     const std::uint8_t* b = m.data.data();
     return (b[i >> 3] & (1u << (i & 7))) != 0;
 }
@@ -1441,7 +1405,7 @@ BufferView where_validity(const dftu_series& m, const dftu_series& a,
     std::memset(writable(out), 0, out.size());
     std::uint8_t* ob = writable(out);
     for (std::int64_t i = 0; i < n; ++i) {
-        const bool valid = mask_bit(m, i) ? is_valid(a, i) : is_valid(b, i);
+        const bool valid = mask_bit(m, i) ? own_valid(a, i) : own_valid(b, i);
         if (valid)
             ob[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         else

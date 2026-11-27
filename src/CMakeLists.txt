@@ -3093,7 +3093,8 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
     target_include_directories(
       ${bench_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
                             ${CMAKE_CURRENT_SOURCE_DIR}
-                            ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks)
+                            ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks
+                            ${CMAKE_CURRENT_SOURCE_DIR}/../tests)
     target_set_warnings(${bench_name})
   endforeach()
 

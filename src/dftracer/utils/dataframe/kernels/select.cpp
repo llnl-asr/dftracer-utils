@@ -219,6 +219,26 @@ Series is_in_strings(const dftu_series& v, const dftu_series& values) {
     return bool_from_flags(flags);
 }
 
+// One flag per row of `vh`, set where `hit` holds for the row's leaf cell.
+template <class Hit>
+Series leaf_flags(const dftu_series* vh, std::int64_t n, Hit hit) {
+    dstd::Vector<char> flags(static_cast<std::size_t>(n), 0);
+    constexpr std::int64_t GRAIN = 1 << 15;
+    auto probe = [&](std::int64_t b, std::int64_t e) {
+        for (std::int64_t i = b; i < e; ++i) {
+            const dftu_series* leaf = vh;
+            std::int64_t j = i;
+            if (!find_leaf(leaf, j)) continue;
+            flags[static_cast<std::size_t>(i)] = hit(leaf, j) ? 1 : 0;
+        }
+    };
+    if (parallel_backend_installed() && n > GRAIN)
+        parallel_for(n, GRAIN, probe);
+    else
+        probe(0, n);
+    return bool_from_flags(flags);
+}
+
 // A number as an is_in key: -0.0 is 0.0 and every NaN is one value.
 std::uint64_t number_key(double x) {
     return canonical_f64_bits(std::bit_cast<std::uint64_t>(x));
@@ -285,32 +305,14 @@ Series is_in_integers(const Series& v, const Series& values) {
         else
             non_negative.insert(static_cast<std::uint64_t>(x));
     }
-    const std::int64_t n = v.length();
-    dstd::Vector<char> flags(static_cast<std::size_t>(n), 0);
-    constexpr std::int64_t GRAIN = 1 << 15;
-    auto probe = [&](std::int64_t b, std::int64_t e) {
-        for (std::int64_t i = b; i < e; ++i) {
-            const dftu_series* leaf = vh;
-            std::int64_t j = i;
-            if (!find_leaf(leaf, j)) continue;
-            bool hit;
-            if (v_unsigned) {
-                hit = non_negative.count(cell_u64(leaf, j)) > 0;
-            } else {
-                const std::int64_t x = cell_i64(leaf, j);
-                hit =
-                    x < 0
-                        ? negative.count(x) > 0
-                        : non_negative.count(static_cast<std::uint64_t>(x)) > 0;
-            }
-            flags[static_cast<std::size_t>(i)] = hit ? 1 : 0;
-        }
-    };
-    if (parallel_backend_installed() && n > GRAIN)
-        parallel_for(n, GRAIN, probe);
-    else
-        probe(0, n);
-    return bool_from_flags(flags);
+    return leaf_flags(
+        vh, v.length(), [&](const dftu_series* leaf, std::int64_t j) {
+            if (v_unsigned) return non_negative.count(cell_u64(leaf, j)) > 0;
+            const std::int64_t x = cell_i64(leaf, j);
+            return x < 0
+                       ? negative.count(x) > 0
+                       : non_negative.count(static_cast<std::uint64_t>(x)) > 0;
+        });
 }
 
 Series is_in_impl(const Series& v, const Series& values) {
@@ -368,26 +370,11 @@ Series is_in_impl(const Series& v, const Series& values) {
             num_set.insert(number_key(cell_f64(mh, j)));
         }
     }
-    const std::int64_t n = v.length();
-    dstd::Vector<char> flags(static_cast<std::size_t>(n), 0);
-    constexpr std::int64_t GRAIN = 1 << 15;
-    auto probe = [&](std::int64_t b, std::int64_t e) {
-        for (std::int64_t i = b; i < e; ++i) {
-            const dftu_series* leaf = vh;
-            std::int64_t j = i;
-            if (!find_leaf(leaf, j)) continue;
-            const bool hit =
-                is_bytes ? str_set.count(cell_bytes(leaf, j)) > 0
-                         : num_set.count(number_key(cell_f64(leaf, j))) > 0;
-            flags[static_cast<std::size_t>(i)] = hit ? 1 : 0;
-        }
-    };
-    if (parallel_backend_installed() && n > GRAIN) {
-        parallel_for(n, GRAIN, probe);
-    } else {
-        probe(0, n);
-    }
-    return bool_from_flags(flags);
+    return leaf_flags(
+        vh, v.length(), [&](const dftu_series* leaf, std::int64_t j) {
+            return is_bytes ? str_set.count(cell_bytes(leaf, j)) > 0
+                            : num_set.count(number_key(cell_f64(leaf, j))) > 0;
+        });
 }
 
 std::int64_t clamp_n(std::int64_t n, std::int64_t len) {

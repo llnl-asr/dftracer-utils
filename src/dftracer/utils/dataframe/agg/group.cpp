@@ -69,10 +69,7 @@ bool by_ref(const Series& c) {
 // A column the drivers below read as it is: FLAT, or a by-reference view the
 // accumulator takes without a copy.
 bool in_place_keep(const Series& c) {
-    return c.encoding() == Encoding::Flat ||
-           ((c.encoding() == Encoding::Dictionary ||
-             c.encoding() == Encoding::View) &&
-            (c.type() == TypeId::String || c.type() == TypeId::Binary));
+    return c.encoding() == Encoding::Flat || by_ref(c);
 }
 
 Series flat_or_ref(const Series& c, bool key) {

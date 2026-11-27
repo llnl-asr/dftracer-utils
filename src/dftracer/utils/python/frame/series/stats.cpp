@@ -54,25 +54,23 @@ PyObject* Series_median(PyObject* self, PyObject*) {
     return reduced_float(*a,
                          without_gil(a->length(), [&] { return a->median(); }));
 }
-PyObject* Series_variance(PyObject* self, PyObject* args, PyObject* kwds) {
+namespace {
+PyObject* sample_reduce(PyObject* self, PyObject* args, PyObject* kwds,
+                        double (*fn)(const dftu_series*, std::int32_t)) {
     Held held_a(self);
     Series* a = held_a.get();
     if (!a) return nullptr;
     int sample = 1;
     if (!parse_kw<"|p">(args, kwds, {"sample"}, &sample)) return nullptr;
-    return reduced_float(*a, without_gil(a->length(), [&] {
-        return dftu_series_variance(a->handle(), sample);
-    }));
+    return reduced_float(
+        *a, without_gil(a->length(), [&] { return fn(a->handle(), sample); }));
+}
+}  // namespace
+PyObject* Series_variance(PyObject* self, PyObject* args, PyObject* kwds) {
+    return sample_reduce(self, args, kwds, dftu_series_variance);
 }
 PyObject* Series_stddev(PyObject* self, PyObject* args, PyObject* kwds) {
-    Held held_a(self);
-    Series* a = held_a.get();
-    if (!a) return nullptr;
-    int sample = 1;
-    if (!parse_kw<"|p">(args, kwds, {"sample"}, &sample)) return nullptr;
-    return reduced_float(*a, without_gil(a->length(), [&] {
-        return dftu_series_stddev(a->handle(), sample);
-    }));
+    return sample_reduce(self, args, kwds, dftu_series_stddev);
 }
 PyObject* Series_value_counts(PyObject* self, PyObject*) {
     Held held_a(self);

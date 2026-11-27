@@ -44,11 +44,6 @@ bool integral(TypeId t) {
     }
 }
 
-bool is_valid(const dftu_series& v, std::int64_t i) {
-    if (!v.validity.block()) return true;
-    return (v.validity.data()[i >> 3] >> (i & 7)) & 1;
-}
-
 dftu_series* alloc_flat(TypeId type, std::int64_t n) {
     auto* out = new dftu_series();
     out->type = type;
@@ -166,7 +161,7 @@ void run_extra(const dftu_series& fa, dftu_series& out, std::int64_t n,
             };
             for (std::int64_t i = lo; i < hi; ++i) {
                 po[i] = T{};
-                if (may_null && (!is_valid(fa, i) || b_null(i))) {
+                if (may_null && (!own_valid(fa, i) || b_null(i))) {
                     null_at(i);
                     continue;
                 }
@@ -243,18 +238,18 @@ dftu_series* extra_binop(const dftu_series* a, const dftu_series* b,
         const auto* pb = reinterpret_cast<const std::int64_t*>(fb->data.data());
         run_extra<std::int64_t>(
             *fa, *out, n, op, true, [pb](std::int64_t i) { return pb[i]; },
-            [fb](std::int64_t i) { return !is_valid(*fb, i); });
+            [fb](std::int64_t i) { return !own_valid(*fb, i); });
     } else if (t == TypeId::Uint64) {
         const auto* pb =
             reinterpret_cast<const std::uint64_t*>(fb->data.data());
         run_extra<std::uint64_t>(
             *fa, *out, n, op, true, [pb](std::int64_t i) { return pb[i]; },
-            [fb](std::int64_t i) { return !is_valid(*fb, i); });
+            [fb](std::int64_t i) { return !own_valid(*fb, i); });
     } else {
         const auto* pb = reinterpret_cast<const double*>(fb->data.data());
         run_extra<double>(
             *fa, *out, n, op, true, [pb](std::int64_t i) { return pb[i]; },
-            [fb](std::int64_t i) { return !is_valid(*fb, i); });
+            [fb](std::int64_t i) { return !own_valid(*fb, i); });
     }
     dftu_series_free(fa);
     dftu_series_free(fb);
@@ -357,52 +352,35 @@ Series bfill(const Series& v) { return Series{dftu_series_bfill(v.handle())}; }
 
 }  // namespace dftracer::utils::dataframe
 
-dftu_series* dftu_series_floordiv(const dftu_series* a, const dftu_series* b) {
-    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_floordiv(flat_a, b));
-    DFTU_FLAT_OPERAND(b, flat_b, dftu_series_floordiv(a, flat_b));
+#define DFTRACER_UTILS_EXTRA_COLUMN_ENTRY(name, op)                  \
+    dftu_series* dftu_series_##name(const dftu_series* a,            \
+                                    const dftu_series* b) {          \
+        DFTU_FLAT_OPERAND(a, flat_a, dftu_series_##name(flat_a, b)); \
+        DFTU_FLAT_OPERAND(b, flat_b, dftu_series_##name(a, flat_b)); \
+        return dftracer::utils::dataframe::extra_binop(              \
+            a, b, dftracer::utils::dataframe::ExtraOp::op);          \
+    }
+#define DFTRACER_UTILS_EXTRA_SCALAR_ENTRY(name, op)                         \
+    dftu_series* dftu_series_##name##_scalar(                               \
+        const dftu_series* a, dftu_scalar s, std::int32_t reverse) {        \
+        DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_##name##_scalar, s,      \
+                                    reverse);                               \
+        DFTU_FLAT_OPERAND(a, flat_a,                                        \
+                          dftu_series_##name##_scalar(flat_a, s, reverse)); \
+        return dftracer::utils::dataframe::extra_scalar(                    \
+            a, s, dftracer::utils::dataframe::ExtraOp::op, reverse != 0);   \
+    }
 
-    return dftracer::utils::dataframe::extra_binop(
-        a, b, dftracer::utils::dataframe::ExtraOp::FloorDiv);
-}
-dftu_series* dftu_series_mod(const dftu_series* a, const dftu_series* b) {
-    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_mod(flat_a, b));
-    DFTU_FLAT_OPERAND(b, flat_b, dftu_series_mod(a, flat_b));
+DFTRACER_UTILS_EXTRA_COLUMN_ENTRY(floordiv, FloorDiv)
+DFTRACER_UTILS_EXTRA_COLUMN_ENTRY(mod, Mod)
+DFTRACER_UTILS_EXTRA_COLUMN_ENTRY(pow, Pow)
+DFTRACER_UTILS_EXTRA_SCALAR_ENTRY(floordiv, FloorDiv)
+DFTRACER_UTILS_EXTRA_SCALAR_ENTRY(mod, Mod)
+DFTRACER_UTILS_EXTRA_SCALAR_ENTRY(pow, Pow)
 
-    return dftracer::utils::dataframe::extra_binop(
-        a, b, dftracer::utils::dataframe::ExtraOp::Mod);
-}
-dftu_series* dftu_series_pow(const dftu_series* a, const dftu_series* b) {
-    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_pow(flat_a, b));
-    DFTU_FLAT_OPERAND(b, flat_b, dftu_series_pow(a, flat_b));
+#undef DFTRACER_UTILS_EXTRA_COLUMN_ENTRY
+#undef DFTRACER_UTILS_EXTRA_SCALAR_ENTRY
 
-    return dftracer::utils::dataframe::extra_binop(
-        a, b, dftracer::utils::dataframe::ExtraOp::Pow);
-}
-dftu_series* dftu_series_floordiv_scalar(const dftu_series* a, dftu_scalar s,
-                                         std::int32_t reverse) {
-    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_floordiv_scalar, s, reverse);
-    DFTU_FLAT_OPERAND(a, flat_a,
-                      dftu_series_floordiv_scalar(flat_a, s, reverse));
-
-    return dftracer::utils::dataframe::extra_scalar(
-        a, s, dftracer::utils::dataframe::ExtraOp::FloorDiv, reverse != 0);
-}
-dftu_series* dftu_series_mod_scalar(const dftu_series* a, dftu_scalar s,
-                                    std::int32_t reverse) {
-    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_mod_scalar, s, reverse);
-    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_mod_scalar(flat_a, s, reverse));
-
-    return dftracer::utils::dataframe::extra_scalar(
-        a, s, dftracer::utils::dataframe::ExtraOp::Mod, reverse != 0);
-}
-dftu_series* dftu_series_pow_scalar(const dftu_series* a, dftu_scalar s,
-                                    std::int32_t reverse) {
-    DFTU_DICTIONARY_ELEMENTWISE(a, dftu_series_pow_scalar, s, reverse);
-    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_pow_scalar(flat_a, s, reverse));
-
-    return dftracer::utils::dataframe::extra_scalar(
-        a, s, dftracer::utils::dataframe::ExtraOp::Pow, reverse != 0);
-}
 dftu_series* dftu_series_ffill(const dftu_series* v) {
     return dftracer::utils::dataframe::fill_along(v, true);
 }

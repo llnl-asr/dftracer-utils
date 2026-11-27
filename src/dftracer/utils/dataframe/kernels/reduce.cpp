@@ -57,10 +57,7 @@ dftu_scalar mode(const Series& v) { return dftu_series_mode(v.handle()); }
 
 namespace {
 
-bool is_valid(const dftu_series& v, std::int64_t i) {
-    if (!v.validity.block()) return true;
-    return (v.validity.data()[i >> 3] & (1u << (i & 7))) != 0;
-}
+using dftracer::utils::dataframe::own_valid;
 
 template <class T>
 void store_domain(dftu_scalar& out, T value) {
@@ -462,7 +459,7 @@ void scan_string(const dftu_series& v, bool is_min, bool& found,
     const std::int64_t* off64 = wide ? dftu_series_offsets64(&v) : nullptr;
     if (base == nullptr || (off32 == nullptr && off64 == nullptr)) return;
     for (std::int64_t i = 0; i < v.length; ++i) {
-        if (!is_valid(v, i)) continue;
+        if (!own_valid(v, i)) continue;
         const std::int64_t lo = wide ? off64[i] : off32[i];
         const std::int64_t hi = wide ? off64[i + 1] : off32[i + 1];
         const dftracer::utils::dstd::StringView cur(
@@ -496,17 +493,6 @@ dftu_scalar reduce_string(const dftu_series& v, std::int32_t op) {
     return out;
 }
 
-double scalar_as_double(const dftu_scalar& s) {
-    switch (s.kind) {
-        case DFTU_SCALAR_TAG_U64:
-            return static_cast<double>(s.value.u);
-        case DFTU_SCALAR_TAG_F64:
-            return s.value.d;
-        default:
-            return static_cast<double>(s.value.i);
-    }
-}
-
 bool scalar_less(const dftu_scalar& a, const dftu_scalar& b) {
     if (a.kind == b.kind) {
         switch (a.kind) {
@@ -518,14 +504,8 @@ bool scalar_less(const dftu_scalar& a, const dftu_scalar& b) {
                 return a.value.i < b.value.i;
         }
     }
-    return scalar_as_double(a) < scalar_as_double(b);
-}
-
-bool is_float_like(dftracer::utils::dataframe::TypeId t) noexcept {
-    using dftracer::utils::dataframe::TypeId;
-    return t == TypeId::Float16 || t == TypeId::Float32 ||
-           t == TypeId::Float64 || t == TypeId::Decimal128 ||
-           t == TypeId::Decimal256;
+    return dftracer::utils::dataframe::scalar_as<double>(a) <
+           dftracer::utils::dataframe::scalar_as<double>(b);
 }
 
 // The SUM or the MIN/MAX of two reduced scalars (the chunks of a CHUNKED
@@ -537,7 +517,8 @@ dftu_scalar combine_scalar(dftu_scalar acc, const dftu_scalar& r, int op) {
     if (op == DFTU_REDUCE_MAX) return scalar_less(acc, r) ? r : acc;
     if (acc.kind != r.kind) {
         acc.kind = DFTU_SCALAR_TAG_F64;
-        acc.value.d = scalar_as_double(acc) + scalar_as_double(r);
+        acc.value.d = dftracer::utils::dataframe::scalar_as<double>(acc) +
+                      dftracer::utils::dataframe::scalar_as<double>(r);
         return acc;
     }
     switch (acc.kind) {
@@ -578,27 +559,28 @@ bool serial_only_layout(dftracer::utils::dataframe::TypeId t) noexcept {
     return t == TypeId::Float32 || t == TypeId::Float64;
 }
 
-// The FLAT reduce on one block.
-template <class T>
-dftu_scalar reduce_block(const dftu_series& v, std::int32_t op, T* buf,
-                         std::uint8_t* valid, std::int64_t n,
-                         std::int64_t nvalid) {
+// `fn` (a FLAT kernel returning a scalar) on one gathered block.
+template <class T, class Fn>
+dftu_scalar on_block(const dftu_series& v, T* buf, std::uint8_t* valid,
+                     std::int64_t n, std::int64_t nvalid, Fn fn) {
     dftu_series* part = borrow_block(v, buf, valid, n, nvalid);
     if (part == nullptr) return null_scalar();
-    const dftu_scalar out = dftu_series_reduce(part, op);
+    const dftu_scalar out = fn(part);
     dftu_series_free(part);
     return out;
 }
 
-// A non-FLAT column reduced a range of blocks at a time: RowBlock gathers
-// CAPACITY rows (a bounded copy) and the same FLAT reduce runs on the block,
-// the ranges fanned out over the parallel backend. Sum, min and max fold over
+// A non-FLAT column folded to one scalar a range of blocks at a time:
+// RowBlock gathers CAPACITY rows (a bounded copy) and the same FLAT kernel
+// `fn` runs on the block, the ranges fanned out over the parallel backend and
+// merged by `combine`. Sum, min, max, product and the bitwise ops fold over
 // ranges exactly as over rows, so the result matches the materialized column.
-// False when the layer chain cannot be resolved (a CHUNKED column is reduced
-// chunk by chunk instead) or the type must stay serial.
-template <class T>
-bool reduce_blocks(const dftu_series& v, std::int32_t op, dftu_scalar& out,
-                   bool& handled) {
+// A block with no valid row is skipped when `skip_empty`. False when the layer
+// chain cannot be resolved (a CHUNKED column is reduced chunk by chunk
+// instead) or the type must stay serial.
+template <class T, class Fn, class Combine>
+bool scalar_blocks(const dftu_series& v, bool skip_empty, Fn fn,
+                   Combine combine, dftu_scalar& out, bool& handled) {
     using dftracer::utils::dataframe::each_block;
     using dftracer::utils::dataframe::RowBlock;
     if constexpr (std::is_floating_point_v<T>) {
@@ -611,29 +593,43 @@ bool reduce_blocks(const dftu_series& v, std::int32_t op, dftu_scalar& out,
             block, 0, v.length, null_scalar(),
             [&](dftu_scalar& acc, std::int64_t, std::int64_t count, T* buf,
                 std::uint8_t* valid, std::int64_t nvalid) {
-                if (nvalid == 0 && op != DFTU_REDUCE_SUM) return;
+                if (acc.kind == DFTU_SCALAR_TAG_ERR) return;
+                if (skip_empty && nvalid == 0) return;
                 const dftu_scalar r =
-                    reduce_block(v, op, buf, valid, count, nvalid);
+                    on_block(v, buf, valid, count, nvalid, fn);
                 if (r.kind == DFTU_SCALAR_TAG_ERR) {
                     acc = r;
                     return;
                 }
                 if (r.kind == DFTU_SCALAR_TAG_NULL) return;
-                acc = acc.kind == DFTU_SCALAR_TAG_NULL
-                          ? r
-                          : combine_scalar(acc, r, op);
+                acc = acc.kind == DFTU_SCALAR_TAG_NULL ? r : combine(acc, r);
             },
-            [op](dftu_scalar a, const dftu_scalar& b) {
+            [combine](dftu_scalar a, const dftu_scalar& b) {
                 if (a.kind == DFTU_SCALAR_TAG_ERR) return a;
                 if (b.kind == DFTU_SCALAR_TAG_ERR) return b;
                 if (b.kind == DFTU_SCALAR_TAG_NULL) return a;
                 if (a.kind == DFTU_SCALAR_TAG_NULL) return b;
-                return combine_scalar(a, b, op);
+                return combine(a, b);
             });
-        if (out.kind == DFTU_SCALAR_TAG_NULL)
-            out = reduce_block<T>(v, op, nullptr, nullptr, 0, 0);
         return true;
     }
+}
+
+template <class T>
+bool reduce_blocks(const dftu_series& v, std::int32_t op, dftu_scalar& out,
+                   bool& handled) {
+    const auto fn = [op](const dftu_series* part) {
+        return dftu_series_reduce(part, op);
+    };
+    const bool ok = scalar_blocks<T>(
+        v, op != DFTU_REDUCE_SUM, fn,
+        [op](const dftu_scalar& a, const dftu_scalar& b) {
+            return combine_scalar(a, b, op);
+        },
+        out, handled);
+    if (ok && out.kind == DFTU_SCALAR_TAG_NULL)
+        out = on_block<T>(v, nullptr, nullptr, 0, 0, fn);
+    return ok;
 }
 
 // The same, dispatched on the column's physical type.
@@ -645,69 +641,55 @@ inline bool reduce_in_blocks(const dftu_series& v, std::int32_t op,
     return handled;
 }
 
-// Products merge by multiplying in the wide domain, which is the same value the
-// row fold reaches (a narrow type's fold is exact in that domain).
-dftu_scalar combine_product(dftu_scalar a, const dftu_scalar& b) {
+// Two scalars merged in the wide domain, which is the value the row fold
+// reaches: a narrow type's fold is exact there, and a bitwise op on the sign
+// or zero extension equals the extension of the narrow result (the top bit of
+// AND/OR/XOR is the op of the narrow top bits). `f` takes two uint64.
+template <class F>
+dftu_scalar combine_wide(dftu_scalar a, const dftu_scalar& b, F f) {
     if (a.kind == DFTU_SCALAR_TAG_NULL) return b;
     if (b.kind == DFTU_SCALAR_TAG_NULL) return a;
+    const std::uint64_t x = a.kind == DFTU_SCALAR_TAG_U64
+                                ? a.value.u
+                                : static_cast<std::uint64_t>(a.value.i);
+    const std::uint64_t y = b.kind == DFTU_SCALAR_TAG_U64
+                                ? b.value.u
+                                : static_cast<std::uint64_t>(b.value.i);
     dftu_scalar out = a;
     if (a.kind == DFTU_SCALAR_TAG_U64 || b.kind == DFTU_SCALAR_TAG_U64) {
-        const std::uint64_t x = a.kind == DFTU_SCALAR_TAG_U64
-                                    ? a.value.u
-                                    : static_cast<std::uint64_t>(a.value.i);
-        const std::uint64_t y = b.kind == DFTU_SCALAR_TAG_U64
-                                    ? b.value.u
-                                    : static_cast<std::uint64_t>(b.value.i);
         out.kind = DFTU_SCALAR_TAG_U64;
-        out.value.u = x * y;
-        return out;
+        out.value.u = f(x, y);
+    } else {
+        out.kind = DFTU_SCALAR_TAG_I64;
+        out.value.i = static_cast<std::int64_t>(f(x, y));
     }
-    out.kind = DFTU_SCALAR_TAG_I64;
-    out.value.i =
-        static_cast<std::int64_t>(static_cast<std::uint64_t>(a.value.i) *
-                                  static_cast<std::uint64_t>(b.value.i));
     return out;
 }
 
-// The FLAT product on one block.
-template <class T>
-dftu_scalar product_block(const dftu_series& v, T* buf, std::uint8_t* valid,
-                          std::int64_t n, std::int64_t nvalid) {
-    dftu_series* part = borrow_block(v, buf, valid, n, nvalid);
-    if (part == nullptr) return null_scalar();
-    const dftu_scalar out = dftu_series_product(part);
-    dftu_series_free(part);
-    return out;
+dftu_scalar combine_product(dftu_scalar a, const dftu_scalar& b) {
+    return combine_wide(std::move(a), b,
+                        [](std::uint64_t x, std::uint64_t y) { return x * y; });
+}
+
+// Bitwise ranges merge by `op`: 0 AND, 1 OR, 2 XOR.
+dftu_scalar combine_bits(dftu_scalar a, const dftu_scalar& b, int op) {
+    return combine_wide(
+        std::move(a), b, [op](std::uint64_t x, std::uint64_t y) {
+            return op == 0 ? (x & y) : op == 1 ? (x | y) : (x ^ y);
+        });
 }
 
 // A non-FLAT integer column's product over blocks; false to stay serial.
 template <class T>
 bool product_blocks(const dftu_series& v, dftu_scalar& out, bool& handled) {
-    using dftracer::utils::dataframe::each_block;
-    using dftracer::utils::dataframe::RowBlock;
-    if constexpr (std::is_floating_point_v<T>) {
-        return false;
-    } else {
-        const RowBlock<T> block(v);
-        if (!block.usable()) return false;
-        handled = true;
-        out = each_block<T>(
-            block, 0, v.length, null_scalar(),
-            [&](dftu_scalar& acc, std::int64_t, std::int64_t count, T* buf,
-                std::uint8_t* valid, std::int64_t nvalid) {
-                const dftu_scalar r =
-                    product_block(v, buf, valid, count, nvalid);
-                acc = acc.kind == DFTU_SCALAR_TAG_NULL
-                          ? r
-                          : combine_product(acc, r);
-            },
-            [](dftu_scalar a, dftu_scalar b) {
-                return combine_product(std::move(a), b);
-            });
-        if (out.kind == DFTU_SCALAR_TAG_NULL)
-            out = product_block<T>(v, nullptr, nullptr, 0, 0);
-        return true;
-    }
+    const auto fn = [](const dftu_series* part) {
+        return dftu_series_product(part);
+    };
+    const bool ok =
+        scalar_blocks<T>(v, false, fn, combine_product, out, handled);
+    if (ok && out.kind == DFTU_SCALAR_TAG_NULL)
+        out = on_block<T>(v, nullptr, nullptr, 0, 0, fn);
+    return ok;
 }
 
 // The product of a CHUNKED integer column: each chunk runs its own kernel and
@@ -718,7 +700,9 @@ dftu_scalar product_by_chunk(const dftu_series& v) {
         if (chunk.series)
             acc = combine_product(acc, dftu_series_product(chunk.series.get()));
     if (acc.kind != DFTU_SCALAR_TAG_NULL) return acc;
-    return product_block<std::uint8_t>(v, nullptr, nullptr, 0, 0);
+    return on_block<std::uint8_t>(
+        v, nullptr, nullptr, 0, 0,
+        [](const dftu_series* part) { return dftu_series_product(part); });
 }
 
 inline bool product_in_blocks(const dftu_series& v, dftu_scalar& out) {
@@ -728,71 +712,20 @@ inline bool product_in_blocks(const dftu_series& v, dftu_scalar& out) {
     return handled;
 }
 
-// Bitwise ranges merge in the wide domain, which equals the sign or zero
-// extension of the narrow result (the top bit of AND/OR/XOR is the op of the
-// narrow top bits).
-dftu_scalar combine_bits(dftu_scalar a, const dftu_scalar& b, int op) {
-    if (a.kind == DFTU_SCALAR_TAG_NULL) return b;
-    if (b.kind == DFTU_SCALAR_TAG_NULL) return a;
-    dftu_scalar out = a;
-    if (a.kind == DFTU_SCALAR_TAG_U64 || b.kind == DFTU_SCALAR_TAG_U64) {
-        const std::uint64_t x = a.kind == DFTU_SCALAR_TAG_U64
-                                    ? a.value.u
-                                    : static_cast<std::uint64_t>(a.value.i);
-        const std::uint64_t y = b.kind == DFTU_SCALAR_TAG_U64
-                                    ? b.value.u
-                                    : static_cast<std::uint64_t>(b.value.i);
-        out.kind = DFTU_SCALAR_TAG_U64;
-        out.value.u = op == 0 ? (x & y) : op == 1 ? (x | y) : (x ^ y);
-        return out;
-    }
-    const std::int64_t x = a.value.i;
-    const std::int64_t y = b.value.i;
-    out.kind = DFTU_SCALAR_TAG_I64;
-    out.value.i = op == 0 ? (x & y) : op == 1 ? (x | y) : (x ^ y);
-    return out;
-}
-
-// The FLAT bitwise reduction `op` on one block.
-template <class T>
-dftu_scalar bitwise_block(const dftu_series& v, int op, T* buf,
-                          std::uint8_t* valid, std::int64_t n,
-                          std::int64_t nvalid) {
-    dftu_series* part = borrow_block(v, buf, valid, n, nvalid);
-    if (part == nullptr) return null_scalar();
-    const dftu_scalar out = op == 0   ? dftu_series_bitwise_and(part)
-                            : op == 1 ? dftu_series_bitwise_or(part)
-                                      : dftu_series_bitwise_xor(part);
-    dftu_series_free(part);
-    return out;
-}
-
 template <class T>
 bool bitwise_blocks(const dftu_series& v, int op, dftu_scalar& out,
                     bool& handled) {
-    using dftracer::utils::dataframe::each_block;
-    using dftracer::utils::dataframe::RowBlock;
-    if constexpr (std::is_floating_point_v<T>) {
-        return false;
-    } else {
-        const RowBlock<T> block(v);
-        if (!block.usable()) return false;
-        handled = true;
-        out = each_block<T>(
-            block, 0, v.length, null_scalar(),
-            [&](dftu_scalar& acc, std::int64_t, std::int64_t count, T* buf,
-                std::uint8_t* valid, std::int64_t nvalid) {
-                const dftu_scalar r =
-                    bitwise_block(v, op, buf, valid, count, nvalid);
-                acc = acc.kind == DFTU_SCALAR_TAG_NULL
-                          ? r
-                          : combine_bits(acc, r, op);
-            },
-            [op](dftu_scalar a, dftu_scalar b) {
-                return combine_bits(std::move(a), b, op);
-            });
-        return true;
-    }
+    return scalar_blocks<T>(
+        v, false,
+        [op](const dftu_series* part) {
+            return op == 0   ? dftu_series_bitwise_and(part)
+                   : op == 1 ? dftu_series_bitwise_or(part)
+                             : dftu_series_bitwise_xor(part);
+        },
+        [op](const dftu_scalar& a, const dftu_scalar& b) {
+            return combine_bits(a, b, op);
+        },
+        out, handled);
 }
 
 inline bool bitwise_in_blocks(const dftu_series& v, int op, dftu_scalar& out) {
@@ -931,7 +864,8 @@ dftu_scalar dftu_series_reduce(const dftu_series* v, dftu_reduce_op op) {
     if (v->encoding == Encoding::Chunked) {
         const bool string_column =
             v->type == TypeId::String || v->type == TypeId::LargeString;
-        if (!string_column && is_float_like(v->type)) {
+        if (!string_column &&
+            dftracer::utils::dataframe::is_double_decoded(v->type)) {
             dftu_series* flat = dftu_series_materialize(v);
             if (flat == nullptr) return refuse_type(op, v->type);
             const dftu_scalar r = dftu_series_reduce(flat, op);
@@ -959,7 +893,10 @@ dftu_scalar dftu_series_reduce(const dftu_series* v, dftu_reduce_op op) {
             }
             if (acc.kind != DFTU_SCALAR_TAG_NULL) return acc;
             if (first.kind != DFTU_SCALAR_TAG_NULL) return first;
-            return reduce_block<std::uint8_t>(*v, op, nullptr, nullptr, 0, 0);
+            return on_block<std::uint8_t>(
+                *v, nullptr, nullptr, 0, 0, [op](const dftu_series* part) {
+                    return dftu_series_reduce(part, op);
+                });
         }
     }
 

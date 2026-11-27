@@ -6,6 +6,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
 #include <dataframe/expr_ok.h>
+#include <dataframe/selection_over.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -94,18 +95,6 @@ Series large_of(const Rows& rows) {
     const std::int32_t* src = s.offsets();
     auto* dst = reinterpret_cast<std::int64_t*>(writable(o->offsets));
     for (std::int64_t i = 0; i <= o->length; ++i) dst[i] = src[i];
-    return Series{o};
-}
-
-Series selection_over(const Series& base, const Idx& idx) {
-    auto* o = new dftu_series();
-    adopt_type_from(*o, *base.handle());
-    o->encoding = Encoding::Selection;
-    o->length = static_cast<std::int64_t>(idx.size());
-    o->data = new_buffer(idx.size() * sizeof(std::int64_t));
-    std::memcpy(writable(o->data), idx.data(),
-                idx.size() * sizeof(std::int64_t));
-    o->set_child(dstd::make_shared<dftu_series>(*base.handle()));
     return Series{o};
 }
 

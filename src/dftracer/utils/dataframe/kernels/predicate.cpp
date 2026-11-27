@@ -251,98 +251,111 @@ dftu_series* fill_nan_flat(const dftu_series* v, T fv, bool to_null) {
 
 using namespace dftracer::utils::dataframe;
 
-dftu_series* dftu_series_is_nan(const dftu_series* v) {
+namespace {
+
+dftu_series* float_class_mask(const dftu_series* v,
+                              dftu_series* (*self)(const dftu_series*),
+                              std::int32_t mode) {
     if (!v) return nullptr;
-    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_is_nan);
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_is_nan(flat_v));
-    return predicate_mask(v, 0);
+    DFTU_DICTIONARY_ELEMENTWISE(v, self);
+    DFTU_FLAT_OPERAND(v, flat_v, self(flat_v));
+    return predicate_mask(v, mode);
+}
+
+}  // namespace
+
+dftu_series* dftu_series_is_nan(const dftu_series* v) {
+    return float_class_mask(v, dftu_series_is_nan, 0);
 }
 dftu_series* dftu_series_is_finite(const dftu_series* v) {
-    if (!v) return nullptr;
-    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_is_finite);
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_is_finite(flat_v));
-    return predicate_mask(v, 1);
+    return float_class_mask(v, dftu_series_is_finite, 1);
 }
 dftu_series* dftu_series_is_infinite(const dftu_series* v) {
-    if (!v) return nullptr;
-    DFTU_DICTIONARY_ELEMENTWISE(v, dftu_series_is_infinite);
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_is_infinite(flat_v));
-    return predicate_mask(v, 2);
+    return float_class_mask(v, dftu_series_is_infinite, 2);
 }
+
+namespace {
 
 // The validity bitmap as a Bool column (inverted for null_mask). A SELECTION,
 // and a DICTIONARY with null entries, is read row by row through is_null; on
 // every other layout validity is per row. A column with no bitmap has no
 // nulls.
-dftu_series* dftu_series_valid_mask(const dftu_series* v) {
+dftu_series* validity_mask(const dftu_series* v,
+                           dftu_series* (*self)(const dftu_series*),
+                           bool valid) {
     if (!v) return nullptr;
-    DFTU_PER_CHUNK(v, dftu_series_valid_mask);
+    DFTU_PER_CHUNK(v, self);
     dftu_series* out = new_bool(v->length);
     if (v->rowwise_nulls()) {
         std::uint8_t* dst = writable(out->data);
         for (std::int64_t i = 0; i < v->length; ++i)
-            if (!dftu_series_is_null(v, i))
+            if (dftu_series_is_null(v, i) != valid)
                 dst[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
         return out;
     }
     if (!v->validity.block()) {
-        std::memset(writable(out->data), 0xFF, out->data.size());
+        if (valid) std::memset(writable(out->data), 0xFF, out->data.size());
         return out;
     }
-    std::memcpy(
-        writable(out->data), v->validity.data(),
-        std::min(buffer_bytes(TypeId::Bool, v->length), v->validity.size()));
-    return out;
-}
-
-dftu_series* dftu_series_null_mask(const dftu_series* v) {
-    if (!v) return nullptr;
-    DFTU_PER_CHUNK(v, dftu_series_null_mask);
-    dftu_series* out = new_bool(v->length);
-    if (v->rowwise_nulls()) {
-        std::uint8_t* dst = writable(out->data);
-        for (std::int64_t i = 0; i < v->length; ++i)
-            if (dftu_series_is_null(v, i))
-                dst[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
-        return out;
-    }
-    if (!v->validity.block()) return out;
     const std::uint8_t* bm = v->validity.data();
     std::uint8_t* dst = writable(out->data);
     const std::size_t bytes =
         std::min(buffer_bytes(TypeId::Bool, v->length), v->validity.size());
-    for (std::size_t i = 0; i < bytes; ++i)
-        dst[i] = static_cast<std::uint8_t>(~bm[i]);
+    if (valid) {
+        std::memcpy(dst, bm, bytes);
+    } else {
+        for (std::size_t i = 0; i < bytes; ++i)
+            dst[i] = static_cast<std::uint8_t>(~bm[i]);
+    }
     return out;
 }
 
-// Null or NaN. A column that is not a float has no NaN, so the answer is the
-// null mask.
-dftu_series* dftu_series_na_mask(const dftu_series* v) {
+}  // namespace
+
+dftu_series* dftu_series_valid_mask(const dftu_series* v) {
+    return validity_mask(v, dftu_series_valid_mask, true);
+}
+
+dftu_series* dftu_series_null_mask(const dftu_series* v) {
+    return validity_mask(v, dftu_series_null_mask, false);
+}
+
+namespace {
+
+// A null mask or valid mask, combined with the NaN rows of a float column:
+// null or NaN (`na`), or neither. A column that is not a float has no NaN, so
+// the answer is the plain mask.
+dftu_series* nan_aware_mask(const dftu_series* v,
+                            dftu_series* (*self)(const dftu_series*),
+                            dftu_series* (*mask)(const dftu_series*), bool na) {
     if (!v) return nullptr;
-    if (!is_float(v->type)) return dftu_series_null_mask(v);
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_na_mask(flat_v));
-    dftu_series* out = dftu_series_null_mask(v);
+    if (!is_float(v->type)) return mask(v);
+    DFTU_FLAT_OPERAND(v, flat_v, self(flat_v));
+    dftu_series* out = mask(v);
     dftu_series* nan = nan_rows(v);
     std::uint8_t* dst = writable(out->data);
     const std::uint8_t* src = nan->data.data();
-    for (std::size_t i = 0; i < out->data.size(); ++i) dst[i] |= src[i];
+    const std::size_t bytes = out->data.size();
+    if (na) {
+        for (std::size_t i = 0; i < bytes; ++i)
+            dst[i] = static_cast<std::uint8_t>(dst[i] | src[i]);
+    } else {
+        for (std::size_t i = 0; i < bytes; ++i)
+            dst[i] = static_cast<std::uint8_t>(dst[i] & ~src[i]);
+    }
     dftu_series_free(nan);
     return out;
+}
+
+}  // namespace
+
+dftu_series* dftu_series_na_mask(const dftu_series* v) {
+    return nan_aware_mask(v, dftu_series_na_mask, dftu_series_null_mask, true);
 }
 
 dftu_series* dftu_series_notna_mask(const dftu_series* v) {
-    if (!v) return nullptr;
-    if (!is_float(v->type)) return dftu_series_valid_mask(v);
-    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_notna_mask(flat_v));
-    dftu_series* out = dftu_series_valid_mask(v);
-    dftu_series* nan = nan_rows(v);
-    std::uint8_t* dst = writable(out->data);
-    const std::uint8_t* src = nan->data.data();
-    for (std::size_t i = 0; i < out->data.size(); ++i)
-        dst[i] &= static_cast<std::uint8_t>(~src[i]);
-    dftu_series_free(nan);
-    return out;
+    return nan_aware_mask(v, dftu_series_notna_mask, dftu_series_valid_mask,
+                          false);
 }
 
 dftu_series* dftu_series_fill_nan(const dftu_series* v, dftu_scalar fill) {

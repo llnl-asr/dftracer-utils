@@ -100,10 +100,13 @@ struct Builder {
 
     std::int32_t intern(dstd::StringView s, std::int64_t row) {
         if (uses_table()) {
+            if (is_float)
+                return intern_key(
+                    canonical_float_at(s.data(),
+                                       static_cast<unsigned>(s.size())),
+                    row);
             std::uint64_t key = 0;
             std::memcpy(&key, s.data(), s.size());
-            if (is_float)
-                key = canonical_float_bits(key, static_cast<unsigned>(width));
             return intern_key(key, row);
         }
         auto [it, fresh] =
@@ -120,17 +123,13 @@ struct Builder {
         return out.null_id;
     }
 
-    bool key_at(const dftu_series* c, std::int64_t i, dstd::StringView& s) {
-        if (is_string) return str_at(c, i, s);
-        return dataframe::key_at(c, i, width, is_bool, s);
-    }
-
     std::uint64_t key_of(const std::uint8_t* d, std::int64_t i) const {
+        const std::uint8_t* at = d + static_cast<std::size_t>(i) * width;
+        if (is_float)
+            return canonical_float_at(at, static_cast<unsigned>(width));
         std::uint64_t key = 0;
-        std::memcpy(&key, d + static_cast<std::size_t>(i) * width, width);
-        return is_float
-                   ? canonical_float_bits(key, static_cast<unsigned>(width))
-                   : key;
+        std::memcpy(&key, at, width);
+        return key;
     }
 
     // Rows `from` .. n-1 of a FLAT column with no nulls whose first rows were
@@ -395,7 +394,9 @@ struct Builder {
                 }
                 std::int32_t& e = entry[code];
                 if (e == -2)
-                    e = key_at(dict, code, s) ? intern(s, row) : null(row);
+                    e = key_bytes(*dict, code, is_string, is_bool, width, s)
+                            ? intern(s, row)
+                            : null(row);
                 ids[i] = e;
             }
             return;
@@ -405,7 +406,9 @@ struct Builder {
             return;
         }
         for (std::int64_t i = 0; i < c->length; ++i)
-            ids[i] = key_at(c, i, s) ? intern(s, base + i) : null(base + i);
+            ids[i] = key_bytes(*c, i, is_string, is_bool, width, s)
+                         ? intern(s, base + i)
+                         : null(base + i);
     }
 };
 

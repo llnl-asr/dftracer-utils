@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/decimal.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dataframe/internal/string_reader.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/string.h>
 
@@ -19,6 +20,21 @@
 // column's TypeId. Shared by every kernel that needs a domain-agnostic value
 // (stats, aggregation, hashing, ...) so the per-type switch lives in one place.
 namespace dftracer::utils::dataframe {
+
+/// Bit `j` of the bit-packed bytes `p`.
+template <class P>
+inline bool bit_at(const P* p, std::int64_t j) noexcept {
+    return ((static_cast<std::uint32_t>(p[j >> 3]) >> (j & 7)) &
+            std::uint32_t{1}) != 0;
+}
+
+/// Whether a value of type `t` is read as a double (@ref read_f64), the types
+/// with no integer physical layout, where read_i64 would give 0 for every row.
+inline bool is_double_decoded(TypeId t) {
+    return t == TypeId::Float32 || t == TypeId::Float64 ||
+           t == TypeId::Float16 || t == TypeId::Decimal128 ||
+           t == TypeId::Decimal256;
+}
 
 /// `f(chunk, local)` for row `i` of the CHUNKED column `c`: the chunk holding
 /// the row, borrowed for the call, and the row inside it.
@@ -43,7 +59,7 @@ inline std::int64_t read_i64(const Series& c, std::int64_t i) {
     switch (physical_type(c.type())) {
         case TypeId::Bool: {
             const std::uint8_t* b = c.data<std::uint8_t>();
-            return (b[i >> 3] >> (i & 7)) & 1;
+            return bit_at(b, i);
         }
         case TypeId::Int8:
             return c.data<std::int8_t>()[i];
@@ -151,9 +167,7 @@ inline bool find_leaf(const dftu_series*& c, std::int64_t& i) {
             i = local;
             continue;
         }
-        if (c->validity.block() &&
-            !((c->validity.data()[i >> 3] >> (i & 7)) & 1))
-            return false;
+        if (c->validity.block() && !bit_at(c->validity.data(), i)) return false;
         if (c->encoding == Encoding::Dictionary) {
             i = reinterpret_cast<const std::int32_t*>(c->data.data())[i];
         } else if (c->encoding == Encoding::Selection) {
@@ -198,8 +212,7 @@ inline dftu_series constant_row(const dftu_series& c) {
 
 /// Whether row `i` of `c` is valid in `c`'s own bitmap.
 inline bool own_valid(const dftu_series& c, std::int64_t i) noexcept {
-    return !c.validity.block() ||
-           ((c.validity.data()[i >> 3] & (1u << (i & 7))) != 0);
+    return !c.validity.block() || bit_at(c.validity.data(), i);
 }
 
 /// Whether row `i` of `c`, in any layout, is null (see @ref find_leaf).
@@ -210,6 +223,16 @@ inline bool cell_is_null(const dftu_series* c, std::int64_t i) {
 /// The one byte of a bit-packed Bool value, as `value_ids` keys a Bool.
 inline constexpr char BOOL_BYTES[2] = {0, 1};
 
+/// The key bytes of row `j` of a fixed-width leaf whose data starts at `data`:
+/// the value's own `width` bytes, one byte of 0 or 1 for a bit-packed Bool.
+inline dstd::StringView leaf_key(const std::uint8_t* data, std::int64_t j,
+                                 std::size_t width, bool is_bool) {
+    if (is_bool) return dstd::StringView(BOOL_BYTES + bit_at(data, j), 1);
+    return dstd::StringView(reinterpret_cast<const char*>(data) +
+                                static_cast<std::size_t>(j) * width,
+                            width);
+}
+
 /// Raw bytes of row `i` of a fixed-width column in any layout, valid while `c`
 /// lives: the value's own `width` bytes, one byte of 0 or 1 for a bit-packed
 /// Bool. The bytes a FLAT column holds, so a key, a dedupe and a group match
@@ -219,14 +242,17 @@ inline bool key_at(const dftu_series* c, std::int64_t i, std::size_t width,
     if (!find_leaf(c, i)) return false;
     if (!c->data.block()) return false;
     const std::int64_t j = c->encoding == Encoding::Constant ? 0 : i;
-    const std::uint8_t* d = c->data.data();
-    if (is_bool)
-        out = dstd::StringView(BOOL_BYTES + ((d[j >> 3] >> (j & 7)) & 1), 1);
-    else
-        out = dstd::StringView(reinterpret_cast<const char*>(d) +
-                                   static_cast<std::size_t>(j) * width,
-                               width);
+    out = leaf_key(c->data.data(), j, width, is_bool);
     return true;
+}
+
+/// The key bytes of row `i` of a column in any layout: the entry text of a
+/// string (@ref str_at), else the value's own bytes (@ref key_at). False for a
+/// null row.
+inline bool key_bytes(const dftu_series& c, std::int64_t i, bool str,
+                      bool is_bool, std::size_t width, dstd::StringView& out) {
+    if (str) return str_at(&c, i, out);
+    return key_at(&c, i, width, is_bool, out);
 }
 
 /// The null rows of `c` in any layout. Unlike @ref Series::null_count it counts
@@ -389,9 +415,7 @@ class ReadPath {
         j = i;
         for (int s = 0; s < depth_; ++s) {
             const Step& st = steps_[s];
-            if (st.validity != nullptr &&
-                !((st.validity[j >> 3] >> (j & 7)) & 1))
-                return false;
+            if (st.validity != nullptr && !bit_at(st.validity, j)) return false;
             if (st.codes != nullptr) {
                 j = st.codes[j];
             } else if (st.sel != nullptr) {
@@ -512,7 +536,7 @@ class RowBlock {
                     bits[k >> 3] &= static_cast<std::uint8_t>(~(1u << (k & 7)));
                 continue;
             }
-            out[k] = packed_ ? static_cast<T>(bit_at(j)) : p_[j];
+            out[k] = packed_ ? static_cast<T>(bit_at(p_, j)) : p_[j];
             ++nvalid;
         }
         return nvalid;
@@ -556,11 +580,7 @@ class RowBlock {
                 bits[r >> 3] &= static_cast<std::uint8_t>(~(1u << (r & 7)));
             return 0;
         }
-        out[r] =
-            PACKED ? static_cast<T>(
-                         ((static_cast<std::uint32_t>(p_[j >> 3]) >> (j & 7)) &
-                          std::uint32_t{1}) != 0)
-                   : p_[j];
+        out[r] = PACKED ? static_cast<T>(bit_at(p_, j)) : p_[j];
         return 1;
     }
 
@@ -571,19 +591,9 @@ class RowBlock {
         const T* p = p_;
         for (std::int64_t k = 0; k < count; ++k) {
             const std::int64_t j = codes[from + k];
-            out[k] =
-                PACKED
-                    ? static_cast<T>(
-                          ((static_cast<std::uint32_t>(p[j >> 3]) >> (j & 7)) &
-                           std::uint32_t{1}) != 0)
-                    : p[j];
+            out[k] = PACKED ? static_cast<T>(bit_at(p, j)) : p[j];
         }
         return count;
-    }
-
-    bool bit_at(std::int64_t j) const noexcept {
-        return ((static_cast<std::uint32_t>(p_[j >> 3]) >> (j & 7)) &
-                std::uint32_t{1}) != 0;
     }
 
     ReadPath path_;
@@ -696,7 +706,8 @@ class MaskBits {
                         v &= static_cast<std::uint8_t>(~(1u << t));
                         continue;
                     }
-                    if (bit_at(j)) b |= static_cast<std::uint8_t>(1u << t);
+                    if (bit_at(src_, j))
+                        b |= static_cast<std::uint8_t>(1u << t);
                 }
                 bits[static_cast<std::size_t>(k >> 3)] |= b;
                 valid[static_cast<std::size_t>(k >> 3)] = v;
@@ -708,7 +719,7 @@ class MaskBits {
                         static_cast<std::uint8_t>(~(1u << (k & 7)));
                     continue;
                 }
-                if (bit_at(j))
+                if (bit_at(src_, j))
                     bits[static_cast<std::size_t>(k >> 3)] |=
                         static_cast<std::uint8_t>(1u << (k & 7));
             }
@@ -757,17 +768,12 @@ class MaskBits {
                 valid[k >> 3] &= static_cast<std::uint8_t>(~(1u << (k & 7)));
                 continue;
             }
-            if (bit_at(j))
+            if (bit_at(src_, j))
                 bits[k >> 3] |= static_cast<std::uint8_t>(1u << (k & 7));
         }
     }
 
    private:
-    bool bit_at(std::int64_t j) const noexcept {
-        return ((static_cast<std::uint32_t>(src_[j >> 3]) >> (j & 7)) &
-                std::uint32_t{1}) != 0;
-    }
-
     ReadPath path_;
     const std::uint8_t* src_ = nullptr;
     std::int64_t words_ = 0;
@@ -775,6 +781,39 @@ class MaskBits {
     bool word_ok_ = false;
     bool usable_ = false;
 };
+
+/// Sets in `bits` (zeroed by the caller) bit k for each of the `n` rows from
+/// row `from` on that the Bool column `mask`, in any layout, selects; a null
+/// row selects none. A block of rows is gathered at a time through @ref
+/// MaskBits and its bytes are ORed in, one range of blocks per task, so every
+/// write starts on a bitmap byte whatever range the backend hands out. The rows
+/// are counted from `from` in `bits`, so `bits` holds `(n + 7) / 8` bytes.
+inline void mask_row_bits(const dftu_series& mask, std::int64_t from,
+                          std::int64_t n, std::uint8_t* bits) {
+    const MaskBits block(mask);
+    if (!block.usable()) {
+        for (std::int64_t k = 0; k < n; ++k) {
+            const std::int64_t p = from + k;
+            if (cell_u64(&mask, p) == 0 || cell_is_null(&mask, p)) continue;
+            bits[static_cast<std::size_t>(k >> 3)] |=
+                static_cast<std::uint8_t>(1u << (k & 7));
+        }
+        return;
+    }
+    constexpr std::int64_t CAP = MaskBits::CAPACITY;
+    parallel_for((n + CAP - 1) / CAP, 8, [&](std::int64_t b, std::int64_t e) {
+        alignas(64) std::uint8_t buf[(CAP + 7) / 8];
+        std::uint8_t valid[(CAP + 7) / 8];
+        for (std::int64_t blk = b; blk < e; ++blk) {
+            const std::int64_t at = blk * CAP;
+            const std::int64_t count = std::min(CAP, n - at);
+            block.gather(from + at, count, buf, valid);
+            std::uint8_t* out = bits + (at >> 3);
+            const std::size_t bytes = static_cast<std::size_t>((count + 7) / 8);
+            for (std::size_t i = 0; i < bytes; ++i) out[i] |= buf[i];
+        }
+    });
+}
 
 /// The values of a numeric column of type `T`, one row at a time: pointer
 /// arithmetic for a FLAT column, the shared cell reader for any other layout.
@@ -830,11 +869,11 @@ class ColumnCells {
 
     /// The bit of row `i` of a bit-packed Bool column, read at `T` = uint8_t.
     bool bool_at(std::int64_t i) const noexcept {
-        if (flat_) return ((p_[i >> 3] >> (i & 7)) & 1) != 0;
+        if (flat_) return bit_at(p_, i);
         if (!resolved_ || !packed_) return cell_u64(c_, i) != 0;
         std::int64_t j = 0;
         if (!path_.locate(i, j)) return false;
-        return ((p_[j >> 3] >> (j & 7)) & 1) != 0;
+        return bit_at(p_, j);
     }
 
    private:

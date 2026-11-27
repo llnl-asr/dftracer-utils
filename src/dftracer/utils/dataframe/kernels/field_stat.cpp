@@ -21,69 +21,86 @@ HWY_BEFORE_NAMESPACE();
 namespace dftracer::utils::dataframe {
 namespace HWY_NAMESPACE {
 
-// Two passes over the chunk: sum, min and max first, then the central moments
-// about the mean just computed. The second pass also sums the deviations, so
-// cm2 gets the corrected two-pass term (sum d)^2 / n that removes the rounding
-// error of the mean itself. A raw power-sum pass cancels when the mean is large
-// next to the spread.
-FsRaw MomentsF64Impl(const double* x, std::size_t n) {
-    const hwy::HWY_NAMESPACE::ScalableTag<double> d;
-    const std::size_t L = hwy::HWY_NAMESPACE::Lanes(d);
-    auto vs = hwy::HWY_NAMESPACE::Zero(d);
-    auto vmin = hwy::HWY_NAMESPACE::Set(d, x[0]),
-         vmax = hwy::HWY_NAMESPACE::Set(d, x[0]);
-    std::size_t i = 0;
-    for (; i + L <= n; i += L) {
-        const auto v = hwy::HWY_NAMESPACE::LoadU(d, x + i);
-        vs = hwy::HWY_NAMESPACE::Add(vs, v);
-        vmin = hwy::HWY_NAMESPACE::Min(vmin, v);
-        vmax = hwy::HWY_NAMESPACE::Max(vmax, v);
-    }
-    FsRaw r{hwy::HWY_NAMESPACE::ReduceSum(d, vs),
-            hwy::HWY_NAMESPACE::ReduceMin(d, vmin),
-            hwy::HWY_NAMESPACE::ReduceMax(d, vmax),
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0};
-    for (; i < n; ++i) {
-        const double v = x[i];
-        r.sum += v;
-        if (v < r.min) r.min = v;
-        if (v > r.max) r.max = v;
-    }
-    const double mean = r.sum / static_cast<double>(n);
-    const auto vm = hwy::HWY_NAMESPACE::Set(d, mean);
-    auto v1 = hwy::HWY_NAMESPACE::Zero(d), v2 = hwy::HWY_NAMESPACE::Zero(d),
-         v3 = hwy::HWY_NAMESPACE::Zero(d), v4 = hwy::HWY_NAMESPACE::Zero(d);
-    i = 0;
-    for (; i + L <= n; i += L) {
-        const auto dv =
-            hwy::HWY_NAMESPACE::Sub(hwy::HWY_NAMESPACE::LoadU(d, x + i), vm);
-        const auto dd = hwy::HWY_NAMESPACE::Mul(dv, dv);
-        v1 = hwy::HWY_NAMESPACE::Add(v1, dv);
-        v2 = hwy::HWY_NAMESPACE::Add(v2, dd);
-        v3 = hwy::HWY_NAMESPACE::Add(v3, hwy::HWY_NAMESPACE::Mul(dd, dv));
-        v4 = hwy::HWY_NAMESPACE::Add(v4, hwy::HWY_NAMESPACE::Mul(dd, dd));
-    }
-    double s1 = hwy::HWY_NAMESPACE::ReduceSum(d, v1),
-           s2 = hwy::HWY_NAMESPACE::ReduceSum(d, v2),
-           s3 = hwy::HWY_NAMESPACE::ReduceSum(d, v3),
-           s4 = hwy::HWY_NAMESPACE::ReduceSum(d, v4);
-    for (; i < n; ++i) {
-        const double dv = x[i] - mean, dd = dv * dv;
+// One step of the first pass: sum, min and max lanes. Vectors travel by value
+// or reference, never in a struct, so a sizeless SVE vector compiles.
+template <class V>
+void SumMinMaxAdd(V& sum, V& min, V& max, V v) {
+    sum = hwy::HWY_NAMESPACE::Add(sum, v);
+    min = hwy::HWY_NAMESPACE::Min(min, v);
+    max = hwy::HWY_NAMESPACE::Max(max, v);
+}
+
+template <class D, class V>
+void SumMinMaxReduce(D d, FsRaw& r, V sum, V min, V max) {
+    r.sum = hwy::HWY_NAMESPACE::ReduceSum(d, sum);
+    r.min = hwy::HWY_NAMESPACE::ReduceMin(d, min);
+    r.max = hwy::HWY_NAMESPACE::ReduceMax(d, max);
+}
+
+inline void AddScalar(FsRaw& r, double v) {
+    r.sum += v;
+    if (v < r.min) r.min = v;
+    if (v > r.max) r.max = v;
+}
+
+// One vector of the second pass: the deviations dv from the mean, summed as
+// powers one to four.
+template <class V>
+void MomentsAdd(V& v1, V& v2, V& v3, V& v4, V v, V vm) {
+    const V dv = hwy::HWY_NAMESPACE::Sub(v, vm);
+    const V dd = hwy::HWY_NAMESPACE::Mul(dv, dv);
+    v1 = hwy::HWY_NAMESPACE::Add(v1, dv);
+    v2 = hwy::HWY_NAMESPACE::Add(v2, dd);
+    v3 = hwy::HWY_NAMESPACE::Add(v3, hwy::HWY_NAMESPACE::Mul(dd, dv));
+    v4 = hwy::HWY_NAMESPACE::Add(v4, hwy::HWY_NAMESPACE::Mul(dd, dd));
+}
+
+// The power sums of the deviations, powers one to four.
+struct MomentSums {
+    double s1, s2, s3, s4;
+
+    void add(double dv) {
+        const double dd = dv * dv;
         s1 += dv;
         s2 += dd;
         s3 += dd * dv;
         s4 += dd * dd;
     }
-    // The first pass's mean is off by e = (sum d) / n. Take the moments about
-    // the true mean, shift + e, with the exact corrections for that offset.
+};
+
+// The second pass is about the mean of the first. It also sums the deviations,
+// so cm2 gets the corrected two-pass term (sum d)^2 / n that removes the
+// rounding error of the mean itself. A raw power-sum pass cancels when the mean
+// is large next to the spread. The first pass's mean is off by e = (sum d) / n:
+// take the moments about the true mean, shift + e, with the exact corrections
+// for that offset.
+inline auto LoadAsF64(const hwy::HWY_NAMESPACE::ScalableTag<double> df,
+                      const double* p) {
+    return hwy::HWY_NAMESPACE::LoadU(df, p);
+}
+
+inline auto LoadAsF64(const hwy::HWY_NAMESPACE::ScalableTag<double> df,
+                      const std::int64_t* p) {
+    const hwy::HWY_NAMESPACE::ScalableTag<std::int64_t> di;
+    return hwy::HWY_NAMESPACE::ConvertTo(df, hwy::HWY_NAMESPACE::LoadU(di, p));
+}
+
+template <class D, class T>
+void CentralMoments(D d, FsRaw& r, const T* x, std::size_t n) {
+    const std::size_t L = hwy::HWY_NAMESPACE::Lanes(d);
+    const double mean = r.sum / static_cast<double>(n);
+    const auto vm = hwy::HWY_NAMESPACE::Set(d, mean);
+    auto v1 = hwy::HWY_NAMESPACE::Zero(d), v2 = hwy::HWY_NAMESPACE::Zero(d),
+         v3 = hwy::HWY_NAMESPACE::Zero(d), v4 = hwy::HWY_NAMESPACE::Zero(d);
+    std::size_t i = 0;
+    for (; i + L <= n; i += L)
+        MomentsAdd(v1, v2, v3, v4, LoadAsF64(d, x + i), vm);
+    MomentSums m{hwy::HWY_NAMESPACE::ReduceSum(d, v1),
+                 hwy::HWY_NAMESPACE::ReduceSum(d, v2),
+                 hwy::HWY_NAMESPACE::ReduceSum(d, v3),
+                 hwy::HWY_NAMESPACE::ReduceSum(d, v4)};
+    for (; i < n; ++i) m.add(static_cast<double>(x[i]) - mean);
+    const double s1 = m.s1, s2 = m.s2, s3 = m.s3, s4 = m.s4;
     const double dn = static_cast<double>(n);
     const double e = s1 / dn;
     r.shift = mean;
@@ -91,6 +108,24 @@ FsRaw MomentsF64Impl(const double* x, std::size_t n) {
     r.cm2 = s2 - s1 * e;
     r.cm3 = s3 - 3.0 * e * s2 + 2.0 * dn * e * e * e;
     r.cm4 = s4 - 4.0 * e * s3 + 6.0 * e * e * s2 - 3.0 * dn * e * e * e * e;
+}
+
+// Two passes over the chunk: sum, min and max first, then the central moments
+// about the mean just computed.
+FsRaw MomentsF64Impl(const double* x, std::size_t n) {
+    const hwy::HWY_NAMESPACE::ScalableTag<double> d;
+    const std::size_t L = hwy::HWY_NAMESPACE::Lanes(d);
+    auto sum = hwy::HWY_NAMESPACE::Zero(d);
+    auto min = hwy::HWY_NAMESPACE::Set(d, x[0]);
+    auto max = hwy::HWY_NAMESPACE::Set(d, x[0]);
+    std::size_t i = 0;
+    for (; i + L <= n; i += L)
+        SumMinMaxAdd(sum, min, max, hwy::HWY_NAMESPACE::LoadU(d, x + i));
+    FsRaw r{};
+    SumMinMaxReduce(d, r, sum, min, max);
+    for (; i < n; ++i) AddScalar(r, x[i]);
+
+    CentralMoments(d, r, x, n);
     return r;
 }
 
@@ -99,10 +134,9 @@ FsRaw MomentsI64Impl(const std::int64_t* x, std::size_t n) {
     const hwy::HWY_NAMESPACE::ScalableTag<std::int64_t> di;
     const std::size_t L =
         hwy::HWY_NAMESPACE::Lanes(df);  // == Lanes(di); both 64-bit lanes
-    auto vs = hwy::HWY_NAMESPACE::Zero(df);
-    const double x0 = static_cast<double>(x[0]);
-    auto vmin = hwy::HWY_NAMESPACE::Set(df, x0),
-         vmax = hwy::HWY_NAMESPACE::Set(df, x0);
+    auto sum = hwy::HWY_NAMESPACE::Zero(df);
+    auto min = hwy::HWY_NAMESPACE::Set(df, static_cast<double>(x[0]));
+    auto max = hwy::HWY_NAMESPACE::Set(df, static_cast<double>(x[0]));
     auto es = hwy::HWY_NAMESPACE::Zero(di);
     auto eh = hwy::HWY_NAMESPACE::Zero(di);
     auto emin = hwy::HWY_NAMESPACE::Set(di, x[0]),
@@ -115,70 +149,24 @@ FsRaw MomentsI64Impl(const std::int64_t* x, std::size_t n) {
             hwy::HWY_NAMESPACE::Add(eh, hwy::HWY_NAMESPACE::ShiftRight<32>(vi));
         emin = hwy::HWY_NAMESPACE::Min(emin, vi);
         emax = hwy::HWY_NAMESPACE::Max(emax, vi);
-        const auto v = hwy::HWY_NAMESPACE::ConvertTo(df, vi);
-        vs = hwy::HWY_NAMESPACE::Add(vs, v);
-        vmin = hwy::HWY_NAMESPACE::Min(vmin, v);
-        vmax = hwy::HWY_NAMESPACE::Max(vmax, v);
+        SumMinMaxAdd(sum, min, max, hwy::HWY_NAMESPACE::ConvertTo(df, vi));
     }
-    FsRaw r{hwy::HWY_NAMESPACE::ReduceSum(df, vs),
-            hwy::HWY_NAMESPACE::ReduceMin(df, vmin),
-            hwy::HWY_NAMESPACE::ReduceMax(df, vmax),
-            0,
-            0,
-            0,
-            0,
-            0,
-            hwy::HWY_NAMESPACE::ReduceSum(di, es),
-            hwy::HWY_NAMESPACE::ReduceMin(di, emin),
-            hwy::HWY_NAMESPACE::ReduceMax(di, emax),
-            hwy::HWY_NAMESPACE::ReduceSum(di, eh)};
+    FsRaw r{};
+    SumMinMaxReduce(df, r, sum, min, max);
+    r.esum = hwy::HWY_NAMESPACE::ReduceSum(di, es);
+    r.emin = hwy::HWY_NAMESPACE::ReduceMin(di, emin);
+    r.emax = hwy::HWY_NAMESPACE::ReduceMax(di, emax);
+    r.ehigh = hwy::HWY_NAMESPACE::ReduceSum(di, eh);
     for (; i < n; ++i) {
         const std::int64_t xi = x[i];
-        const double v = static_cast<double>(xi);
-        r.sum += v;
-        if (v < r.min) r.min = v;
-        if (v > r.max) r.max = v;
+        AddScalar(r, static_cast<double>(xi));
         static_cast<void>(dstd::bits::add_overflow(r.esum, xi, &r.esum));
         r.ehigh += xi >> 32;
         if (xi < r.emin) r.emin = xi;
         if (xi > r.emax) r.emax = xi;
     }
-    const double mean = r.sum / static_cast<double>(n);
-    const auto vm = hwy::HWY_NAMESPACE::Set(df, mean);
-    auto v1 = hwy::HWY_NAMESPACE::Zero(df), v2 = hwy::HWY_NAMESPACE::Zero(df),
-         v3 = hwy::HWY_NAMESPACE::Zero(df), v4 = hwy::HWY_NAMESPACE::Zero(df);
-    i = 0;
-    for (; i + L <= n; i += L) {
-        const auto dv = hwy::HWY_NAMESPACE::Sub(
-            hwy::HWY_NAMESPACE::ConvertTo(df,
-                                          hwy::HWY_NAMESPACE::LoadU(di, x + i)),
-            vm);
-        const auto dd = hwy::HWY_NAMESPACE::Mul(dv, dv);
-        v1 = hwy::HWY_NAMESPACE::Add(v1, dv);
-        v2 = hwy::HWY_NAMESPACE::Add(v2, dd);
-        v3 = hwy::HWY_NAMESPACE::Add(v3, hwy::HWY_NAMESPACE::Mul(dd, dv));
-        v4 = hwy::HWY_NAMESPACE::Add(v4, hwy::HWY_NAMESPACE::Mul(dd, dd));
-    }
-    double s1 = hwy::HWY_NAMESPACE::ReduceSum(df, v1),
-           s2 = hwy::HWY_NAMESPACE::ReduceSum(df, v2),
-           s3 = hwy::HWY_NAMESPACE::ReduceSum(df, v3),
-           s4 = hwy::HWY_NAMESPACE::ReduceSum(df, v4);
-    for (; i < n; ++i) {
-        const double dv = static_cast<double>(x[i]) - mean, dd = dv * dv;
-        s1 += dv;
-        s2 += dd;
-        s3 += dd * dv;
-        s4 += dd * dd;
-    }
-    // The first pass's mean is off by e = (sum d) / n. Take the moments about
-    // the true mean, shift + e, with the exact corrections for that offset.
-    const double dn = static_cast<double>(n);
-    const double e = s1 / dn;
-    r.shift = mean;
-    r.cmean = e;
-    r.cm2 = s2 - s1 * e;
-    r.cm3 = s3 - 3.0 * e * s2 + 2.0 * dn * e * e * e;
-    r.cm4 = s4 - 4.0 * e * s3 + 6.0 * e * e * s2 - 3.0 * dn * e * e * e * e;
+
+    CentralMoments(df, r, x, n);
     return r;
 }
 
@@ -197,15 +185,6 @@ namespace {
 bool is_uint(TypeId t) {
     return t == TypeId::Uint8 || t == TypeId::Uint16 || t == TypeId::Uint32 ||
            t == TypeId::Uint64;
-}
-
-// Float16/Decimal128/Decimal256 have no integer physical layout, so they must
-// go through read_f64 like Float32/Float64 rather than falling into
-// read_i64's default (which would silently sum 0 for every row).
-bool is_double_decoded(TypeId t) {
-    return t == TypeId::Float32 || t == TypeId::Float64 ||
-           t == TypeId::Float16 || t == TypeId::Decimal128 ||
-           t == TypeId::Decimal256;
 }
 
 void scalar_reduce(FieldStat& fs, const Series& c, std::int64_t b,
@@ -233,8 +212,7 @@ void scalar_reduce(FieldStat& fs, const Series& c, std::int64_t b,
 }
 
 // The SIMD pass over `n` > 0 contiguous values, none null.
-FieldStat dense_stat(const double* x, std::size_t n) {
-    const FsRaw r = HWY_DYNAMIC_DISPATCH(MomentsF64Impl)(x, n);
+FieldStat dense_stat(const FsRaw& r, std::size_t n, FieldStatDomain domain) {
     FieldStat fs;
     fs.n = n;
     fs.sum = r.sum;
@@ -245,23 +223,18 @@ FieldStat dense_stat(const double* x, std::size_t n) {
     fs.cm4 = r.cm4;
     fs.min = r.min;
     fs.max = r.max;
-    fs.domain = FieldStatDomain::F64;
+    fs.domain = domain;
     return fs;
+}
+
+FieldStat dense_stat(const double* x, std::size_t n) {
+    return dense_stat(HWY_DYNAMIC_DISPATCH(MomentsF64Impl)(x, n), n,
+                      FieldStatDomain::F64);
 }
 
 FieldStat dense_stat(const std::int64_t* x, std::size_t n) {
     const FsRaw r = HWY_DYNAMIC_DISPATCH(MomentsI64Impl)(x, n);
-    FieldStat fs;
-    fs.n = n;
-    fs.sum = r.sum;
-    fs.shift = r.shift;
-    fs.cmean = r.cmean;
-    fs.cm2 = r.cm2;
-    fs.cm3 = r.cm3;
-    fs.cm4 = r.cm4;
-    fs.min = r.min;
-    fs.max = r.max;
-    fs.domain = FieldStatDomain::I64;
+    FieldStat fs = dense_stat(r, n, FieldStatDomain::I64);
     fs.esum = r.esum;
     fs.emin = r.emin;
     fs.emax = r.emax;
